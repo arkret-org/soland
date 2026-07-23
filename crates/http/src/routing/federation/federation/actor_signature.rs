@@ -8,7 +8,7 @@ use soland_http::error::AppError;
 use crate::state::AppState;
 
 pub(super) fn federation_verify_actor_digest(
-    body: &arkret_core::FederationVerifyActorRequestBody,
+    body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
 ) -> Result<String, &'static str> {
     let value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
@@ -17,7 +17,7 @@ pub(super) fn federation_verify_actor_digest(
 }
 
 pub(super) fn federation_verify_actor_unsigned_digest(
-    body: &arkret_core::FederationVerifyActorRequestBody,
+    body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
 ) -> Result<String, &'static str> {
     let mut value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
@@ -37,7 +37,7 @@ pub(super) fn federation_verify_actor_unsigned_digest(
 /// is populated after signing. The HTTP federation trust headers still bind
 /// the complete request body, including `signature`.
 fn federation_verify_actor_signature_transcript(
-    body: &arkret_core::FederationVerifyActorRequestBody,
+    body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
     unsigned_request_digest: &str,
 ) -> Value {
     let scope_id = body.realm_id.as_ref().map(|value| value.as_str());
@@ -66,7 +66,7 @@ struct FederationActorSignature {
 
 pub(super) async fn verify_federation_actor_signature(
     state: &AppState,
-    body: &arkret_core::FederationVerifyActorRequestBody,
+    body: &arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
     unsigned_request_digest: &str,
 ) -> Result<VerifiedFederationActor, AppError> {
     let actor_signature = FederationActorSignature {

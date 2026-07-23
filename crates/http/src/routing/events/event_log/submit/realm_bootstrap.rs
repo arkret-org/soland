@@ -64,7 +64,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             })?
             .len();
-        if arkret_core::validate_event_envelope_byte_len(encoded_len).is_err() {
+        if arkret_wire::event_envelope::validate_event_envelope_byte_len(encoded_len).is_err() {
             return Err(SubmitOneError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",

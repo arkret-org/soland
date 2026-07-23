@@ -263,7 +263,7 @@ async fn keys_query(
         {
             device_generations.insert(
                 actor.clone(),
-                arkret_core::DeviceGenerationState {
+                arkret_models_crypto::keys::DeviceGenerationState {
                     current_device_generation_ref: arkret_wire::NonEmptyString::new(
                         generation.current_ref,
                     )
@@ -272,10 +272,10 @@ async fn keys_query(
                     })?,
                     device_generation_status: match generation.status {
                         crate::routing::identity::device_generation::DeviceGenerationStatus::Active => {
-                            arkret_core::DeviceGenerationStatus::Active
+                            arkret_models_crypto::keys::DeviceGenerationStatus::Active
                         }
                         crate::routing::identity::device_generation::DeviceGenerationStatus::Conflicted => {
-                            arkret_core::DeviceGenerationStatus::Conflicted
+                            arkret_models_crypto::keys::DeviceGenerationStatus::Conflicted
                         }
                     },
                 },
@@ -446,7 +446,7 @@ fn verify_keys_upload_device_signature(
     current_device: Option<&DeviceIdentity>,
     one_time_keys: &impl Serialize,
     fallback_keys: &impl Serialize,
-    device_signature: &arkret_core::KeyOperationSignature,
+    device_signature: &arkret_models_crypto::artifacts_keys::KeyOperationSignature,
 ) -> Result<(), AppError> {
     let record = current_device.ok_or_else(|| {
         AppError::invalid_param("keys/upload requires an authorized device_public_key")

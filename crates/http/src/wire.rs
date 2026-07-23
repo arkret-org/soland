@@ -1,22 +1,37 @@
-use arkret_core::{
-    AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
-    ClaimedProfileEntry, Did, MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH,
-    MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
-    ServiceDescribe, SessionGrantProofKind,
+use arkret_identifiers::Did;
+pub use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
+pub use arkret_models_collaboration::http_bodies::{
+    ContactListRow, ContactState, DirectConversationBindingState, DirectConversationSummary,
 };
-pub use arkret_core::{
-    ContactListRow, ContactState, DeviceMessageEnvelope, DeviceMessageTarget,
-    DeviceMessagesAckOutcome, DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome,
-    DeviceMessagesSendOutcome, DeviceMessagesSendRequestBody, DeviceStatus,
-    DirectConversationBindingState, DirectConversationSummary, EventsQueryPostRequestBody,
-    IdentityResolveRequestBody, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome,
-    KeysQueryRequestBody, KeysUploadOutcome, KeysUploadRequestBody, OkOutcome, PushNotifyOutcome,
-    PushNotifyRequestBody, QueryDeviceRecord, RealmJoinCandidate, RealmJoinCandidateRole,
-    RealmJoinCandidateServiceType, RealmJoinCandidateSource, RealmJoinMethod,
+pub use arkret_models_collaboration::session_grant_bodies::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
     SessionGrantIntrospectStatus, SessionGrantIntrospectionProof, SessionLoginOutcome,
 };
+pub use arkret_models_collaboration::sync_frames::account_sync::{
+    DeviceMessageEnvelope, DeviceMessageTarget, DeviceMessagesAckOutcome,
+    DeviceMessagesAckRequestBody, DeviceMessagesGetOutcome, DeviceMessagesSendOutcome,
+    DeviceMessagesSendRequestBody,
+};
+pub use arkret_models_crypto::{
+    DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
+    KeysUploadOutcome, KeysUploadRequestBody, QueryDeviceRecord,
+};
 pub use arkret_models_discovery::ops::HardeningStatus;
+use arkret_models_discovery::{
+    AccountAuthority, AuthGrantExchange, AuthMetadata, AuthMethod, AuthMethodKind,
+    ClaimedProfileEntry, ServiceDescribe,
+};
+pub use arkret_models_discovery::{
+    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
+    RealmJoinCandidateSource, RealmJoinMethod,
+};
+pub use arkret_models_identity::identity::IdentityResolveRequestBody;
+use arkret_models_identity::session_credential::SessionGrantProofKind;
+pub use arkret_models_integration::{OkOutcome, PushNotifyOutcome, PushNotifyRequestBody};
+use arkret_wire::{
+    MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH, MAX_EVENT_ENVELOPE_BYTES,
+    MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
+};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -375,7 +390,6 @@ pub struct OutboundPushBridgeCacheInvalidateOutcome {
 // no private copies that could drift. NOTE: the explicit `model::` path
 // matters — the SDK root re-exports a different, client-side typed
 // `sync::SyncRequestBody` under the same name.
-pub use arkret_core::SyncRequestBody;
 // Snapshot head operations return the full signed `ak.schema.snapshot.v1`
 // manifest. soland answers both operations with `not_implemented` until it can
 // produce a real Snapshot detached proof.
@@ -395,6 +409,7 @@ pub use arkret_models_collaboration::governance::authorization::{
 pub use arkret_models_collaboration::governance::moderation::{
     ModerationReportOutcome, ModerationReportRequestBody,
 };
+pub use arkret_models_collaboration::sync_frames::client_sync::SyncRequestBody;
 pub use arkret_models_integration::{
     PushRegisterDeviceRequestBody, PushUnregisterDeviceRequestBody,
 };
@@ -483,17 +498,17 @@ pub struct SolandAccountRegisterOutcome {
 // `capability_refs`/`desired_media` inputs; `CallMediaTokenExchangeOutcome`
 // / `CallMediaParticipantBinding` derive ToSchema under the `salvo` feature),
 // so soland no longer mints private mirrors that can drift from the spec DTOs.
-pub use arkret_core::{
-    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
-    IdentityLogListOutcome, IdentityReceiptListOutcome, KeysBackupsPutRequestBody,
-};
 pub use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
     AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarEnsureOutcome,
     AgentSidecarEnsureRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
 };
-pub use arkret_models_collaboration::objects::media::CallMediaTokenExchangeRequestBody;
+pub use arkret_models_collaboration::objects::media::{
+    CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
+    CallMediaTokenExchangeRequestBody,
+};
+pub use arkret_models_crypto::KeysBackupsPutRequestBody;
 // Key-backup replace/delete outcomes are the SDK server-side DTOs
 // (`arkret-models-crypto` is the authoritative carrier for
 // `keys-operations.schema.json#/$defs/keys_backups_replace_outcome` /
@@ -501,6 +516,7 @@ pub use arkret_models_collaboration::objects::media::CallMediaTokenExchangeReque
 pub use arkret_models_crypto::{
     KeyBackupPutStatus, KeysBackupsDeleteOutcome, KeysBackupsList, KeysBackupsReplaceOutcome,
 };
+pub use arkret_models_identity::identity::{IdentityLogListOutcome, IdentityReceiptListOutcome};
 
 // Recovery policy / receipt endpoints validate against the spec REC-1 shapes in
 // `routing::identity::recovery`: policy publish uses the SDK request body,
@@ -862,7 +878,7 @@ pub fn describe(
         "index.query.local_projection".to_owned(),
     ];
     let compat_surfaces = Vec::new();
-    let plaintext_visibility = arkret_core::PlaintextVisibility {
+    let plaintext_visibility = arkret_models_discovery::service_description::PlaintextVisibility {
         data_classes: vec![
             arkret_wire::PlaintextDataClassKind::MessageContent,
             arkret_wire::PlaintextDataClassKind::AttachmentPlaintext,
@@ -872,7 +888,7 @@ pub fn describe(
             arkret_wire::PlaintextDataClassKind::NotificationSummary,
             arkret_wire::PlaintextDataClassKind::MediaPlaintext,
         ],
-        max_visibility: Some(arkret_core::PlaintextMaxVisibility::PrivatePlaintext),
+        max_visibility: Some(arkret_models_discovery::service_description::PlaintextMaxVisibility::PrivatePlaintext),
         event_kinds: vec![
             "ak.message.create".to_owned(),
             "ak.realm.policy_components".to_owned(),
@@ -909,7 +925,7 @@ pub fn describe(
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
         service_type: arkret_wire::ServiceType::PrincipalServer,
-        protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
                 "ak.profile.core_event_store.v1".to_owned(),
@@ -918,7 +934,7 @@ pub fn describe(
                 "ak.profile.mimi_interop.v1".to_owned(),
                 "ak.profile.file_transfer.v1".to_owned(),
                 "ak.profile.webrtc_media.v1".to_owned(),
-                arkret_core::DIRECT_CONVERSATION_REALM_PROFILE.to_owned(),
+                arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_PROFILE.to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
             // advertise `ak.profile.media_service_binding.v1` whenever the
@@ -953,7 +969,7 @@ pub fn describe(
                 .advertised_policy(),
         ),
         rate_limit_policy_id: None,
-        egress_network_policy: Some(arkret_core::EgressNetworkPolicy::deny_private_defaults()),
+        egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_types: Vec::new(),
         discovery_profiles: Vec::new(),
         restricted_query_proof: None,
@@ -968,7 +984,7 @@ pub fn describe(
         takedown_contact: None,
         rate_limits: None,
         supported_features: vec![
-            arkret_core::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
+            arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
             "org.arkret.soland.feature.auth.logout".to_owned(),
             "org.arkret.soland.feature.contacts.request".to_owned(),
             "org.arkret.soland.feature.contacts.respond".to_owned(),
@@ -1039,14 +1055,14 @@ pub fn describe(
         // Emit the same public base URL used by the HTTP describe handler so
         // clients can build `base_url + operation_path` directly.
         supported_bindings: vec![
-            arkret_core::SupportedBinding::new("http_json")
+            arkret_models_discovery::service_description::SupportedBinding::new("http_json")
                 .with_base_url(public_base_url.trim_end_matches('/')),
             // Per-operation HTTP companion binding (transport-bindings.md
             // §6.1): tus 1.0.0 resumable upload for ak.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
             // routing::interop::blob_resumable — describe and wire MUST
             // agree.
-            arkret_core::SupportedBinding::new("tus")
+            arkret_models_discovery::service_description::SupportedBinding::new("tus")
                 .with_base_url(format!(
                     "{}/_arkret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')
@@ -1070,7 +1086,7 @@ pub fn describe(
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
         receive_policy_constraints: None,
-        limits: arkret_core::ServerLimits {
+        limits: arkret_models_discovery::service_description::ServerLimits {
             max_get_query_selectors: None,
             extensions: serde_json::from_value(serde_json::json!({
             "storage": storage,
@@ -1312,9 +1328,10 @@ pub fn now() -> DateTime<Utc> {
 
 // ── Conversation Model DTOs ──
 
-pub type ReadScopeWire = arkret_core::ReadCursorScope;
-pub type ReadCursorPositionWire = arkret_core::ReadCursorPosition;
-pub type ReadMarkerOutcome = arkret_core::ReadMarkerOutcome;
+pub type ReadScopeWire = arkret_wire::primitives::ReadCursorScope;
+pub type ReadCursorPositionWire =
+    arkret_models_collaboration::objects::read_receipts::ReadCursorPosition;
+pub type ReadMarkerOutcome = arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 
 #[cfg(test)]
 mod tests {
@@ -1456,19 +1473,19 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_event_bytes"],
-            json!(arkret_core::MAX_EVENT_ENVELOPE_BYTES)
+            json!(arkret_wire::event_envelope::MAX_EVENT_ENVELOPE_BYTES)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_events_batch_submit"],
-            json!(arkret_core::MAX_EVENT_SUBMIT_BATCH)
+            json!(arkret_wire::event_envelope::MAX_EVENT_SUBMIT_BATCH)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_prev_refs"],
-            json!(arkret_core::MAX_EVENT_PREV_REFS)
+            json!(arkret_wire::event_envelope::MAX_EVENT_PREV_REFS)
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["max_refs"],
-            json!(arkret_core::MAX_EVENT_REFS)
+            json!(arkret_wire::event_envelope::MAX_EVENT_REFS)
         );
         assert_eq!(
             value["limits"]["search"]["directory"]["returns_message_hits"],

@@ -54,7 +54,7 @@ fn did_method_host_without_encoded_port(host: &str) -> &str {
 }
 
 fn valid_handle_domain_candidate(value: &str) -> Option<String> {
-    arkret_core::prepare_idna_domain(value).ok()
+    arkret_wire::string_profiles::prepare_idna_domain(value).ok()
 }
 
 pub(super) fn handle_lookup(input: &str, default_domain: &str) -> Option<HandleLookup> {
@@ -127,7 +127,10 @@ pub(super) async fn membership_builder_resolve_allowed(
     };
     if !matches!(
         request.intent,
-        Some(arkret_core::DirectoryIntent::Invite | arkret_core::DirectoryIntent::MemberAdd)
+        Some(
+            arkret_models_discovery::directory::DirectoryIntent::Invite
+                | arkret_models_discovery::directory::DirectoryIntent::MemberAdd
+        )
     ) {
         return false;
     }
@@ -148,7 +151,7 @@ pub(super) async fn contact_request_resolve_allowed(
     let Some(session) = session else {
         return false;
     };
-    if request.intent != Some(arkret_core::DirectoryIntent::ContactRequest) {
+    if request.intent != Some(arkret_models_discovery::directory::DirectoryIntent::ContactRequest) {
         return false;
     }
     matches!(
@@ -649,7 +652,7 @@ pub(super) async fn signed_handle_claim(
         policy_event_ref: None,
     };
     let mut claim = SdkHandleClaim {
-        schema: arkret_core::HANDLE_CLAIM_SCHEMA.to_owned(),
+        schema: arkret_models_identity::handle::HANDLE_CLAIM_SCHEMA.to_owned(),
         handle: Some(handle),
         handle_aliases: vec![handle_alias],
         subject: Some(subject),

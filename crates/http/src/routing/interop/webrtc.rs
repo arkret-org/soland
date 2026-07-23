@@ -15,12 +15,14 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    CellRef, DeviceId, Did, Hash, MediaIceConfigOutcome, MediaIceConfigRequestBody,
-    MediaIceConfigSignature, MediaIceCredentialType, MediaIceMode, MediaIceServer,
-    MediaIceSignatureAlgorithm, MediaIceSignatureInput, Operation, OperationId, RealmId,
-    XExtensionMap,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{CellRef, DeviceId, Did, Hash, OperationId, RealmId};
+use arkret_models_collaboration::objects::media::{
+    MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
+    MediaIceCredentialType, MediaIceMode, MediaIceServer, MediaIceSignatureAlgorithm,
+    MediaIceSignatureInput,
 };
+use arkret_wire::XExtensionMap;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
@@ -527,8 +529,8 @@ async fn handle_rtc_token(
     // The request body is the SDK typed shape: `realm_id`/`call_id`/`actor_id`/
     // `device_id` arrive already validated as the corresponding scalar id types,
     // and the response binding carries the same typed ids — so the wire outcome
-    // reuses `arkret_core::CallMediaTokenExchangeOutcome` directly instead of a
-    // stringly soland mirror.
+    // reuses `arkret_models_collaboration::objects::media::CallMediaTokenExchangeOutcome` directly
+    // instead of a stringly soland mirror.
     let realm_id = body.realm_id.clone();
     if !is_valid_webrtc_session_id(body.call_id.as_str()) {
         return Err(AppError::invalid_param("invalid call_id"));
@@ -645,7 +647,7 @@ async fn handle_rtc_token(
     // even if the realm focus advertises a larger backend TTL.
     let ttl_secs = focus
         .ttl_seconds
-        .clamp(1, arkret_core::MEDIA_TOKEN_TTL_MAX_SECS);
+        .clamp(1, arkret_wire::constants::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
@@ -748,7 +750,7 @@ async fn handle_rtc_token(
     };
 
     let participant_binding = CallMediaParticipantBinding {
-        scheme: arkret_core::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+        scheme: arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.to_owned(),
         sig,
         issuer_kid,
         realm_id,
@@ -1070,7 +1072,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .or_else(|| focus_value.get("token_ttl_seconds"))
             .or_else(|| config.get("ttl_seconds"))
             .and_then(Value::as_u64)
-            .unwrap_or(arkret_core::MEDIA_TOKEN_TTL_SHOULD_SECS);
+            .unwrap_or(arkret_wire::constants::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value
             .get("connect_url")
             .and_then(Value::as_str)

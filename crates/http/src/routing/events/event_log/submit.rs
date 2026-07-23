@@ -162,11 +162,11 @@ enum InternalEventBinding {
     },
     PeerDirectBinding {
         subject_id: String,
-        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+        signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
     },
     PeerFederatedEvent {
         event_id: String,
-        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+        signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
     },
 }
 
@@ -211,7 +211,7 @@ impl InternalEventAdmission {
         actor_id: impl Into<String>,
         device_id: impl Into<String>,
         subject_id: impl Into<String>,
-        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+        signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
     ) -> Self {
         Self {
             realm_id: realm_id.into(),
@@ -247,7 +247,7 @@ impl InternalEventAdmission {
         actor_id: impl Into<String>,
         device_id: impl Into<String>,
         event_id: impl Into<String>,
-        signer_key_evidence: Vec<arkret_core::FederatedDeviceSigningKeyEvidence>,
+        signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
     ) -> Self {
         Self {
             realm_id: realm_id.into(),
@@ -311,7 +311,7 @@ impl InternalEventAdmission {
         session: &SessionRecord,
         object: &serde_json::Map<String, Value>,
         verification_method: &str,
-    ) -> Option<&arkret_core::FederatedDeviceSigningKeyEvidence> {
+    ) -> Option<&arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence> {
         if !self.matches(session, object) {
             return None;
         }
@@ -460,8 +460,9 @@ pub(super) fn render_submit_one_error(res: &mut Response, error: SubmitOneError)
         return;
     }
     if let Some(details) = error.details {
-        let mut envelope = arkret_core::ErrorEnvelope::new(error.code, error.message)
-            .with_request_id(crate::ids::generate_request_id());
+        let mut envelope =
+            arkret_wire::problem_details::ErrorEnvelope::new(error.code, error.message)
+                .with_request_id(crate::ids::generate_request_id());
         if let Some(object) = details.as_object() {
             for (key, value) in object {
                 envelope = envelope.with_detail(key.clone(), value.clone());
@@ -516,7 +517,7 @@ pub(super) async fn submit_event_batch_outcome(
             "events submit batch must contain at least one envelope",
         ));
     }
-    if arkret_core::validate_event_submit_batch_count(envelopes.len()).is_err() {
+    if arkret_wire::event_envelope::validate_event_submit_batch_count(envelopes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",
@@ -629,13 +630,13 @@ async fn direct_bootstrap_source_is_contact_authority(
         return false;
     };
     let realm = first.get("payload").cloned().and_then(|payload| {
-        serde_json::from_value::<arkret_core::RealmCreatePayload>(payload)
+        serde_json::from_value::<arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmCreatePayload>(payload)
             .ok()
             .map(|payload| payload.object)
     });
     if realm
         .as_ref()
-        .is_none_or(|realm| arkret_core::DirectConversationRealmRole::validate(realm).is_err())
+        .is_none_or(|realm| arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::validate(realm).is_err())
     {
         return false;
     }
@@ -698,7 +699,8 @@ pub(crate) async fn submit_federation_events(
         signer_key_evidence,
         idempotency_key: _,
     } = submit;
-    if signer_key_evidence.len() > arkret_core::MAX_FEDERATED_EVENT_SIGNER_EVIDENCE
+    if signer_key_evidence.len()
+        > arkret_models_collaboration::event_sync::MAX_FEDERATED_EVENT_SIGNER_EVIDENCE
         || signer_key_evidence.iter().any(|evidence| {
             evidence.validate_shape().is_err()
                 || !events
@@ -807,7 +809,7 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    if arkret_core::validate_event_submit_batch_count(events.len()).is_err() {
+    if arkret_wire::event_envelope::validate_event_submit_batch_count(events.len()).is_err() {
         render_error(
             res,
             StatusCode::PAYLOAD_TOO_LARGE,

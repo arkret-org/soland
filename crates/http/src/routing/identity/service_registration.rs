@@ -1,10 +1,11 @@
 //! Standard Service Identity Provider operations.
 
-use arkret_core::{
-    CanonicalServiceUrl, Did, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
-    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
-    ServiceWebvhDataIntegrityProof,
+use arkret_identifiers::Did;
+use arkret_models_identity::service_identity::{
+    CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
+    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
 };
+use arkret_wire::ServiceType;
 use ed25519_dalek::Signer;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};

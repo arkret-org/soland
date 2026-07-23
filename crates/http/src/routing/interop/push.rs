@@ -48,19 +48,19 @@ const PUSH_TARGET_RETAIN_SECONDS: i64 = 24 * 60 * 60;
 
 pub(crate) fn push_target_privacy_derivation_claim(
     now: chrono::DateTime<chrono::Utc>,
-) -> arkret_core::PrivacyDerivation {
-    arkret_core::PrivacyDerivation {
-        push_target_id: Some(arkret_core::PushTargetPrivacyDerivation {
-            derivation_profile: arkret_core::PushTargetDerivationProfile::HmacSha256V1,
-            secret_scope: arkret_core::PushTargetSecretScope::PerService,
+) -> arkret_models_discovery::service_description::PrivacyDerivation {
+    arkret_models_discovery::service_description::PrivacyDerivation {
+        push_target_id: Some(arkret_models_discovery::service_description::PushTargetPrivacyDerivation {
+            derivation_profile: arkret_models_discovery::service_description::PushTargetDerivationProfile::HmacSha256V1,
+            secret_scope: arkret_models_discovery::service_description::PushTargetSecretScope::PerService,
             salt_epoch_id: push_target_salt_epoch_id_at(now),
             salt_rotation_seconds: PUSH_TARGET_SALT_ROTATION_SECONDS as u64,
             input_binding: Some(vec![
-                arkret_core::PushTargetInputBinding::RecipientServiceId,
-                arkret_core::PushTargetInputBinding::PrincipalId,
-                arkret_core::PushTargetInputBinding::DeviceId,
-                arkret_core::PushTargetInputBinding::PushRouteId,
-                arkret_core::PushTargetInputBinding::SaltEpochId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::RecipientServiceId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::PrincipalId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::DeviceId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::PushRouteId,
+                arkret_models_discovery::service_description::PushTargetInputBinding::SaltEpochId,
             ]),
         }),
     }
@@ -104,7 +104,7 @@ pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_core::PushRegisterDeviceOutcome> {
+) -> JsonResult<arkret_models_integration::models_push::PushRegisterDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let auth_result = authenticated_session(state, req);
     let body = body.into_inner();
@@ -206,11 +206,13 @@ pub(super) async fn push_register(
     {
         tracing::error!(%error, "failed to persist push device registration");
     }
-    json_ok(arkret_core::PushRegisterDeviceOutcome {
-        ok: true,
-        registration_id: Some(registration_id),
-        expires_at: None,
-    })
+    json_ok(
+        arkret_models_integration::models_push::PushRegisterDeviceOutcome {
+            ok: true,
+            registration_id: Some(registration_id),
+            expires_at: None,
+        },
+    )
 }
 
 /// Map the `(status, code, message)` triplet produced by
@@ -335,7 +337,7 @@ pub(super) async fn push_unregister(
     body: JsonBody<PushUnregisterDeviceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_core::PushUnregisterDeviceOutcome> {
+) -> JsonResult<arkret_models_integration::models_push::PushUnregisterDeviceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -364,7 +366,7 @@ pub(super) async fn push_unregister(
         if removed == 0 { "no_match" } else { "accepted" },
     )
     .await;
-    json_ok(arkret_core::PushUnregisterDeviceOutcome { ok: true })
+    json_ok(arkret_models_integration::models_push::PushUnregisterDeviceOutcome { ok: true })
 }
 
 #[endpoint(
@@ -676,12 +678,12 @@ fn push_rejection(
     device: Value,
     reason: &str,
     _detail: Option<String>,
-) -> arkret_core::PushNotifyRejection {
+) -> arkret_models_integration::models_push::PushNotifyRejection {
     let device_id = device
         .get("device_id")
         .and_then(Value::as_str)
         .and_then(|value| arkret_identifiers::DeviceId::new(value.to_owned()).ok());
-    arkret_core::PushNotifyRejection {
+    arkret_models_integration::models_push::PushNotifyRejection {
         push_target_id: push_target_id.to_owned(),
         device_id,
         reason_code: reason.to_owned(),

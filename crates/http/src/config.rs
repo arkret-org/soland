@@ -443,7 +443,7 @@ pub struct AppConfig {
     /// Deployment/admin upper bound for invite/contact receive policies.
     /// Constraints can only reduce holder reachability. Loaded from
     /// `SOLAND_RECEIVE_POLICY_*` env vars and advertised on ServiceDescribe.
-    pub receive_policy_constraints: Option<arkret_core::ReceivePolicyConstraints>,
+    pub receive_policy_constraints: Option<arkret_wire::receive_policy::ReceivePolicyConstraints>,
     /// When true, `AppState::new` seeds a deterministic demo Realm
     /// (`ak:realm:0196419b-...`), demo account (`did:web:alice.example`),
     /// and matching space_meta record on boot. Off by default so
@@ -1514,15 +1514,19 @@ pub(crate) fn did_host_from_service_id(service_id: &str) -> Option<String> {
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
 }
 
-fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_core::ReceivePolicyConstraints>>
-{
+fn load_receive_policy_constraints()
+-> anyhow::Result<Option<arkret_wire::receive_policy::ReceivePolicyConstraints>> {
     let applies_to = env_csv_cap("SOLAND_RECEIVE_POLICY_APPLIES_TO")
         .map(|values| {
             values
                 .into_iter()
                 .map(|value| match value.as_str() {
-                    "invite_delivery" => Ok(arkret_core::ReceivePolicySurface::InviteDelivery),
-                    "contact_request" => Ok(arkret_core::ReceivePolicySurface::ContactRequest),
+                    "invite_delivery" => {
+                        Ok(arkret_wire::receive_policy::ReceivePolicySurface::InviteDelivery)
+                    }
+                    "contact_request" => {
+                        Ok(arkret_wire::receive_policy::ReceivePolicySurface::ContactRequest)
+                    }
                     other => anyhow::bail!(
                         "SOLAND_RECEIVE_POLICY_APPLIES_TO contains unsupported surface {other}"
                     ),
@@ -1573,42 +1577,54 @@ fn load_receive_policy_constraints() -> anyhow::Result<Option<arkret_core::Recei
         return Ok(None);
     }
 
-    Ok(Some(arkret_core::ReceivePolicyConstraints {
-        policy_version: Some("env".to_owned()),
-        applies_to,
-        permitted_introduction_kinds,
-        forbidden_introduction_kinds,
-        handle_claim_max_behavior,
-        explicit_address_max_behavior,
-        unknown_invites_max_behavior,
-        allowed_handle_domains,
-        trusted_handle_issuers,
-        trusted_directory_services,
-        trusted_principal_services,
-        blocked_principal_services,
-        accepted_subject_did_methods,
-    }))
+    Ok(Some(
+        arkret_wire::receive_policy::ReceivePolicyConstraints {
+            policy_version: Some("env".to_owned()),
+            applies_to,
+            permitted_introduction_kinds,
+            forbidden_introduction_kinds,
+            handle_claim_max_behavior,
+            explicit_address_max_behavior,
+            unknown_invites_max_behavior,
+            allowed_handle_domains,
+            trusted_handle_issuers,
+            trusted_directory_services,
+            trusted_principal_services,
+            blocked_principal_services,
+            accepted_subject_did_methods,
+        },
+    ))
 }
 
-fn env_receive_action(name: &str) -> anyhow::Result<Option<arkret_core::InviteReceiveAction>> {
+fn env_receive_action(
+    name: &str,
+) -> anyhow::Result<Option<arkret_wire::receive_policy::InviteReceiveAction>> {
     let Some(value) = env_non_empty(name) else {
         return Ok(None);
     };
     match value.as_str() {
-        "drop" => Ok(Some(arkret_core::InviteReceiveAction::Drop)),
-        "quarantine" => Ok(Some(arkret_core::InviteReceiveAction::Quarantine)),
-        "notify" => Ok(Some(arkret_core::InviteReceiveAction::Notify)),
+        "drop" => Ok(Some(arkret_wire::receive_policy::InviteReceiveAction::Drop)),
+        "quarantine" => Ok(Some(
+            arkret_wire::receive_policy::InviteReceiveAction::Quarantine,
+        )),
+        "notify" => Ok(Some(
+            arkret_wire::receive_policy::InviteReceiveAction::Notify,
+        )),
         other => anyhow::bail!("{name} must be drop, quarantine, or notify; got {other}"),
     }
 }
 
-fn env_unknown_action(name: &str) -> anyhow::Result<Option<arkret_core::UnknownInviteAction>> {
+fn env_unknown_action(
+    name: &str,
+) -> anyhow::Result<Option<arkret_wire::receive_policy::UnknownInviteAction>> {
     let Some(value) = env_non_empty(name) else {
         return Ok(None);
     };
     match value.as_str() {
-        "drop" => Ok(Some(arkret_core::UnknownInviteAction::Drop)),
-        "quarantine" => Ok(Some(arkret_core::UnknownInviteAction::Quarantine)),
+        "drop" => Ok(Some(arkret_wire::receive_policy::UnknownInviteAction::Drop)),
+        "quarantine" => Ok(Some(
+            arkret_wire::receive_policy::UnknownInviteAction::Quarantine,
+        )),
         other => anyhow::bail!("{name} must be drop or quarantine; got {other}"),
     }
 }

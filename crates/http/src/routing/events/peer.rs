@@ -1,8 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    Did, EventId, EventsFrontierFederationPeerState, EventsQueryPostRequestBody,
-    EventsSubmitFederationRequestBody, RealmId,
+use arkret_identifiers::{Did, EventId, RealmId};
+use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
+use arkret_models_collaboration::event_sync::{
+    EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody,
 };
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,

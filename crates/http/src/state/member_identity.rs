@@ -306,7 +306,7 @@ impl MemberIdentityRegistry {
             .map(|r| {
                 Some(EffectiveIdentityEntry {
                     event_id: arkret_identifiers::EventId::new(r.event_id.clone()).ok()?,
-                    segment: arkret_core::MemberIdentitySegment::MemberIdentity,
+                    segment: arkret_models_identity::member_identity::MemberIdentitySegment::MemberIdentity,
                     payload_digest: arkret_identifiers::Hash::new(r.payload_digest.clone()).ok()?,
                 })
             })
@@ -379,10 +379,10 @@ fn effective_set_digest(
 ) -> Option<String> {
     let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
     let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).ok()?;
-    arkret_core::member_identity_effective_set_digest(
+    arkret_models_identity::member_identity::member_identity_effective_set_digest(
         &realm_id,
         &actor_id,
-        arkret_core::MemberIdentitySegment::MemberIdentity,
+        arkret_models_identity::member_identity::MemberIdentitySegment::MemberIdentity,
         entries,
     )
     .ok()
@@ -401,27 +401,39 @@ pub(crate) fn display_state_digest(
     entries: &[EffectiveIdentityEntry],
     handle_claims: &[HandleClaimDigestInput],
 ) -> Option<String> {
-    let handle_claims: Vec<arkret_core::RosterHandleClaimDigestEntry> = handle_claims
-        .iter()
-        .map(|claim| {
-            Some(arkret_core::RosterHandleClaimDigestEntry {
-                claim_digest: arkret_identifiers::Hash::new(claim.claim_digest.clone()).ok()?,
-                binding_state: serde_json::from_value(Value::String(claim.binding_state.clone()))
-                    .ok()?,
-                expires_at: match claim.expires_at.as_deref() {
-                    Some(value) => Some(
-                        chrono::DateTime::parse_from_rfc3339(value)
-                            .ok()?
-                            .with_timezone(&chrono::Utc),
-                    ),
-                    None => None,
-                },
+    let handle_claims: Vec<arkret_models_identity::member_identity::RosterHandleClaimDigestEntry> =
+        handle_claims
+            .iter()
+            .map(|claim| {
+                Some(
+                    arkret_models_identity::member_identity::RosterHandleClaimDigestEntry {
+                        claim_digest: arkret_identifiers::Hash::new(claim.claim_digest.clone())
+                            .ok()?,
+                        binding_state: serde_json::from_value(Value::String(
+                            claim.binding_state.clone(),
+                        ))
+                        .ok()?,
+                        expires_at: match claim.expires_at.as_deref() {
+                            Some(value) => Some(
+                                chrono::DateTime::parse_from_rfc3339(value)
+                                    .ok()?
+                                    .with_timezone(&chrono::Utc),
+                            ),
+                            None => None,
+                        },
+                    },
+                )
             })
-        })
-        .collect::<Option<Vec<_>>>()?;
+            .collect::<Option<Vec<_>>>()?;
     let realm_id = arkret_identifiers::RealmId::new(realm_id.to_owned()).ok()?;
     let actor_id = arkret_identifiers::Did::new(actor_id.to_owned()).ok()?;
-    arkret_core::member_display_state_digest(&realm_id, &actor_id, entries, &handle_claims).ok()
+    arkret_models_identity::member_identity::member_display_state_digest(
+        &realm_id,
+        &actor_id,
+        entries,
+        &handle_claims,
+    )
+    .ok()
 }
 
 fn canonical_digest(

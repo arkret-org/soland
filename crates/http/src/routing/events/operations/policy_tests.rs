@@ -39,13 +39,13 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         realm_id.clone(),
         "000000000691",
         arkret_wire::events::EventKind::REALM_CREATE,
-        serde_json::to_value(arkret_core::direct_conversation_realm_create_payload(
+        serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
             realm_id.clone(),
             alice.clone(),
             arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
                 .unwrap(),
-            arkret_core::NotaryProfile::SingleDid,
-            arkret_core::NotaryValue::single_did(alice.clone()),
+            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+            arkret_wire::notary::NotaryValue::single_did(alice.clone()),
             now,
         ))
         .unwrap(),
@@ -54,7 +54,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         realm_id.clone(),
         "000000000692",
         arkret_wire::events::EventKind::MEMBER_STATE,
-        arkret_core::direct_conversation_member_join_payload(
+        arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
             realm_id.clone(),
             bob,
             arkret_models_identity::DeliveryStatus::Unroutable,
@@ -66,7 +66,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         realm_id.clone(),
         "000000000693",
         arkret_wire::events::EventKind::STRAND_CREATE,
-        serde_json::to_value(arkret_core::direct_conversation_main_strand_create_payload(
+        serde_json::to_value(arkret_models_collaboration::objects::direct_conversation::direct_conversation_main_strand_create_payload(
             strand_id,
             realm_id.clone(),
             alice,
@@ -708,9 +708,9 @@ async fn register_native_agent_membership_context(
             "jws": "test"
         }
     });
-    serde_json::from_value::<arkret_core::AccountabilityGrantPayload>(
-        accountability_grant_payload.clone(),
-    )
+    serde_json::from_value::<
+        arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload,
+    >(accountability_grant_payload.clone())
     .expect("standard accountability grant payload");
     state
         .test_persistence()
@@ -1551,7 +1551,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     );
     state.test_projection().lock().agent_lifecycles.insert(
         agent.to_owned(),
-        arkret_core::AgentLifecycleState::Deactivated,
+        arkret_models_collaboration::agent_operations::AgentLifecycleState::Deactivated,
     );
     let operation = reply_message(realm_id, "0000000007c8", agent, grant.grant_id.as_str());
 

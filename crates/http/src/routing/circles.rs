@@ -28,14 +28,16 @@
 //! MLS genesis / commit / welcome cascade is wired end-to-end. It must not
 //! acknowledge a rotation without actually changing the cryptographic scope.
 
-use arkret_core::{
-    Circle, CircleColorToken, CircleCreatePayload, CircleCreateRequestBody,
-    CircleDirectoryVisibility, CircleDisplay, CircleGlyph, CircleId, CircleJoinRule, CircleList,
-    CircleMemberRequestBody, CircleMembership, CircleMembershipOutcome, CirclePendingMlsRemoval,
-    CircleScopeRotateOutcome, CircleScopeRotateRequestBody, CircleState, CircleSymbol, CircleView,
-    Did, EncryptionFloor, EncryptionProfile, Event, EventId, HistoryVisibility, Operation,
-    OperationId, RealmId,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{CircleId, Did, EventId, OperationId, RealmId};
+use arkret_models_collaboration::events_payloads::capability_circle_consent_contact::CircleCreatePayload;
+use arkret_models_collaboration::governance::circle::{
+    Circle, CircleColorToken, CircleCreateRequestBody, CircleDirectoryVisibility, CircleDisplay,
+    CircleGlyph, CircleJoinRule, CircleList, CircleMemberRequestBody, CircleMembership,
+    CircleMembershipOutcome, CirclePendingMlsRemoval, CircleScopeRotateOutcome,
+    CircleScopeRotateRequestBody, CircleState, CircleSymbol, CircleView, EncryptionFloor,
 };
+use arkret_wire::{EncryptionProfile, Event, HistoryVisibility};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
@@ -1052,7 +1054,7 @@ mod tests {
             .expect("circle object");
         assert_eq!(
             object.get("schema").and_then(Value::as_str),
-            Some(arkret_core::CIRCLE_SCHEMA_ID)
+            Some(arkret_wire::constants::CIRCLE_SCHEMA_ID)
         );
         assert_eq!(object.get("state").and_then(Value::as_str), Some("active"));
         assert_eq!(

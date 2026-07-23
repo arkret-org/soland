@@ -32,17 +32,19 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    Did, Failure as KeypackageFailure, Hash, KeyOperationSignature, KeyPackageClaimRecord,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, Hash, OperationId, RealmId};
+use arkret_models_crypto::{
+    Failure as KeypackageFailure, KeyOperationSignature, KeyPackageClaimRecord,
     KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
     KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
     KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody,
-    Operation, OperationId, PeerKeyPackageClaimErrorCode, PeerKeyPackageClaimPurpose,
-    PeerKeyPackageClaimReceipt, PeerKeyPackagesClaimAuthorizationDraft,
-    PeerKeyPackagesClaimOutcome, PeerKeyPackagesClaimQueryOutcome,
-    PeerKeyPackagesClaimQueryRequestBody, PeerKeyPackagesClaimQueryState,
-    PeerKeyPackagesClaimRequestBody, PeerKeyPackagesClaimTransportBinding, RealmId,
-    peer_keypackage_claim_authorization_signing_bytes, peer_keypackage_claim_receipt_signing_bytes,
+    PeerKeyPackageClaimErrorCode, PeerKeyPackageClaimPurpose, PeerKeyPackageClaimReceipt,
+    PeerKeyPackagesClaimAuthorizationDraft, PeerKeyPackagesClaimOutcome,
+    PeerKeyPackagesClaimQueryOutcome, PeerKeyPackagesClaimQueryRequestBody,
+    PeerKeyPackagesClaimQueryState, PeerKeyPackagesClaimRequestBody,
+    PeerKeyPackagesClaimTransportBinding, peer_keypackage_claim_authorization_signing_bytes,
+    peer_keypackage_claim_receipt_signing_bytes,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -263,10 +265,13 @@ async fn upload_keypackage(
     let trust_binding =
         current_keypackage_trust_binding(state, &body.principal_id, &device_id).await?;
     let unsigned_upload = body.unsigned();
-    let upload_signing_input = arkret_core::keypackages_upload_signing_input(&unsigned_upload)
-        .map_err(|error| {
-            AppError::invalid_param(format!("KeyPackage upload canonical input failed: {error}"))
-        })?;
+    let upload_signing_input =
+        arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&unsigned_upload)
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "KeyPackage upload canonical input failed: {error}"
+                ))
+            })?;
     if let Some(authorize_event_id) = trust_binding.agent_key_authorize_event_id.as_deref() {
         let first_entry = body
             .key_packages
@@ -359,7 +364,7 @@ async fn upload_keypackage(
                 }
             };
         let entry_signing_input = if entry.device_signature.is_some() {
-            match arkret_core::keypackage_upload_entry_signing_input(
+            match arkret_models_crypto::http_bodies::keypackage_upload_entry_signing_input(
                 &body.principal_id,
                 &body.device_id,
                 &entry,
@@ -880,13 +885,15 @@ async fn verify_peer_claim_participant_authorization(
             )
             .await
             .map_err(|error| AppError::internal(format!("requester device directory: {error}")))?;
-            if !matches!(facet.status, arkret_core::DeviceStatus::Active)
-                || facet
-                    .device_authorize_event_id
-                    .as_ref()
-                    .map(ToString::to_string)
-                    .as_deref()
-                    != authorization.device_authorize_event_id.as_deref()
+            if !matches!(
+                facet.status,
+                arkret_models_crypto::keys::DeviceStatus::Active
+            ) || facet
+                .device_authorize_event_id
+                .as_ref()
+                .map(ToString::to_string)
+                .as_deref()
+                != authorization.device_authorize_event_id.as_deref()
                 || authorization.verification_method.as_str()
                     != format!("{}#{}", body.requester, device_id).as_str()
             {
@@ -981,8 +988,8 @@ async fn peer_claim_policy_authorized(
                     .map_err(|_| AppError::internal("configured trust_domain is invalid"))?;
             let expected_pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
                 trust_domain,
-                arkret_core::DirectConversationPairKeyParticipant::unmapped(body.requester.clone()),
-                arkret_core::DirectConversationPairKeyParticipant::unmapped(
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(body.requester.clone()),
+                arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
                     body.target_principal_id.clone(),
                 ),
             )
@@ -1061,9 +1068,11 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     revoke_expired_peer_claims(state)
         .await
         .map_err(|_| "peer_claim_welcome_pending")?;
-    let welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(payload.clone())
-        .map_err(|_| "peer_claim_welcome_invalid")?;
-    if let arkret_core::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(authorize_event_id) =
+    let welcome = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
+    >(payload.clone())
+    .map_err(|_| "peer_claim_welcome_invalid")?;
+    if let arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(authorize_event_id) =
         &welcome.claim_ref.trust_binding
         && !current_agent_key_authorization_matches(
             state,
@@ -1509,12 +1518,13 @@ async fn consume_keypackages(
         ));
     }
     let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
-    let consume_signing_input = arkret_core::keypackages_consume_signing_input(&body.unsigned())
-        .map_err(|error| {
-            AppError::invalid_param(format!(
-                "KeyPackage consume canonical input failed: {error}"
-            ))
-        })?;
+    let consume_signing_input =
+        arkret_models_crypto::http_bodies::keypackages_consume_signing_input(&body.unsigned())
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "KeyPackage consume canonical input failed: {error}"
+                ))
+            })?;
     verify_session_keypackage_write_signature(
         state,
         &session,
@@ -1668,7 +1678,7 @@ async fn validate_direct_keypackage_consume(
         .map_err(|error| {
             AppError::internal(format!("stored direct binding Event invalid: {error}"))
         })?;
-    let binding_payload = serde_json::from_value::<arkret_core::DirectConversationBoundPayload>(
+    let binding_payload = serde_json::from_value::<arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload>(
         serde_json::to_value(binding_event.payload).map_err(|error| {
             AppError::internal(format!("stored direct binding payload invalid: {error}"))
         })?,
@@ -1709,7 +1719,9 @@ async fn validate_direct_keypackage_consume(
             "canonical direct Welcome belongs to another Realm",
         ));
     }
-    let welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(
+    let welcome = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
+    >(
         serde_json::to_value(welcome_event.payload).map_err(|error| {
             AppError::internal(format!("stored direct Welcome payload invalid: {error}"))
         })?,
@@ -1804,11 +1816,11 @@ async fn validate_sidecar_keypackage_consume(
             "Sidecar consume reference is not a Welcome Event",
         ));
     }
-    let welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(
-        serde_json::to_value(event.payload).map_err(|error| {
-            AppError::internal(format!("stored Sidecar Welcome payload invalid: {error}"))
-        })?,
-    )
+    let welcome = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
+    >(serde_json::to_value(event.payload).map_err(|error| {
+        AppError::internal(format!("stored Sidecar Welcome payload invalid: {error}"))
+    })?)
     .map_err(|_| {
         AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1889,9 +1901,9 @@ async fn validate_sidecar_keypackage_consume(
                         .commit_ref
                         .as_ref()
                         .map(|event_id| event_id.as_str())
-                && serde_json::from_value::<arkret_core::MlsGovernanceBindingPayload>(
-                    row.governance_binding.clone(),
-                )
+                && serde_json::from_value::<
+                    arkret_models_crypto::mls_payloads::MlsGovernanceBindingPayload,
+                >(row.governance_binding.clone())
                 .ok()
                 .as_ref()
                     == Some(&welcome.governance_binding)
@@ -1928,10 +1940,13 @@ async fn revoke_keypackages(
         ));
     }
     let refs = non_empty_keypackage_refs(&body.key_package_refs)?;
-    let revoke_signing_input = arkret_core::keypackages_revoke_signing_input(&body.unsigned())
-        .map_err(|error| {
-            AppError::invalid_param(format!("KeyPackage revoke canonical input failed: {error}"))
-        })?;
+    let revoke_signing_input =
+        arkret_models_crypto::http_bodies::keypackages_revoke_signing_input(&body.unsigned())
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "KeyPackage revoke canonical input failed: {error}"
+                ))
+            })?;
     verify_session_keypackage_write_signature(
         state,
         &session,
@@ -2144,8 +2159,9 @@ async fn validate_agent_keypackage_upload(
         "alg": "Ed25519",
         "key": URL_SAFE_NO_PAD.encode(public_key),
     });
-    let actual_public_key_digest = arkret_core::agent_runtime_public_key_digest(&public_key_value)
-        .map_err(|_| "claim_generation_mismatch".to_owned())?;
+    let actual_public_key_digest =
+        arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value)
+            .map_err(|_| "claim_generation_mismatch".to_owned())?;
     if actual_public_key_digest.as_str() != expected_public_key_digest
         || signature.kid.as_str() != verification_method
         || signature
@@ -2155,7 +2171,7 @@ async fn validate_agent_keypackage_upload(
     {
         return Err("claim_generation_mismatch".to_owned());
     }
-    arkret_core::verify_keypackage_signing_input(
+    arkret_signatures::keypackages::verify_keypackage_signing_input(
         &public_key,
         verification_method,
         signing_input,
@@ -2214,7 +2230,7 @@ async fn verify_device_keypackage_signature(
             .map_err(|error| {
                 AppError::invalid_param(format!("device signing key is invalid: {error}"))
             })?;
-    arkret_core::verify_keypackage_signing_input(
+    arkret_signatures::keypackages::verify_keypackage_signing_input(
         &verifying_key.to_bytes(),
         signature.kid.as_str(),
         signing_input,
@@ -2766,7 +2782,7 @@ mod trust_binding_tests {
             "key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
         });
         let public_key_digest =
-            arkret_core::agent_runtime_public_key_digest(&public_key_value).unwrap();
+            arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value).unwrap();
         let realm_id = arkret_identifiers::RealmId::new(
             "ak:realm:01904100-0000-7000-8000-00000000000f".to_owned(),
         )
@@ -2820,7 +2836,8 @@ mod trust_binding_tests {
             .signed_key_packages_upload_request(&[record], verification_method)
             .unwrap();
         let signing_input =
-            arkret_core::keypackages_upload_signing_input(&upload.unsigned()).unwrap();
+            arkret_models_crypto::http_bodies::keypackages_upload_signing_input(&upload.unsigned())
+                .unwrap();
 
         validate_agent_keypackage_upload(
             &state,

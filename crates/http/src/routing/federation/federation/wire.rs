@@ -31,18 +31,26 @@ impl FederationTrustHeaders {
                 .to_str()
                 .map_err(|_| HeaderViolation::Malformed(name.to_owned()))
         };
-        let source = header_value(arkret_core::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
-        let destination = header_value(arkret_core::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let canonical_hash = header_value(arkret_core::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
+        let source = header_value(arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
+        let destination =
+            header_value(arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
+        let canonical_hash =
+            header_value(arkret_wire::constants::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
         let source = arkret_identifiers::TypedTrustDomainId::new(source).map_err(|_| {
-            HeaderViolation::Malformed(arkret_core::HEADER_SOURCE_TRUST_DOMAIN.to_owned())
+            HeaderViolation::Malformed(
+                arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN.to_owned(),
+            )
         })?;
         let destination =
             arkret_identifiers::TypedTrustDomainId::new(destination).map_err(|_| {
-                HeaderViolation::Malformed(arkret_core::HEADER_DESTINATION_TRUST_DOMAIN.to_owned())
+                HeaderViolation::Malformed(
+                    arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN.to_owned(),
+                )
             })?;
         let canonical_hash = arkret_identifiers::Hash::new(canonical_hash).map_err(|_| {
-            HeaderViolation::Malformed(arkret_core::HEADER_REQUEST_CANONICAL_DIGEST.to_owned())
+            HeaderViolation::Malformed(
+                arkret_wire::constants::HEADER_REQUEST_CANONICAL_DIGEST.to_owned(),
+            )
         })?;
         Ok(Self {
             source_trust_domain: source,
@@ -68,7 +76,7 @@ impl FederationTrustHeaders {
     /// inclusion in the message-signature transcript. Delegates to the SDK
     /// helper to keep producer + consumer byte-for-byte identical.
     pub(crate) fn transcript_fragment(&self) -> String {
-        arkret_core::federation_trust_domain_transcript_fragment(
+        arkret_signatures::federation::federation_trust_domain_transcript_fragment(
             &self.source_trust_domain,
             &self.destination_trust_domain,
             &self.request_canonical_digest,
@@ -176,17 +184,18 @@ pub(crate) fn delivery_binding_stale_response(
         Value::Object(object) => object.into_iter().collect::<BTreeMap<_, _>>(),
         other => BTreeMap::from([("value".to_owned(), other)]),
     };
-    let details = arkret_core::DeliveryBindingStale {
+    let details = arkret_models_identity::artifacts_device_identity::DeliveryBindingStale {
         new_recipient_service_id: new_recipient_service_id.clone(),
         handover_frontier: handover_frontier.to_vec(),
-        handover_proof: arkret_core::DeliveryBindingStaleHandoverProof {
-            frontier: handover_frontier.to_vec(),
-            recipient_service_id: new_recipient_service_id.clone(),
-            actor_id: actor_id.clone(),
-            witness: arkret_core::NonEmptyJsonObject::new(witness)
-                .expect("delivery binding witness must be non-empty"),
-            extra: Default::default(),
-        },
+        handover_proof:
+            arkret_models_identity::artifacts_device_identity::DeliveryBindingStaleHandoverProof {
+                frontier: handover_frontier.to_vec(),
+                recipient_service_id: new_recipient_service_id.clone(),
+                actor_id: actor_id.clone(),
+                witness: arkret_wire::wire_strings::NonEmptyJsonObject::new(witness)
+                    .expect("delivery binding witness must be non-empty"),
+                extra: Default::default(),
+            },
         extra: Default::default(),
     };
     error_envelope_with_details(
@@ -216,7 +225,7 @@ fn error_envelope_with_details(
 ) -> Value {
     let details =
         serde_json::to_value(details).unwrap_or_else(|_| Value::Object(Default::default()));
-    let mut envelope = arkret_core::ErrorEnvelope::new(code, message);
+    let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message);
     if let Some(object) = details.as_object() {
         for (key, value) in object {
             envelope = envelope.with_detail(key.clone(), value.clone());

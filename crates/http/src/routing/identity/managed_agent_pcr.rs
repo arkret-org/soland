@@ -1,11 +1,16 @@
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    AgentKeyScope, AgentPcrRecoveryState, BackupClass, Did, Hash, KeyBackup,
-    KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding, RealmId,
-    RealmSealFrontierView, RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse,
-    RecoveryPolicy, Seal, agent_requested_scope_digest,
+use arkret_identifiers::{Did, Hash, RealmId};
+use arkret_models_collaboration::agent_operations::{
+    AgentPcrRecoveryState, agent_requested_scope_digest,
 };
+use arkret_models_collaboration::event_sync::RealmSealFrontierView;
+use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
+use arkret_models_crypto::{
+    BackupClass, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding,
+    RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
+};
+use arkret_wire::Seal;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -361,7 +366,7 @@ pub(crate) async fn project_agent_pcr_recovery(
 pub(crate) async fn active_series_pointer_is_current(
     state: &AppState,
     controller_id: &str,
-    pointer: &arkret_core::KeyBackupActiveSeries,
+    pointer: &arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
     let controller_realm =
         RealmId::new(soland_application::identity::principal_control_realm_for_did(controller_id))
@@ -412,16 +417,16 @@ pub(crate) async fn active_series_pointer_is_current(
         &pointer.frontier_ref.generation,
     ) {
         (
-            arkret_core::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
-            arkret_core::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
         ) => Ok(auth == frontier
             && crate::routing::identity::cross_signing::current_accepted_ssk_generation(
                 state,
                 controller_id,
             ) == Some(auth.get())),
         (
-            arkret_core::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
-            arkret_core::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
         ) => {
             let current = crate::routing::identity::device_generation::current_device_generation(
                 state,
@@ -436,7 +441,7 @@ pub(crate) async fn active_series_pointer_is_current(
             let Some(current) = current else {
                 return Ok(false);
             };
-            if current.status != arkret_core::DeviceGenerationStatus::Active
+            if current.status != arkret_models_crypto::keys::DeviceGenerationStatus::Active
                 || current.current_ref != frontier.as_str()
             {
                 return Ok(false);
@@ -483,11 +488,15 @@ pub(crate) async fn validate_active_series_operation_authority(
     {
         return Ok(());
     }
-    let record = serde_json::from_value::<arkret_core::KeyBackupActiveSeries>(
-        crate::routing::events::projection_context_stripped_payload(&operation.payload),
-    )
+    let record = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
+    >(crate::routing::events::projection_context_stripped_payload(
+        &operation.payload,
+    ))
     .map_err(|_| "key_backup_active_series_schema_violation")?;
-    if arkret_core::principal_control_realm_id(&record.actor_id) != operation.realm_id.as_str() {
+    if arkret_models_identity::did_document::principal_control_realm_id(&record.actor_id)
+        != operation.realm_id.as_str()
+    {
         return Err("key_backup_active_series_wrong_control_realm");
     }
     let backup_class = record.backup_class.as_str().to_owned();
@@ -507,7 +516,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     if !series_exists {
         return Err("key_backup_active_series_target_missing");
     }
-    arkret_core::key_backup_active_series_head(&record)
+    arkret_models_collaboration::events_payloads::strand_history_join::key_backup_active_series_head(&record)
         .map_err(|_| "key_backup_active_series_schema_violation")?;
     let pointer = record;
     match active_series_pointer_is_current(state, pointer.actor_id.as_str(), &pointer).await {
@@ -520,9 +529,11 @@ pub(crate) async fn validate_active_series_operation_authority(
 async fn active_series_signature_is_valid(
     state: &AppState,
     controller_id: &str,
-    pointer: &arkret_core::KeyBackupActiveSeries,
+    pointer: &arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    if pointer.auth_data.signature_algorithm != arkret_core::KeyBackupSignatureAlgorithm::Ed25519 {
+    if pointer.auth_data.signature_algorithm
+        != arkret_models_crypto::key_backup::KeyBackupSignatureAlgorithm::Ed25519
+    {
         return Ok(false);
     }
     let record = pointer.clone();
@@ -570,7 +581,7 @@ async fn active_series_signature_is_valid(
             continue;
         }
         let anchored = match &pointer.auth_data.trust_binding {
-            arkret_core::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
                 crate::routing::identity::cross_signing::persisted_device_is_anchored_to_ssk_generation(
                     state,
                     controller_id,
@@ -580,7 +591,7 @@ async fn active_series_signature_is_valid(
                     generation.get(),
                 )
             }
-            arkret_core::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
                 device
                     .payload
                     .get("device_authorize_event_id")
@@ -1224,7 +1235,7 @@ async fn validate_current_recovery_recipient(
         .encryption
         .hpke_suite
         .as_deref()
-        .unwrap_or(arkret_core::DEFAULT_HPKE_SUITE);
+        .unwrap_or(arkret_models_crypto::key_backup::DEFAULT_HPKE_SUITE);
     let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
         .map_err(|_| {
             AppError::new(
@@ -1462,7 +1473,7 @@ mod tests {
         let agreement = RecoveryKeyAgreementEntry {
             key_agreement_ref: arkret_wire::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
                 .unwrap(),
-            alg: arkret_core::RecoveryKeyAgreementAlgorithm::X25519,
+            alg: arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
             public_key_multibase: arkret_wire::NonEmptyString::new(
                 "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
             )

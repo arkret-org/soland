@@ -1,6 +1,6 @@
 //! Effective mention-routing policy for Realm notifications.
 
-use arkret_core::{MentionRoutingHint, effective_mention_routing_hint};
+use arkret_models_integration::{MentionRoutingHint, effective_mention_routing_hint};
 
 use crate::state::AppState;
 

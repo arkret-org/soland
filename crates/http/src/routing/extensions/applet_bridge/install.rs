@@ -3,14 +3,16 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    AppletApprovalRequest, AppletGhostActorMode, AppletId, AppletInstallAppletId,
+use arkret_identifiers::{AppletId, Did, EventId, GrantId, RealmId};
+use arkret_identity::DidDocument;
+use arkret_models_integration::{
+    AppletApprovalRequest, AppletGhostActorMode, AppletInstallAppletId,
     AppletInstallEffectiveStatus, AppletInstallOutcome, AppletInstallPlan,
     AppletInstallRequestBody, AppletPackage, AppletRejectedItem, AppletWireNamespaces,
-    CapabilityConstraint, DeniedScope, Did, E2eeEffect, E2eePolicy, EffectiveScope, EventId,
-    EventSubmission, GrantId, NamespaceConflict, RealmId, ScopeGrant, WidgetEffect,
+    CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
+    ScopeGrant, WidgetEffect,
 };
-use arkret_identity::DidDocument;
+use arkret_wire::EffectiveScope;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -925,7 +927,7 @@ fn validate_controller_proof(
 fn validated_registration_epoch_evidence(
     state: &AppState,
     package: &AppletPackage,
-) -> Result<arkret_core::AppletRegistrationEpochEvidence, AppError> {
+) -> Result<arkret_models_integration::AppletRegistrationEpochEvidence, AppError> {
     let document =
         crate::jws_verify::resolve_did_document(state, &package.service_id).map_err(|reason| {
             AppError::invalid_param("applet service DID document could not be resolved")
@@ -938,7 +940,7 @@ fn validated_registration_epoch_evidence(
 fn validate_registration_epoch_evidence_for_document(
     package: &AppletPackage,
     document: &DidDocument,
-) -> Result<arkret_core::AppletRegistrationEpochEvidence, AppError> {
+) -> Result<arkret_models_integration::AppletRegistrationEpochEvidence, AppError> {
     let evidence = package.registration_epoch_evidence.clone().ok_or_else(|| {
         AppError::invalid_param("applet package registration_epoch evidence is required")
             .with_wire_code("applet_registration_epoch_evidence_mismatch")
@@ -1388,7 +1390,7 @@ pub(super) fn package_namespace(package: &AppletPackage) -> String {
 pub(super) fn allow_ghost_actors_for_install(
     package: &AppletPackage,
     approved_actions: &[String],
-    actor_policy: Option<&arkret_core::AppletActorPolicy>,
+    actor_policy: Option<&arkret_models_integration::applet_models::AppletActorPolicy>,
 ) -> bool {
     let package_allows = package.ghost_policy.enabled;
     let scope_approved = approved_actions
@@ -1409,9 +1411,9 @@ pub(super) fn capability_allows_message_create(capability: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{
-        AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry, Did,
-        Hash,
+    use arkret_identifiers::{Did, Hash};
+    use arkret_models_integration::{
+        AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
     };
     use arkret_signatures::Ed25519MoveSigner;
 
@@ -1606,7 +1608,8 @@ mod tests {
             membership_event_refs: Vec::new(),
             e2ee_authorization_refs: Vec::new(),
             widget_policy_ref: None,
-            effective_status: arkret_core::AppletInstallEffectiveStatus::Installed,
+            effective_status:
+                arkret_models_integration::applet_models::AppletInstallEffectiveStatus::Installed,
             rejected: Vec::new(),
         }
     }
@@ -1619,9 +1622,13 @@ mod tests {
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
         };
-        let actor_policy = arkret_core::AppletActorPolicy {
-            bot_membership: Some(arkret_core::AppletBotMembership::Join),
-            ghost_actor_mode: Some(arkret_core::AppletGhostActorMode::PolicyDeclared),
+        let actor_policy = arkret_models_integration::applet_models::AppletActorPolicy {
+            bot_membership: Some(
+                arkret_models_integration::applet_models::AppletBotMembership::Join,
+            ),
+            ghost_actor_mode: Some(
+                arkret_models_integration::applet_models::AppletGhostActorMode::PolicyDeclared,
+            ),
         };
         assert!(allow_ghost_actors_for_install(
             &package,
@@ -1715,16 +1722,17 @@ mod tests {
         let version_time = chrono::DateTime::parse_from_rfc3339("2026-07-18T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let evidence = arkret_core::AppletRegistrationEpochEvidence::from_did_document(
-            &document,
-            arkret_core::AppletDidMethodVersionEvidence::versioned(
-                "did:web",
-                None,
-                Some(version_time),
+        let evidence =
+            arkret_models_integration::AppletRegistrationEpochEvidence::from_did_document(
+                &document,
+                arkret_models_integration::AppletDidMethodVersionEvidence::versioned(
+                    "did:web",
+                    None,
+                    Some(version_time),
+                )
+                .unwrap(),
             )
-            .unwrap(),
-        )
-        .unwrap();
+            .unwrap();
         package.registration_epoch_evidence = Some(evidence.clone());
 
         let validated =

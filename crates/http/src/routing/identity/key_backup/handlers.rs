@@ -269,11 +269,12 @@ pub(super) async fn put_key_backup(
     // Spec `keys-operations.schema.json#/$defs/backup_id` pins the id to
     // `ak:backup:<uuidv7>`; parse into the SDK typed id up front so a
     // non-conforming id fails before any persistence side effect.
-    let typed_backup_id = arkret_core::BackupId::new(backup_id.clone()).map_err(|error| {
-        AppError::invalid_param(format!(
-            "backup_id must be a ak:backup:<uuidv7> typed id: {error}"
-        ))
-    })?;
+    let typed_backup_id =
+        arkret_identifiers::BackupId::new(backup_id.clone()).map_err(|error| {
+            AppError::invalid_param(format!(
+                "backup_id must be a ak:backup:<uuidv7> typed id: {error}"
+            ))
+        })?;
     // The request body is now deserialized straight into the SDK `KeyBackup`
     // type (matching `request_schema_ref: key-backup.schema.json`), so the
     // OpenAPI request contract is strong rather than `Value`.

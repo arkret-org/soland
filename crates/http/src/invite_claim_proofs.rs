@@ -1,9 +1,11 @@
-use arkret_core::{
-    Did, INVITE_CLAIM_AUDIENCE, INVITE_SUBJECT_PROOF_ALG, InviteClaimBindingProof,
-    InviteSubjectProof, InviteSubjectProofBody, Operation, invite_binding_proof_transcript_bytes,
-};
+use arkret_event_draft::Operation;
+use arkret_identifiers::Did;
 #[cfg(test)]
 use arkret_identity::DidResolver;
+use arkret_models_collaboration::governance::membership_invite::{
+    INVITE_CLAIM_AUDIENCE, INVITE_SUBJECT_PROOF_ALG, InviteClaimBindingProof, InviteSubjectProof,
+    InviteSubjectProofBody, invite_binding_proof_transcript_bytes,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, VerifyingKey};

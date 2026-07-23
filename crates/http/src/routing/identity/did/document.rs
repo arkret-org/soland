@@ -161,7 +161,7 @@ fn valid_handle_domain_candidate(value: &str) -> Option<String> {
     if domain.is_empty() {
         return None;
     }
-    arkret_core::prepare_idna_domain(&domain).ok()
+    arkret_wire::string_profiles::prepare_idna_domain(&domain).ok()
 }
 
 fn with_default_also_known_as(

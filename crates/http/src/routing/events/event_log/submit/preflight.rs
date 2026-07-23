@@ -18,7 +18,7 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
         }
     };
     let envelope =
-        match serde_json::from_value::<arkret_core::MlsWelcomeClaimEnvelope>(envelope_value) {
+        match serde_json::from_value::<arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomeClaimEnvelope>(envelope_value) {
             Ok(envelope) => envelope,
             Err(_) => {
                 return Some(

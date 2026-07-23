@@ -41,7 +41,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
         .collect::<Result<Vec<_>, _>>()?;
     let state_digest = arkret_state::state_digest_from_items(&items)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let snapshot_id = arkret_core::SnapshotId::new(crate::ids::generate_snapshot_id())
+    let snapshot_id = arkret_identifiers::SnapshotId::new(crate::ids::generate_snapshot_id())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let built_chunks = arkret_state::build_snapshot_chunks(
         &snapshot_id,

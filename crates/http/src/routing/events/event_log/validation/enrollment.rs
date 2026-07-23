@@ -116,7 +116,7 @@ pub(crate) async fn validate_device_enrollment_authority_binding(
 /// was signed by the DID-designated enrollment authority.
 pub(crate) async fn validate_federated_device_signing_key_evidence(
     state: &AppState,
-    evidence: &arkret_core::FederatedDeviceSigningKeyEvidence,
+    evidence: &arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence,
 ) -> Result<(), String> {
     evidence
         .validate_shape()

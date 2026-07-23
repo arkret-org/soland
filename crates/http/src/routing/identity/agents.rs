@@ -29,9 +29,9 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    BlobRef, CircleId, Did, EventId, GrantId, Hash, Operation, OperationId, RealmId, RelationId,
-    StrandId,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{
+    BlobRef, CircleId, Did, EventId, GrantId, Hash, OperationId, RealmId, RelationId, StrandId,
 };
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
@@ -298,7 +298,7 @@ mod tests {
         };
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
         let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
-        let request_digest = arkret_core::agent_key_pair_proof_request_binding_digest(
+        let request_digest = arkret_signatures::agent::agent_key_pair_proof_request_binding_digest(
             pairing_request_id,
             &agent_id,
             verification_method,
@@ -357,7 +357,7 @@ mod tests {
             agent_id,
             verification_method: arkret_wire::DidUrl::new(verification_method).unwrap(),
             public_key,
-            proof_of_possession: arkret_core::NonEmptyJsonObject::new(
+            proof_of_possession: arkret_wire::wire_strings::NonEmptyJsonObject::new(
                 std::collections::BTreeMap::from([
                     ("challenge".to_owned(), json!(pairing_request_id)),
                     ("audience".to_owned(), json!(service_id)),
@@ -655,7 +655,7 @@ mod tests {
 
         let key_state = agent_key_state_from_record(
             &record,
-            arkret_core::AgentPcrRecoveryState::Pending,
+            arkret_models_collaboration::agent_operations::AgentPcrRecoveryState::Pending,
             Vec::new(),
         )
         .expect("key state projection");

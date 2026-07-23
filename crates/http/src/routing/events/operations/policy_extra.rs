@@ -1,4 +1,7 @@
-use arkret_core::{Operation, ReadReceiptPolicy, ReadReceiptPolicyChildViolation};
+use arkret_event_draft::Operation;
+use arkret_models_collaboration::objects::read_receipts::{
+    ReadReceiptPolicy, ReadReceiptPolicyChildViolation,
+};
 use serde_json::Value;
 use soland_application::operation_semantics::poll_id_from_content;
 
@@ -59,7 +62,7 @@ pub(crate) async fn validate_history_visibility_content_scheme_policy(
     let history_visibility =
         intended_history_visibility_for_realm(state, operations, realm_id).await;
     let content_scheme = intended_content_scheme_for_realm(state, operations, realm_id).await;
-    arkret_core::validate_history_visibility_content_scheme_values(
+    arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
         &history_visibility,
         content_scheme.as_deref(),
     )
@@ -407,9 +410,9 @@ pub(crate) async fn validate_realm_key_share_policy(
     {
         return Ok(());
     }
-    let share = serde_json::from_value::<arkret_core::RealmKeySharePayload>(
-        projection_context_stripped_payload(&operation.payload),
-    )
+    let share = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
+    >(projection_context_stripped_payload(&operation.payload))
     .map_err(|_| "policy_denied")?;
     // encryption-and-audit.md §2.10.8 — a `ak.realm_key.share` with
     // `share_class=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
@@ -421,7 +424,7 @@ pub(crate) async fn validate_realm_key_share_policy(
     // recovery recipient or it is rejected.
     if matches!(
         share.share_class,
-        arkret_core::RealmKeyShareClass::RealmRecoveryKey
+        arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeyShareClass::RealmRecoveryKey
     ) {
         return validate_rrk_targeted_realm_key_share(state, operation.realm_id.as_str(), &share)
             .unwrap_or(Err("durability_recovery_recipient_unverified"));
@@ -471,32 +474,33 @@ pub(crate) async fn validate_realm_key_share_policy(
         .await
         .map_err(|_| "policy_denied")?
         .ok_or("policy_denied")?;
-    let policy = serde_json::from_value::<arkret_core::HistorySharingPolicyPayloadValue>(
+    let policy = serde_json::from_value::<arkret_models_collaboration::events_payloads::strand_history_join::HistorySharingPolicyPayloadValue>(
         policy_value.clone(),
     )
     .map_err(|_| "policy_denied")?;
-    arkret_core::validate_history_sharing_policy(&policy).map_err(|_| "policy_denied")?;
+    arkret_policy::history_visibility::validate_history_sharing_policy(&policy)
+        .map_err(|_| "policy_denied")?;
     let visibility = share.key_scope.history_visibility.unwrap_or_else(|| {
         meta.history_visibility
             .parse()
-            .unwrap_or(arkret_core::HistoryVisibility::Restricted)
+            .unwrap_or(arkret_wire::primitives::HistoryVisibility::Restricted)
     });
     let receiver_state = realm_key_share_receiver_event_state(
         state,
         operation.realm_id.as_str(),
         share.recipient_principal_id.as_str(),
     );
-    let input = arkret_core::HistoryKeyShareGateInput {
+    let input = arkret_policy::history_visibility::HistoryKeyShareGateInput {
         visibility,
-        reader: arkret_core::HistoryReaderContext {
+        reader: arkret_models_collaboration::governance::history_visibility::HistoryReaderContext {
             current_active_member: true,
             event_state: receiver_state,
             has_discoverability: true,
             has_preview_token: false,
         },
-        range: arkret_core::HistoryRangeContext {
+        range: arkret_models_collaboration::governance::history_visibility::HistoryRangeContext {
             since_invite: true,
-            since_join: receiver_state == arkret_core::HistoryReaderEventState::Joined,
+            since_join: receiver_state == arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::Joined,
             epoch_span: realm_key_share_epoch_span(
                 share.key_scope.from_epoch,
                 share.key_scope.to_epoch,
@@ -505,29 +509,29 @@ pub(crate) async fn validate_realm_key_share_policy(
         policy: Some(&policy),
         key_source: realm_key_share_source(&share),
         scope: None,
-        device: arkret_core::HistoryDeviceGate {
+        device: arkret_models_collaboration::governance::history_visibility::HistoryDeviceGate {
             revoked: device.revoked_at.is_some(),
             verified: device.verification_state == "verified",
         },
         safety_policy_allows: true,
-        audit: arkret_core::HistoryAuditGate {
+        audit: arkret_models_collaboration::governance::history_visibility::HistoryAuditGate {
             required: policy.audit.share_audit_event_required,
             satisfied: !policy.audit.share_audit_event_required,
         },
     };
-    let decision = arkret_core::evaluate_history_key_share_gates(input);
+    let decision = arkret_policy::history_visibility::evaluate_history_key_share_gates(input);
     if decision.allowed {
         Ok(())
     } else {
         Err(match decision.withheld_reason_code {
-            Some(arkret_core::RealmKeyWithheldReasonCode::NotMember) => "not_member",
-            Some(arkret_core::RealmKeyWithheldReasonCode::HistoryNotVisible) => {
+            Some(arkret_models_collaboration::governance::history_visibility::RealmKeyWithheldReasonCode::NotMember) => "not_member",
+            Some(arkret_models_collaboration::governance::history_visibility::RealmKeyWithheldReasonCode::HistoryNotVisible) => {
                 "history_not_visible"
             }
-            Some(arkret_core::RealmKeyWithheldReasonCode::PolicyDenied) => "policy_denied",
-            Some(arkret_core::RealmKeyWithheldReasonCode::BlacklistedDevice) => "device_revoked",
-            Some(arkret_core::RealmKeyWithheldReasonCode::UnverifiedDevice) => "policy_denied",
-            Some(arkret_core::RealmKeyWithheldReasonCode::UnknownSession) => "policy_denied",
+            Some(arkret_models_collaboration::governance::history_visibility::RealmKeyWithheldReasonCode::PolicyDenied) => "policy_denied",
+            Some(arkret_models_collaboration::governance::history_visibility::RealmKeyWithheldReasonCode::BlacklistedDevice) => "device_revoked",
+            Some(arkret_models_collaboration::governance::history_visibility::RealmKeyWithheldReasonCode::UnverifiedDevice) => "policy_denied",
+            Some(arkret_models_collaboration::governance::history_visibility::RealmKeyWithheldReasonCode::UnknownSession) => "policy_denied",
             None => "policy_denied",
         })
     }
@@ -560,7 +564,7 @@ pub(crate) async fn validate_realm_key_share_policy(
 fn validate_rrk_targeted_realm_key_share(
     state: &AppState,
     realm_id: &str,
-    share: &arkret_core::RealmKeySharePayload,
+    share: &arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
 ) -> Option<Result<(), &'static str>> {
     use arkret_models_collaboration::objects::realm::DurabilityMode;
     // Snapshot the durability policy off the projection without holding the lock
@@ -635,35 +639,35 @@ fn realm_key_share_receiver_event_state(
     state: &AppState,
     realm_id: &str,
     receiver: &str,
-) -> arkret_core::HistoryReaderEventState {
+) -> arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState {
     {
         let projection = state.projection_application().snapshot();
         if let Some(member) = projection.member(realm_id, receiver) {
             return match member.state.as_str() {
-                "join" => arkret_core::HistoryReaderEventState::Joined,
-                "invite" => arkret_core::HistoryReaderEventState::Invited,
-                "leave" | "ban" => arkret_core::HistoryReaderEventState::Removed,
-                _ => arkret_core::HistoryReaderEventState::None,
+                "join" => arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::Joined,
+                "invite" => arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::Invited,
+                "leave" | "ban" => arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::Removed,
+                _ => arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::None,
             };
         }
     }
-    arkret_core::HistoryReaderEventState::None
+    arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::None
 }
 
 fn realm_key_share_source(
-    share: &arkret_core::RealmKeySharePayload,
-) -> arkret_core::HistoryKeySource {
+    share: &arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
+) -> arkret_models_collaboration::governance::history_visibility::HistoryKeySource {
     if share
         .recipient_device_id
         .as_ref()
         .map(arkret_identifiers::DeviceId::as_str)
         == Some(share.sender_device_id.as_str())
     {
-        arkret_core::HistoryKeySource::OwnDevice
+        arkret_models_collaboration::governance::history_visibility::HistoryKeySource::OwnDevice
     } else if share.encrypted_key_ref.is_some() {
-        arkret_core::HistoryKeySource::KeyBackup
+        arkret_models_collaboration::governance::history_visibility::HistoryKeySource::KeyBackup
     } else {
-        arkret_core::HistoryKeySource::VerifiedMemberDevice
+        arkret_models_collaboration::governance::history_visibility::HistoryKeySource::VerifiedMemberDevice
     }
 }
 

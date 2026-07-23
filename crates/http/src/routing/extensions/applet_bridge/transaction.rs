@@ -1,7 +1,9 @@
-use arkret_core::{
-    AppletNamespaceDomain, AppletTransactionOutcome, AppletTransactionRequestBody, Event, EventId,
-    RejectedItem, namespace_pattern_matches,
+use arkret_identifiers::EventId;
+use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
+use arkret_models_integration::{
+    AppletNamespaceDomain, AppletTransactionOutcome, RejectedItem, namespace_pattern_matches,
 };
+use arkret_wire::Event;
 use salvo::http::StatusCode;
 use soland_application::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
 use soland_application::identity::SessionIdentityState as SessionRecord;

@@ -284,13 +284,15 @@ pub fn realm_policy_components_check(
         .and_then(Value::as_u64)
     {
         let window_u32 = u32::try_from(window).unwrap_or(u32::MAX);
-        if arkret_core::validate_relaxed_window_ms(window_u32).is_err() {
+        if arkret_models_collaboration::governance::audit::validate_relaxed_window_ms(window_u32)
+            .is_err()
+        {
             return Err((
                 ErrorCode::FailedPrecondition,
                 format!(
                     "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
-                    arkret_core::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
+                    arkret_models_collaboration::events_payloads::ephemeral::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
                 ),
             ));
         }

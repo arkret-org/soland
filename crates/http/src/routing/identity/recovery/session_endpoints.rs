@@ -1306,7 +1306,7 @@ pub(super) async fn recovery_session_complete(
                     AppError::conflict("re-anchor Event is not atomically accepted")
                         .with_wire_code("recovery_control_event_not_found")
                 })?;
-            let reanchor_payload: arkret_core::DeviceReanchorPayload = serde_json::from_value(
+            let reanchor_payload: arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload = serde_json::from_value(
                 reanchor_record
                     .envelope
                     .get("payload")

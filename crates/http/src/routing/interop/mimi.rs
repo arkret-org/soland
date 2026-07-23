@@ -20,16 +20,19 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{
-    Audience, Base64UrlString, Did, EventId, Hash, MimiDelivery, MimiDeliveryStatus, MimiGroupInfo,
-    MimiGroupInfoOutcome, MimiIdentifierMatch, MimiIdentifierQueryOutcome,
-    MimiIdentifierQueryRequestBody, MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody,
-    MimiNotifyOutcome, MimiNotifyRequestBody, MimiProxyDownloadOutcome,
-    MimiProxyDownloadRequestBody, MimiReportAbuseOutcome, MimiReportAbuseRequestBody,
-    MimiRequestConsentOutcome, MimiRequestConsentRequestBody, MimiRoomUpdateOutcome,
-    MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome, MimiSubmitMessageRequestBody,
-    MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody, MlsGroupId, ReportId,
+use arkret_identifiers::{Did, EventId, Hash, ReportId};
+use arkret_models_collaboration::http_bodies::{
+    MimiGroupInfoOutcome, MimiIdentifierQueryOutcome, MimiIdentifierQueryRequestBody,
+    MimiKeyMaterialOutcome, MimiKeyMaterialRequestBody, MimiNotifyOutcome, MimiNotifyRequestBody,
+    MimiProxyDownloadOutcome, MimiProxyDownloadRequestBody, MimiReportAbuseOutcome,
+    MimiReportAbuseRequestBody, MimiRequestConsentOutcome, MimiRequestConsentRequestBody,
+    MimiRoomUpdateOutcome, MimiRoomUpdateRequestBody, MimiSubmitMessageOutcome,
+    MimiSubmitMessageRequestBody, MimiUpdateConsentOutcome, MimiUpdateConsentRequestBody,
 };
+use arkret_models_collaboration::objects::mimi::{
+    MimiDelivery, MimiDeliveryStatus, MimiGroupInfo, MimiIdentifierMatch,
+};
+use arkret_wire::{Audience, Base64UrlString, MlsGroupId};
 use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};

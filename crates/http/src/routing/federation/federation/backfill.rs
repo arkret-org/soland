@@ -41,7 +41,7 @@ pub(super) async fn pull_operations_page(
     realm_id: &str,
     after_cursor: Option<&str>,
     limit: usize,
-) -> Result<arkret_core::FederationPullOperationsOutcome, AppError> {
+) -> Result<arkret_event_draft::federation_transaction::FederationPullOperationsOutcome, AppError> {
     let mut url = reqwest::Url::parse(&format!("{}/_arkret/peer/events", peer.url))
         .map_err(|error| AppError::invalid_param(format!("invalid peer_url: {error}")))?;
     {
@@ -74,8 +74,10 @@ pub(super) async fn pull_operations_page(
             "federation pull from {url} returned {status}: {text}"
         )));
     }
-    serde_json::from_str::<arkret_core::FederationPullOperationsOutcome>(&text)
-        .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
+    serde_json::from_str::<
+        arkret_event_draft::federation_transaction::FederationPullOperationsOutcome,
+    >(&text)
+    .map_err(|error| AppError::internal(format!("parse federation pull response: {error}")))
 }
 
 #[cfg(test)]
@@ -135,7 +137,7 @@ pub(super) fn is_valid_federation_txn_id(value: &str) -> bool {
 }
 
 pub(super) fn federation_request_digest(
-    body: &arkret_core::FederationTransactionRequestBody,
+    body: &arkret_event_draft::federation_transaction::FederationTransactionRequestBody,
 ) -> Result<String, &'static str> {
     let value =
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;

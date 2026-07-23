@@ -17,7 +17,9 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{Operation, OperationId, RealmDestroyPayload, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{OperationId, RealmId};
+use arkret_models_collaboration::governance::realm_lifecycle::RealmDestroyPayload;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -120,7 +122,7 @@ pub(super) async fn admin_collection(
             AppError::capability_denied(format!("admin scope check failed: {error}"))
                 .with_status(http)
         })?;
-    if !grant.has_admin_scope(arkret_core::admin_scopes::ADMIN_READ) {
+    if !grant.has_admin_scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ) {
         return Err(AppError::capability_denied(
             "admin collection API requires admin.read scope",
         ));

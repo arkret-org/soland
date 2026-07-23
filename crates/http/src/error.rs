@@ -75,7 +75,8 @@ fn request_id() -> String {
 pub fn render_error(res: &mut Response, status: StatusCode, code: &str, message: &str) {
     res.status_code(status);
     res.render(Json(
-        arkret_core::ErrorEnvelope::new(code, message).with_request_id(request_id()),
+        arkret_wire::problem_details::ErrorEnvelope::new(code, message)
+            .with_request_id(request_id()),
     ));
 }
 
@@ -88,7 +89,7 @@ pub fn render_error_with_detail(
 ) {
     res.status_code(status);
     res.render(Json(
-        arkret_core::ErrorEnvelope::new(code, message)
+        arkret_wire::problem_details::ErrorEnvelope::new(code, message)
             .with_request_id(request_id())
             .with_detail(
                 "reason_detail",
@@ -105,7 +106,7 @@ pub fn render_error_with_reason_code(
     reason_code: &str,
     reason_detail: Option<&str>,
 ) {
-    let mut envelope = arkret_core::ErrorEnvelope::new(code, message)
+    let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message)
         .with_request_id(request_id())
         .with_detail(
             "reason_code",
@@ -129,7 +130,8 @@ pub fn render_error_with_top_level_reason(
     reason: &str,
     reason_detail: Option<&str>,
 ) {
-    let mut envelope = arkret_core::ErrorEnvelope::new(code, message).with_request_id(request_id());
+    let mut envelope = arkret_wire::problem_details::ErrorEnvelope::new(code, message)
+        .with_request_id(request_id());
     if let Some(reason_detail) = reason_detail {
         envelope = envelope.with_detail(
             "reason_detail",
@@ -440,7 +442,7 @@ impl Writer for AppError {
 
 impl EndpointOutRegister for AppError {
     fn register(components: &mut Components, operation: &mut Operation) {
-        // Reuse `arkret_core::ErrorEnvelope` (already `ToSchema` under the
+        // Reuse `arkret_wire::problem_details::ErrorEnvelope` (already `ToSchema` under the
         // SDK's `salvo` feature) as the response body schema for every error
         // status. The wire representation is the spec-canonical
         // `{ ok: false, error: { code, message, ... }, request_id }`.
@@ -451,7 +453,8 @@ impl EndpointOutRegister for AppError {
         // so the field is documentation-only — describe its shape and
         // stability contract in each response's `description` rather
         // than mutating the SDK-owned schema.
-        let envelope_schema = <arkret_core::ErrorEnvelope as ToSchema>::to_schema(components);
+        let envelope_schema =
+            <arkret_wire::problem_details::ErrorEnvelope as ToSchema>::to_schema(components);
         const ERROR_DETAILS_DOC: &str = " (envelope details may contain stable \
             `reason_code: string` and/or unstable `reason_detail: string`; do not parse \
             `reason_detail`)";

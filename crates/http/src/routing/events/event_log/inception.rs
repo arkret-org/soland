@@ -51,9 +51,9 @@ pub(super) fn event_ref_list(
         "refs_too_large"
     };
     let count_error = if key == "prev_refs" {
-        arkret_core::validate_event_prev_ref_count(values.len()).is_err()
+        arkret_wire::event_envelope::validate_event_prev_ref_count(values.len()).is_err()
     } else {
-        arkret_core::validate_event_ref_count(values.len()).is_err()
+        arkret_wire::event_envelope::validate_event_ref_count(values.len()).is_err()
     };
     if values.len() > max_len || count_error {
         return Err(event_validation_error(

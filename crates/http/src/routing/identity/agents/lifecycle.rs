@@ -151,7 +151,7 @@ pub(super) async fn provision_agent(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let agent_slug = arkret_core::prepare_agent_slug(agent_slug.trim())
+    let agent_slug = arkret_wire::string_profiles::prepare_agent_slug(agent_slug.trim())
         .map_err(|err| AppError::invalid_param(format!("slug is invalid: {err}")))?;
     let avatar_blob_ref = avatar_blob_ref.map(|value| value.to_string());
     let now_utc = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
@@ -227,7 +227,7 @@ pub(super) async fn provision_agent(
         })?;
         res.status_code(StatusCode::CREATED);
         return json_ok(AgentProvisionOutcome::Complete {
-            outcome: arkret_core::AgentProvisionComplete {
+            outcome: arkret_models_collaboration::agent_operations::AgentProvisionComplete {
                 agent_id: prepared_agent_id.clone(),
                 principal_control_realm_id: prepared_realm_id.clone(),
                 controller_authorization_ref: record.controller_authorization_ref.clone(),
@@ -439,7 +439,7 @@ pub(super) async fn provision_agent(
     .await;
     res.status_code(StatusCode::CREATED);
     json_ok(AgentProvisionOutcome::Complete {
-        outcome: arkret_core::AgentProvisionComplete {
+        outcome: arkret_models_collaboration::agent_operations::AgentProvisionComplete {
             agent_id: agent_principal_did,
             principal_control_realm_id,
             controller_authorization_ref,

@@ -16,9 +16,12 @@
 //!   `keys_query` to mask revoked devices and by other auth adjacent paths)
 //! - `session_credential_hash` / `token_for` — credential derivation primitives
 
-use arkret_core::{
-    AccountDevicePairOutcome, AccountDevicePairRequestBody, DeviceId, EventId,
+use arkret_identifiers::{DeviceId, EventId};
+use arkret_models_collaboration::account_lifecycle::{
     SessionRevokeOutcome, SessionRevokeRequestBody,
+};
+use arkret_models_collaboration::http_bodies::{
+    AccountDevicePairOutcome, AccountDevicePairRequestBody,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

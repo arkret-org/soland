@@ -228,7 +228,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     }
 
     let message_id = crate::ids::generate("message");
-    let encrypted_content: arkret_core::EncryptedEnvelope = serde_json::from_value(json!({
+    let encrypted_content: arkret_models_crypto::encrypted_envelope::EncryptedEnvelope = serde_json::from_value(json!({
         "scheme": "mls-rfc9420",
         "version": "1.0",
         "group_id": "mls_test",
@@ -325,8 +325,8 @@ async fn participant_leave_retires_direct_binding() {
         bob,
     );
 
-    let leave_payload = arkret_core::MembershipPayload::transition(
-        arkret_core::MembershipPayloadState::Leave,
+    let leave_payload = arkret_models_collaboration::governance::membership_invite::MembershipPayload::transition(
+        arkret_models_collaboration::governance::membership_invite::MembershipPayloadState::Leave,
         arkret_identifiers::Did::new(bob.to_owned()).unwrap(),
         "direct conversation participant left",
     )

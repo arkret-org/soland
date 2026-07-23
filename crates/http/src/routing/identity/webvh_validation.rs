@@ -1202,7 +1202,7 @@ fn scid_skeleton_from_genesis(entry: &Value) -> Result<Value, String> {
 /// `z` prefix, per DIF did:webvh v1.0 (SCIDs and entry hashes are 46-char
 /// `Qm…` strings; multibase `z` applies to keys/signatures only).
 pub(crate) fn sha256_multihash_base58btc(bytes: &[u8]) -> String {
-    arkret_core::sha256_multihash_base58btc(bytes)
+    arkret_canonical::multibase::sha256_multihash_base58btc(bytes)
 }
 
 pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, String> {

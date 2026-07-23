@@ -16,7 +16,7 @@ pub(super) fn stored_prev_frontier_digest(
 }
 
 pub(super) fn prev_frontier_digest(prev_refs: &[String]) -> Result<String, SubmitOneError> {
-    arkret_core::prev_frontier_digest(prev_refs).map_err(|error| {
+    arkret_wire::event_envelope::prev_frontier_digest(prev_refs).map_err(|error| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
@@ -43,7 +43,7 @@ async fn validate_active_series_authority_before_commit(
     if parsed.kind != arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
         return Ok(());
     }
-    let record: arkret_core::KeyBackupActiveSeries = serde_json::from_value(
+    let record: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries = serde_json::from_value(
         crate::routing::events::projection_context_stripped_payload(&operation.payload),
     )
     .map_err(|error| {
@@ -193,7 +193,7 @@ pub(super) async fn submit_event_value_with_context(
             "event envelope cannot be encoded",
         )
     })?;
-    if arkret_core::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
+    if arkret_wire::event_envelope::validate_event_envelope_byte_len(raw_bytes.len()).is_err() {
         return Err(SubmitOneError::new(
             StatusCode::PAYLOAD_TOO_LARGE,
             "payload_too_large",

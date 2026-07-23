@@ -660,5 +660,6 @@ pub fn validate_canonical_json_value_inner(
 }
 
 pub fn validate_content_block(block: &serde_json::Value) -> Result<(), &'static str> {
-    arkret_core::validate_content_block(block).map_err(|error| error.message())
+    arkret_models_collaboration::events_payloads::morph_message::validate_content_block(block)
+        .map_err(|error| error.message())
 }

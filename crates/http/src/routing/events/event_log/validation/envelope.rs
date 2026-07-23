@@ -16,7 +16,7 @@ const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [
     "ak.event_envelope.v1",
     "ak.profile.core_event_store.v1",
     "ak.proof.event_digest.v1",
-    arkret_core::DIRECT_CONVERSATION_REALM_ROLE_FEATURE,
+    arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE,
 ];
 
 pub(crate) fn canonical_json_hash(value: &Value) -> Option<String> {

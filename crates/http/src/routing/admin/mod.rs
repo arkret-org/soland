@@ -110,7 +110,9 @@ pub fn audit_ingest_router() -> Router {
 /// `/_arkret/...` protocol prefix. Gated by the shared `RequireAdmin` hoop.
 pub fn router() -> Router {
     Router::new()
-        .hoop(RequireAdmin::scope(arkret_core::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(
+            arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
+        ))
         .push(cells::router())
         .push(Router::with_path("admin/{resource}").get(collection::admin_collection))
         .push(control::router())
@@ -119,7 +121,9 @@ pub fn router() -> Router {
 }
 
 pub fn server_ops_router() -> Router {
-    server_ops::router().hoop(RequireAdmin::scope(arkret_core::admin_scopes::ADMIN_READ))
+    server_ops::router().hoop(RequireAdmin::scope(
+        arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ,
+    ))
 }
 
 pub fn admin_router() -> Router {
@@ -134,7 +138,7 @@ pub fn admin_router() -> Router {
     // wildcard) at the root so the concrete `bottom` segment wins.
     Router::with_path("admin")
         .oapi_tag("soland-admin")
-        .hoop(RequireAdmin::scope(arkret_core::admin_scopes::ADMIN_READ))
+        .hoop(RequireAdmin::scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
         .push(
             Router::with_path("realms/{realm_id}")

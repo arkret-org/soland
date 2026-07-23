@@ -11,19 +11,18 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    ACTOR_PROFILE_SCHEMA, AccountDeviceSummary, AccountRegisterOutcome, AccountRegisterRequestBody,
-    AccountRegistrationAudit, AccountRegistrationAuditOutcome, AccountRegistrationEvidenceSummary,
-    AccountRegistrationPolicy, AccountRegistrationPolicyEvidence,
-    AccountRegistrationRateLimitPolicy, AccountStatus, AccountUpdateProfileOutcome,
-    AccountUpdateProfileRequestBody, AccountView, ActorKind, ActorProfile, ActorProfileId, BlobRef,
-    ContactIntroductionEvidence, DeviceId, Did, EventId, Hash, Patch, PatchOpKind, RealmId,
-    StrandId,
+use arkret_identifiers::{
+    ActorProfileId, BlobRef, DeviceId, Did, EventId, Hash, RealmId, StrandId,
 };
-// `arkret_core::InviteReceivePolicy` also resolves at the crate root, but the
-// invite-addressing strong type lives under `model`; import it via the
-// `model` path to avoid binding the wrong same-named re-export.
+use arkret_models_collaboration::account_lifecycle::{
+    AccountRegisterOutcome, AccountRegisterRequestBody, AccountUpdateProfileRequestBody,
+    AccountView,
+};
+// `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
+// resolves at the crate root, but the invite-addressing strong type lives under `model`;
+// import it via the `model` path to avoid binding the wrong same-named re-export.
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
+use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
     ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
@@ -31,7 +30,15 @@ use arkret_models_collaboration::http_bodies::{
     DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
     DirectConversationResolveState, DirectConversationSummary,
 };
-use arkret_wire::ErrorCode;
+use arkret_models_collaboration::objects::account_status::AccountStatus;
+use arkret_models_identity::account::{
+    AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
+    AccountRegistrationEvidenceSummary, AccountRegistrationPolicy,
+    AccountRegistrationPolicyEvidence, AccountRegistrationRateLimitPolicy,
+    AccountUpdateProfileOutcome,
+};
+use arkret_models_identity::actor_profile::ActorProfile;
+use arkret_wire::{ACTOR_PROFILE_SCHEMA, ActorKind, ErrorCode, Patch, PatchOpKind};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -307,7 +314,7 @@ fn normalize_account_localpart_for_request(localpart: &str) -> Result<String, Ap
             "localpart must be a bare handle localpart",
         ));
     }
-    arkret_core::prepare_handle_localpart(localpart)
+    arkret_wire::string_profiles::prepare_handle_localpart(localpart)
         .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))
 }
 
@@ -666,7 +673,7 @@ async fn managed_agent_direct_authorization_basis(
     state: &AppState,
     controller: &str,
     agent_id: &str,
-) -> Result<Option<arkret_core::DirectConversationAuthorizationBasis>, AppError> {
+) -> Result<Option<arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis>, AppError>{
     let Some(record) = state
         .agent_pairing_application()
         .agent(agent_id)
@@ -714,7 +721,9 @@ async fn managed_agent_direct_authorization_basis(
 
 fn managed_agent_direct_authorization_basis_from_record(
     record: &AgentPairingState,
-) -> Option<arkret_core::DirectConversationAuthorizationBasis> {
+) -> Option<
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis,
+> {
     let provision_refs = record.provision_event_refs.as_ref()?;
     let refs = [
         provision_refs
@@ -730,7 +739,7 @@ fn managed_agent_direct_authorization_basis_from_record(
         .map(|event_ref| EventId::new(event_ref?.to_owned()).ok())
         .collect::<Option<Vec<_>>>()?;
     let basis =
-        arkret_core::DirectConversationAuthorizationBasis::managed_agent_controller(event_refs);
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis::managed_agent_controller(event_refs);
     basis.validate_shape().ok()?;
     Some(basis)
 }
@@ -1521,7 +1530,7 @@ async fn direct_conversation_resolve(
             binding_event_ref: None,
             created: Some(false),
             authoring_kind: Some(
-                arkret_core::DirectConversationAuthoringKind::RemoteKeypackageClaim,
+                arkret_models_collaboration::http_bodies::DirectConversationAuthoringKind::RemoteKeypackageClaim,
             ),
             claim_authorization_draft: Some(claim_authorization_draft),
             materialization_draft: None,
@@ -1681,7 +1690,7 @@ mod tests {
         let basis = managed_agent_direct_authorization_basis_from_record(&record).unwrap();
         assert_eq!(
             basis.kind,
-            arkret_core::DirectConversationAuthorizationKind::ManagedAgentController
+            arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::ManagedAgentController
         );
         assert_eq!(
             basis

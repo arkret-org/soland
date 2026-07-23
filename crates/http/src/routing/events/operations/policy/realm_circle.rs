@@ -268,8 +268,8 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
     !matches!(
         projection.agent_lifecycles.get(target),
         Some(
-            arkret_core::AgentLifecycleState::Paused
-                | arkret_core::AgentLifecycleState::Deactivated
+            arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused
+                | arkret_models_collaboration::agent_operations::AgentLifecycleState::Deactivated
         )
     ) && projection.agent_has_authorized_key(target)
 }
@@ -407,7 +407,8 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
     {
         return false;
     }
-    let expected_short_name = arkret_core::agent_sidecar_backing_circle_short_name(sidecar_id);
+    let expected_short_name =
+        arkret_wire::constants::agent_sidecar_backing_circle_short_name(sidecar_id);
     object.get("title").and_then(Value::as_str) == Some("Agent Sidecar Scope")
         && object.get("summary").is_none()
         && object

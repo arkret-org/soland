@@ -5,12 +5,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicI64, Ordering};
 
 use arc_swap::ArcSwap;
-use arkret_core::{AccountRegistrationPolicy, AccountStatus, Did, RealmId, ServiceIdentityState};
+use arkret_identifiers::{Did, RealmId};
+use arkret_identity::service_identity::ServiceIdentityState;
 #[cfg(test)]
-use arkret_core::{
-    CanonicalServiceUrl, LocalServiceIdentity, ServiceIdentityKeyRef, ServiceRegistrationKey,
-    ServiceType,
-};
+use arkret_identity::service_identity::{LocalServiceIdentity, ServiceIdentityKeyRef};
+use arkret_models_collaboration::objects::account_status::AccountStatus;
+use arkret_models_identity::account::AccountRegistrationPolicy;
+#[cfg(test)]
+use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
+#[cfg(test)]
+use arkret_wire::ServiceType;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -164,7 +168,7 @@ pub struct AppState {
     /// in the hot read path; the per-pass diagnostic helper just snapshots).
     notary_signing_key_origin: Arc<Mutex<NotarySigningKeyOrigin>>,
     /// Per-admin signing keys: SDK
-    /// [`arkret_core::AdminKeyStore`] keyed by the `application_id`
+    /// [`arkret_auth::AdminKeyStore`] keyed by the `application_id`
     /// `soland.<service_id>`. Each admin DID in
     /// `config.admin_principal_dids` gets its own ed25519 signing seed
     /// (provisioned at boot in `development_mode`; lazily loaded from the
@@ -676,7 +680,7 @@ impl AppState {
             .expect("configured KeyStore must open every namespace")
             .unwrap_or_else(|| Box::new(arkret_keystore::InMemoryKeyStore::new()));
         let admin_keystore =
-            arkret_core::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
+            arkret_auth::AdminKeyStore::new(admin_app_id.clone(), admin_keystore_inner);
         if config.development_mode {
             for did_str in &config.admin_principal_dids {
                 let Ok(did) = Did::new(did_str.clone()) else {
@@ -1398,7 +1402,7 @@ impl AppState {
     }
 }
 
-struct RuntimeAdminSigningKeys(Arc<arkret_core::AdminKeyStore>);
+struct RuntimeAdminSigningKeys(Arc<arkret_auth::AdminKeyStore>);
 
 struct RuntimeHydrationProjectionAdapter;
 
@@ -1505,7 +1509,7 @@ pub fn getrandom_seed(out: &mut [u8; 32]) {
 
 #[cfg(test)]
 mod membership_hydration_tests {
-    use arkret_core::{Did, RealmId};
+    use arkret_identifiers::{Did, RealmId};
     use soland_application::hydration::{
         hydrate_projections_from_persistence, hydrate_realm_member_state_event,
     };
@@ -1858,7 +1862,7 @@ mod membership_hydration_tests {
                 Some(circle_id),
             )
             .unwrap(),
-            Some(arkret_core::ChildScopePolicy::RequireScopeCircleId {
+            Some(arkret_models_collaboration::objects::space::ChildScopePolicy::RequireScopeCircleId {
                 scope_circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
             })
         );

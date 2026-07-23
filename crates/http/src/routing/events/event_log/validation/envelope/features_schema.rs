@@ -317,7 +317,7 @@ pub(crate) async fn validate_member_identity_proof(
             "identity_payload must carry member_identity or encrypted_payload",
         ));
     };
-    let identity: arkret_core::MemberIdentity =
+    let identity: arkret_models_identity::member_identity::MemberIdentity =
         serde_json::from_value(member_identity_value.clone()).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
@@ -360,7 +360,7 @@ pub(crate) async fn validate_member_identity_proof(
     }
     if !matches!(
         identity.proof.signature_algorithm,
-        arkret_core::MemberIdentitySignatureAlgorithm::Ed25519
+        arkret_models_identity::member_identity::MemberIdentitySignatureAlgorithm::Ed25519
     ) {
         let code = soland_http::error::ErrorCode::UnsupportedSignatureAlg;
         return Err(event_validation_error(

@@ -33,7 +33,7 @@
 //!   [`crate::state::AppState::verified_profiles`].
 //! - `describe.rs::apply_claim_level_partition` reads that vector and emits a `verified_profiles[]`
 //!   array matching the wire schema `service-describe.schema.json#/properties/verified_profiles`
-//!   (via the SDK's typed [`arkret_core::VerifiedProfileEntry`]).
+//!   (via the SDK's typed [`arkret_models_discovery::service_description::VerifiedProfileEntry`]).
 //!
 //! Dev-mode invariant (service-surface.md §3.0): when the env var is unset
 //! OR the file is missing OR malformed, the loaded vector is empty and the
@@ -104,7 +104,7 @@ struct RawVerifiedEntry {
 
 /// In-memory representation of a loaded verified-profile entry, owned by
 /// [`crate::state::AppState`]. The handler converts each entry into an SDK
-/// [`arkret_core::VerifiedProfileEntry`] on the way out.
+/// [`arkret_models_discovery::service_description::VerifiedProfileEntry`] on the way out.
 #[derive(Debug, Clone)]
 pub struct VerifiedProfileDescriptor {
     pub profile_id: String,

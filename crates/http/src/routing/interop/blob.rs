@@ -12,10 +12,11 @@
 //! is enforced at write time but not at GC.
 
 use arkret_canonical as canonical;
-use arkret_core::{
+use arkret_identifiers::{BlobRef, Did, Hash, RealmId};
+use arkret_models_collaboration::objects::blob::{
     BlobPresignAccessScope, BlobPresignDetachedJwsProof, BlobPresignEnvelope, BlobPresignOutcome,
-    BlobPresignPayload, BlobPresignRequestBody, BlobRef, BlobUploadOutcome, BlobVisibility, Did,
-    Hash, RealmId, SignatureValue, UploadReceipt,
+    BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,
+    UploadReceipt,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
-pub use arkret_core::DeviceGenerationStatus;
-use arkret_core::{MoveId, RealmId, SealId};
+use arkret_identifiers::{MoveId, RealmId, SealId};
+pub use arkret_models_crypto::keys::DeviceGenerationStatus;
 use serde_json::Value;
 use soland_application::ApplicationError;
 use soland_application::events::CanonicalEventRecord;

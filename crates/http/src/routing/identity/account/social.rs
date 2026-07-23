@@ -772,7 +772,7 @@ fn blocked_invite_policy_update(
     state: &AppState,
     holder: &str,
     peer: &str,
-) -> Option<arkret_core::InviteReceivePolicy> {
+) -> Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy> {
     let peer_did = Did::new(peer.to_owned()).ok()?;
     let mut policy = state
         .contact_application()
@@ -1311,7 +1311,9 @@ pub(crate) fn direct_resolve_response(
     binding: DirectConversationBindingRecord,
     created: bool,
     state: DirectConversationResolveState,
-    materialization_draft: Option<arkret_core::DirectConversationMaterializationDraft>,
+    materialization_draft: Option<
+        arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
+    >,
 ) -> DirectConversationResolveOutcome {
     DirectConversationResolveOutcome {
         state,
@@ -1326,7 +1328,7 @@ pub(crate) fn direct_resolve_response(
         ),
         created: Some(created),
         authoring_kind: (state == DirectConversationResolveState::AuthoringRequired).then_some(
-            arkret_core::DirectConversationAuthoringKind::DirectConversationMaterialization,
+            arkret_models_collaboration::http_bodies::DirectConversationAuthoringKind::DirectConversationMaterialization,
         ),
         claim_authorization_draft: None,
         materialization_draft,

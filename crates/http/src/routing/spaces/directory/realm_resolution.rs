@@ -264,7 +264,7 @@ pub(super) async fn resolve_target(
 }
 
 fn object_preview_for_address(
-    parsed: &arkret_core::ParsedAddress,
+    parsed: &arkret_wire::object_address::ParsedAddress,
     target_kind: TargetKind,
     as_of: DateTime<Utc>,
     policy_revision: &str,
@@ -305,7 +305,7 @@ fn object_preview_for_address(
 
 pub(super) async fn resolve_realm_for_address(
     state: &AppState,
-    parsed: &arkret_core::ParsedAddress,
+    parsed: &arkret_wire::object_address::ParsedAddress,
 ) -> Option<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
         let realms = state.realm_directory_application().snapshot();
@@ -321,7 +321,9 @@ pub(super) async fn resolve_realm_for_address(
     })
 }
 
-pub(super) fn target_kind_for_address(parsed: &arkret_core::ParsedAddress) -> TargetKind {
+pub(super) fn target_kind_for_address(
+    parsed: &arkret_wire::object_address::ParsedAddress,
+) -> TargetKind {
     if parsed.message.is_some() {
         TargetKind::Message
     } else if parsed.strand.is_some() {

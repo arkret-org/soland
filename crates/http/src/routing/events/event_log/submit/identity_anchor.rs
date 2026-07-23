@@ -32,7 +32,7 @@ pub(super) async fn submit_identity_anchor_batch(
         let encoded_len = serde_json::to_vec(envelope)
             .map_err(|_| unit_error("identity anchor Event cannot be encoded"))?
             .len();
-        if arkret_core::validate_event_envelope_byte_len(encoded_len).is_err() {
+        if arkret_wire::event_envelope::validate_event_envelope_byte_len(encoded_len).is_err() {
             return Err(SubmitOneError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "payload_too_large",
@@ -800,7 +800,7 @@ fn event_prev_refs(envelope: &Value) -> Vec<&str> {
 
 async fn validate_reanchor_entry_delegation(
     state: &AppState,
-    reanchor: &arkret_core::DeviceReanchorPayload,
+    reanchor: &arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload,
     authorize: &arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
 ) -> Result<(), SubmitOneError> {
     let binding = authorize
@@ -869,7 +869,7 @@ async fn validate_reanchor_entry_delegation(
 
 async fn validate_reanchor_recovery_session(
     state: &AppState,
-    reanchor: &arkret_core::DeviceReanchorPayload,
+    reanchor: &arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload,
     authorize: &arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload,
 ) -> Result<(), SubmitOneError> {
     let session_id = authorize.recovery_session_id.as_ref().ok_or_else(|| {
@@ -1004,7 +1004,10 @@ async fn validate_pre_fence_basis(
 
 fn typed_device_reanchor_payload(
     envelope: &Value,
-) -> Result<arkret_core::DeviceReanchorPayload, SubmitOneError> {
+) -> Result<
+    arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload,
+    SubmitOneError,
+> {
     serde_json::from_value(envelope.get("payload").cloned().unwrap_or(Value::Null)).map_err(
         |error| {
             SubmitOneError::new(
@@ -1201,7 +1204,7 @@ async fn build_reanchor_batch_receipt(
         })?;
     let mut receipt = arkret_wire::EventBatchReceipt {
         schema: "ak.schema.event_batch_receipt.v1".to_owned(),
-        receipt_id: arkret_core::ReceiptId::new(crate::ids::generate("receipt")).map_err(
+        receipt_id: arkret_identifiers::ReceiptId::new(crate::ids::generate("receipt")).map_err(
             |error| {
                 SubmitOneError::new(
                     StatusCode::INTERNAL_SERVER_ERROR,
@@ -1218,8 +1221,9 @@ async fn build_reanchor_batch_receipt(
             )
         })?,
         scope: arkret_wire::EventBatchReceiptScope::DeviceReanchor(
-            arkret_core::DeviceReanchorReceiptScope {
-                kind: arkret_core::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
+            arkret_wire::event_receipt::DeviceReanchorReceiptScope {
+                kind:
+                    arkret_wire::event_receipt::DeviceReanchorReceiptScopeKind::DeviceReanchorUnit,
                 principal_id: payload.principal_id,
                 realm_id: RealmId::new(reanchor.realm_id.clone()).map_err(|error| {
                     SubmitOneError::new(

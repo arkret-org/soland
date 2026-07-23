@@ -21,8 +21,9 @@ fn config_with_policy(topology: FederationFanoutTopology, peers: Vec<String>) ->
     }
 }
 
-fn verify_actor_body() -> arkret_core::FederationVerifyActorRequestBody {
-    arkret_core::FederationVerifyActorRequestBody {
+fn verify_actor_body()
+-> arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody {
+    arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody {
         actor_id: arkret_identifiers::Did::new("did:web:alice.example").unwrap(),
         challenge: Some("challenge-1".to_owned()),
         signed_payload_digest: None,

@@ -140,7 +140,7 @@ pub(crate) async fn identity_describe(
     ];
 
     json_ok(IdentityRegistryDescription {
-        protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         service_type: "identity_registry".to_owned(),
         service_id,
         trust_domain: state.config().trust_domain.clone(),
@@ -170,8 +170,9 @@ pub(crate) async fn identity_describe(
                 "/_arkret/root/identity/log".to_owned(),
                 "/_arkret/root/identity/receipts".to_owned(),
                 "/_arkret/root/identity/submit-did-operation".to_owned(),
-                arkret_core::SERVICE_REGISTRATION_ENSURE_PATH.to_owned(),
-                arkret_core::SERVICE_REGISTRATION_GET_PATH.to_owned(),
+                arkret_models_identity::service_identity::SERVICE_REGISTRATION_ENSURE_PATH
+                    .to_owned(),
+                arkret_models_identity::service_identity::SERVICE_REGISTRATION_GET_PATH.to_owned(),
             ],
         }],
         supported_features: supported_features.clone(),

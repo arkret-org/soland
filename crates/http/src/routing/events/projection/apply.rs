@@ -686,9 +686,9 @@ async fn project_realm_key_share_to_device(
 ) {
     let wire_payload =
         crate::routing::events::operations::projection_context_stripped_payload(&operation.payload);
-    let Ok(share) =
-        serde_json::from_value::<arkret_core::RealmKeySharePayload>(wire_payload.clone())
-    else {
+    let Ok(share) = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
+    >(wire_payload.clone()) else {
         return;
     };
     // share_class=realm_recovery_key (recipient_device_id absent): the recipient is

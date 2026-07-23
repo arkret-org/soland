@@ -11,14 +11,23 @@
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
 
-use arkret_core::{
-    Did, HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
-    HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
-    HistoryVisibility, Operation, OperationId, PlaintextDataClassKind, RealmArchivePayload,
-    RealmDestroyPayload, RealmFreezePayload, RealmId, RealmLifecycleView,
-    RealmModerationPolicyReplaceRequestBody, RealmTombstonePayload, STRAND_TRACK_NAME_DISCUSSION,
-    SpaceId, matching_restricted_rules,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, OperationId, RealmId, SpaceId};
+use arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmFreezePayload;
+use arkret_models_collaboration::events_payloads::strand_history_join::HistorySharingPolicyPayloadValue;
+use arkret_models_collaboration::governance::history_visibility::{
+    HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
+    HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
 };
+use arkret_models_collaboration::governance::realm_governance::{
+    RealmLifecycleView, RealmModerationPolicyReplaceRequestBody,
+};
+use arkret_models_collaboration::governance::realm_lifecycle::{
+    RealmArchivePayload, RealmDestroyPayload, RealmTombstonePayload,
+};
+use arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION;
+use arkret_policy::history_visibility::matching_restricted_rules;
+use arkret_wire::{HistoryVisibility, PlaintextDataClassKind};
 use chrono::{DateTime, Utc};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -1085,7 +1094,7 @@ async fn realm_restricted_history_policy_allows(
     else {
         return false;
     };
-    if arkret_core::validate_history_sharing_policy(&policy).is_err() {
+    if arkret_policy::history_visibility::validate_history_sharing_policy(&policy).is_err() {
         return false;
     }
     let active_member = realm_active_member_at_read_time(state, &realm_id, actor).await;

@@ -364,7 +364,7 @@ fn submit_one_error_value(error: SubmitOneError) -> (StatusCode, Value) {
         return (StatusCode::OK, submit_outcome_value(&outcome));
     }
     let mut body = json!(
-        arkret_core::ErrorEnvelope::new(error.code.clone(), error.message.clone())
+        arkret_wire::problem_details::ErrorEnvelope::new(error.code.clone(), error.message.clone())
             .with_request_id(crate::ids::generate_request_id())
     );
     if let Some(details) = error.details.as_ref().and_then(Value::as_object)

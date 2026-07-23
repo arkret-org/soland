@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
-use arkret_core::{Operation, OperationId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::OperationId;
 use soland_application::events::ProjectedEvent as ProjectionEventRecord;
 use soland_application::operation_semantics as kinds;
 
@@ -343,7 +344,7 @@ pub async fn accept_local_operations(
 pub async fn accept_trusted_sidecar_circle_operation(
     state: &AppState,
     controller: &str,
-    sidecar_id: &arkret_core::SidecarId,
+    sidecar_id: &arkret_identifiers::SidecarId,
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let _active_series_guards = crate::routing::events::operations::lock_active_series_operations(

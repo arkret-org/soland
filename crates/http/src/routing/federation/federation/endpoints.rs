@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use arkret_core::{Did, RealmId};
+use arkret_identifiers::{Did, RealmId};
 use chrono::Duration;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -92,10 +92,10 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.transaction"))]
 pub(crate) async fn federation_transaction(
     txn_id: PathParam<String>,
-    body: JsonBody<arkret_core::FederationTransactionRequestBody>,
+    body: JsonBody<arkret_event_draft::federation_transaction::FederationTransactionRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_core::FederationTransactionOutcome> {
+) -> JsonResult<arkret_event_draft::federation_transaction::FederationTransactionOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_write_rail_local(state)?;
     let txn_id = txn_id.into_inner();
@@ -213,7 +213,7 @@ pub(crate) async fn federation_transaction(
             if !strict_cache_hit {
                 response_value = mark_response_historical_only(response_value);
             }
-            let response: arkret_core::FederationTransactionOutcome =
+            let response: arkret_event_draft::federation_transaction::FederationTransactionOutcome =
                 serde_json::from_value(response_value).map_err(|error| {
                     AppError::internal(format!("cached federation response decode: {error}"))
                 })?;
@@ -286,7 +286,7 @@ pub(crate) async fn federation_transaction(
         }
     }
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    let response = arkret_core::FederationTransactionOutcome {
+    let response = arkret_event_draft::federation_transaction::FederationTransactionOutcome {
         ok: true,
         accepted: ingest.accepted,
         rejected: ingest.rejected,
@@ -324,7 +324,7 @@ pub(crate) async fn federation_transaction(
 fn local_peer_policy_digest_for_transaction(
     state: &AppState,
     origin_service_id: &str,
-    body: &arkret_core::FederationTransactionRequestBody,
+    body: &arkret_event_draft::federation_transaction::FederationTransactionRequestBody,
 ) -> Result<String, AppError> {
     let live_settings = state.settings();
     let mut federation_peers = live_settings.federation_peers.clone();
@@ -395,7 +395,7 @@ fn local_peer_policy_digest_for_transaction(
 pub(crate) async fn federation_push_operations(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_core::FederationPushOperationsOutcome> {
+) -> JsonResult<arkret_event_draft::federation_transaction::FederationPushOperationsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     // federation.md §4.0 (SPEC-CR-008): the private `/_soland/peer/federation/*`
     // write rail MUST fail closed as a non-interop entry *before* any interop
@@ -405,7 +405,7 @@ pub(crate) async fn federation_push_operations(
     // schema-validation error in place of the canonical 501
     // `federation_interop_track_only`.
     ensure_private_inbound_write_rail_local(state)?;
-    let body: arkret_core::FederationPushOperationsRequestBody =
+    let body: arkret_event_draft::federation_transaction::FederationPushOperationsRequestBody =
         req.parse_json().await.map_err(|error| {
             AppError::invalid_param(format!("invalid federation push body: {error}"))
         })?;
@@ -429,11 +429,13 @@ pub(crate) async fn federation_push_operations(
     let operations = body.operations;
     enforce_inbound_operation_batch_policy(state, &origin, &operations).await?;
     let ingest = ingest_federation_operations(state, &origin, operations).await;
-    json_ok(arkret_core::FederationPushOperationsOutcome {
-        accepted: ingest.accepted,
-        rejected: ingest.rejected,
-        quarantine: Vec::new(),
-    })
+    json_ok(
+        arkret_event_draft::federation_transaction::FederationPushOperationsOutcome {
+            accepted: ingest.accepted,
+            rejected: ingest.rejected,
+            quarantine: Vec::new(),
+        },
+    )
 }
 
 #[endpoint(
@@ -521,7 +523,7 @@ pub(crate) async fn federation_pull_operations(
     limit: QueryParam<usize, false>,
     snapshot_bootstrap: QueryParam<bool, false>,
     depot: &mut Depot,
-) -> JsonResult<arkret_core::FederationPullOperationsOutcome> {
+) -> JsonResult<arkret_event_draft::federation_transaction::FederationPullOperationsOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id = realm_id.into_inner();
@@ -567,12 +569,14 @@ pub(crate) async fn federation_pull_operations(
         Some(next_cursor) => Some(next_cursor),
         None => Some(sync_token(state).await),
     };
-    json_ok(arkret_core::FederationPullOperationsOutcome {
-        operations,
-        snapshot_bootstrap,
-        next_cursor,
-        has_more,
-    })
+    json_ok(
+        arkret_event_draft::federation_transaction::FederationPullOperationsOutcome {
+            operations,
+            snapshot_bootstrap,
+            next_cursor,
+            has_more,
+        },
+    )
 }
 
 #[endpoint(
@@ -715,7 +719,7 @@ pub(crate) async fn federation_operation_frontier(
 pub(crate) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
     depot: &mut Depot,
-) -> JsonResult<arkret_core::FederationRealmMemberList> {
+) -> JsonResult<arkret_models_collaboration::federation::wire_dtos::FederationRealmMemberList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     ensure_private_inbound_read_rail_local(state)?;
     let realm_id_value = RealmId::new(realm_id.into_inner())
@@ -728,18 +732,20 @@ pub(crate) async fn federation_realm_members(
             realm
                 .members
                 .iter()
-                .map(|principal_id| arkret_core::MemberRef {
+                .map(|principal_id| arkret_models_collaboration::federation::wire_dtos::MemberRef {
                     principal_id: principal_id.clone(),
-                    membership: arkret_core::MembershipState::Join,
+                    membership: arkret_models_collaboration::sync_frames::account_sync::MembershipState::Join,
                 })
                 .collect()
         })
         .unwrap_or_default();
-    json_ok(arkret_core::FederationRealmMemberList {
-        members,
-        membership_frontier: sync_token(state).await,
-        next_cursor: None,
-    })
+    json_ok(
+        arkret_models_collaboration::federation::wire_dtos::FederationRealmMemberList {
+            members,
+            membership_frontier: sync_token(state).await,
+            next_cursor: None,
+        },
+    )
 }
 
 #[endpoint(
@@ -749,10 +755,12 @@ pub(crate) async fn federation_realm_members(
 )]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.verify_actor"))]
 pub(crate) async fn federation_verify_actor(
-    body: JsonBody<arkret_core::FederationVerifyActorRequestBody>,
+    body: JsonBody<
+        arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody,
+    >,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<arkret_core::FederationVerifyActorOutcome> {
+) -> JsonResult<arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
@@ -769,19 +777,21 @@ pub(crate) async fn federation_verify_actor(
         // request. Fail closed: report `valid: false` and explain that the
         // signature was skipped, rather than asserting a verification that did
         // not happen.
-        return json_ok(arkret_core::FederationVerifyActorOutcome {
-            valid: false,
-            actor_id: body.actor_id.clone(),
-            verified_key_id: None,
-            key_log_head: None,
-            did_document_ref: Some(format!("{}#document", body.actor_id)),
-            expires_at: Some(now() + Duration::minutes(5)),
-            warnings: vec![
+        return json_ok(
+            arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorOutcome {
+                valid: false,
+                actor_id: body.actor_id.clone(),
+                verified_key_id: None,
+                key_log_head: None,
+                did_document_ref: Some(format!("{}#document", body.actor_id)),
+                expires_at: Some(now() + Duration::minutes(5)),
+                warnings: vec![
                 "development_mode skipped actor signature verification; valid=false because no \
                  signature was checked"
                     .to_owned(),
             ],
-        });
+            },
+        );
     }
 
     let unsigned_request_digest =
@@ -792,15 +802,17 @@ pub(crate) async fn federation_verify_actor(
     let verification =
         verify_federation_actor_signature(state, &body, &unsigned_request_digest).await?;
 
-    json_ok(arkret_core::FederationVerifyActorOutcome {
-        valid: true,
-        actor_id: body.actor_id.clone(),
-        verified_key_id: Some(verification.verified_key_id),
-        key_log_head: Some(verification.key_log_head),
-        did_document_ref: Some(verification.did_document_ref),
-        expires_at: Some(now() + Duration::minutes(5)),
-        warnings: Vec::new(),
-    })
+    json_ok(
+        arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorOutcome {
+            valid: true,
+            actor_id: body.actor_id.clone(),
+            verified_key_id: Some(verification.verified_key_id),
+            key_log_head: Some(verification.key_log_head),
+            did_document_ref: Some(verification.did_document_ref),
+            expires_at: Some(now() + Duration::minutes(5)),
+            warnings: Vec::new(),
+        },
+    )
 }
 
 // ── Seal pull/push (federation/seals) ──────────────

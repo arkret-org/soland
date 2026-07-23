@@ -36,8 +36,9 @@ use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_core::{RealmId, Seal, SealId};
+use arkret_identifiers::{RealmId, SealId};
 use arkret_state::{PruneCandidate, PruneEligibility};
+use arkret_wire::Seal;
 
 use crate::state::AppState;
 

@@ -11,12 +11,18 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    CrossSigningPublish, CrossSigningResetPayload, CrossSigningResetProof,
-    DeviceEnrollmentAuthorityBinding, DeviceId, DeviceQuorumSignature, DeviceStatus, Did, EventId,
-    MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope, SignatureMaterial,
-};
 use arkret_crypto::DeviceTrustBinding;
+use arkret_identifiers::{DeviceId, Did, EventId};
+use arkret_models_collaboration::events_payloads::list_message_mimi_mls::{
+    MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope,
+};
+use arkret_models_collaboration::events_payloads::preview_realm_reaction::SignatureMaterial;
+use arkret_models_crypto::DeviceStatus;
+use arkret_models_identity::artifacts_device_identity::{
+    CrossSigningPublish, CrossSigningResetProof, DeviceEnrollmentAuthorityBinding,
+    DeviceQuorumSignature,
+};
+use arkret_models_identity::cross_signing::CrossSigningResetPayload;
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -819,7 +825,7 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     state: &AppState,
     envelope: &MlsWelcomeClaimEnvelope,
     sender_device_id: Option<&str>,
-    signer_key_evidence: Option<&arkret_core::FederatedDeviceSigningKeyEvidence>,
+    signer_key_evidence: Option<&arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
 ) -> Result<(), &'static str> {
     envelope.validate_signature_shape()?;
     if let Some(alg) = envelope.signature.alg.as_deref()
@@ -880,7 +886,7 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
     envelope: &MlsWelcomeClaimEnvelope,
     requester_device_id: &str,
     sender_device_id: Option<&str>,
-    signer_key_evidence: Option<&arkret_core::FederatedDeviceSigningKeyEvidence>,
+    signer_key_evidence: Option<&arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
 ) -> Result<(), &'static str> {
     if let Some(sender_device_id) = sender_device_id
         && sender_device_id != requester_device_id
@@ -1016,7 +1022,7 @@ pub(crate) struct DeviceSigningDirectoryFacet {
     /// `cross_signing_binding` echoed verbatim for client-side chain
     /// verification. Present only for a verified, non-revoked device that
     /// carries one (inception bootstrap devices have none).
-    pub cross_signing_binding: Option<arkret_core::QueryDeviceCrossSigningBinding>,
+    pub cross_signing_binding: Option<arkret_models_crypto::keys::QueryDeviceCrossSigningBinding>,
     /// Service-attested trust material echoed from `ak.device.authorize`.
     /// Present only for a verified, non-revoked device that was authorized by a
     /// designated enrollment authority.
@@ -1044,7 +1050,7 @@ pub(crate) struct ProjectedDevicePayload {
     #[serde(default)]
     pub algorithms: Option<Vec<String>>,
     #[serde(default)]
-    pub cross_signing_binding: Option<arkret_core::QueryDeviceCrossSigningBinding>,
+    pub cross_signing_binding: Option<arkret_models_crypto::keys::QueryDeviceCrossSigningBinding>,
     #[serde(default)]
     pub enrollment_authority_binding: Option<DeviceEnrollmentAuthorityBinding>,
     #[serde(default)]

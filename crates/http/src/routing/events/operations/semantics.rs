@@ -28,7 +28,7 @@ pub fn validate_operation_semantics(
 ) -> Result<(), &'static str> {
     validate_cross_signing_reset_replay_batch(operations)?;
     let mut active_series_heads =
-        BTreeMap::<(String, String), arkret_core::KeyBackupActiveSeriesHead>::new();
+        BTreeMap::<(String, String), arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead>::new();
     for operation in operations {
         operation
             .validate_payload_object()
@@ -67,9 +67,9 @@ pub fn validate_operation_semantics(
 fn validate_key_backup_active_series_transition(
     state: &AppState,
     operation: &Operation,
-    heads: &mut BTreeMap<(String, String), arkret_core::KeyBackupActiveSeriesHead>,
+    heads: &mut BTreeMap<(String, String), arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead>,
 ) -> Result<(), &'static str> {
-    let record: arkret_core::KeyBackupActiveSeries =
+    let record: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries =
         serde_json::from_value(projection_context_stripped_payload(&operation.payload))
             .map_err(|_| "key_backup_active_series_schema_violation")?;
     let key = (
@@ -82,16 +82,16 @@ fn validate_key_backup_active_series_transition(
             .snapshot()
             .key_backup_active_series_head(&key.0, &key.1)
     });
-    let next = arkret_core::validate_key_backup_active_series_transition(current.as_ref(), &record)
+    let next = arkret_models_collaboration::events_payloads::strand_history_join::validate_key_backup_active_series_transition(current.as_ref(), &record)
         .map_err(active_series_transition_reason)?;
     heads.insert(key, next);
     Ok(())
 }
 
 fn active_series_transition_reason(
-    error: arkret_core::KeyBackupActiveSeriesTransitionError,
+    error: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTransitionError,
 ) -> &'static str {
-    use arkret_core::KeyBackupActiveSeriesTransitionError as Error;
+    use arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTransitionError as Error;
     match error {
         Error::SchemaMismatch => "key_backup_active_series_schema_mismatch",
         Error::SignedFieldsDuplicate => "key_backup_active_series_signed_fields_duplicate",
@@ -154,7 +154,7 @@ pub(crate) fn validate_reaction_target_kind(
 fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<(), &'static str> {
     match kind {
         arkret_wire::events::EventKind::CONTAINER_MOVE_ITEM => {
-            let payload: arkret_core::ContainerMoveItemPayload = typed_payload_fields(
+            let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerMoveItemPayload = typed_payload_fields(
                 operation,
                 &[
                     "item_ref",
@@ -170,7 +170,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_wire::events::EventKind::CONTAINER_REBALANCE => {
-            let payload: arkret_core::ContainerRebalancePayload = typed_payload_fields(
+            let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerRebalancePayload = typed_payload_fields(
                 operation,
                 &[
                     "container_ref",
@@ -184,7 +184,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_wire::events::EventKind::REALM_NOTARY => {
-            let payload: arkret_core::RealmNotaryPayload =
+            let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmNotaryPayload =
                 typed_payload_fields(operation, &["realm_id", "notary"])?;
             if payload.realm_id != operation.realm_id {
                 return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
@@ -194,7 +194,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_wire::events::EventKind::REALM_DIGEST_SUITE_TRANSITION => {
-            let payload: arkret_core::RealmDigestSuiteTransitionPayload = typed_payload_fields(
+            let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmDigestSuiteTransitionPayload = typed_payload_fields(
                 operation,
                 &[
                     "from_digest_algorithm",
@@ -208,7 +208,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                 .map_err(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
         }
         arkret_wire::events::EventKind::CONSENT_GRANT => {
-            let _: arkret_core::ConsentGrantPayload = typed_payload_fields(
+            let _: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ConsentGrantPayload = typed_payload_fields(
                 operation,
                 &[
                     "consent_id",
@@ -372,7 +372,7 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
                     // `participant_binding::verify_call_state_participant_bindings`
                     // pass dispatched from `validate_operation_semantics`.
                     let scheme = binding.get("scheme").and_then(|v| v.as_str());
-                    if scheme != Some(arkret_core::PARTICIPANT_BINDING_SCHEMA) {
+                    if scheme != Some(arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA) {
                         return Err(
                             "participant_binding_invalid: participant_binding.scheme must be \
                              ak.media.participant_binding.v1",

@@ -321,9 +321,11 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     res.stream(body_stream.boxed());
 }
 
-fn account_frontier_frame(cursor: Option<String>) -> arkret_core::AccountSubscribeFrame {
-    arkret_core::AccountSubscribeFrame {
-        kind: arkret_core::AccountSubscribeFrameKind::Frontier,
+fn account_frontier_frame(
+    cursor: Option<String>,
+) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+    arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+        kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Frontier,
         cursor,
         realms: None,
         to_device: None,
@@ -337,9 +339,11 @@ fn account_frontier_frame(cursor: Option<String>) -> arkret_core::AccountSubscri
     }
 }
 
-fn account_catchup_complete_frame(cursor: Option<String>) -> arkret_core::AccountSubscribeFrame {
-    arkret_core::AccountSubscribeFrame {
-        kind: arkret_core::AccountSubscribeFrameKind::CatchupComplete,
+fn account_catchup_complete_frame(
+    cursor: Option<String>,
+) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+    arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+        kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::CatchupComplete,
         cursor,
         realms: None,
         to_device: None,
@@ -358,7 +362,9 @@ fn account_catchup_complete_frame(cursor: Option<String>) -> arkret_core::Accoun
 /// and no presence ticks. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(response: &arkret_core::AccountSubscribeFrame) -> bool {
+fn delta_is_empty(
+    response: &arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
+) -> bool {
     response
         .realms
         .as_ref()
@@ -426,7 +432,9 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
     }
 }
 
-pub(crate) fn sync_filter_value(filter: Option<&arkret_core::SyncFilter>) -> Option<Value> {
+pub(crate) fn sync_filter_value(
+    filter: Option<&arkret_models_collaboration::sync_frames::client_sync::SyncFilter>,
+) -> Option<Value> {
     filter.and_then(|filter| serde_json::to_value(filter).ok())
 }
 
@@ -434,15 +442,15 @@ fn account_reconnect_control_frame(
     after: Option<&str>,
     _reason: impl Into<String>,
     reconnect_after_ms: u64,
-) -> arkret_core::AccountSubscribeFrame {
+) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     let (kind, cursor) = match after {
         Some(cursor) if !cursor.is_empty() => (
-            arkret_core::AccountSubscribeFrameKind::Dropped,
+            arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Dropped,
             Some(cursor.to_owned()),
         ),
-        _ => (arkret_core::AccountSubscribeFrameKind::ResyncRequired, None),
+        _ => (arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::ResyncRequired, None),
     };
-    arkret_core::AccountSubscribeFrame {
+    arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
         kind,
         cursor,
         realms: None,
@@ -485,7 +493,7 @@ pub(crate) async fn presence_events_for_actors(
     state: &AppState,
     actors: BTreeSet<String>,
     session: Option<&SessionRecord>,
-) -> Vec<arkret_core::EphemeralEnvelope> {
+) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
     let now = Utc::now();
     let mut events = Vec::new();
     for actor in actors {
@@ -539,10 +547,10 @@ pub(crate) fn aggregate_presence_records(
             updated_at: newest_updated_at,
         });
     }
-    let status = arkret_core::aggregate_presence_states(
-        live.iter()
-            .filter_map(|record| arkret_core::PresenceStatus::parse_wire(&record.status)),
-    );
+    let status =
+        arkret_models_discovery::presence::aggregate_presence_states(live.iter().filter_map(
+            |record| arkret_models_discovery::presence::PresenceStatus::parse_wire(&record.status),
+        ));
     let mut by_recency: Vec<&&PresenceRecord> = live.iter().collect();
     by_recency.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
     Some(AggregatedPresence {

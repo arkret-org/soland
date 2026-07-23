@@ -1,6 +1,6 @@
 //! Seal DAG admin endpoints — snapshot, compaction, prune.
 
-use arkret_core::{RealmId, SealId};
+use arkret_identifiers::{RealmId, SealId};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -58,13 +58,13 @@ pub(crate) async fn admin_get_seal_dag(
             continue;
         };
         let signers: Vec<String> = match &seal.notary_signature {
-            arkret_core::NotarySig::Single(sig) => vec![sig.verification_method.clone()],
-            arkret_core::NotarySig::Multi(multi) => multi
+            arkret_wire::seal::NotarySig::Single(sig) => vec![sig.verification_method.clone()],
+            arkret_wire::seal::NotarySig::Multi(multi) => multi
                 .signatures
                 .iter()
                 .map(|s| s.verification_method.clone())
                 .collect(),
-            arkret_core::NotarySig::Threshold(threshold) => threshold
+            arkret_wire::seal::NotarySig::Threshold(threshold) => threshold
                 .signers
                 .iter()
                 .map(|d| d.as_str().to_owned())
@@ -126,7 +126,7 @@ pub(crate) async fn admin_compact_seal_dag(
         state,
         req,
         &admin_session,
-        arkret_core::admin_scopes::SEAL_COMPACT,
+        arkret_models_identity::admin_grant::admin_scopes::SEAL_COMPACT,
     )
     .await?;
     let realm_id = realm_id.into_inner();
@@ -251,7 +251,7 @@ pub(crate) async fn admin_prune_seal_dag(
         state,
         req,
         &admin_session,
-        arkret_core::admin_scopes::SEAL_PRUNE,
+        arkret_models_identity::admin_grant::admin_scopes::SEAL_PRUNE,
     )
     .await?;
     let realm_id_str = realm_id.into_inner();

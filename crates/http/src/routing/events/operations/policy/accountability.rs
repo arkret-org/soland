@@ -147,9 +147,9 @@ pub(super) fn accountability_grant_value_active_for(
     subject: &str,
     now: chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    let Ok(grant) =
-        serde_json::from_value::<arkret_core::AccountabilityGrantPayload>(value.clone())
-    else {
+    let Ok(grant) = serde_json::from_value::<
+        arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload,
+    >(value.clone()) else {
         return false;
     };
     grant.issuer.as_str() == issuer
@@ -221,8 +221,8 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
 }
 
 /// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted
-/// envelope to the SDK [`arkret_core::EncryptedEnvelopeAadVisibility`] enum. Returns `None`
-/// when the field is missing or carries an unknown value, which the caller
+/// envelope to the SDK [`arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility`]
+/// enum. Returns `None` when the field is missing or carries an unknown value, which the caller
 /// treats as fail-closed for a minimal-metadata Realm.
 pub(super) fn validate_disappearing_message_policy(
     state: &AppState,
@@ -288,8 +288,8 @@ pub(super) fn validate_disappearing_message_policy(
 
 pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
     envelope: &Value,
-) -> Option<arkret_core::EncryptedEnvelopeAadVisibility> {
-    use arkret_core::EncryptedEnvelopeAadVisibility;
+) -> Option<arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility> {
+    use arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility;
     // The discriminator lives at the envelope root; tolerate a nested
     // `envelope` wrapper as shown in the spec wire example.
     let raw = envelope

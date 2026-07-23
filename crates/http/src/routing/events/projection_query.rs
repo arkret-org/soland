@@ -32,15 +32,22 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{
-    CellRef, Did, DocumentMorphProjectionOutcome, HistoryRangeContext, HistoryReaderContext,
-    HistoryReaderEventState, HistorySharingPolicyPayloadValue, HistorySharingRestrictedScopeRef,
-    HistorySharingScopeKind, HistoryVisibility, MorphId, ProjectionAssignedToRelation,
-    ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState, ProjectionSpaceList,
-    ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList, ProjectionStrandRow, RealmId,
-    ReferenceProjectionStatus, RelationId, SealId, SpaceId, StrandId, event_time_history_visible,
-    matching_restricted_rules,
+use arkret_identifiers::{CellRef, Did, MorphId, RealmId, RelationId, SealId, SpaceId, StrandId};
+use arkret_models_collaboration::events_payloads::strand_history_join::HistorySharingPolicyPayloadValue;
+use arkret_models_collaboration::governance::history_visibility::{
+    HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
+    HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
 };
+use arkret_models_collaboration::http_bodies::{
+    ProjectionAssignedToRelation, ProjectionMorphList, ProjectionMorphRow, ProjectionObjectState,
+    ProjectionSpaceList, ProjectionSpaceRow, ProjectionSpaceState, ProjectionStrandList,
+    ProjectionStrandRow,
+};
+use arkret_models_collaboration::objects::query_projection::{
+    DocumentMorphProjectionOutcome, ReferenceProjectionStatus,
+};
+use arkret_policy::history_visibility::{event_time_history_visible, matching_restricted_rules};
+use arkret_wire::HistoryVisibility;
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{PathParam, QueryParam};
@@ -111,7 +118,7 @@ async fn realm_history_sharing_policy(
         .flatten()?
         .history_sharing_policy?;
     let policy = serde_json::from_value::<HistorySharingPolicyPayloadValue>(policy_value).ok()?;
-    arkret_core::validate_history_sharing_policy(&policy).ok()?;
+    arkret_policy::history_visibility::validate_history_sharing_policy(&policy).ok()?;
     Some(policy)
 }
 
@@ -372,7 +379,8 @@ fn strand_assigned_to_relations(
 fn document_projection_document(
     morph: &MorphProjection,
     body: Value,
-) -> Result<arkret_core::DocumentMorphProjection, AppError> {
+) -> Result<arkret_models_collaboration::objects::query_projection::DocumentMorphProjection, AppError>
+{
     parse_projection_id::<MorphId>(&morph.morph_id, "document.morph_id")?;
     parse_projection_id::<RealmId>(&morph.realm_id, "document.realm_id")?;
     parse_projection_id::<Did>(&morph.created_by, "document.created_by")?;

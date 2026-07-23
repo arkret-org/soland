@@ -34,7 +34,8 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{CellRef, Operation};
+use arkret_event_draft::Operation;
+use arkret_identifiers::CellRef;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -45,7 +46,8 @@ use crate::state::AppState;
 /// Fixed ASCII domain-separation label prefixed (NUL-delimited) before the
 /// canonical binding bytes. Equals the `scheme` value verbatim; MUST match the
 /// issuer and verifier byte-for-byte (`media-service-binding.md` §3).
-pub(crate) const BINDING_SIGNING_LABEL: &[u8] = arkret_core::PARTICIPANT_BINDING_SCHEMA.as_bytes();
+pub(crate) const BINDING_SIGNING_LABEL: &[u8] =
+    arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.as_bytes();
 
 /// Build the canonical-JSON value the issuer signs over: exactly the seven
 /// authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
@@ -399,14 +401,15 @@ mod cross_impl_tests {
     //! input. `media-service-binding.md` §3 fixes one normative `signing_input`
     //! that the issuer signs and the verifier reconstructs. soland issues the
     //! binding here (`binding_signing_input`) and the SDK
-    //! ([`arkret_core::participant_binding_signing_input`]) reconstructs it on the
+    //! ([`arkret_signatures::media::participant_binding_signing_input`]) reconstructs it on the
     //! verify side. Each side has its own self-consistent unit tests, but until
     //! this lock there was no test asserting the two produce **identical bytes**
     //! for the same logical seven-tuple — so a drift on either side could go
     //! unnoticed (unlike the `ak.call.signal` envelope proof, which has a real
     //! inkson round-trip). This test fails the moment either construction drifts.
 
-    use arkret_core::{CallId, CallMediaParticipantBinding, DeviceId, Did, RealmId};
+    use arkret_identifiers::{CallId, DeviceId, Did, RealmId};
+    use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
     use arkret_signatures::media::participant_binding_signing_input;
     use chrono::{DateTime, Utc};
     use serde_json::json;
@@ -428,7 +431,7 @@ mod cross_impl_tests {
         let expires_at: DateTime<Utc> = expires_at.parse().unwrap();
         let binding = CallMediaParticipantBinding {
             // Unsigned metadata — MUST NOT enter the signing input.
-            scheme: arkret_core::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+            scheme: arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.to_owned(),
             sig: String::new(),
             issuer_kid: "did:web:media.example#media-token".to_owned(),
             issued_at: "2026-05-27T12:30:00.000Z".parse().unwrap(),

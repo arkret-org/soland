@@ -22,11 +22,12 @@
 //! Production note: see `_todos.md` B9 (merge `policy_check` and `authz_check`
 //! into a single evaluator), B10 (obligation execution), B12 (cache TTL).
 
-use arkret_core::{
-    AuthzDecision, Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome,
-    PolicyCheckRequestBody, PolicyCheckSignature, RealmId,
+use arkret_identifiers::{Did, Hash, RealmId};
+use arkret_models_collaboration::governance::policy_check::{
+    PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
 };
 use arkret_schema::{CapabilityRiskTier, embedded_capability_action};
+use arkret_wire::{AuthzDecision, FreshnessState};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -800,7 +801,7 @@ mod tests {
             device_id: None,
             action: "ak.message.create".to_owned(),
             request_canonical_digest: test_hash(),
-            source: arkret_core::PolicyCheckSource {
+            source: arkret_models_collaboration::governance::policy_check::PolicyCheckSource {
                 service_id: Did::new(source_service.to_owned()).unwrap(),
                 service_type: "soland".to_owned(),
                 source_ip_digest: Some(test_hash()),

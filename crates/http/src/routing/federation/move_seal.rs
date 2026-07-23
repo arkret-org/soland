@@ -20,10 +20,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{Event, Move, MoveId, NotarySig, RealmId, Seal, SealId, SealKind};
+use arkret_identifiers::{MoveId, RealmId, SealId};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::lattice::SealedOp;
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
+use arkret_wire::{Event, Move, NotarySig, Seal, SealKind};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -529,7 +530,7 @@ async fn try_apply_device_generation_event_seal(
         && let Some(requirement) = &context.generation_fence
         && requirement.payload.pre_fence_basis.is_none()
     {
-        arkret_core::validate_device_reanchor_recovery_first_seal(
+        arkret_models_collaboration::events_payloads::device_identity::validate_device_reanchor_recovery_first_seal(
             &requirement.payload,
             &seal.predecessor_refs,
             &seal.delta,

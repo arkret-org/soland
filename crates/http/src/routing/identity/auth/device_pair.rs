@@ -179,7 +179,7 @@ struct PairPubkeyMaterial {
 }
 
 fn pair_pubkey_material(
-    new_device_pubkey: &arkret_core::PublicKey,
+    new_device_pubkey: &arkret_models_collaboration::governance::agent_artifacts::PublicKey,
 ) -> Result<PairPubkeyMaterial, AppError> {
     let public_key = new_device_pubkey.key.as_str();
     let device_public_key = normalize_pair_device_public_key(public_key)?;

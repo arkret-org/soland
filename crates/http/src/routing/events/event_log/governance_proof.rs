@@ -1,17 +1,17 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    CellId, CellRef, Event, Hash, MaterializedMlsGovernanceProofBundle,
-    MlsGovernanceBindingPayload, MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue,
-    MlsGovernanceProofBundle, MlsGovernanceProofRequest, MoveId, SealId,
-    build_mls_governance_proof_chunks, derive_mls_capability_root,
-    derive_mls_discussion_metadata_digest, derive_mls_policy_root,
-    is_mls_membership_frontier_component,
+use arkret_identifiers::{CellRef, Hash, MoveId, SealId};
+use arkret_models_crypto::{
+    MaterializedMlsGovernanceProofBundle, MlsGovernanceBindingPayload,
+    MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue, MlsGovernanceProofBundle,
+    MlsGovernanceProofRequest, build_mls_governance_proof_chunks,
+    derive_mls_discussion_metadata_digest, is_mls_membership_frontier_component,
 };
 use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
 use arkret_state::state::compute_state_root;
-use arkret_wire::EffectiveScope as GovernanceScope;
 use arkret_wire::move_event::{LatticeOp, LatticeOpType};
+use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
@@ -118,8 +118,11 @@ async fn materialize_realm_control(
                 format!("canonical Event bounds preflight unavailable: {error}"),
             )
         })?;
-    if stats.count > arkret_core::MLS_GOVERNANCE_MAX_COVERED_EVENT_DIGESTS as u64
-        || stats.canonical_bytes > arkret_core::MLS_GOVERNANCE_MAX_TOTAL_ITEM_BYTES as u64
+    if stats.count
+        > arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_MAX_COVERED_EVENT_DIGESTS
+            as u64
+        || stats.canonical_bytes
+            > arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_MAX_TOTAL_ITEM_BYTES as u64
     {
         return Err(AppError::new(
             ErrorCode::MlsGovernanceProofBoundsExceeded,
@@ -629,12 +632,12 @@ async fn materialize_governance_proof(
     }
 
     Ok(MaterializedMlsGovernanceProofBundle {
-        bundle_version: arkret_core::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
+        bundle_version: arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
         proof_request_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
             .expect("zero sha256 digest is valid"),
         bundle_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
             .expect("zero sha256 digest is valid"),
-        materialization_profile: arkret_core::MLS_GOVERNANCE_COMPLETE_MATERIALIZATION_PROFILE
+        materialization_profile: arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_COMPLETE_MATERIALIZATION_PROFILE
             .to_owned(),
         realm_id: request.realm_id.clone(),
         effective_scope: request.effective_scope.clone(),
@@ -731,7 +734,9 @@ pub(crate) async fn first_generation_event_seal_requirement(
             ));
         }
         let reanchor = candidates[0];
-        let payload = serde_json::from_value::<arkret_core::DeviceReanchorPayload>(
+        let payload = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::device_identity::DeviceReanchorPayload,
+        >(
             reanchor
                 .envelope
                 .get("payload")
@@ -913,13 +918,13 @@ pub(crate) fn canonical_event_ops(
             "Realm create proof material is missing the genesis notary value",
         )
     })?;
-    let notary_value =
-        serde_json::from_value::<arkret_core::NotaryValue>(notary.clone()).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                format!("Realm create proof notary value is invalid: {error}"),
-            )
-        })?;
+    let notary_value = serde_json::from_value::<arkret_wire::notary::NotaryValue>(notary.clone())
+        .map_err(|error| {
+        AppError::new(
+            ErrorCode::StateMismatch,
+            format!("Realm create proof notary value is invalid: {error}"),
+        )
+    })?;
     notary_value.validate().map_err(|error| {
         AppError::new(
             ErrorCode::StateMismatch,

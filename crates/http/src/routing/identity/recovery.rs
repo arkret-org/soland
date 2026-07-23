@@ -19,15 +19,18 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    DeviceGenerationStatus, DeviceId, Did, EventBatchReceiptScope, Hash, NonEmptyString, PolicyId,
-    ProofSummary, RealmId, ReceiptId, RecoveryIdentityModel, RecoveryPolicy,
+use arkret_identifiers::{
+    DeviceId, Did, Hash, PolicyId, RealmId, ReceiptId, RecoverySessionId, TypedTrustDomainId,
+};
+use arkret_models_crypto::{
+    DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
     RecoveryPolicySummary, RecoveryReceiptOutcome, RecoverySessionCompleteOutcome,
-    RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody, RecoverySessionId,
+    RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody,
     RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
-    SessionState, TypedTrustDomainId,
+    SessionState,
 };
+use arkret_wire::{EventBatchReceiptScope, NonEmptyString};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};

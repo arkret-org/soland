@@ -3,8 +3,9 @@
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
-use arkret_core::{
-    BlobRef, Did, ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
+use arkret_identifiers::{BlobRef, Did};
+use arkret_models_collaboration::governance::erasure::{
+    ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
     ErasureStorageBoundary, ErasureSubject, ErasureSubjectKind,
 };
 
@@ -1105,7 +1106,7 @@ fn erasure_retained_stub(
     subject: &ErasureSubject,
     scope: &ErasureScope,
     completed_at: chrono::DateTime<chrono::Utc>,
-) -> Result<arkret_core::VerificationStub, AppError> {
+) -> Result<arkret_models_collaboration::events_payloads::event_wire::VerificationStub, AppError> {
     serde_json::from_value(json!({
         "stub_schema": "ak.schema.erasure_verification_stub.v1",
         "receipt_id": receipt_id,

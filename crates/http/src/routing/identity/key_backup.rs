@@ -1,8 +1,9 @@
 //! Encrypted key-backup CRUD.
 
-use arkret_core::{
-    BackupClass, BackupId, DeviceId, Did, EventId, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND,
-    KeyBackup, KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupKdfName,
+use arkret_identifiers::{BackupId, DeviceId, Did, EventId};
+use arkret_models_crypto::{
+    BackupClass, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
+    KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupKdfName,
     KeyBackupRecipientMethod, KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
 use base64::Engine as _;

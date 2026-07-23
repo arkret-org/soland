@@ -2,15 +2,16 @@
 //! build + persistence path.
 
 use arkret_canonical as canonical;
-use arkret_core::{
-    ActorProfileId, AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event,
-    EventRef, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId,
-    namespace_pattern_matches,
-};
 use arkret_event_draft::GhostActorProfileRequest;
+use arkret_identifiers::{ActorProfileId, AppletId, Did, Hash, Hlc, RealmId};
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
 };
+use arkret_models_integration::{
+    AppletDelegatedEventAuthorization, AppletNamespaceDomain, GhostActorProvisionRequestBody,
+    namespace_pattern_matches,
+};
+use arkret_wire::{Event, EventRef, PayloadProof};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
 use soland_application::identity::SessionIdentityState as SessionRecord;

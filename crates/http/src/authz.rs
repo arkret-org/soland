@@ -1014,16 +1014,16 @@ fn evaluate_constraint(
 pub enum MergedAuthzDecision {
     Allowed {
         local: AuthorizationDecision,
-        remote: Option<arkret_core::PolicyCheckOutcome>,
+        remote: Option<arkret_models_collaboration::governance::policy_check::PolicyCheckOutcome>,
     },
     LocalDeny(AuthorizationDecision),
     RemoteDeny {
         local: AuthorizationDecision,
-        remote: arkret_core::PolicyCheckOutcome,
+        remote: arkret_models_collaboration::governance::policy_check::PolicyCheckOutcome,
     },
     RemoteObligationFailed {
         local: AuthorizationDecision,
-        remote: arkret_core::PolicyCheckOutcome,
+        remote: arkret_models_collaboration::governance::policy_check::PolicyCheckOutcome,
         error: obligation_executor::ObligationError,
     },
 }

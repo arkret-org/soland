@@ -3,24 +3,31 @@
 //! Implements the v1 private invite delivery endpoint and the body-only
 //! online locator resolver from `sync/invite-addressing.md`.
 
-// NOTE: `arkret_core::DisclosurePolicy` at the crate root resolves to the
-// auth/DID-proof type (re-exported explicitly), which shadows the
+// NOTE: `arkret_models_collaboration::governance::invite_addressing::DisclosurePolicy` at the crate
+// root resolves to the auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
 use arkret_canonical as canonical;
-use arkret_core::{
-    CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
-    Did, DirectoryIntent, DisclosedOutcome, DisclosureLevel, Handle, HandleBindingState, Hash,
-    IntroductionEvidence, InviteDeliveryOutcome, InviteDeliveryOutcomeStatus,
-    InviteDeliveryRequest, InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody,
-    InviteLocatorResolveRequestBody, InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody,
-    InviteLocatorRotateRequestBody, InviteLocatorStatus, InviteReceiveAction, InviteReceivePolicy,
-    MemberDeliveryBindingCandidate, PrincipalLocator, PrincipalLocatorProof,
-    PrincipalLocatorProofPurpose, ReceivePolicyConstraints, ReceivePolicySurface,
-    UnknownInviteAction,
+use arkret_identifiers::{Did, Hash};
+use arkret_models_collaboration::governance::invite_addressing::{
+    DisclosedOutcome, DisclosureLevel, DisclosurePolicy, IntroductionEvidence,
+    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
+    InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
+    InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
+    InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
+    PrincipalLocatorProofPurpose,
 };
-use arkret_models_collaboration::governance::invite_addressing::DisclosurePolicy;
+use arkret_models_collaboration::governance::member_delivery_binding_candidate::{
+    CandidateIntent, CandidateValidationContext, MemberDeliveryBindingCandidate,
+};
+use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
+use arkret_models_discovery::DirectoryIntent;
 use arkret_models_identity::HandleClaim;
+use arkret_models_identity::handle::{Handle, HandleBindingState};
+use arkret_models_identity::proof::DetachedPayloadProof;
+use arkret_wire::{
+    InviteReceiveAction, ReceivePolicyConstraints, ReceivePolicySurface, UnknownInviteAction,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
@@ -429,7 +436,7 @@ async fn resolve_invite_locator(
         ))
     })?;
     let mut locator = PrincipalLocator {
-        schema: arkret_core::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
+        schema: arkret_wire::constants::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
         subject_id,
         recipient_service_id,
         recipient_service_type: None,
@@ -692,7 +699,7 @@ pub(crate) struct ReceiveDecision {
 /// `high_trust=outcome / low_trust=opaque`.
 pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolicy {
     InviteReceivePolicy {
-        schema: arkret_core::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
+        schema: arkret_wire::constants::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
         subject_id: Did::new(subject.to_owned()).unwrap_or_else(|_| {
             // did:webvh-only red line: placeholder is never a did:web literal.
             Did::new("did:webvh:invalid.invalid".to_owned()).expect("placeholder did")

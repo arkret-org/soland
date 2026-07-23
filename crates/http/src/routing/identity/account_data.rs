@@ -10,10 +10,11 @@
 //! opaque encrypted blob; clients own canonical encoding, schema validation,
 //! and (where applicable) encryption.
 
-use arkret_core::{
+use arkret_identifiers::{Did, EventId, Hlc, RealmId};
+use arkret_models_identity::account::{
     AccountDataDeleteOutcome, AccountDataEntry, AccountDataList, AccountDataReplaceRequestBody,
-    Did, Event, EventId, Hlc, RealmId,
 };
+use arkret_wire::Event;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -47,39 +48,39 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_REMINDER,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_REMINDER,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_SNOOZE,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SNOOZE,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_SAVED,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SAVED,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_DRAFT,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_DRAFT,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
         controller_private: true,
     },
     AccountDataTypeSpec {
-        data_type: arkret_core::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
         controller_private: true,
     },
     AccountDataTypeSpec {

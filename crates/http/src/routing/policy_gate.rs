@@ -1,7 +1,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_core::{Did, Hash, Operation, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_identity::{DidDocument, DidResolver};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};

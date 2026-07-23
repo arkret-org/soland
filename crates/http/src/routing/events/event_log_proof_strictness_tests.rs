@@ -98,18 +98,19 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
     let actor_id = arkret_identifiers::Did::new(did.clone()).unwrap();
     let subject_id = actor_id.clone();
     let zero_hash = arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
-    let mut identity = arkret_core::MemberIdentity::new(
+    let mut identity = arkret_models_identity::member_identity::MemberIdentity::new(
         realm_id.clone(),
         actor_id.clone(),
         subject_id,
-        arkret_core::DisplayProfile {
+        arkret_models_identity::member_identity::DisplayProfile {
             display_name: "Alice".to_owned(),
             avatar_blob_ref: None,
         },
         chrono::Utc::now(),
-        arkret_core::MemberIdentityProof {
+        arkret_models_identity::member_identity::MemberIdentityProof {
             verification_method,
-            signature_algorithm: arkret_core::MemberIdentitySignatureAlgorithm::Ed25519,
+            signature_algorithm:
+                arkret_models_identity::member_identity::MemberIdentitySignatureAlgorithm::Ed25519,
             payload_digest: zero_hash,
             signature: "AA".to_owned(),
         },
@@ -1445,8 +1446,9 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
 /// inherit the same fail-closed semantics they get inline today.
 #[test]
 fn soland_dev_proof_gate_matches_sdk_production_verifier() {
-    use arkret_core::{Audience, Hash};
+    use arkret_identifiers::Hash;
     use arkret_signatures::{ProductionVerifier, build_proof_envelope};
+    use arkret_wire::Audience;
 
     struct Noop;
     impl arkret_signatures::EventVerifier for Noop {
@@ -1549,7 +1551,7 @@ fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_identifiers::Mov
         covered_event_digests: covered,
         previous_state_root: None,
         previous_digest_algorithm: None,
-        notary_signature: arkret_core::NotarySig::Single(data_event_dummy_signature()),
+        notary_signature: arkret_wire::seal::NotarySig::Single(data_event_dummy_signature()),
         sealed_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         kind: arkret_wire::SealKind::Normal,

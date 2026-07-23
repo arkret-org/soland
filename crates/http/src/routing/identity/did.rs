@@ -14,11 +14,12 @@
 //! Long-term DID state is accessed through the identity application service; the
 //! `did_resolver` remains an in-process bounded cache over durable records.
 
-use arkret_core::{
-    Did, DidOperationSubmitOutcome, DidOperationSubmitRequestBody, Hash, IdentityDocumentView,
+use arkret_identifiers::{Did, Hash};
+use arkret_models_identity::http_bodies::IdentityDocumentViewOutcome;
+use arkret_models_identity::identity::{
+    DidOperationSubmitOutcome, DidOperationSubmitRequestBody, IdentityDocumentView,
     IdentityResolveOutcome,
 };
-use arkret_models_identity::http_bodies::IdentityDocumentViewOutcome;
 use salvo::http::{StatusCode, header};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;

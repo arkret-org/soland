@@ -1,7 +1,9 @@
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    Operation, ProfileSemanticRequirements, ServiceDescribe, collect_profile_semantic_requirements,
+use arkret_event_draft::Operation;
+use arkret_models_discovery::ServiceDescribe;
+use arkret_policy::profile_semantics::{
+    ProfileSemanticRequirements, collect_profile_semantic_requirements,
 };
 use serde_json::Value;
 use soland_application::operation_semantics as kinds;

@@ -13,7 +13,8 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use arkret_core::{Operation, OperationId, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{OperationId, RealmId};
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};

@@ -7,9 +7,11 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
-    ConsentCellList, ConsentCellView, ConsentId, ConsentRequestRequestBody, ConsentState,
-    ConsentUpdateRequestBody, Did, EventId, Operation,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{ConsentId, Did, EventId};
+use arkret_models_collaboration::account_lifecycle::{
+    ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
+    ConsentUpdateRequestBody,
 };
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;

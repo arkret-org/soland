@@ -1,5 +1,5 @@
 //! Per-scope admin gating via SDK
-//! [`arkret_core::SessionGrantIntrospection`].
+//! [`arkret_models_identity::admin_grant::SessionGrantIntrospection`].
 //!
 //! The SDK provides a typed view of an OAuth-style introspection
 //! response carrying `(principal_id, admin_scopes, expires_at,
@@ -21,10 +21,11 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::{Duration, Instant};
 
-use arkret_core::{
-    Did, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,
-    SessionGrantIntrospectStatus, SessionGrantIntrospection,
+use arkret_identifiers::Did;
+use arkret_models_collaboration::session_grant_bodies::{
+    SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody, SessionGrantIntrospectStatus,
 };
+use arkret_models_identity::admin_grant::SessionGrantIntrospection;
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
@@ -152,7 +153,7 @@ fn bearer_token_from_request(req: &Request) -> Option<String> {
 /// is configured. Grants every well-known admin scope to any DID listed
 /// in `admin_principal_dids` (or any DID in development_mode).
 fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGrantIntrospection {
-    use arkret_core::admin_scopes::*;
+    use arkret_models_identity::admin_grant::admin_scopes::*;
     let scopes = vec![
         NOTARY_RECONFIGURE.to_owned(),
         NOTARY_ROTATE_SIGNING_KEY.to_owned(),

@@ -1,5 +1,6 @@
-use arkret_core::{
-    AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody, SESSION_REVOKE_LIFECYCLE_PROOF_KIND,
+use arkret_models_collaboration::account_lifecycle::SESSION_REVOKE_LIFECYCLE_PROOF_KIND;
+use arkret_models_collaboration::session_grant_bodies::{
+    AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
@@ -481,7 +482,7 @@ async fn verify_cross_session_revoke_proof(
     })?;
     let session_device = DeviceId::new(session.device_id.clone())
         .map_err(|_| AppError::invalid_param("session device_id is not a valid DeviceId"))?;
-    let expected_digest = arkret_core::AccountLifecycleProof::session_revoke_request_digest(
+    let expected_digest = arkret_models_collaboration::account_lifecycle::AccountLifecycleProof::session_revoke_request_digest(
         &actor,
         &service_id,
         &session_device,

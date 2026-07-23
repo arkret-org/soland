@@ -213,7 +213,7 @@ fn test_presence_envelope(
     device: &str,
     status: &str,
     sent_at: DateTime<Utc>,
-) -> arkret_core::EphemeralEnvelope {
+) -> arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope {
     let envelope_device = if arkret_identifiers::DeviceId::new(device.to_owned()).is_ok() {
         device
     } else {
@@ -464,15 +464,17 @@ fn roster_body(audience: &str) -> SyncRequestBody {
     SyncRequestBody {
         after: None,
         catchup: None,
-        filter: Some(arkret_core::SyncFilter {
-            realms: Vec::new(),
-            timeline_limit: None,
-            lazy_load_members: false,
-            include_redundant_members: false,
-            event_types: Vec::new(),
-            not_event_types: Vec::new(),
-            extra,
-        }),
+        filter: Some(
+            arkret_models_collaboration::sync_frames::client_sync::SyncFilter {
+                realms: Vec::new(),
+                timeline_limit: None,
+                lazy_load_members: false,
+                include_redundant_members: false,
+                event_types: Vec::new(),
+                not_event_types: Vec::new(),
+                extra,
+            },
+        ),
         subscriptions: None,
         wait_for: None,
     }
@@ -952,7 +954,8 @@ fn canonical_value_digest(value: &Value) -> String {
 // spec-compliant client, whose `replaces[].event_id` is a `ak:event:` id.
 #[test]
 fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces() {
-    use arkret_core::{Operation, OperationId};
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::OperationId;
 
     use crate::routing::events::projection::project_member_identity_update;
 

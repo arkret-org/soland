@@ -8,7 +8,7 @@ pub(crate) async fn build_sync_snapshot(
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
     include_presence_delta: bool,
-) -> arkret_core::AccountSubscribeFrame {
+) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — `members[]` is
     // the per-Realm roster v2 projection from
@@ -194,24 +194,27 @@ pub(crate) async fn build_sync_snapshot(
         {
             continue;
         }
-        let mut entry = arkret_core::RealmSyncEntry::default();
+        let mut entry =
+            arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry::default();
         if durable_projection_changed {
             let roster = members
                 .into_iter()
                 .filter_map(|member| serde_json::from_value(member).ok())
-                .collect::<Vec<arkret_core::MemberRosterEntry>>();
+                .collect::<Vec<arkret_models_collaboration::sync_frames::account_sync::MemberRosterEntry>>();
             let heroes = roster
                 .iter()
                 .take(5)
                 .map(|member| member.actor_id.clone())
                 .collect::<Vec<_>>();
-            entry.timeline = Some(arkret_core::Timeline {
-                events: timeline_events,
-                limited: false,
-                prev_cursor: None,
-                preview_only: None,
-                extra: BTreeMap::new(),
-            });
+            entry.timeline = Some(
+                arkret_models_collaboration::sync_frames::account_sync::Timeline {
+                    events: timeline_events,
+                    limited: false,
+                    prev_cursor: None,
+                    preview_only: None,
+                    extra: BTreeMap::new(),
+                },
+            );
             entry.state = Some(
                 arkret_models_collaboration::sync_frames::account_sync::EventContainer {
                     events: state_events,
@@ -222,34 +225,36 @@ pub(crate) async fn build_sync_snapshot(
             // `state_at_window_start.realm_metadata`. Do not discard the
             // directory title/summary after visibility filtering and force
             // clients to fall back to the opaque Realm id.
-            entry.state_at_window_start = Some(arkret_core::StateAtWindowStart {
+            entry.state_at_window_start = Some(arkret_models_collaboration::sync_frames::account_sync::StateAtWindowStart {
                 actor_profiles: BTreeMap::new(),
-                realm_metadata: arkret_core::WindowStartRealmMetadata {
+                realm_metadata: arkret_models_collaboration::sync_frames::account_sync::WindowStartRealmMetadata {
                     title: (!title.trim().is_empty()).then_some(title),
                     summary,
                     join_rule,
                     collaboration_role: projection
                         .realm_is_direct_conversation(&realm_id)
-                        .then_some(arkret_core::CollaborationRealmRole::DirectConversation),
+                        .then_some(arkret_models_collaboration::objects::direct_conversation::CollaborationRealmRole::DirectConversation),
                 },
-                e2ee_epoch: arkret_core::WindowStartNullableE2eeEpoch::Null(()),
+                e2ee_epoch: arkret_models_collaboration::sync_frames::account_sync::WindowStartNullableE2eeEpoch::Null(()),
             });
-            entry.summary = Some(arkret_core::AccountSubscribeRealmSummary {
+            entry.summary = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeRealmSummary {
                 joined_member_count: Some(roster.len() as u64),
                 invited_member_count: None,
                 heroes: (!heroes.is_empty()).then_some(heroes),
             });
             entry.members = Some(roster);
             entry.members_limited = Some(false);
-            entry.unread_notifications = Some(arkret_core::AccountSubscribeUnreadCounts {
+            entry.unread_notifications = Some(arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeUnreadCounts {
                 notification_count: Some(0),
                 highlight_count: Some(0),
             });
         }
         if full_sync || !ephemeral_events.is_empty() {
-            entry.ephemeral = Some(arkret_core::EphemeralEventContainer {
-                events: ephemeral_events,
-            });
+            entry.ephemeral = Some(
+                arkret_models_collaboration::sync_frames::account_sync::EphemeralEventContainer {
+                    events: ephemeral_events,
+                },
+            );
         }
         sync_realms.insert(realm_id.clone(), entry);
     }
@@ -340,13 +345,13 @@ pub(crate) async fn build_sync_snapshot(
         notification_position,
     )
     .await;
-    arkret_core::AccountSubscribeFrame {
-        kind: arkret_core::AccountSubscribeFrameKind::Delta,
+    arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
+        kind: arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrameKind::Delta,
         cursor: Some(cursor),
-        realms: Some(arkret_core::AccountSubscribeRealms {
+        realms: Some(arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeRealms {
             entries: sync_realms,
         }),
-        to_device: Some(arkret_core::DeviceMessageContainer {
+        to_device: Some(arkret_models_collaboration::sync_frames::account_sync::DeviceMessageContainer {
             messages: to_device,
             ack_token: to_device_ack_token,
             lost: to_device_lost,
@@ -361,7 +366,7 @@ pub(crate) async fn build_sync_snapshot(
                 extra: BTreeMap::new(),
             },
         ),
-        presence: Some(arkret_core::EphemeralEventContainer { events: presence }),
+        presence: Some(arkret_models_collaboration::sync_frames::account_sync::EphemeralEventContainer { events: presence }),
         notifications: Some(account_notifications),
         partial: None,
         priority: None,
@@ -374,9 +379,16 @@ async fn account_notification_delta(
     session: Option<&SessionRecord>,
     after_cursor: &SyncCursor,
     is_incremental: bool,
-) -> (arkret_core::NotificationContainer, i64) {
+) -> (
+    arkret_models_collaboration::sync_frames::account_sync::NotificationContainer,
+    i64,
+) {
     let Some(session) = session else {
-        return (arkret_core::NotificationContainer::default(), 0);
+        return (
+            arkret_models_collaboration::sync_frames::account_sync::NotificationContainer::default(
+            ),
+            0,
+        );
     };
     let Some(account) = state
         .identity_application()
@@ -388,7 +400,8 @@ async fn account_notification_delta(
         .flatten()
     else {
         return (
-            arkret_core::NotificationContainer::default(),
+            arkret_models_collaboration::sync_frames::account_sync::NotificationContainer::default(
+            ),
             after_cursor.notification_position,
         );
     };
@@ -426,12 +439,18 @@ async fn account_notification_delta(
         if let Some(data) = row.get("projection_data").filter(|value| !value.is_null()) {
             delta["data"] = data.clone();
         }
-        match serde_json::from_value::<arkret_core::NotificationDelta>(delta) {
+        match serde_json::from_value::<
+            arkret_models_collaboration::sync_frames::account_sync::NotificationDelta,
+        >(delta)
+        {
             Ok(delta) => items.push(delta),
             Err(error) => tracing::error!(%error, "ignored invalid persisted account notification"),
         }
     }
-    (arkret_core::NotificationContainer { items }, position)
+    (
+        arkret_models_collaboration::sync_frames::account_sync::NotificationContainer { items },
+        position,
+    )
 }
 
 /// SYNC-MEM-1..4 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — build the
@@ -968,12 +987,12 @@ async fn device_lists_for_actors(
     after_cursor: &SyncCursor,
     is_incremental: bool,
 ) -> (
-    arkret_core::AccountSubscribeDeviceListChanges,
+    arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges,
     BTreeMap<String, i64>,
 ) {
     if session.is_none() {
         return (
-            arkret_core::AccountSubscribeDeviceListChanges {
+            arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges {
                 changed: Vec::new(),
                 left: Vec::new(),
             },
@@ -1030,7 +1049,10 @@ async fn device_lists_for_actors(
         .filter_map(|actor| arkret_identifiers::Did::new(actor).ok())
         .collect();
     (
-        arkret_core::AccountSubscribeDeviceListChanges { changed, left },
+        arkret_models_collaboration::sync_frames::account_sync::AccountSubscribeDeviceListChanges {
+            changed,
+            left,
+        },
         positions,
     )
 }
@@ -1201,8 +1223,8 @@ async fn deliver_ephemeral_events_for_subscriber(
     realm_id: &str,
     session: Option<&SessionRecord>,
     full_sync: bool,
-    typing_events: Vec<arkret_core::EphemeralEnvelope>,
-) -> Vec<arkret_core::EphemeralEnvelope> {
+    typing_events: Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope>,
+) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
     let Some(session) = session else {
         return Vec::new();
     };
@@ -1222,7 +1244,10 @@ pub(super) async fn typing_envelopes_for_subscriber(
     realm_id: &str,
     session: Option<&SessionRecord>,
     after_position: i64,
-) -> (Vec<arkret_core::EphemeralEnvelope>, i64) {
+) -> (
+    Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope>,
+    i64,
+) {
     let Some(session) = session else {
         return (Vec::new(), after_position);
     };
@@ -1299,7 +1324,7 @@ async fn deliver_call_signal_envelopes_for_subscriber(
     realm_id: &str,
     session: &SessionRecord,
     full_sync: bool,
-) -> Vec<arkret_core::EphemeralEnvelope> {
+) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
     let records =
         pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync).await;
     if let Some(max_position) = records.iter().map(|record| record.position).max() {

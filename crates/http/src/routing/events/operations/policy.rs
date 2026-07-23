@@ -33,7 +33,7 @@ pub(crate) async fn validate_trusted_sidecar_circle_operation(
     state: &AppState,
     operation: &Operation,
     controller: &str,
-    sidecar_id: &arkret_core::SidecarId,
+    sidecar_id: &arkret_identifiers::SidecarId,
 ) -> Result<(), &'static str> {
     if !sidecar_circle_object_shape_is_constrained(operation, controller, sidecar_id.as_str()) {
         return Err("sidecar_create_denied");
@@ -414,18 +414,19 @@ async fn validate_managed_agent_grant_ceiling(
     let Some(resources) = grant.get("resources").and_then(Value::as_array) else {
         return Err("agent_grant_exceeds_requested_scope");
     };
-    let resources = serde_json::from_value::<Vec<arkret_core::WireResourceSelector>>(Value::Array(
-        resources.clone(),
-    ))
+    let resources = serde_json::from_value::<
+        Vec<arkret_wire::resource_selector::WireResourceSelector>,
+    >(Value::Array(resources.clone()))
     .map_err(|_| "agent_grant_exceeds_requested_scope")?;
     let constraints = grant
         .get("constraints")
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    let constraints =
-        serde_json::from_value::<Vec<arkret_core::GrantConstraint>>(Value::Array(constraints))
-            .map_err(|_| "agent_grant_exceeds_requested_scope")?;
+    let constraints = serde_json::from_value::<
+        Vec<arkret_models_collaboration::governance::grant_constraint::GrantConstraint>,
+    >(Value::Array(constraints))
+    .map_err(|_| "agent_grant_exceeds_requested_scope")?;
     if crate::routing::identity::agents::agent_grant_within_requested_scope(
         &record,
         &actions,

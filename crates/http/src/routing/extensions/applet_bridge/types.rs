@@ -1,6 +1,6 @@
 //! Wire and storage types for the applet bridge surface.
 
-use arkret_core::{
+use arkret_models_integration::{
     AppletInstallOutcome, AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces,
 };
 use salvo::oapi::ToSchema;

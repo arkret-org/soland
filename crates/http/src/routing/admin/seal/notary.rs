@@ -1,7 +1,8 @@
 //! Notary cell admin endpoints — read + reconfigure.
 
-use arkret_core::{Did, Move, MoveSigner, NotaryValue as SdkNotaryValue, RealmId, UnsignedMove};
+use arkret_identifiers::{Did, RealmId};
 use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
+use arkret_wire::{Move, MoveSigner, NotaryValue as SdkNotaryValue, UnsignedMove};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -69,9 +70,9 @@ fn sdk_notary_value_from_body(
             // arithmetic (realm.schema.json notary.forensic_attribution):
             // quorum_intersection iff 2*threshold > members.len().
             let forensic_attribution = if 2 * (threshold as usize) > members.len() {
-                arkret_core::ForensicAttribution::QuorumIntersection
+                arkret_wire::notary::ForensicAttribution::QuorumIntersection
             } else {
-                arkret_core::ForensicAttribution::Waived
+                arkret_wire::notary::ForensicAttribution::Waived
             };
             SdkNotaryValue::Threshold {
                 threshold,
@@ -288,7 +289,7 @@ pub(crate) async fn admin_reconfigure_notary(
         state,
         req,
         &admin_session,
-        arkret_core::admin_scopes::NOTARY_RECONFIGURE,
+        arkret_models_identity::admin_grant::admin_scopes::NOTARY_RECONFIGURE,
     )
     .await?;
     let realm_id = realm_id.into_inner();

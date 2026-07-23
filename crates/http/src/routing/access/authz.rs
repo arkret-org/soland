@@ -12,8 +12,8 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{AuthzInviteList, Did, GrantId, Hash, InviteId, RealmId};
-use arkret_models_collaboration::governance::authorization::GrantList;
+use arkret_identifiers::{Did, GrantId, Hash, InviteId, RealmId};
+use arkret_models_collaboration::governance::authorization::{AuthzInviteList, GrantList};
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilityGrant, CapabilitySubject, GrantConstraint as WireGrantConstraint,
     GrantConstraintEffect as WireGrantConstraintEffect, GrantConstraintExtensionKey,
@@ -603,7 +603,7 @@ async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bo
 fn capability_resource_selector(
     realm_id: &str,
     resource: &str,
-) -> Result<arkret_core::WireResourceSelector, AppError> {
+) -> Result<arkret_wire::resource_selector::WireResourceSelector, AppError> {
     let value = if resource == "*" {
         json!({
             "kind": "realm",

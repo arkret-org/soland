@@ -24,7 +24,7 @@ use crate::state::AppState;
 /// cas-register conflict semantics writes should go through Move/Seal.
 pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     let realm_id = operation.realm_id.clone();
-    let policy: arkret_core::ReadReceiptPolicy =
+    let policy: arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy =
         match serde_json::from_value(operation.payload.clone()) {
             Ok(policy) => policy,
             Err(_) => return,

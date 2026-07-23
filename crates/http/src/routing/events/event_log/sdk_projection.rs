@@ -15,7 +15,9 @@ pub(in crate::routing) fn event_semantic_refs(
         ));
     };
     // scalability-constraints.md §2 — total refs[] across all roles ≤ 128.
-    if values.len() > max_len || arkret_core::validate_event_ref_count(values.len()).is_err() {
+    if values.len() > max_len
+        || arkret_wire::event_envelope::validate_event_ref_count(values.len()).is_err()
+    {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "refs_too_large",
@@ -59,7 +61,8 @@ pub(in crate::routing) fn event_semantic_refs(
     // scalability-constraints.md §2 — the `authorized_by` role is capped at 64
     // within the 128 total; authorized_by refs MUST be the minimal authorizing
     // state set (event-and-patch.md §2.2).
-    if arkret_core::validate_authorized_by_ref_count(authorized_refs.len()).is_err() {
+    if arkret_wire::event_envelope::validate_authorized_by_ref_count(authorized_refs.len()).is_err()
+    {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "refs_too_large",
@@ -730,7 +733,7 @@ fn sdk_event_from_record(
         applet_id: object
             .get("applet_id")
             .and_then(Value::as_str)
-            .and_then(|value| arkret_core::AppletId::new(value.to_owned()).ok()),
+            .and_then(|value| arkret_identifiers::AppletId::new(value.to_owned()).ok()),
         external_ref: object
             .get("external_ref")
             .filter(|value| !value.is_null())
@@ -1110,7 +1113,7 @@ mod refs_limit_tests {
     // §2 — `authorized_by` role ≤ 64 within the 128 total.
     #[test]
     fn authorized_by_over_max_rejected_as_refs_too_large() {
-        let refs: Vec<Value> = (0..(arkret_core::MAX_AUTHORIZED_BY_REFS + 1))
+        let refs: Vec<Value> = (0..(arkret_wire::event_envelope::MAX_AUTHORIZED_BY_REFS + 1))
             .map(|_| json!({"id": "ak:event:e1", "role": "authorized_by"}))
             .collect();
         let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();

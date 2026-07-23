@@ -2,7 +2,10 @@ use super::*;
 
 pub(crate) fn direct_authorization_basis_from_contact(
     contact: &ContactRecord,
-) -> Result<arkret_core::DirectConversationAuthorizationBasis, AppError> {
+) -> Result<
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis,
+    AppError,
+> {
     let event_refs = contact_fact_refs(contact)
         .into_iter()
         .map(arkret_identifiers::EventId::new)
@@ -10,7 +13,7 @@ pub(crate) fn direct_authorization_basis_from_contact(
         .map_err(|error| {
             AppError::internal(format!("stored contact event ref is invalid: {error}"))
         })?;
-    let basis = arkret_core::DirectConversationAuthorizationBasis::accepted_contact(event_refs);
+    let basis = arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis::accepted_contact(event_refs);
     basis.validate_shape().map_err(|error| {
         AppError::internal(format!(
             "stored direct conversation contact authorization basis is invalid: {error}"
@@ -96,7 +99,10 @@ pub(crate) fn direct_pair_key(
 pub(super) fn direct_pair_key_participant(
     did: &str,
     role: &str,
-) -> Result<arkret_core::DirectConversationPairKeyParticipant, AppError> {
+) -> Result<
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant,
+    AppError,
+> {
     let did = Did::new(did.to_owned()).map_err(|error| {
         AppError::internal(format!(
             "stored direct conversation {role} DID invalid: {error}"
@@ -112,7 +118,7 @@ pub(super) fn direct_pair_key_participant(
             "direct conversation pairwise DID requires a verified stable-subject identity link",
         ));
     }
-    Ok(arkret_core::DirectConversationPairKeyParticipant::unmapped(
+    Ok(arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(
         did,
     ))
 }
@@ -219,7 +225,10 @@ pub(crate) async fn retire_direct_bindings_for_operation(
 
 fn direct_binding_payload_from_operation(
     operation: &arkret_event_draft::Operation,
-) -> Result<arkret_core::DirectConversationBoundPayload, &'static str> {
+) -> Result<
+    arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+    &'static str,
+> {
     let mut payload = operation.payload.clone();
     let object = payload
         .as_object_mut()
@@ -259,7 +268,7 @@ pub(crate) async fn validate_direct_binding_operation(
         .validate_pair_key(trust_domain)
         .map_err(|_| "direct_conversation_binding_invalid")?;
 
-    if payload.binding_state == arkret_core::DirectConversationAuthoredBindingState::Retired {
+    if payload.binding_state == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Retired {
         let supersedes = payload
             .supersedes_binding_ref
             .as_ref()
@@ -297,7 +306,7 @@ pub(crate) async fn validate_direct_binding_operation(
     }
     validate_direct_binding_event_refs(state, &payload).await?;
     if payload.authorization_basis.kind
-        == arkret_core::DirectConversationAuthorizationKind::AcceptedContact
+        == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact
     {
         let left = payload.participants_unordered[0].as_str();
         let right = payload.participants_unordered[1].as_str();
@@ -343,7 +352,7 @@ async fn accepted_direct_event(
 
 async fn validate_direct_binding_event_refs(
     state: &AppState,
-    payload: &arkret_core::DirectConversationBoundPayload,
+    payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
 ) -> Result<(), &'static str> {
     if payload.member_event_refs.len() != 2 {
         return Err("direct_conversation_binding_invalid");
@@ -426,7 +435,7 @@ async fn validate_direct_binding_event_refs(
         authorization_kinds.insert(accepted.kind);
     }
     match payload.authorization_basis.kind {
-        arkret_core::DirectConversationAuthorizationKind::AcceptedContact => {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact => {
             let expected = BTreeSet::from([
                 arkret_wire::events::EventKind::CONTACT_REQUESTED.to_owned(),
                 arkret_wire::events::EventKind::CONTACT_ACCEPTED.to_owned(),
@@ -436,7 +445,7 @@ async fn validate_direct_binding_event_refs(
                 return Err("direct_conversation_binding_invalid");
             }
         }
-        arkret_core::DirectConversationAuthorizationKind::ManagedAgentController => {
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::ManagedAgentController => {
             let expected = BTreeSet::from([
                 arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT.to_owned(),
                 arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM.to_owned(),
@@ -561,14 +570,17 @@ async fn validate_direct_binding_event_refs(
     {
         return Err("direct_conversation_binding_invalid");
     }
-    let typed_welcome = serde_json::from_value::<arkret_core::MlsWelcomePayload>(
+    let typed_welcome = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
+    >(
         serde_json::to_value(&welcome.payload)
             .map_err(|_| "direct_conversation_binding_invalid")?,
     )
     .map_err(|_| "direct_conversation_binding_invalid")?;
     if let Some(receipt) = typed_welcome.peer_claim_receipt.as_ref() {
         let request = &receipt.request;
-        if request.claim_purpose != arkret_core::PeerKeyPackageClaimPurpose::DirectConversation
+        if request.claim_purpose
+            != arkret_models_crypto::http_bodies::PeerKeyPackageClaimPurpose::DirectConversation
             || request.requester.as_str() != creator
             || request.target_principal_id.as_str() != recipient
             || request.intended_realm_id != payload.realm_id
@@ -604,7 +616,7 @@ pub(crate) async fn project_canonical_direct_binding(
         return;
     };
     let pair_key = payload.pair_key.to_string();
-    if payload.binding_state == arkret_core::DirectConversationAuthoredBindingState::Retired {
+    if payload.binding_state == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Retired {
         let retired = payload
             .supersedes_binding_ref
             .as_ref()
@@ -764,10 +776,12 @@ struct RemoteDirectAuthoringContext {
     peer_member_event_ref: String,
     main_strand_create_ref: String,
     mls_group_id: String,
-    claim_authorization_draft: arkret_core::PeerKeyPackagesClaimAuthorizationDraft,
+    claim_authorization_draft:
+        arkret_models_crypto::http_bodies::PeerKeyPackagesClaimAuthorizationDraft,
     claim_command_dispatched: bool,
     #[serde(default)]
-    requester_signing_key_evidence: Option<arkret_core::FederatedDeviceSigningKeyEvidence>,
+    requester_signing_key_evidence:
+        Option<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
 }
 
 pub(crate) async fn prepare_remote_direct_keypackage_claim(
@@ -779,7 +793,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
 ) -> Result<
     (
         DirectConversationBindingRecord,
-        arkret_core::PeerKeyPackagesClaimAuthorizationDraft,
+        arkret_models_crypto::http_bodies::PeerKeyPackagesClaimAuthorizationDraft,
     ),
     AppError,
 > {
@@ -820,7 +834,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
     };
     let claim_request_id = URL_SAFE_NO_PAD.encode(uuid::Uuid::now_v7().as_bytes());
     let claim_nonce = URL_SAFE_NO_PAD.encode(uuid::Uuid::now_v7().as_bytes());
-    let draft: arkret_core::PeerKeyPackagesClaimAuthorizationDraft = serde_json::from_value(json!({
+    let draft: arkret_models_crypto::http_bodies::PeerKeyPackagesClaimAuthorizationDraft = serde_json::from_value(json!({
         "request": {
             "claim_request_id": claim_request_id,
             "target_principal_id": peer,
@@ -875,12 +889,12 @@ pub(crate) async fn complete_remote_direct_binding_with_realm(
     actor_device_id: &str,
     peer: &str,
     contact: &ContactRecord,
-    signed_claim: &arkret_core::PeerKeyPackagesClaimRequestBody,
+    signed_claim: &arkret_models_crypto::http_bodies::PeerKeyPackagesClaimRequestBody,
 ) -> Result<
     (
         DirectConversationBindingRecord,
         bool,
-        Option<arkret_core::DirectConversationMaterializationDraft>,
+        Option<arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft>,
     ),
     AppError,
 > {
@@ -950,7 +964,7 @@ pub(crate) fn pending_direct_materialization(
     pair_key: &str,
 ) -> Option<(
     DirectConversationBindingRecord,
-    arkret_core::DirectConversationMaterializationDraft,
+    arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
 )> {
     let binding = state
         .contact_application()
@@ -965,11 +979,11 @@ async fn execute_remote_peer_claim(
     pair_key: &str,
     reserved: &DirectConversationBindingRecord,
     mut context: RemoteDirectAuthoringContext,
-    signed_claim: &arkret_core::PeerKeyPackagesClaimRequestBody,
+    signed_claim: &arkret_models_crypto::http_bodies::PeerKeyPackagesClaimRequestBody,
 ) -> Result<
     (
-        arkret_core::KeyPackageClaimRecord,
-        arkret_core::PeerKeyPackageClaimReceipt,
+        arkret_models_crypto::artifacts_keys::KeyPackageClaimRecord,
+        arkret_models_crypto::http_bodies::PeerKeyPackageClaimReceipt,
     ),
     AppError,
 > {
@@ -1138,7 +1152,7 @@ async fn execute_remote_peer_claim(
 }
 
 enum RemotePeerClaimRecovery {
-    Claimed(Box<arkret_core::PeerKeyPackagesClaimOutcome>),
+    Claimed(Box<arkret_models_crypto::http_bodies::PeerKeyPackagesClaimOutcome>),
     Unknown,
     Pending,
     Failed,
@@ -1148,10 +1162,10 @@ async fn query_remote_peer_claim(
     state: &AppState,
     peer_url: &str,
     destination_service_id: &str,
-    signed_claim: &arkret_core::PeerKeyPackagesClaimRequestBody,
+    signed_claim: &arkret_models_crypto::http_bodies::PeerKeyPackagesClaimRequestBody,
     request_digest: &str,
 ) -> Result<RemotePeerClaimRecovery, AppError> {
-    let query = arkret_core::PeerKeyPackagesClaimQueryRequestBody {
+    let query = arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryRequestBody {
         claim_request_id: signed_claim.claim_request_id.clone(),
         request_digest: arkret_identifiers::Hash::new(request_digest.to_owned())
             .map_err(|error| AppError::internal(format!("remote claim query digest: {error}")))?,
@@ -1179,28 +1193,28 @@ async fn query_remote_peer_claim(
             "remote KeyPackage claim query was not accepted",
         ));
     }
-    let outcome: arkret_core::PeerKeyPackagesClaimQueryOutcome = serde_json::from_slice(&body)
-        .map_err(|error| {
+    let outcome: arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryOutcome =
+        serde_json::from_slice(&body).map_err(|error| {
             AppError::internal(format!("remote claim query outcome invalid: {error}"))
         })?;
     outcome.validate_shape().map_err(|error| {
         AppError::internal(format!("remote claim query shape invalid: {error}"))
     })?;
     match outcome.state {
-        arkret_core::PeerKeyPackagesClaimQueryState::Claimed => outcome
+        arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryState::Claimed => outcome
             .claim_outcome
             .map(Box::new)
             .map(RemotePeerClaimRecovery::Claimed)
             .ok_or_else(|| AppError::internal("claimed query outcome is missing claim_outcome")),
-        arkret_core::PeerKeyPackagesClaimQueryState::ClaimFailed
-        | arkret_core::PeerKeyPackagesClaimQueryState::Expired
-        | arkret_core::PeerKeyPackagesClaimQueryState::Revoked => {
+        arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryState::ClaimFailed
+        | arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryState::Expired
+        | arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryState::Revoked => {
             Ok(RemotePeerClaimRecovery::Failed)
         }
-        arkret_core::PeerKeyPackagesClaimQueryState::Unknown => {
+        arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryState::Unknown => {
             Ok(RemotePeerClaimRecovery::Unknown)
         }
-        arkret_core::PeerKeyPackagesClaimQueryState::Pending => {
+        arkret_models_crypto::http_bodies::PeerKeyPackagesClaimQueryState::Pending => {
             Ok(RemotePeerClaimRecovery::Pending)
         }
     }
@@ -1209,13 +1223,13 @@ async fn query_remote_peer_claim(
 async fn verify_remote_peer_claim_outcome(
     state: &AppState,
     destination_service_id: &str,
-    request: &arkret_core::PeerKeyPackagesClaimRequestBody,
+    request: &arkret_models_crypto::http_bodies::PeerKeyPackagesClaimRequestBody,
     request_digest: &str,
-    outcome: arkret_core::PeerKeyPackagesClaimOutcome,
+    outcome: arkret_models_crypto::http_bodies::PeerKeyPackagesClaimOutcome,
 ) -> Result<
     (
-        arkret_core::KeyPackageClaimRecord,
-        arkret_core::PeerKeyPackageClaimReceipt,
+        arkret_models_crypto::artifacts_keys::KeyPackageClaimRecord,
+        arkret_models_crypto::http_bodies::PeerKeyPackageClaimReceipt,
     ),
     AppError,
 > {
@@ -1272,8 +1286,10 @@ async fn verify_remote_peer_claim_outcome(
         )
     })?;
     let signing_bytes =
-        arkret_core::peer_keypackage_claim_receipt_signing_bytes(&outcome.claim_receipt)
-            .map_err(|error| AppError::internal(format!("remote receipt transcript: {error}")))?;
+        arkret_models_crypto::http_bodies::peer_keypackage_claim_receipt_signing_bytes(
+            &outcome.claim_receipt,
+        )
+        .map_err(|error| AppError::internal(format!("remote receipt transcript: {error}")))?;
     if !crate::routing::identity::cross_signing::ed25519_verify(
         &key.public_key,
         &signing_bytes,
@@ -1375,12 +1391,12 @@ pub(crate) async fn create_direct_binding_with_realm(
     actor_device_id: &str,
     peer: &str,
     contact: Option<&ContactRecord>,
-    authorization_basis: arkret_core::DirectConversationAuthorizationBasis,
+    authorization_basis: arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis,
 ) -> Result<
     (
         DirectConversationBindingRecord,
         bool,
-        Option<arkret_core::DirectConversationMaterializationDraft>,
+        Option<arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft>,
     ),
     AppError,
 > {
@@ -1473,7 +1489,7 @@ async fn prepare_reserved_direct_materialization(
     _actor_device_id: &str,
     peer: &str,
     contact: Option<&ContactRecord>,
-    authorization_basis: arkret_core::DirectConversationAuthorizationBasis,
+    authorization_basis: arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis,
     realm_id: &str,
     main_strand_id: &str,
     actor_member_event_ref: &str,
@@ -1481,14 +1497,14 @@ async fn prepare_reserved_direct_materialization(
     main_strand_create_ref: &str,
     mls_group_id: &str,
     reserved: DirectConversationBindingRecord,
-    claim: arkret_core::KeyPackageClaimRecord,
+    claim: arkret_models_crypto::artifacts_keys::KeyPackageClaimRecord,
     claim_nonce: &str,
-    claim_receipt: Option<arkret_core::PeerKeyPackageClaimReceipt>,
+    claim_receipt: Option<arkret_models_crypto::http_bodies::PeerKeyPackageClaimReceipt>,
 ) -> Result<
     (
         DirectConversationBindingRecord,
         bool,
-        Option<arkret_core::DirectConversationMaterializationDraft>,
+        Option<arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft>,
     ),
     AppError,
 > {
@@ -1509,11 +1525,11 @@ async fn prepare_reserved_direct_materialization(
     realm_event
         .requirements
         .critical_extensions
-        .push(arkret_core::CriticalExtension {
-            id: arkret_core::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
+        .push(arkret_wire::primitives::CriticalExtension {
+            id: arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
             extension_scope: "payload".to_owned(),
             schema_ref: None,
-            profile_ref: Some(arkret_core::DIRECT_CONVERSATION_REALM_PROFILE.to_owned()),
+            profile_ref: Some(arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_PROFILE.to_owned()),
             parameters: None,
             material_digest: None,
             evidence_ref: None,
@@ -1586,7 +1602,7 @@ async fn prepare_reserved_direct_materialization(
     let mls_genesis_event_ref = crate::ids::generate_event_id();
     let mls_commit_event_ref = crate::ids::generate_event_id();
     let mls_welcome_event_ref = crate::ids::generate_event_id();
-    let binding_fact = arkret_core::DirectConversationBoundPayload {
+    let binding_fact = arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload {
         pair_key: arkret_identifiers::Hash::new(pair_key.to_owned())
             .map_err(|error| AppError::internal(format!("stored pair key is invalid: {error}")))?,
         participants_unordered: sorted_participants(actor, peer)
@@ -1613,7 +1629,7 @@ async fn prepare_reserved_direct_materialization(
             .map_err(|error| {
                 AppError::internal(format!("stored strand event ref is invalid: {error}"))
             })?,
-        mls_group_id: arkret_core::MlsGroupId::new(mls_group_id.to_owned()).map_err(|error| {
+        mls_group_id: arkret_wire::MlsGroupId::new(mls_group_id.to_owned()).map_err(|error| {
             AppError::internal(format!("stored MLS group id is invalid: {error}"))
         })?,
         mls_genesis_event_ref: arkret_identifiers::EventId::new(mls_genesis_event_ref.clone())
@@ -1629,7 +1645,7 @@ async fn prepare_reserved_direct_materialization(
                 AppError::internal(format!("stored MLS Welcome Event id is invalid: {error}"))
             })?,
         created_at: reserved.created_at,
-        binding_state: arkret_core::DirectConversationAuthoredBindingState::Active,
+        binding_state: arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Active,
         supersedes_binding_ref: None,
     };
     let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
@@ -1651,12 +1667,12 @@ async fn prepare_reserved_direct_materialization(
             AppError::internal(format!("direct binding encoding failed: {error}"))
         })?,
     )?;
-    let draft = arkret_core::DirectConversationMaterializationDraft {
+    let draft = arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft {
         materialization_id: arkret_wire::NonEmptyString::new(reserved.binding_event_ref.clone())
             .map_err(|error| AppError::internal(format!("materialization id invalid: {error}")))?,
         claim_nonce: arkret_wire::Base64UrlString::new(claim_nonce.to_owned())
             .map_err(|error| AppError::internal(format!("claim nonce invalid: {error}")))?,
-        mls_group_id: arkret_core::MlsGroupId::new(mls_group_id.to_owned())
+        mls_group_id: arkret_wire::MlsGroupId::new(mls_group_id.to_owned())
             .map_err(|error| AppError::internal(format!("MLS group id invalid: {error}")))?,
         mls_genesis_event_ref: arkret_identifiers::EventId::new(mls_genesis_event_ref).map_err(
             |error| AppError::internal(format!("MLS genesis Event id invalid: {error}")),
@@ -1764,10 +1780,10 @@ fn attach_create_cell_contract(
         .get("object")
         .cloned()
         .ok_or_else(|| AppError::internal("direct create payload object missing"))?;
-    event.preconditions = vec![arkret_core::Precondition {
+    event.preconditions = vec![arkret_wire::move_event::Precondition {
         cell: cell.clone(),
-        predicate: arkret_core::Predicate {
-            op: arkret_core::PredicateOp::HeadEq,
+        predicate: arkret_wire::move_event::Predicate {
+            op: arkret_wire::move_event::PredicateOp::HeadEq,
             value: Some(Value::Null),
             values: None,
             predicate_id: None,
@@ -1793,10 +1809,10 @@ fn attach_member_join_cell_contract(
     participant: &str,
 ) -> Result<(), AppError> {
     let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
-    event.preconditions = vec![arkret_core::Precondition {
+    event.preconditions = vec![arkret_wire::move_event::Precondition {
         cell: cell.clone(),
-        predicate: arkret_core::Predicate {
-            op: arkret_core::PredicateOp::HeadEq,
+        predicate: arkret_wire::move_event::Predicate {
+            op: arkret_wire::move_event::PredicateOp::HeadEq,
             value: Some(Value::Null),
             values: None,
             predicate_id: None,
@@ -1940,7 +1956,7 @@ pub(super) async fn wait_for_pending_direct_binding(
     (
         DirectConversationBindingRecord,
         bool,
-        Option<arkret_core::DirectConversationMaterializationDraft>,
+        Option<arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft>,
     ),
     AppError,
 > {
@@ -1960,7 +1976,7 @@ pub(super) async fn wait_for_pending_direct_binding(
                 if binding.binding_event_ref == binding_event_ref
                     && binding.state == "authoring_required"
                     && serde_json::from_value::<
-                        arkret_core::DirectConversationMaterializationDraft,
+                        arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
                     >(
                         binding.authoring_context.clone().unwrap_or(Value::Null)
                     )
@@ -2014,7 +2030,7 @@ pub(super) async fn claim_direct_keypackage(
     realm_id: &str,
     main_strand_id: &str,
     mls_group_id: &str,
-) -> Result<arkret_core::KeyPackageClaimRecord, AppError> {
+) -> Result<arkret_models_crypto::artifacts_keys::KeyPackageClaimRecord, AppError> {
     let target_principal_id = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
             arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
@@ -2027,7 +2043,7 @@ pub(super) async fn claim_direct_keypackage(
             "direct conversation requester DID is invalid",
         )
     })?;
-    let body = arkret_core::KeyPackagesClaimRequestBody {
+    let body = arkret_models_crypto::http_bodies::KeyPackagesClaimRequestBody {
         target_principal_id,
         intended_realm_id: RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
@@ -2130,12 +2146,12 @@ pub(super) fn direct_realm_create_payload(
     let trust_domain =
         arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
             .map_err(|_| "invalid direct realm trust domain")?;
-    let payload = arkret_core::direct_conversation_realm_create_payload(
+    let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         realm_scope,
         creator_did.clone(),
         trust_domain,
-        arkret_core::NotaryProfile::SingleDid,
-        arkret_core::NotaryValue::single_did(creator_did),
+        arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+        arkret_wire::notary::NotaryValue::single_did(creator_did),
         created_at,
     );
     serde_json::to_value(payload).map_err(|_| "direct realm create payload serialization failed")
@@ -2211,7 +2227,7 @@ pub(super) fn direct_member_join_payload(
 ) -> Result<Value, &'static str> {
     let member_did = arkret_identifiers::Did::new(member.to_owned())
         .map_err(|_| "invalid direct peer member DID")?;
-    arkret_core::direct_conversation_member_join_payload(
+    arkret_models_collaboration::objects::direct_conversation::direct_conversation_member_join_payload(
         realm_scope,
         member_did,
         arkret_models_identity::DeliveryStatus::Unroutable,
@@ -2230,7 +2246,7 @@ pub(super) fn direct_strand_create_payload(
         .map_err(|_| "generated invalid direct conversation strand id")?;
     let creator_did = arkret_identifiers::Did::new(creator.to_owned())
         .map_err(|_| "invalid direct strand creator DID")?;
-    let payload = arkret_core::direct_conversation_main_strand_create_payload(
+    let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_main_strand_create_payload(
         strand_id,
         realm_scope,
         creator_did,

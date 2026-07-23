@@ -1,4 +1,5 @@
-use arkret_core::{Operation, OperationId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::OperationId;
 use serde_json::{Value, json};
 use soland_storage_postgres::Db;
 

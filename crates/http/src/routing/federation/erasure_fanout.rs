@@ -30,7 +30,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_core::{Did, Operation, OperationId, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, OperationId, RealmId};
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -226,7 +227,7 @@ fn erasure_push_payload(
     let origin = Did::new(state.service_id().clone()).ok()?;
     let destination = Did::new(peer.did.clone()).ok()?;
     let realm_id = RealmId::new(operation.realm_id.to_string()).ok()?;
-    let body = arkret_core::FederationPushOperationsRequestBody {
+    let body = arkret_event_draft::federation_transaction::FederationPushOperationsRequestBody {
         origin,
         destination,
         realm_id,

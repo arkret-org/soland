@@ -24,28 +24,27 @@ bs58.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 arkret-canonical.workspace = true
-arkret-core = { workspace = true, features = ["salvo"] }
-arkret-event-draft.workspace = true
+arkret-event-draft = { workspace = true, features = ["salvo-oapi"] }
 arkret-auth.workspace = true
 arkret-bootstrap.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data"] }
 arkret-http-client.workspace = true
 arkret-hlc.workspace = true
-arkret-identifiers.workspace = true
+arkret-identifiers = { workspace = true, features = ["salvo"] }
 arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
 arkret-mls.workspace = true
-arkret-models-collaboration.workspace = true
-arkret-models-discovery.workspace = true
-arkret-models-integration.workspace = true
-arkret-models-crypto.workspace = true
-arkret-models-identity.workspace = true
-arkret-policy.workspace = true
-arkret-schema.workspace = true
+arkret-models-collaboration = { workspace = true, features = ["salvo-oapi"] }
+arkret-models-discovery = { workspace = true, features = ["salvo-oapi"] }
+arkret-models-integration = { workspace = true, features = ["salvo-oapi"] }
+arkret-models-crypto = { workspace = true, features = ["salvo-oapi"] }
+arkret-models-identity = { workspace = true, features = ["salvo-oapi"] }
+arkret-policy = { workspace = true, features = ["salvo-oapi"] }
+arkret-schema = { workspace = true, features = ["salvo-oapi"] }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["protocol", "signer"] }
 arkret-state = { workspace = true, features = ["salvo"] }
-arkret-wire.workspace = true
+arkret-wire = { workspace = true, features = ["salvo-oapi"] }
 dotenvy.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true

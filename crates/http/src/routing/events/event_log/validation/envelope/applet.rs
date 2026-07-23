@@ -157,7 +157,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
     state: &AppState,
     object: &serde_json::Map<String, Value>,
     record: &crate::routing::extensions::applet_bridge::AppletRecord,
-    package: &arkret_core::AppletPackage,
+    package: &arkret_models_integration::AppletPackage,
     grant: &crate::authz::Grant,
     applet_id: &str,
     executed_by: &str,
@@ -271,8 +271,8 @@ pub(super) fn applet_actor_matches_exact_namespace(
     record.namespaces.as_ref().is_some_and(|namespaces| {
         namespaces.actors.iter().any(|entry| {
             !applet_namespace_pattern_is_wildcard(&entry.pattern)
-                && arkret_core::namespace_pattern_matches(
-                    arkret_core::AppletNamespaceDomain::Actors,
+                && arkret_models_integration::namespace_pattern_matches(
+                    arkret_models_integration::AppletNamespaceDomain::Actors,
                     &entry.pattern,
                     actor_id,
                 )

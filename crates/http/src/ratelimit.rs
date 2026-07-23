@@ -158,23 +158,27 @@ impl RateLimiterConfig {
     /// derived from the SAME ceilings the middleware enforces. Entries are
     /// ordered most-specific-first, mirroring [`EndpointClass::classify`]; the
     /// scope is `ip` because the buckets are keyed on the remote address.
-    pub fn advertised_policy(&self) -> arkret_core::RateLimitPolicy {
+    pub fn advertised_policy(
+        &self,
+    ) -> arkret_models_discovery::service_description::RateLimitPolicy {
         let window_seconds = u32::try_from(self.window.as_secs())
             .unwrap_or(u32::MAX)
             .max(1);
-        let entry = |endpoint: String, max_requests: u32| arkret_core::RateLimitEntry {
-            endpoint: Some(endpoint),
-            // NOTE: `arkret_core::RateLimitScope` (crate root) is the authz
-            // constraints enum; the describe entry needs the service-description
-            // scope, which lives under `models`.
-            rate_limit_scope: Some(arkret_models_discovery::RateLimitScope::Single(
-                "ip".to_owned(),
-            )),
-            window_seconds: Some(window_seconds),
-            max_requests: Some(max_requests.max(1)),
-            ..arkret_core::RateLimitEntry::default()
+        let entry = |endpoint: String, max_requests: u32| {
+            arkret_models_discovery::service_description::RateLimitEntry {
+                endpoint: Some(endpoint),
+                // NOTE: `arkret_models_discovery::service_description::RateLimitScope` (crate root)
+                // is the authz constraints enum; the describe entry needs the
+                // service-description scope, which lives under `models`.
+                rate_limit_scope: Some(arkret_models_discovery::RateLimitScope::Single(
+                    "ip".to_owned(),
+                )),
+                window_seconds: Some(window_seconds),
+                max_requests: Some(max_requests.max(1)),
+                ..arkret_models_discovery::service_description::RateLimitEntry::default()
+            }
         };
-        arkret_core::RateLimitPolicy {
+        arkret_models_discovery::service_description::RateLimitPolicy {
             policy_version: Some("1".to_owned()),
             entries: vec![
                 entry(DESCRIBE_PROBE_PATH.to_owned(), self.probe_max_requests),
@@ -185,7 +189,7 @@ impl RateLimiterConfig {
                 entry(format!("{ARKRET_PREFIX}*"), self.api_max_requests),
                 entry("*".to_owned(), self.max_requests),
             ],
-            ..arkret_core::RateLimitPolicy::default()
+            ..arkret_models_discovery::service_description::RateLimitPolicy::default()
         }
     }
 }
@@ -393,7 +397,7 @@ impl Handler for RateLimiterMiddleware {
             res.headers_mut()
                 .insert(salvo::http::header::RETRY_AFTER, retry_after_seconds.into());
             res.render(Json(
-                arkret_core::ErrorEnvelope::new(
+                arkret_wire::problem_details::ErrorEnvelope::new(
                     "rate_limited",
                     "Too many requests. Please try again later.",
                 )

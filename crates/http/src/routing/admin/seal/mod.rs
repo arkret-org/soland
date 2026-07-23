@@ -34,7 +34,7 @@
 //!   full multi-signer compaction are placeholder-only — these need the admin signer strand +
 //!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
 
-use arkret_core::{Did, Hlc, RealmId, SealId};
+use arkret_identifiers::{Did, Hlc, RealmId, SealId};
 use arkret_signatures::Ed25519MoveSigner;
 use salvo::http::StatusCode;
 use soland_http::error::AppError;

@@ -59,7 +59,8 @@ pub fn retention_tombstone_for_event(
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{Operation, OperationId, RealmId};
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
     use serde_json::{Value, json};
 
     use super::*;

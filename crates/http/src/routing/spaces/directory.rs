@@ -25,29 +25,31 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_core::{
-    AGENT_SELECTOR_CLAIM_SCHEMA, ActorPreview, AgentSelectorClaim, Audience, BlobRef,
-    DeliveryBindingHint, DeliveryMode, Did, DirectoryActorSearchOutcome,
-    DirectoryAgentSelectorResolutionOutcome, DirectoryAnnounceOutcome,
-    DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome, DirectoryIntent,
-    DirectoryListHandlesForSubjectRequestBody, DirectoryOrganizationResolutionOutcome,
-    DirectoryOrganizationSearchOutcome, DirectoryPrivateContactDiscoveryOutcome,
-    DirectoryPrivateContactDiscoveryRequestBody, DirectoryPushRegisterOutcome,
-    DirectoryPushRegisterRequestBody, DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
+use arkret_hlc::CursorPurpose;
+use arkret_identifiers::{BlobRef, Did, MessageId, RealmId, StrandId};
+use arkret_models_discovery::{
+    ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
+    DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome,
+    DirectoryIntent, DirectoryListHandlesForSubjectRequestBody,
+    DirectoryOrganizationResolutionOutcome, DirectoryOrganizationSearchOutcome,
+    DirectoryPrivateContactDiscoveryOutcome, DirectoryPrivateContactDiscoveryRequestBody,
+    DirectoryPushRegisterOutcome, DirectoryPushRegisterRequestBody,
+    DirectoryRealmResolutionOutcome, DirectoryRealmSearchOutcome,
     DirectoryResolveAgentSelectorRequestBody, DirectoryResolveHandleRequestBody,
     DirectoryResolveOrganizationRequestBody, DirectoryResolveRealmRequestBody,
     DirectoryResolveTargetRequestBody, DirectoryResourceKind, DirectorySearchActorsRequestBody,
     DirectorySearchOrganizationsRequestBody, DirectorySearchRealmsRequestBody,
     DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
     DirectoryUserSearchOutcome, DirectoryWithdrawOutcome, DirectoryWithdrawRequestBody,
-    HandleClaimKind, HandleHintBindingSource, JoinRule, LinkType, MessageId, MoveSigner,
-    ObjectPreview, ObjectPreviewId, OrganizationPreview, PayloadProof, RealmId, RealmJoinCandidate,
+    ObjectPreview, ObjectPreviewId, OrganizationPreview, RealmJoinCandidate,
     RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
-    RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef,
-    RecipientServiceType, ServiceDescribe, StrandId, TargetDescriptor, TargetKind,
-    UserSearchOutcome, parse_address, proof_kind, target_digest, validate_agent_slug,
+    RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview,
+    ServiceDescribe, TargetKind, UserSearchOutcome,
 };
-use arkret_hlc::CursorPurpose;
+use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
+use arkret_models_identity::delivery_binding::{DeliveryMode, RecipientServiceType};
+use arkret_models_identity::handle::{HandleClaimKind, HandleHintBindingSource};
+use arkret_models_identity::handle_claim::DeliveryBindingHint;
 use arkret_models_identity::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
@@ -55,6 +57,10 @@ use arkret_server::{
     CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
 };
 use arkret_signatures::Ed25519MoveSigner;
+use arkret_wire::{
+    AGENT_SELECTOR_CLAIM_SCHEMA, Audience, JoinRule, LinkType, MoveSigner, PayloadProof, RealmRef,
+    TargetDescriptor, parse_address, proof_kind, target_digest,
+};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
@@ -173,39 +179,39 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         service_id,
         trust_domain,
         service_type: arkret_wire::ServiceType::DirectoryService,
-        protocol_version: arkret_core::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS
             .iter()
             .map(|operation| (*operation).to_owned())
             .collect(),
         supported_bindings: vec![
-            arkret_core::SupportedBinding::new("http_json")
+            arkret_models_discovery::service_description::SupportedBinding::new("http_json")
                 .with_base_url(state.config().public_base_url.trim_end_matches('/')),
         ],
         supported_features: supported_features.clone(),
-        auth_metadata: arkret_core::AuthMetadata::minimal("public_no_auth"),
+        auth_metadata: arkret_models_discovery::service_description::AuthMetadata::minimal("public_no_auth"),
         limits: Default::default(),
-        plaintext_visibility: arkret_core::PlaintextVisibility::none(),
+        plaintext_visibility: arkret_models_discovery::service_description::PlaintextVisibility::none(),
         privacy_derivation: None,
         receive_policy_constraints: None,
         implemented_features: supported_features,
         claimed_profiles: supported_profiles
             .iter()
-            .map(arkret_core::ClaimedProfileEntry::self_claimed)
+            .map(arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed)
             .collect(),
         verified_profiles: Vec::new(),
         experimental_features: Vec::new(),
         compat_surfaces: Vec::new(),
         development_mode: state.config().development_mode,
-        rate_limit_policy: Some(arkret_core::RateLimitPolicy::unspecified()),
+        rate_limit_policy: Some(arkret_models_discovery::service_description::RateLimitPolicy::unspecified()),
         rate_limit_policy_id: None,
-        egress_network_policy: Some(arkret_core::EgressNetworkPolicy::deny_private_defaults()),
+        egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
         resource_types: DIRECTORY_RESOURCE_TYPES.to_vec(),
         discovery_profiles: supported_profiles,
         restricted_query_proof: Some(false),
-        ingest_modes: vec![arkret_core::DirectoryIngestMode::Push],
-        accept_policy_kind: Some(arkret_core::DirectoryAcceptPolicyKind::Open),
+        ingest_modes: vec![arkret_models_discovery::service_description::DirectoryIngestMode::Push],
+        accept_policy_kind: Some(arkret_models_discovery::service_description::DirectoryAcceptPolicyKind::Open),
         accept_policy_ref: None,
         default_ttl_seconds: Some(86_400),
         max_ttl_seconds: Some(604_800),

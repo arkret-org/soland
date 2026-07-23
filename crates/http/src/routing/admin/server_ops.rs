@@ -216,7 +216,7 @@ async fn get_server_info(
     let _ = require_admin_principal(state, session)?;
     json_ok(AdminServerInfoOutcome {
         server_version: env!("CARGO_PKG_VERSION").to_owned(),
-        protocol_version: Some(arkret_core::PROTOCOL_VERSION.to_owned()),
+        protocol_version: Some(arkret_wire::constants::PROTOCOL_VERSION.to_owned()),
         server_name: Some(state.service_id().clone()),
         uptime: None,
         service_id: state.service_id().clone(),

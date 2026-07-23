@@ -27,7 +27,9 @@ use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::time::{Duration as StdDuration, Instant};
 
-use arkret_core::{DeviceId, Did, FreshnessState, SessionGrantProofKind};
+use arkret_identifiers::{DeviceId, Did};
+use arkret_models_identity::session_credential::SessionGrantProofKind;
+use arkret_wire::FreshnessState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
@@ -640,7 +642,7 @@ pub(crate) async fn grant_dpop_session(
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{GrantId, RealmId};
+    use arkret_identifiers::{GrantId, RealmId};
 
     use super::*;
 
@@ -735,12 +737,15 @@ mod tests {
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
-            realm_ids: vec![
-                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned()).unwrap(),
-            ],
-            ..Default::default()
-        });
+        grant.scope_details = Some(
+            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
+                realm_ids: vec![
+                    RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned())
+                        .unwrap(),
+                ],
+                ..Default::default()
+            },
+        );
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let (device_id, agent_session) = session_binding_from_introspection(&grant).unwrap();
@@ -765,12 +770,15 @@ mod tests {
         grant.device_id = None;
         grant.scopes = vec!["ak.agent.action:message.send".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
-            realm_ids: vec![
-                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned()).unwrap(),
-            ],
-            ..Default::default()
-        });
+        grant.scope_details = Some(
+            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
+                realm_ids: vec![
+                    RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000003".to_owned())
+                        .unwrap(),
+                ],
+                ..Default::default()
+            },
+        );
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let err = session_binding_from_introspection(&grant).unwrap_err();
@@ -799,7 +807,9 @@ mod tests {
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.events.query.scan".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
+        grant.scope_details = Some(
+            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
+        );
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
@@ -816,7 +826,9 @@ mod tests {
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.message.create".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
+        grant.scope_details = Some(
+            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
+        );
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let err = session_binding_from_introspection(&grant).unwrap_err();
@@ -832,7 +844,9 @@ mod tests {
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.keys.keypackages.upload.create".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
+        grant.scope_details = Some(
+            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails::default(),
+        );
         grant.freshness_state = Some(FreshnessState::Fresh);
 
         let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
@@ -848,12 +862,15 @@ mod tests {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
-        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails {
-            realm_ids: vec![
-                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000004".to_owned()).unwrap(),
-            ],
-            ..Default::default()
-        });
+        grant.scope_details = Some(
+            arkret_models_collaboration::session_grant_bodies::SessionGrantScopeDetails {
+                realm_ids: vec![
+                    RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000004".to_owned())
+                        .unwrap(),
+                ],
+                ..Default::default()
+            },
+        );
 
         let err = session_binding_from_introspection(&grant).unwrap_err();
 

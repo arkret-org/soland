@@ -1,14 +1,13 @@
-use arkret_core::{
-    MlsGovernanceBindingPayload, MlsGroupId, NonEmptyString, SidecarId, SidecarMlsBinding,
-    agent_sidecar_desired_access_digest,
-};
+use arkret_identifiers::SidecarId;
 use arkret_models_collaboration::agent_operations::{
     AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
     AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
     AgentSidecarList, AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState,
     AgentSidecarView, PendingSidecarAccessReconciliationItem,
-    PendingSidecarAccessReconciliationStage,
+    PendingSidecarAccessReconciliationStage, agent_sidecar_desired_access_digest,
 };
+use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
+use arkret_wire::{MlsGroupId, NonEmptyString};
 use salvo::oapi::extract::QueryParam;
 use soland_application::identity::{
     AgentSidecarContextState as AgentSidecarContextRecord, AgentSidecarState as AgentSidecarRecord,
@@ -283,7 +282,7 @@ fn backing_circle_is_compliant(
     controller: &str,
 ) -> bool {
     let expected_short_name =
-        arkret_core::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
+        arkret_wire::constants::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
     circle.profile_ref.is_none()
         && circle.title == "Agent Sidecar Scope"
         && circle.summary.is_none()
@@ -327,7 +326,8 @@ async fn ensure_backing_circle(
             Err(sidecar_create_denied("Sidecar backing scope conflict"))
         };
     }
-    let short_name = arkret_core::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
+    let short_name =
+        arkret_wire::constants::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
     let object = json!({
         "id": circle_id,
         "schema": "ak.schema.circle.v1",

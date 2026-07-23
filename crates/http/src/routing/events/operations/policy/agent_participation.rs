@@ -262,8 +262,12 @@ pub(super) async fn agent_lifecycle_rejection_reason(
         projection.agent_lifecycles.get(agent_id).copied()
     };
     Ok(match projected {
-        Some(arkret_core::AgentLifecycleState::Paused) => Some("agent_paused"),
-        Some(arkret_core::AgentLifecycleState::Deactivated) => Some("agent_deactivated"),
+        Some(arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused) => {
+            Some("agent_paused")
+        }
+        Some(arkret_models_collaboration::agent_operations::AgentLifecycleState::Deactivated) => {
+            Some("agent_deactivated")
+        }
         _ => None,
     })
 }

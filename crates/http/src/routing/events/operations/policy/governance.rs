@@ -565,7 +565,8 @@ pub(super) async fn validate_call_recording_start_policy(
 
 fn call_recording_start_payload(
     operation: &Operation,
-) -> Result<arkret_core::RecordingStartPayload, &'static str> {
+) -> Result<arkret_models_collaboration::events_payloads::call::RecordingStartPayload, &'static str>
+{
     let Some(payload) = operation.payload.as_object() else {
         return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
     };
@@ -590,15 +591,16 @@ fn call_recording_start_payload(
 }
 
 pub(super) fn call_recording_start_required_action(
-    payload: &arkret_core::RecordingStartPayload,
+    payload: &arkret_models_collaboration::events_payloads::call::RecordingStartPayload,
 ) -> &'static str {
     match payload.capture_kind {
-        Some(arkret_core::RecordingCaptureKind::Transcript) => {
-            arkret_wire::CapabilityActionId::CALL_TRANSCRIBE
-        }
-        Some(arkret_core::RecordingCaptureKind::Recording) | None => {
-            arkret_wire::CapabilityActionId::CALL_RECORD
-        }
+        Some(
+            arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Transcript,
+        ) => arkret_wire::CapabilityActionId::CALL_TRANSCRIBE,
+        Some(
+            arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Recording,
+        )
+        | None => arkret_wire::CapabilityActionId::CALL_RECORD,
     }
 }
 

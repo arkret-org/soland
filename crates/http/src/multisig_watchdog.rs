@@ -20,9 +20,8 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_core::{
-    Did, Hash, Hlc, MoveId, PartialSignature, RealmId, Seal, SealId, ThresholdAggregator, WireError,
-};
+use arkret_identifiers::{Did, Hash, Hlc, MoveId, RealmId, SealId};
+use arkret_wire::{PartialSignature, Seal, ThresholdAggregator, WireError};
 use base64::Engine as _;
 use chrono::Utc;
 use soland_application::governance::MultisigPendingRecord;

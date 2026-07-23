@@ -72,7 +72,7 @@ pub(super) fn validate_federation_headers(
 pub(super) async fn verify_inbound_push_http_signature(
     state: &AppState,
     req: &mut Request,
-    body: &arkret_core::FederationPushOperationsRequestBody,
+    body: &arkret_event_draft::federation_transaction::FederationPushOperationsRequestBody,
 ) -> Result<(), AppError> {
     verify_inbound_federation_http_signature(
         state,
@@ -87,7 +87,7 @@ pub(super) async fn verify_inbound_push_http_signature(
 pub(super) async fn verify_inbound_transaction_http_signature(
     state: &AppState,
     req: &mut Request,
-    body: &arkret_core::FederationTransactionRequestBody,
+    body: &arkret_event_draft::federation_transaction::FederationTransactionRequestBody,
 ) -> Result<(), AppError> {
     verify_inbound_federation_http_signature(
         state,

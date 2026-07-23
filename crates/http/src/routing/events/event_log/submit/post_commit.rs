@@ -481,23 +481,25 @@ fn service_binding_ref_for_target(
     parsed: &ValidatedEventEnvelope,
     binding_payload: &Value,
     target: &DynamicPeerEventTarget,
-) -> Option<arkret_core::FederationServiceBindingRef> {
+) -> Option<arkret_models_collaboration::event_sync::FederationServiceBindingRef> {
     let membership_frontier =
         typed_frontier_or_fallback(&target.membership_frontier, &parsed.event_id)?;
     let delivery_binding_frontier =
         typed_frontier_or_fallback(&target.delivery_binding_frontier, &parsed.event_id)?;
-    Some(arkret_core::FederationServiceBindingRef {
-        realm_id: RealmId::new(parsed.realm_id.clone()).ok()?,
-        realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
-        membership_frontier,
-        delivery_binding_frontier,
-        destination_service_type: "principal_server".to_owned(),
-        reducer_profile_digest: Hash::new(
-            arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST
-                .to_owned(),
-        )
-        .ok()?,
-    })
+    Some(
+        arkret_models_collaboration::event_sync::FederationServiceBindingRef {
+            realm_id: RealmId::new(parsed.realm_id.clone()).ok()?,
+            realm_policy_digest: Hash::new(canonical_json_hash(binding_payload)?).ok()?,
+            membership_frontier,
+            delivery_binding_frontier,
+            destination_service_type: "principal_server".to_owned(),
+            reducer_profile_digest: Hash::new(
+                arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST
+                    .to_owned(),
+            )
+            .ok()?,
+        },
+    )
 }
 
 pub(super) fn typed_frontier_or_fallback(

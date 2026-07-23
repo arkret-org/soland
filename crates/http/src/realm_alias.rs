@@ -8,7 +8,8 @@
 //!
 //! Validation / canonicalization (RFC 8265 preparation, UTS #46 domain
 //! processing, and the ≥2-label domain rule) is delegated to the SDK
-//! [`arkret_core::RealmAlias`] so soland and clients agree on the exact bytes.
+//! [`arkret_models_collaboration::objects::realm_alias::RealmAlias`] so soland and clients agree on
+//! the exact bytes.
 
 /// Derive this deployment's authority domain from its service DID. Mirrors the
 /// handle `service_handle_domain` derivation (`did:web:<host>` → `<host>`).
@@ -39,7 +40,9 @@ pub fn canonical_realm_alias(service_id: &str, input: &str) -> Option<String> {
     } else {
         format!("{body}:{domain}")
     };
-    let alias = arkret_core::RealmAlias::prepare(&canonical_input).ok()?;
+    let alias =
+        arkret_models_collaboration::objects::realm_alias::RealmAlias::prepare(&canonical_input)
+            .ok()?;
     // Deployment-authority model: only aliases under THIS deployment's domain.
     (alias.domain() == domain).then(|| alias.canonical().to_owned())
 }

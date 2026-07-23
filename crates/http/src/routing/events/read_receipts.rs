@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 
-use arkret_core::{ReadReceipt, ReadScopeKind};
+use arkret_models_collaboration::objects::read_receipts::ReadReceipt;
+use arkret_wire::ReadScopeKind;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_application::delivery::ReadReceiptState;
@@ -26,7 +27,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
     session: &SessionRecord,
     realm_id: &str,
     visibility: &str,
-    envelope: &arkret_core::EphemeralEnvelope,
+    envelope: &arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 ) -> Result<(), AppError> {
     let normalized = normalize_read_receipt_payload(realm_id, envelope)?;
     let target = state
@@ -88,14 +89,22 @@ pub(crate) async fn relay_ephemeral_read_receipt(
 
 fn normalize_read_receipt_payload(
     realm_id: &str,
-    envelope: &arkret_core::EphemeralEnvelope,
+    envelope: &arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 ) -> Result<NormalizedReadReceipt, AppError> {
     let payload = envelope.payload.clone();
     let event_id = {
         let object = &payload;
 
-        require_string_field(object, "receipt_type", arkret_core::READ_RECEIPT_TYPE)?;
-        require_string_field(object, "schema", arkret_core::READ_RECEIPT_SCHEMA)?;
+        require_string_field(
+            object,
+            "receipt_type",
+            arkret_wire::constants::READ_RECEIPT_TYPE,
+        )?;
+        require_string_field(
+            object,
+            "schema",
+            arkret_wire::constants::READ_RECEIPT_SCHEMA,
+        )?;
         require_string_field(object, "realm_id", realm_id)?;
         require_string_field(object, "actor_id", envelope.actor_id.as_str())?;
         object
@@ -154,7 +163,7 @@ pub(crate) async fn deliver_read_receipt_envelopes_for_subscriber(
     realm_id: &str,
     session: Option<&SessionRecord>,
     full_sync: bool,
-) -> Vec<arkret_core::EphemeralEnvelope> {
+) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
     let records =
         pending_read_receipt_records_for_subscriber(state, realm_id, session, full_sync).await;
     if let (Some(session), Some(max_position)) =

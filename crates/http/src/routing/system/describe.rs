@@ -16,7 +16,8 @@
 //! `events_describe` lives in `routing/events.rs` (it carries the registry version pull).
 //! `sync_describe` is still in `mod.rs` pending sync-module extraction.
 
-use arkret_core::{ServiceDescribe, ServiceIdentityState};
+use arkret_identity::service_identity::ServiceIdentityState;
+use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
@@ -345,7 +346,7 @@ async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOu
 }
 
 fn unsupported_profiles_from_limits(
-    limits: &arkret_core::ServerLimits,
+    limits: &arkret_models_discovery::service_description::ServerLimits,
 ) -> Vec<UnsupportedProfileDescriptor> {
     limits
         .extensions
@@ -449,10 +450,16 @@ pub(crate) fn apply_claim_level_partition(
     // floor + Principal Server + Principal Server Events API in
     // addition to the MIMI interop staging extension below.
     let mut claimed_profiles = vec![
-        arkret_core::ClaimedProfileEntry::self_claimed("ak.profile.core_event_store.v1"),
-        arkret_core::ClaimedProfileEntry::self_claimed("ak.profile.principal_server.v1"),
-        arkret_core::ClaimedProfileEntry::self_claimed("ak.profile.principal_server_events_api.v1"),
-        arkret_core::ClaimedProfileEntry {
+        arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+            "ak.profile.core_event_store.v1",
+        ),
+        arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+            "ak.profile.principal_server.v1",
+        ),
+        arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+            "ak.profile.principal_server_events_api.v1",
+        ),
+        arkret_models_discovery::service_description::ClaimedProfileEntry {
             notes: Some(
                 "Full MLS Governance Binding: reducer validates governance_binding \
                  policy_root / metadata coverage and the covered_seals_cell coverage \
@@ -463,16 +470,18 @@ pub(crate) fn apply_claim_level_partition(
                  (not claimed)."
                     .to_owned(),
             ),
-            ..arkret_core::ClaimedProfileEntry::self_claimed(
+            ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
                 "ak.profile.mls_governance_binding.full.v1",
             )
         },
-        arkret_core::ClaimedProfileEntry {
+        arkret_models_discovery::service_description::ClaimedProfileEntry {
             notes: Some(
                 "MIMI provider facade first round (not a full v1 core conformance claim)"
                     .to_owned(),
             ),
-            ..arkret_core::ClaimedProfileEntry::self_claimed("ak.profile.mimi_interop.v1")
+            ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+                "ak.profile.mimi_interop.v1",
+            )
         },
     ];
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
@@ -491,28 +500,34 @@ pub(crate) fn apply_claim_level_partition(
         std::env::var("SOLAND_SOVEREIGN_ENCLAVE").as_deref(),
         Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes")
     ) {
-        claimed_profiles.push(arkret_core::ClaimedProfileEntry {
-            notes: Some(
-                "Sovereign enclave profile: outbound federation disabled, \
+        claimed_profiles.push(
+            arkret_models_discovery::service_description::ClaimedProfileEntry {
+                notes: Some(
+                    "Sovereign enclave profile: outbound federation disabled, \
                  outbound HTTP allow-list enforced. See \
                  zh/sync/sovereign-deployment.md §2–§6."
-                    .to_owned(),
-            ),
-            ..arkret_core::ClaimedProfileEntry::self_claimed(
-                crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
-            )
-        });
+                        .to_owned(),
+                ),
+                ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+                    crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
+                )
+            },
+        );
     }
     if candidate_join_policy_enabled {
-        claimed_profiles.push(arkret_core::ClaimedProfileEntry {
-            notes: Some(
-                "Candidate join-policy profile: product-local member application \
+        claimed_profiles.push(
+            arkret_models_discovery::service_description::ClaimedProfileEntry {
+                notes: Some(
+                    "Candidate join-policy profile: product-local member application \
                  workflow surface is enabled; application/review concepts remain \
                  profile-private and off the /_arkret protocol root."
-                    .to_owned(),
-            ),
-            ..arkret_core::ClaimedProfileEntry::self_claimed("ak.profile.candidate.join_policy.v1")
-        });
+                        .to_owned(),
+                ),
+                ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+                    "ak.profile.candidate.join_policy.v1",
+                )
+            },
+        );
     }
     // Snapshot the claimed-profile id set BEFORE serialising (which moves
     // the vec) — the verified_profiles cross-check below needs to know
@@ -533,19 +548,19 @@ pub(crate) fn apply_claim_level_partition(
     // the `claimed_profiles[]` built above. Entries that fail the
     // cross-check are dropped with a warn — we never advertise a verified
     // profile we don't also self-claim.
-    let verified_profiles: Vec<arkret_core::VerifiedProfileEntry> = if description.development_mode
-    {
-        if !loaded_verified.is_empty() {
-            tracing::warn!(
-                target: "verified_profiles",
-                count = loaded_verified.len(),
-                "development_mode=true overrides loaded verified-profile artifact; \
-                 emitting verified_profiles=[] per service-surface.md §3.0"
-            );
-        }
-        Vec::new()
-    } else {
-        loaded_verified
+    let verified_profiles: Vec<arkret_models_discovery::service_description::VerifiedProfileEntry> =
+        if description.development_mode {
+            if !loaded_verified.is_empty() {
+                tracing::warn!(
+                    target: "verified_profiles",
+                    count = loaded_verified.len(),
+                    "development_mode=true overrides loaded verified-profile artifact; \
+                     emitting verified_profiles=[] per service-surface.md §3.0"
+                );
+            }
+            Vec::new()
+        } else {
+            loaded_verified
             .iter()
             .filter_map(|entry| {
                 if !claimed_id_set.contains(&entry.profile_id) {
@@ -556,9 +571,9 @@ pub(crate) fn apply_claim_level_partition(
                     );
                     return None;
                 }
-                Some(arkret_core::VerifiedProfileEntry {
+                Some(arkret_models_discovery::service_description::VerifiedProfileEntry {
                     profile_id: entry.profile_id.clone(),
-                    claim_kind: arkret_core::ConformanceVerifiedKind::ConformanceVerified,
+                    claim_kind: arkret_models_discovery::service_description::ConformanceVerifiedKind::ConformanceVerified,
                     verification_run_id: entry.verification_run_id.clone(),
                     artifact_digest: entry.artifact_digest.clone(),
                     artifact_ref: entry.artifact_ref.clone(),
@@ -570,7 +585,7 @@ pub(crate) fn apply_claim_level_partition(
                 })
             })
             .collect()
-    };
+        };
     debug_assert!(
         !description.development_mode || verified_profiles.is_empty(),
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
@@ -579,12 +594,15 @@ pub(crate) fn apply_claim_level_partition(
     description.compat_surfaces = soland_compat_surfaces();
 }
 
-fn soland_compat_surfaces() -> Vec<arkret_core::CompatSurfaceEntry> {
+fn soland_compat_surfaces() -> Vec<arkret_models_discovery::service_description::CompatSurfaceEntry>
+{
     vec![
-        arkret_core::CompatSurfaceEntry::external_interop(SOLAND_LOCAL_COMPAT_SURFACE_NAME)
-            .with_extra_string("base_path", SOLAND_LOCAL_COMPAT_BASE_PATH)
-            .with_extra_string("status", SOLAND_LOCAL_COMPAT_STATUS)
-            .with_notes(SOLAND_LOCAL_COMPAT_NOTES),
+        arkret_models_discovery::service_description::CompatSurfaceEntry::external_interop(
+            SOLAND_LOCAL_COMPAT_SURFACE_NAME,
+        )
+        .with_extra_string("base_path", SOLAND_LOCAL_COMPAT_BASE_PATH)
+        .with_extra_string("status", SOLAND_LOCAL_COMPAT_STATUS)
+        .with_notes(SOLAND_LOCAL_COMPAT_NOTES),
     ]
 }
 

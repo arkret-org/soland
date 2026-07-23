@@ -38,7 +38,7 @@ pub(crate) const TO_DEVICE_PAGE_LIMIT: usize = 1000;
 struct PreparedDeviceMessageTarget {
     recipient: String,
     device_id: String,
-    target: arkret_core::DeviceMessageTarget,
+    target: arkret_models_collaboration::sync_frames::account_sync::DeviceMessageTarget,
     message_key: String,
     intent_digest: String,
 }
@@ -589,7 +589,7 @@ fn note_unknown_device(
 fn device_message_envelope_from_record(
     message: &DeviceMessageState,
 ) -> Option<DeviceMessageEnvelope> {
-    let kind = arkret_core::ProtocolKind::new(
+    let kind = arkret_wire::wire_strings::ProtocolKind::new(
         message
             .content
             .get("kind")

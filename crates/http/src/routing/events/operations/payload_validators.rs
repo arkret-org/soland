@@ -52,9 +52,9 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
 pub(crate) fn validate_key_backup_active_series_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    serde_json::from_value::<arkret_core::KeyBackupActiveSeries>(
-        projection_context_stripped_payload(&operation.payload),
-    )
+    serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
+    >(projection_context_stripped_payload(&operation.payload))
     .map(|_| ())
     .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
 }
@@ -146,7 +146,7 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     }
     let claim_nonce =
         payload_string(payload, "claim_nonce").ok_or("ak.invite.claim requires claim_nonce")?;
-    let binding: arkret_core::InviteClaimBindingProof = serde_json::from_value(
+    let binding: arkret_models_collaboration::governance::membership_invite::InviteClaimBindingProof = serde_json::from_value(
         payload
             .get("binding_proof")
             .cloned()
@@ -162,13 +162,15 @@ pub(crate) fn validate_invite_claim_payload(operation: &Operation) -> Result<(),
     if binding.realm_id != operation.realm_id {
         return Err("binding_proof.realm_id must match envelope realm_id");
     }
-    if binding.audience != arkret_core::INVITE_CLAIM_AUDIENCE {
+    if binding.audience
+        != arkret_models_collaboration::governance::membership_invite::INVITE_CLAIM_AUDIENCE
+    {
         return Err("binding_proof.audience must be arkret.invite.claim");
     }
     if binding.claim_nonce != claim_nonce {
         return Err("binding_proof.claim_nonce must match claim_nonce");
     }
-    let subject_proof: arkret_core::InviteSubjectProof = serde_json::from_value(
+    let subject_proof: arkret_models_collaboration::governance::membership_invite::InviteSubjectProof = serde_json::from_value(
         payload
             .get("subject_proof")
             .cloned()
@@ -344,7 +346,7 @@ pub(crate) fn validate_read_receipt_policy_payload(
     if payload.is_empty() {
         return Err("ak.realm.read_receipt_policy payload must set at least one field");
     }
-    serde_json::from_value::<arkret_core::ReadReceiptPolicy>(wire_payload)
+    serde_json::from_value::<arkret_models_collaboration::objects::read_receipts::ReadReceiptPolicy>(wire_payload)
         .map_err(|_| "ak.realm.read_receipt_policy payload violates SDK artifact schema")?;
     Ok(())
 }
@@ -353,7 +355,7 @@ pub(crate) fn validate_realm_inheritance_policy_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let wire_payload = projection_context_stripped_payload(&operation.payload);
-    let payload: arkret_core::RealmInheritancePolicyPayload = serde_json::from_value(wire_payload)
+    let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmInheritancePolicyPayload = serde_json::from_value(wire_payload)
         .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
     if payload.mode != "narrow_only" {
         return Err("ak.realm.inheritance_policy mode must be narrow_only");
@@ -377,7 +379,7 @@ pub(crate) fn validate_realm_inheritance_policy_payload(
         if max_depth == 0 {
             return Err("ak.realm.inheritance_policy max_depth must be >= 1");
         }
-        if max_depth > u64::from(arkret_core::RealmInheritancePolicy::MAX_DEPTH_CAP) {
+        if max_depth > u64::from(arkret_models_collaboration::governance::realm_governance::RealmInheritancePolicy::MAX_DEPTH_CAP) {
             return Err("ak.realm.inheritance_policy max_depth exceeds v1 cap");
         }
     }
@@ -640,7 +642,10 @@ pub(crate) fn validate_relation_operation_payload(
     let from_ref = ["from_ref", "from"]
         .iter()
         .find_map(|field| operation.payload.get(*field).and_then(Value::as_str));
-    arkret_core::validate_relation_direct_write(relation_kind, from_ref)
+    arkret_models_collaboration::objects::relation::validate_relation_direct_write(
+        relation_kind,
+        from_ref,
+    )
 }
 
 pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(), &'static str> {
@@ -805,8 +810,8 @@ pub(crate) fn validate_morph_schema_migrate_payload(
         .and_then(serde_json::Value::as_str)
     {
         Some("additive") => {
-            let empty_fields = arkret_core::MorphSchemaFieldSet::new();
-            arkret_core::morph_schema_refs_additive_only(
+            let empty_fields = arkret_models_collaboration::events_payloads::moderation_morph_misc::MorphSchemaFieldSet::new();
+            arkret_models_collaboration::events_payloads::moderation_morph_misc::morph_schema_refs_additive_only(
                 &from_schema_refs,
                 &to_schema_refs,
                 &empty_fields,

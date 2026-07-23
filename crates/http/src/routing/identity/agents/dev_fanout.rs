@@ -5,11 +5,13 @@
 //! signed Event fail closed instead of asking Soland to impersonate a
 //! controller or writing a development-only proof shape into durable history.
 
-use arkret_core::{AgentProvisionEvents, AgentSelectorClaim, Event, LatticeOpType};
+use arkret_models_collaboration::agent_operations::AgentProvisionEvents;
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityGrantStatus, AccountabilityScope,
     AccountabilityScopeKind,
 };
+use arkret_models_identity::claim_presentation::AgentSelectorClaim;
+use arkret_wire::{Event, LatticeOpType};
 use chrono::Utc;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
@@ -277,11 +279,11 @@ pub(super) async fn fanout_provision_subevents(
         || selector_payload.agent_slug != agent_slug
         || !matches!(
             selector_payload.binding_state,
-            arkret_core::HandleBindingState::Pending
+            arkret_models_identity::handle::HandleBindingState::Pending
         )
         || !matches!(
             selector_payload.visibility,
-            arkret_core::HandleVisibility::Private
+            arkret_models_identity::handle::HandleVisibility::Private
         )
         || selector_payload.issuer_service_id.is_some()
         || selector_payload.proofs.len() != 1

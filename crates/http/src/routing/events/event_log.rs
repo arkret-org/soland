@@ -16,18 +16,21 @@
 use std::collections::BTreeMap;
 
 use arkret_canonical as canonical;
-use arkret_core::{
-    ActorAggregateFrontierKind, ActorAggregateFrontierView, Audience, Did, Event, EventId,
-    EventRef, EventsFrontierAccountClientState, EventsFrontierView,
-    EventsSubmitFederationRequestBody, FederationServiceBindingRef, Hash, Hlc,
-    MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
-    MAX_EVENT_SUBMIT_BATCH, ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind,
-    NotarySig, Operation, OperationId, Proof, RealmActorFrontierView, RealmId,
-    RealmSealFrontierView, Seal, TypedTrustDomainId, proof_kind,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, EventId, Hash, Hlc, OperationId, RealmId, TypedTrustDomainId};
+use arkret_models_collaboration::event_sync::{
+    ActorAggregateFrontierKind, ActorAggregateFrontierView, EventsFrontierAccountClientState,
+    EventsFrontierView, EventsSubmitFederationRequestBody, FederationServiceBindingRef,
+    ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind, RealmActorFrontierView,
+    RealmSealFrontierView,
 };
 use arkret_models_collaboration::http_bodies::{
     EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,
     EventsSubmitOutcome, EventsSubmitStatus,
+};
+use arkret_wire::{
+    Audience, Event, EventRef, MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS,
+    MAX_EVENT_RESOLVE, MAX_EVENT_SUBMIT_BATCH, NotarySig, Proof, Seal, proof_kind,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

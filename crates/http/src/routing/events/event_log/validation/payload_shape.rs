@@ -121,7 +121,7 @@ pub(super) fn validate_realm_create_policy_constraints(
         .and_then(Value::as_str)
         .unwrap_or("joined");
     if object.get("encryption_profile").and_then(Value::as_str) == Some("mls_rfc9420")
-        && let Err(reason) = arkret_core::validate_history_visibility_content_scheme_values(
+        && let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
             history_visibility,
             object.get("content_scheme").and_then(Value::as_str),
         )

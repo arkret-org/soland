@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{
+use arkret_models_collaboration::governance::realm_governance::{
     REALM_MODERATION_POLICY_FANOUT_SOURCE_ORGANIZATION_POLICY,
     REALM_MODERATION_POLICY_MERGE_STRATEGY_MOST_RESTRICTIVE,
 };

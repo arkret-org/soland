@@ -447,7 +447,7 @@ pub(super) async fn mimi_consent_request(
         .as_ref()
         .map(|(consent_id, _cell)| consent_id.clone())
         .unwrap_or_else(|| ids::generate("consent"));
-    let consent_id = arkret_core::ConsentId::new(consent_id)
+    let consent_id = arkret_identifiers::ConsentId::new(consent_id)
         .map_err(|error| AppError::internal(format!("generated consent id is invalid: {error}")))?;
     let _receipt = mimi_receipt(
         state,
@@ -485,7 +485,10 @@ pub(super) async fn mimi_consent_update(
     if let Some(message) = unsupported_mimi_draft(&body_value) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
-    let granted = matches!(body.decision, arkret_core::MimiConsentDecision::Accept);
+    let granted = matches!(
+        body.decision,
+        arkret_models_collaboration::http_bodies::MimiConsentDecision::Accept
+    );
     let consent_id = body.consent_id.as_str();
     let actor_id = body.actor_id.as_str();
     verify_mimi_consent_update_authority(state, req, aa, &body).await?;
@@ -1086,9 +1089,9 @@ pub(super) fn mimi_proxy_download_egress_denied(error: impl Into<String>) -> App
 
 #[cfg(test)]
 mod consent_proof_tests {
-    use arkret_core::{
-        Audience, ConsentId, Did, Hash, MimiConsentDecision, PayloadProof, proof_kind,
-    };
+    use arkret_identifiers::{ConsentId, Did, Hash};
+    use arkret_models_collaboration::http_bodies::MimiConsentDecision;
+    use arkret_wire::{Audience, PayloadProof, proof_kind};
     use soland_http::error::ErrorCode;
     use soland_storage_postgres::Db;
 

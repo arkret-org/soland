@@ -16,11 +16,13 @@
 //!   target holder's contact projection.
 
 use arkret_canonical as canonical;
-use arkret_core::{
-    ContactIntroductionEvidence, Did, DisclosedOutcome, Event, EventId, Hash, Hlc,
-    InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
-    Proof, RealmId, proof_kind,
+use arkret_identifiers::{Did, EventId, Hash, Hlc, RealmId};
+use arkret_models_collaboration::governance::invite_addressing::DisclosedOutcome;
+use arkret_models_collaboration::governance::peer_contact::{
+    ContactIntroductionEvidence, PeerContactAddress, PeerContactDeliveryRequest,
+    PeerContactFactKind,
 };
+use arkret_wire::{Event, InviteReceiveAction, Proof, proof_kind};
 use chrono::Duration;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -433,7 +435,7 @@ async fn accept_delivered_direct_binding(
     event: &Event,
     subject_id: &str,
     source_service_id: Option<&str>,
-    signer_key_evidence: &[arkret_core::FederatedDeviceSigningKeyEvidence],
+    signer_key_evidence: &[arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence],
 ) -> Result<&'static str, AppError> {
     for evidence in signer_key_evidence {
         crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
@@ -446,7 +448,7 @@ async fn accept_delivered_direct_binding(
             ))
         })?;
     }
-    let payload: arkret_core::DirectConversationBoundPayload =
+    let payload: arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload =
         serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
             AppError::internal(format!("direct binding payload encode failed: {error}"))
         })?)

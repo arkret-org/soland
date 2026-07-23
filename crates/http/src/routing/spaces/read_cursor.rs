@@ -4,10 +4,12 @@
 //! resulting account-private state is consumed through projection/account sync.
 //! Mounted on the protocol surface at `/_arkret/self/read-cursors*`.
 
-use arkret_core::{
-    DeviceId, Did, Operation, OperationId, ReadCursorAdvanceRequestBody, ReadCursorList,
-    ReadCursorPosition, ReadCursorScope, ReadMarkerOutcome, ReadScopeKind, RealmId,
+use arkret_event_draft::Operation;
+use arkret_identifiers::{DeviceId, Did, OperationId, RealmId};
+use arkret_models_collaboration::objects::read_receipts::{
+    ReadCursorAdvanceRequestBody, ReadCursorList, ReadCursorPosition, ReadMarkerOutcome,
 };
+use arkret_wire::{ReadCursorScope, ReadScopeKind};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;

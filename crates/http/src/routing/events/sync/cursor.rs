@@ -792,10 +792,12 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<arkret_core::AccountCursorRevokeRequestBody>,
+    body: salvo::oapi::extract::JsonBody<
+        arkret_models_identity::account::AccountCursorRevokeRequestBody,
+    >,
     depot: &mut Depot,
     req: &mut Request,
-) -> soland_http::result::JsonResult<arkret_core::AccountCursorRevokeOutcome> {
+) -> soland_http::result::JsonResult<arkret_models_identity::account::AccountCursorRevokeOutcome> {
     use soland_http::error::AppError;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -811,14 +813,17 @@ pub(super) async fn account_cursor_revoke(
     }
     let scope = body.revoke_scope;
     let scope_value = match scope {
-        arkret_core::CursorRevokeScope::ThisCursor => "this_cursor",
-        arkret_core::CursorRevokeScope::SameDevice => "same_device",
-        arkret_core::CursorRevokeScope::SameSession => "same_session",
+        arkret_models_identity::account::CursorRevokeScope::ThisCursor => "this_cursor",
+        arkret_models_identity::account::CursorRevokeScope::SameDevice => "same_device",
+        arkret_models_identity::account::CursorRevokeScope::SameSession => "same_session",
     };
 
     let revoked_at = now();
     let expires_at = revoked_at + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS);
-    let device_id = if matches!(scope, arkret_core::CursorRevokeScope::ThisCursor) {
+    let device_id = if matches!(
+        scope,
+        arkret_models_identity::account::CursorRevokeScope::ThisCursor
+    ) {
         None
     } else {
         Some(session.device_id.clone())
@@ -848,11 +853,13 @@ pub(super) async fn account_cursor_revoke(
         .sync_application()
         .cache_cursor_revocation(application_record);
 
-    crate::json_ok(arkret_core::AccountCursorRevokeOutcome {
-        revoked: true,
-        expires_at,
-        revoke_scope_effective: Some(scope),
-    })
+    crate::json_ok(
+        arkret_models_identity::account::AccountCursorRevokeOutcome {
+            revoked: true,
+            expires_at,
+            revoke_scope_effective: Some(scope),
+        },
+    )
 }
 
 /// Returns `true` when `token` (or the authenticated session it is bound to)

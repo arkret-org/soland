@@ -16,7 +16,7 @@
 //! list reads require an explicit Realm scope so product Space subjects are
 //! never mistaken for security boundaries.
 
-use arkret_core::{CellRef, RealmId};
+use arkret_identifiers::{CellRef, RealmId};
 use arkret_state::lattice::CellState;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -155,7 +155,7 @@ async fn admin_get_cell(
     // Reject syntactically valid CellRef strings that fail the stricter
     // `ak:cell:<family>:<subject>` parse. Without this guard a malformed
     // family slot would leak into the registry resolver.
-    let _ = arkret_core::CellId::parse(cell_ref.as_str()).map_err(|e| {
+    let _ = arkret_wire::cell::CellId::parse(cell_ref.as_str()).map_err(|e| {
         AppError::new(
             ErrorCode::InvalidParam,
             format!("cell_id is not a parseable ak:cell:<family>:<subject>: {e}"),
@@ -262,7 +262,7 @@ async fn admin_list_cells(
         let Some(prefix_str) = prefix.as_deref() else {
             return true;
         };
-        arkret_core::CellId::parse(cell.as_str())
+        arkret_wire::cell::CellId::parse(cell.as_str())
             .map(|cid| cid.component().starts_with(prefix_str))
             .unwrap_or(false)
     };

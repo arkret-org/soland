@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
-use arkret_core::{Did, EventId, Hash, RealmId};
+use arkret_identifiers::{Did, EventId, Hash, RealmId};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 

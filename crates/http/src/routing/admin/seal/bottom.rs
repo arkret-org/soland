@@ -2,9 +2,10 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::{CellRef, Move, MoveSigner, RealmId, SealId, UnsignedMove};
+use arkret_identifiers::{CellRef, RealmId, SealId};
 use arkret_state::lattice::CellState;
 use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
+use arkret_wire::{Move, MoveSigner, UnsignedMove};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -205,7 +206,7 @@ pub(crate) async fn admin_repair_bottom(
         state,
         req,
         &admin_session,
-        arkret_core::admin_scopes::BOTTOM_REPAIR,
+        arkret_models_identity::admin_grant::admin_scopes::BOTTOM_REPAIR,
     )
     .await?;
     let realm_id = realm_id.into_inner();

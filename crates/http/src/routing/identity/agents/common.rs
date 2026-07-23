@@ -243,8 +243,8 @@ pub(crate) fn agent_actions_within_requested_scope(
 pub(crate) fn agent_grant_within_requested_scope(
     record: &AgentPrincipalRecord,
     actions: &[String],
-    resources: &[arkret_core::WireResourceSelector],
-    constraints: &[arkret_core::GrantConstraint],
+    resources: &[arkret_wire::resource_selector::WireResourceSelector],
+    constraints: &[arkret_models_collaboration::governance::grant_constraint::GrantConstraint],
 ) -> bool {
     if !agent_actions_within_requested_scope(record, actions) {
         return false;
@@ -394,7 +394,7 @@ mod requested_scope_tests {
         record
     }
 
-    fn resource(value: Value) -> arkret_core::WireResourceSelector {
+    fn resource(value: Value) -> arkret_wire::resource_selector::WireResourceSelector {
         serde_json::from_value(value).unwrap()
     }
 
@@ -508,11 +508,11 @@ mod requested_scope_tests {
 
     #[test]
     fn realm_grant_must_preserve_provision_constraints() {
-        let mut mandatory = arkret_core::GrantConstraint::new(
-            arkret_core::GrantConstraintType::ClaimBased,
-            arkret_core::GrantConstraintEffect::Allow,
+        let mut mandatory = arkret_models_collaboration::governance::grant_constraint::GrantConstraint::new(
+            arkret_models_collaboration::governance::grant_constraint::GrantConstraintType::ClaimBased,
+            arkret_models_collaboration::governance::grant_constraint::GrantConstraintEffect::Allow,
         );
-        mandatory.subtype = Some(arkret_core::GrantConstraintSubtype::Approval);
+        mandatory.subtype = Some(arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubtype::Approval);
         mandatory.controller_approval_required = Some(true);
         let mandatory_value = serde_json::to_value(&mandatory).unwrap();
         let record = record_with_scope(json!({
@@ -651,8 +651,10 @@ pub(super) async fn agent_view_from_record(
 
 pub(super) fn agent_key_state_from_record(
     record: &AgentPrincipalRecord,
-    pcr_recovery: arkret_core::AgentPcrRecoveryState,
-    active_authorizations: Vec<arkret_core::AgentKeyAuthorizationState>,
+    pcr_recovery: arkret_models_collaboration::agent_operations::AgentPcrRecoveryState,
+    active_authorizations: Vec<
+        arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState,
+    >,
 ) -> Result<KeyState, AppError> {
     let requested_scope = record
         .requested_scope
@@ -751,14 +753,17 @@ pub(super) fn agent_key_state_from_record(
 fn active_agent_key_authorizations(
     state: &AppState,
     agent_id: &str,
-) -> Result<Vec<arkret_core::AgentKeyAuthorizationState>, AppError> {
+) -> Result<
+    Vec<arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState>,
+    AppError,
+> {
     state
         .projection_application()
         .snapshot()
         .active_agent_key_authorizations(agent_id)
         .into_iter()
         .map(|(key_id, authorized_event_ref)| {
-            Ok(arkret_core::AgentKeyAuthorizationState {
+            Ok(arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState {
                 verification_method: key_id.clone(),
                 key_id,
                 authorized_event_ref: EventId::new(authorized_event_ref).map_err(|error| {
@@ -777,7 +782,7 @@ fn active_agent_key_authorizations(
 //
 // Stands up the cross-project HTTP contract at the same fidelity as the
 // sibling agent handlers (audit-log row + typed response), but performs
-// the REAL ceiling check via the shared `arkret_core` validators so the
+// the REAL ceiling check via the shared owner validators so the
 // "inner scope MUST NOT exceed the outer ceiling" invariant is enforced
 // at the edge. Persistence into `agent_participation`, ceiling
 // resolution from the realm/circle/strand policy projection,

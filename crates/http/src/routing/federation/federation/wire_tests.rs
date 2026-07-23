@@ -100,7 +100,7 @@ fn delivery_binding_stale_response_carries_new_service_and_frontier() {
         .pointer("/error/details")
         .cloned()
         .expect("delivery binding details");
-    serde_json::from_value::<arkret_core::DeliveryBindingStale>(details)
+    serde_json::from_value::<arkret_models_identity::artifacts_device_identity::DeliveryBindingStale>(details)
         .expect("details must match the SDK delivery-binding-stale DTO");
 }
 

@@ -14,7 +14,7 @@
 ///
 /// - [`RealmId`] is the SDK security-boundary id and validates `ak:realm:`.
 /// - [`SpaceContainerId`] is the SDK Space container id and validates `ak:space:`.
-pub use arkret_core::{RealmId, SpaceId as SpaceContainerId};
+pub use arkret_identifiers::{RealmId, SpaceId as SpaceContainerId};
 use uuid::Uuid;
 
 /// Generate a new typed wire ID with the given kind prefix.

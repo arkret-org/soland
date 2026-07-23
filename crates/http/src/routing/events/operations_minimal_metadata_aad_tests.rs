@@ -1,4 +1,4 @@
-use arkret_core::EncryptedEnvelopeAadVisibility;
+use arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility;
 use serde_json::json;
 
 use super::*;

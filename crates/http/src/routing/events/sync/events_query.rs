@@ -512,7 +512,7 @@ fn render_subscribe_rate_limited(res: &mut Response, retry_after_ms: u64) {
     res.headers_mut()
         .insert(header::RETRY_AFTER, retry_after_seconds.into());
     res.render(Json(
-        arkret_core::ErrorEnvelope::new(
+        arkret_wire::problem_details::ErrorEnvelope::new(
             "rate_limited",
             "Subscribe reconnect window is still active.",
         )
