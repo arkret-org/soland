@@ -452,7 +452,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             .transpose()?;
         let current_device_generation_ref = row
             .current_device_generation_ref
-            .map(arkret_core::NonEmptyString::new)
+            .map(arkret_wire::NonEmptyString::new)
             .transpose()
             .map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -472,7 +472,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             })?;
         let registry_head = row
             .registry_head
-            .map(arkret_core::Hash::new)
+            .map(arkret_identifiers::Hash::new)
             .transpose()
             .map_err(|error| {
                 PersistenceError::Internal(format!(
@@ -557,8 +557,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
                 )
             })?;
         let device_generation_status = record.device_generation_status.map(|status| match status {
-            arkret_core::DeviceGenerationStatus::Active => "active",
-            arkret_core::DeviceGenerationStatus::Conflicted => "conflicted",
+            arkret_models_crypto::DeviceGenerationStatus::Active => "active",
+            arkret_models_crypto::DeviceGenerationStatus::Conflicted => "conflicted",
         });
         sql_query(
             "INSERT INTO recovery_sessions \
@@ -577,8 +577,10 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Integer, _>(record.policy_version as i32)
         .bind::<Text, _>(match record.identity_model {
-            arkret_core::RecoveryIdentityModel::CrossSigning => "cross_signing",
-            arkret_core::RecoveryIdentityModel::EnrollmentAuthority => "enrollment_authority",
+            arkret_models_crypto::RecoveryIdentityModel::CrossSigning => "cross_signing",
+            arkret_models_crypto::RecoveryIdentityModel::EnrollmentAuthority => {
+                "enrollment_authority"
+            }
         })
         .bind::<Nullable<BigInt>, _>(ssk_generation)
         .bind::<Nullable<Text>, _>(

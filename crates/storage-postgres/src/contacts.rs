@@ -166,7 +166,7 @@ impl ContactStore for PgContactStore {
 }
 // ── Pg-backed invite-receive policy store ────────────────────────────────
 // Durable backing for per-subject `invite_receive_policy` overrides. The full
-// `arkret_core::InviteReceivePolicy` is persisted as JSONB; `blocked_subjects`
+// `InviteReceivePolicy` is persisted as JSONB; `blocked_subjects`
 // is duplicated into a TEXT[] column for cheap hard-block lookups.
 pub struct PgInviteReceivePolicyStore {
     pub pool: PgPool,
@@ -179,8 +179,14 @@ struct InviteReceivePolicyRow {
     policy_payload: Value,
 }
 impl InviteReceivePolicyRow {
-    fn into_pair(self) -> PersistenceResult<(String, arkret_core::InviteReceivePolicy)> {
-        let policy: arkret_core::InviteReceivePolicy = serde_json::from_value(self.policy_payload)
+    fn into_pair(
+        self,
+    ) -> PersistenceResult<(
+        String,
+        arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    )> {
+        let policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy =
+            serde_json::from_value(self.policy_payload)
             .map_err(|error| {
                 PersistenceError::Internal(format!(
                     "invite_receive_policy `{}` payload decode: {error}",
@@ -195,7 +201,9 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
     async fn get(
         &self,
         subject_id: &str,
-    ) -> PersistenceResult<Option<arkret_core::InviteReceivePolicy>> {
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+    > {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -211,7 +219,10 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .transpose()
     }
 
-    async fn put(&self, policy: &arkret_core::InviteReceivePolicy) -> PersistenceResult<()> {
+    async fn put(
+        &self,
+        policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    ) -> PersistenceResult<()> {
         let subject_id = policy.subject_id.as_str().to_owned();
         let payload = serde_json::to_value(policy).map_err(|error| {
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
@@ -244,7 +255,12 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
 
     async fn snapshot_all(
         &self,
-    ) -> PersistenceResult<Vec<(String, arkret_core::InviteReceivePolicy)>> {
+    ) -> PersistenceResult<
+        Vec<(
+            String,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
+    > {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;

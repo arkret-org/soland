@@ -2,12 +2,13 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use arkret_core::{Bottom, CellRef, Hash, LatticeOp, Move, MoveId, RealmId, Seal, SealId};
+use arkret_identifiers::{CellRef, Hash, MoveId, RealmId, SealId};
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
     CellRegistry, CellStore, MoveStore, SealStore, SealedMoveRecord, StoreError, StoreResult,
     compute_state_root,
 };
+use arkret_wire::{Bottom, LatticeOp, Move, Seal};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
@@ -1189,8 +1190,9 @@ impl CellStore for PgCellStore {
 mod event_seal_commit_tests {
     use std::sync::{Arc, Barrier};
 
-    use arkret_core::{Hlc, LatticeOpType, MoveSignature, NotarySig, SealKind};
+    use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
+    use arkret_wire::{LatticeOpType, MoveSignature, NotarySig, SealKind};
     use chrono::Utc;
     use serde_json::json;
 

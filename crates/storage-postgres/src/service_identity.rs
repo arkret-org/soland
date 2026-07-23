@@ -1,4 +1,4 @@
-use arkret_core::StoredServiceIdentity;
+use arkret_identity::service_identity::StoredServiceIdentity;
 
 use super::{
     Jsonb, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
