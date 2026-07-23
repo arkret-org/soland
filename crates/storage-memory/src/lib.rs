@@ -1,7 +1,8 @@
 pub(crate) use std::collections::{BTreeMap, BTreeSet, VecDeque};
 pub(crate) use std::sync::Arc;
 
-pub(crate) use arkret_core::{EventBatchReceipt, Operation};
+pub(crate) use arkret_event_draft::Operation;
+pub(crate) use arkret_wire::EventBatchReceipt;
 pub(crate) use async_trait::async_trait;
 pub(crate) use chrono::Utc;
 pub(crate) use parking_lot::Mutex;

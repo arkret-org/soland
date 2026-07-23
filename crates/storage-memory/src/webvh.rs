@@ -15,7 +15,10 @@ pub(crate) struct MemoryWebvhStore {
     documents: Mutex<BTreeMap<String, WebvhDocumentRecord>>,
     log: Mutex<BTreeMap<String, Vec<WebvhLogRecord>>>,
     service_registrations: Mutex<
-        BTreeMap<arkret_core::ServiceRegistrationKey, arkret_core::ServiceRegistrationOutcome>,
+        BTreeMap<
+            arkret_models_identity::service_identity::ServiceRegistrationKey,
+            arkret_models_identity::service_identity::ServiceRegistrationOutcome,
+        >,
     >,
     submission_lock: Mutex<()>,
 }
@@ -161,8 +164,10 @@ impl WebvhStore for MemoryWebvhStore {
 
     async fn get_service_registration(
         &self,
-        key: &arkret_core::ServiceRegistrationKey,
-    ) -> PersistenceResult<Option<arkret_core::ServiceRegistrationOutcome>> {
+        key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
+    ) -> PersistenceResult<
+        Option<arkret_models_identity::service_identity::ServiceRegistrationOutcome>,
+    > {
         Ok(self
             .service_registrations
             .lock()
@@ -173,8 +178,8 @@ impl WebvhStore for MemoryWebvhStore {
 
     async fn commit_service_registration(
         &self,
-        key: arkret_core::ServiceRegistrationKey,
-        outcome: arkret_core::ServiceRegistrationOutcome,
+        key: arkret_models_identity::service_identity::ServiceRegistrationKey,
+        outcome: arkret_models_identity::service_identity::ServiceRegistrationOutcome,
         mut document: WebvhDocumentRecord,
         event: WebvhLogRecord,
     ) -> PersistenceResult<ServiceRegistrationCommitOutcome> {

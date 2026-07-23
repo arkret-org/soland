@@ -14,7 +14,10 @@ default = []
 fault-injection = []
 
 [dependencies]
-arkret-core.workspace = true
+arkret-event-draft.workspace = true
+arkret-identity.workspace = true
+arkret-models-collaboration.workspace = true
+arkret-models-identity.workspace = true
 arkret-wire.workspace = true
 async-trait = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}

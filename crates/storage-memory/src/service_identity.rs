@@ -1,4 +1,4 @@
-use arkret_core::StoredServiceIdentity;
+use arkret_identity::service_identity::StoredServiceIdentity;
 
 use super::{Mutex, PersistenceResult, ServiceIdentityStore, async_trait};
 #[derive(Default)]

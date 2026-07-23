@@ -75,7 +75,14 @@ impl ContactStore for MemoryContactStore {
 }
 // In-memory invite-receive policy store
 pub(crate) struct MemoryInviteReceivePolicyStore {
-    data: Arc<Mutex<BTreeMap<String, arkret_core::InviteReceivePolicy>>>,
+    data: Arc<
+        Mutex<
+            BTreeMap<
+                String,
+                arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+            >,
+        >,
+    >,
 }
 impl MemoryInviteReceivePolicyStore {
     pub(crate) fn new() -> Self {
@@ -89,11 +96,16 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
     async fn get(
         &self,
         subject_id: &str,
-    ) -> PersistenceResult<Option<arkret_core::InviteReceivePolicy>> {
+    ) -> PersistenceResult<
+        Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>,
+    > {
         Ok(self.data.lock().get(subject_id).cloned())
     }
 
-    async fn put(&self, policy: &arkret_core::InviteReceivePolicy) -> PersistenceResult<()> {
+    async fn put(
+        &self,
+        policy: &arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    ) -> PersistenceResult<()> {
         self.data
             .lock()
             .insert(policy.subject_id.as_str().to_owned(), policy.clone());
@@ -102,7 +114,12 @@ impl InviteReceivePolicyStore for MemoryInviteReceivePolicyStore {
 
     async fn snapshot_all(
         &self,
-    ) -> PersistenceResult<Vec<(String, arkret_core::InviteReceivePolicy)>> {
+    ) -> PersistenceResult<
+        Vec<(
+            String,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
+    > {
         Ok(self
             .data
             .lock()

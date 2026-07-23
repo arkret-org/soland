@@ -5129,7 +5129,10 @@ dependencies = [
 name = "soland-storage-memory"
 version = "0.3.0"
 dependencies = [
- "arkret-core",
+ "arkret-event-draft",
+ "arkret-identity",
+ "arkret-models-collaboration",
+ "arkret-models-identity",
  "arkret-wire",
  "async-trait",
  "chrono",
