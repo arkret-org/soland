@@ -90,7 +90,7 @@ pub(crate) use snapshot::{
 // glob re-exports keep these reachable from `super::*` in the child modules
 // (and from `wire.rs` via `crate::routing::soland_extension_operation_ids`).
 pub(crate) use soland_http::openapi::soland_extension_operation_ids;
-use soland_http::openapi::{arkret_openapi_yaml, cached_arkret_openapi_doc};
+use soland_http::openapi::{arkret_openapi_json, arkret_openapi_yaml, cached_arkret_openapi_doc};
 // Framework error catcher + OpenAPI doc depot type consumed by `crate::service`
 // and `crate::routing` children.
 pub use soland_http::openapi_routes::ArkretOpenApiDoc;

@@ -1,54 +1,208 @@
 use std::sync::OnceLock;
 
+use anyhow::{Context, bail};
 use salvo::oapi::{OpenApi, Operation, PathItemType, Response as OapiResponse};
 use salvo::prelude::*;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::openapi_routes::{ArkretOpenApiDoc, pattern_matches_path, populate_known_routes};
 
-static ARKRET_OPENAPI_DOC: OnceLock<OpenApi> = OnceLock::new();
+static ARKRET_OPENAPI_DOC: OnceLock<Value> = OnceLock::new();
 
 pub fn cached_arkret_openapi_doc(
     router: &Router,
     artifact_registry_summary: serde_json::Value,
-) -> OpenApi {
+) -> Value {
     let doc = ARKRET_OPENAPI_DOC
-        .get_or_init(|| arkret_openapi_doc(router, artifact_registry_summary))
+        .get_or_init(|| {
+            arkret_openapi_doc(router, artifact_registry_summary)
+                .unwrap_or_else(|error| panic!("failed to build artifact-first OpenAPI: {error:#}"))
+        })
         .clone();
-    // The same cached doc is also the source of truth for the
-    // 404/405 known-routes table used by `api_not_found`.
+    // The same artifact-derived implementation doc is also the source of
+    // truth for the 404/405 known-routes table used by `api_not_found`.
     populate_known_routes(&doc);
     doc
 }
 
-fn arkret_openapi_doc(router: &Router, artifact_registry_summary: serde_json::Value) -> OpenApi {
-    let mut doc = OpenApi::new("soland", "0.1.0")
-        .add_extension(
-            "x-operation-aliases",
-            json!({
-                "events.submit": "ak.self.events.command.submit",
-                "events.query": "ak.self.events.query.scan",
-                "events.subscribe": "ak.self.events.stream.subscribe",
-                "account.subscribe": "ak.self.account.stream.subscribe",
-            }),
-        )
-        .add_extension(
-            "x-arkret-artifacts",
-            json!({
-                "registries": artifact_registry_summary,
-                "openapi_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
-                // Round-6: the round-4 entity/view scaffold (FacetName /
-                // ViewRenderer / AllowedEntityFacetsConstraint /
-                // allowed_entity_facets) was removed alongside the entity
-                // abstraction. View facets are now declared by individual
-                // spec event kinds (`ak.view.*` / `ak.strand.*` / `ak.space.*`)
-                // and bound through cell-family registry mappings.
-                "authz_constraint_kinds": ["allowed_object_facets"],
-            }),
-        )
-        .merge_router(router);
-    register_soland_extension_operations(&mut doc);
-    doc
+fn arkret_openapi_doc(
+    router: &Router,
+    artifact_registry_summary: serde_json::Value,
+) -> anyhow::Result<Value> {
+    let mut generated = OpenApi::new("soland", "0.1.0").merge_router(router);
+    register_soland_extension_operations(&mut generated);
+    let generated = serde_json::to_value(generated)
+        .context("failed to serialize the registered Soland route document")?;
+
+    let mut artifact: Value = serde_saphyr::from_str(arkret_schema::embedded_openapi_yaml()?)
+        .context("failed to parse the embedded canonical OpenAPI artifact")?;
+    select_implemented_protocol_paths(&mut artifact, &generated)?;
+    append_product_paths(&mut artifact, &generated)?;
+    merge_missing_components(&mut artifact, &generated)?;
+
+    let root = artifact
+        .as_object_mut()
+        .context("canonical OpenAPI artifact root must be an object")?;
+    root.insert(
+        "x-operation-aliases".to_owned(),
+        json!({
+            "events.submit": "ak.self.events.command.submit",
+            "events.query": "ak.self.events.query.scan",
+            "events.subscribe": "ak.self.events.stream.subscribe",
+            "account.subscribe": "ak.self.account.stream.subscribe",
+        }),
+    );
+    root.insert(
+        "x-arkret-artifacts".to_owned(),
+        json!({
+            "registries": artifact_registry_summary,
+            "openapi_source": "arkret-schema::embedded_openapi_yaml",
+            "canonical_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
+            "protocol_path_policy": "implemented_intersection",
+            // The historical entity/view scaffold was removed alongside the
+            // entity abstraction. View facets are declared by individual spec
+            // event kinds and bound through cell-family registry mappings.
+            "authz_constraint_kinds": ["allowed_object_facets"],
+        }),
+    );
+    Ok(artifact)
+}
+
+const OPENAPI_METHODS: &[&str] = &[
+    "get", "head", "post", "put", "patch", "delete", "options", "trace",
+];
+
+fn select_implemented_protocol_paths(
+    artifact: &mut Value,
+    generated: &Value,
+) -> anyhow::Result<()> {
+    let generated_paths = generated
+        .get("paths")
+        .and_then(Value::as_object)
+        .context("registered Soland route document must contain a paths object")?;
+    let artifact_paths = artifact
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .context("canonical OpenAPI artifact must contain a paths object")?;
+    let canonical_paths = std::mem::take(artifact_paths);
+    let mut selected = Map::new();
+
+    for (path, mut canonical_item) in canonical_paths {
+        let Some(generated_item) = generated_paths.get(&path).and_then(Value::as_object) else {
+            continue;
+        };
+        let canonical_item_object = canonical_item
+            .as_object_mut()
+            .with_context(|| format!("canonical OpenAPI path `{path}` must be an object"))?;
+        let mut implemented = false;
+        for method in OPENAPI_METHODS {
+            if !generated_item.contains_key(*method) {
+                canonical_item_object.remove(*method);
+                continue;
+            }
+            let Some(canonical_operation) = canonical_item_object.get(*method) else {
+                bail!(
+                    "Soland registers {method} {path}, but the canonical OpenAPI artifact does not"
+                );
+            };
+            let generated_operation = generated_item
+                .get(*method)
+                .expect("generated operation presence checked above");
+            let canonical_id = canonical_operation
+                .get("operationId")
+                .and_then(Value::as_str);
+            let generated_id = generated_operation
+                .get("operationId")
+                .and_then(Value::as_str);
+            if canonical_id != generated_id {
+                bail!(
+                    "operationId drift for {method} {path}: artifact={canonical_id:?}, registered={generated_id:?}"
+                );
+            }
+            implemented = true;
+        }
+        if implemented {
+            selected.insert(path, canonical_item);
+        }
+    }
+
+    for (path, generated_item) in generated_paths {
+        if !path.starts_with("/_arkret/") || is_test_only_protocol_path(path) {
+            continue;
+        }
+        let Some(generated_item) = generated_item.as_object() else {
+            continue;
+        };
+        for method in OPENAPI_METHODS {
+            if generated_item.contains_key(*method)
+                && !selected
+                    .get(path)
+                    .and_then(Value::as_object)
+                    .is_some_and(|item| item.contains_key(*method))
+            {
+                bail!(
+                    "registered protocol operation {method} {path} is absent from the canonical OpenAPI artifact"
+                );
+            }
+        }
+    }
+
+    *artifact_paths = selected;
+    Ok(())
+}
+
+fn append_product_paths(artifact: &mut Value, generated: &Value) -> anyhow::Result<()> {
+    let generated_paths = generated
+        .get("paths")
+        .and_then(Value::as_object)
+        .context("registered Soland route document must contain a paths object")?;
+    let artifact_paths = artifact
+        .get_mut("paths")
+        .and_then(Value::as_object_mut)
+        .context("canonical OpenAPI artifact must contain a paths object")?;
+    for (path, item) in generated_paths {
+        if !path.starts_with("/_arkret/") || is_test_only_protocol_path(path) {
+            artifact_paths.insert(path.clone(), item.clone());
+        }
+    }
+    Ok(())
+}
+
+fn is_test_only_protocol_path(path: &str) -> bool {
+    path.starts_with("/_arkret/_conformance/")
+}
+
+fn merge_missing_components(artifact: &mut Value, generated: &Value) -> anyhow::Result<()> {
+    let Some(generated_components) = generated.get("components").and_then(Value::as_object) else {
+        return Ok(());
+    };
+    let artifact_root = artifact
+        .as_object_mut()
+        .context("canonical OpenAPI artifact root must be an object")?;
+    let artifact_components = artifact_root
+        .entry("components")
+        .or_insert_with(|| Value::Object(Map::new()))
+        .as_object_mut()
+        .context("canonical OpenAPI components must be an object")?;
+
+    for (section, generated_entries) in generated_components {
+        let Some(generated_entries) = generated_entries.as_object() else {
+            continue;
+        };
+        let artifact_entries = artifact_components
+            .entry(section.clone())
+            .or_insert_with(|| Value::Object(Map::new()))
+            .as_object_mut()
+            .with_context(|| {
+                format!("canonical OpenAPI component section `{section}` is invalid")
+            })?;
+        for (name, entry) in generated_entries {
+            artifact_entries
+                .entry(name.clone())
+                .or_insert_with(|| entry.clone());
+        }
+    }
+    Ok(())
 }
 
 fn register_soland_extension_operations(doc: &mut OpenApi) {
@@ -748,23 +902,43 @@ const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &
     ),
 ];
 
-#[endpoint]
+#[handler]
+#[tracing::instrument(skip_all, fields(op = "arkret_openapi_json"))]
+pub async fn arkret_openapi_json(depot: &mut Depot, res: &mut Response) {
+    let doc = depot
+        .get_typed::<ArkretOpenApiDoc>()
+        .expect("openapi doc injected");
+    let spec = serde_json::to_vec_pretty(&doc.0).unwrap_or_else(|error| {
+        tracing::error!(%error, "failed to render openapi json");
+        b"{}\n".to_vec()
+    });
+    write_openapi_body(res, "application/json; charset=utf-8", spec);
+}
+
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "arkret_openapi_yaml"))]
 pub async fn arkret_openapi_yaml(depot: &mut Depot, res: &mut Response) {
     let doc = depot
         .get_typed::<ArkretOpenApiDoc>()
         .expect("openapi doc injected");
-    let spec = doc.0.to_yaml().unwrap_or_else(|error| {
+    let spec = serde_saphyr::to_string(&doc.0).unwrap_or_else(|error| {
         tracing::error!(%error, "failed to render openapi yaml");
         "{}\n".to_owned()
     });
+    write_openapi_body(res, "application/yaml; charset=utf-8", spec.into_bytes());
+}
+
+fn write_openapi_body(res: &mut Response, content_type: &'static str, body: Vec<u8>) {
     res.headers_mut().insert(
         salvo::http::header::CONTENT_TYPE,
-        "application/yaml; charset=utf-8".parse().unwrap(),
+        content_type.parse().expect("valid OpenAPI content type"),
     );
     res.headers_mut().insert(
         salvo::http::header::CONTENT_LENGTH,
-        spec.len().to_string().parse().unwrap(),
+        body.len()
+            .to_string()
+            .parse()
+            .expect("valid OpenAPI content length"),
     );
-    res.write_body(spec.as_bytes().to_vec()).ok();
+    res.write_body(body).ok();
 }

@@ -1,13 +1,13 @@
 use std::sync::OnceLock;
 
 use salvo::http::Method;
-use salvo::oapi::{OpenApi, PathItemType};
 use salvo::prelude::*;
+use serde_json::Value;
 
 use crate::util::{is_valid_sync_token, render_error};
 
 #[derive(Clone)]
-pub struct ArkretOpenApiDoc(pub OpenApi);
+pub struct ArkretOpenApiDoc(pub Value);
 
 /// Catch-all handler under `/_arkret/*` (and the `/_soland/*` compat mirror,
 /// which mounts the same protocol handlers and must answer errors identically).
@@ -63,10 +63,14 @@ pub async fn api_not_found(req: &mut Request, res: &mut Response) {
 /// pattern without any regex compilation.
 static KNOWN_ROUTES: OnceLock<Vec<(String, Vec<Method>)>> = OnceLock::new();
 
-pub fn populate_known_routes(doc: &OpenApi) {
+pub fn populate_known_routes(doc: &Value) {
     let _ = KNOWN_ROUTES.get_or_init(|| {
         let mut out: Vec<(String, Vec<Method>)> = Vec::new();
-        for (path, item) in doc.paths.iter() {
+        let paths = doc
+            .get("paths")
+            .and_then(Value::as_object)
+            .expect("OpenAPI artifact must contain a paths object");
+        for (path, item) in paths {
             // The protocol surface (`/_arkret/...`, trust segments
             // self/gate/root/find/peer/open/edge) is spec-mandated to return
             // the canonical error envelope; the `/_soland/...` compat mirror
@@ -79,9 +83,10 @@ pub fn populate_known_routes(doc: &OpenApi) {
                 continue;
             }
             let methods: Vec<Method> = item
-                .operations
-                .keys()
-                .filter_map(path_item_type_to_method)
+                .as_object()
+                .into_iter()
+                .flat_map(|item| item.keys())
+                .filter_map(|method| method_name_to_method(method))
                 .collect();
             if methods.is_empty() {
                 continue;
@@ -92,18 +97,19 @@ pub fn populate_known_routes(doc: &OpenApi) {
     });
 }
 
-fn path_item_type_to_method(ty: &PathItemType) -> Option<Method> {
-    Some(match ty {
-        PathItemType::Get => Method::GET,
-        PathItemType::Post => Method::POST,
-        PathItemType::Put => Method::PUT,
-        PathItemType::Delete => Method::DELETE,
-        PathItemType::Patch => Method::PATCH,
-        PathItemType::Head => Method::HEAD,
-        PathItemType::Options => Method::OPTIONS,
+fn method_name_to_method(method: &str) -> Option<Method> {
+    Some(match method {
+        "get" => Method::GET,
+        "post" => Method::POST,
+        "put" => Method::PUT,
+        "delete" => Method::DELETE,
+        "patch" => Method::PATCH,
+        "head" => Method::HEAD,
+        "options" => Method::OPTIONS,
         // TRACE is not part of the Arkret HTTP binding; exclude it so it
         // doesn't pollute the `Allow` header.
-        PathItemType::Trace => return None,
+        "trace" => return None,
+        _ => return None,
     })
 }
 

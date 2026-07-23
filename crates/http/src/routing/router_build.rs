@@ -126,7 +126,11 @@ pub fn router_with_rate_limiter_and_request_size_config(
                 .hoop(affix_state::inject(ArkretOpenApiDoc(doc.clone())))
                 .get(arkret_openapi_yaml),
         )
-        .unshift(doc.into_router(".well-known/arkret/openapi.json"))
+        .unshift(
+            Router::with_path(".well-known/arkret/openapi.json")
+                .hoop(affix_state::inject(ArkretOpenApiDoc(doc)))
+                .get(arkret_openapi_json),
+        )
         .unshift(Router::new().get(home_page))
 }
 

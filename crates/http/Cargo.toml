@@ -42,7 +42,7 @@ arkret-models-identity = { workspace = true, features = ["salvo-oapi"] }
 arkret-policy = { workspace = true, features = ["salvo-oapi"] }
 arkret-push-policy.workspace = true
 arkret-rate-limit.workspace = true
-arkret-schema = { workspace = true, features = ["salvo-oapi"] }
+arkret-schema = { workspace = true, features = ["embedded-artifacts", "salvo-oapi"] }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["salvo"] }
@@ -59,6 +59,7 @@ reqwest = { workspace = true, default-features = false, features = ["form", "jso
 salvo = { workspace = true, default-features = false, features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+serde-saphyr.workspace = true
 sha2.workspace = true
 soland-application.workspace = true
 soland-contracts = { workspace = true, features = ["salvo"] }
