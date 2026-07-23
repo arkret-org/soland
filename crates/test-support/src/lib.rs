@@ -5,15 +5,17 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use arkret_core::{
-    CanonicalServiceUrl, CellRef, Did, LocalServiceIdentity, MoveId, Seal, SealId,
-    ServiceIdentityKeyRef, ServiceIdentityState, ServiceRegistrationKey, ServiceType,
+use arkret_identifiers::{CellRef, Did, MoveId, SealId};
+use arkret_identity::service_identity::{
+    LocalServiceIdentity, ServiceIdentityKeyRef, ServiceIdentityState,
 };
+use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
     CellRegistry, CellStore, MemoryCellStore, MemoryMoveStore, MemorySealStore, MoveStore,
     SealStore, StoreError, StoreResult, compute_state_root,
 };
+use arkret_wire::{Seal, ServiceType};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -290,7 +292,7 @@ impl ProjectedOperationPersistencePort for NoProjectedOperationPersistence {
     async fn persist_projected_operation(
         &self,
         _origin: &str,
-        _operation: &arkret_core::Operation,
+        _operation: &arkret_event_draft::Operation,
         _event_type: &str,
         _is_message_create: bool,
         _is_membership_or_realm_lifecycle: bool,
@@ -407,7 +409,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
 fn effective_state_with_new_ops(
     cells: &dyn CellStore,
     registry: &dyn CellRegistry,
-    realm_id: &arkret_core::RealmId,
+    realm_id: &arkret_identifiers::RealmId,
     covered: &BTreeSet<MoveId>,
     new_ops: &[(CellRef, SealedOp)],
 ) -> StoreResult<BTreeMap<CellRef, CellState>> {
