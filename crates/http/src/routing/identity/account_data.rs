@@ -118,8 +118,14 @@ fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataT
 /// neither over resource reads nor over the account stream, even when an
 /// agent-granted session presents the controller as its actor
 /// (zh/models/sidecar.md §7 / private-objects.md §4.2).
+///
+/// Retired prefixes (for example `ak.agent.sidecar_projection.v1`) also count
+/// as controller-private: new writes are already hard-rejected by the key
+/// validator, and treating legacy stored rows as controller-private keeps them
+/// out of agent-session list results and the account stream (fail closed).
 pub(crate) fn is_controller_private_account_data_key(data_type: &str) -> bool {
-    registered_account_data_type(data_type).is_some_and(|spec| spec.controller_private)
+    crate::routing::account_data_encryption::is_retired_encrypted_account_data_key(data_type)
+        || registered_account_data_type(data_type).is_some_and(|spec| spec.controller_private)
 }
 
 fn validate_registered_account_data_key(data_type: &str) -> Result<(), AppError> {
@@ -199,6 +205,21 @@ async fn session_actor_is_agent_runtime(
         .await
         .map(|controller| controller.is_some())
         .map_err(|error| AppError::internal(format!("agent principal lookup failed: {error}")))
+}
+
+/// Unified agent-context predicate for the controller-private gate. A session
+/// is an agent context when it carries an agent grant marker OR when its actor
+/// is itself a registered agent runtime principal — put/delete and get/list
+/// MUST agree on this so a native agent principal cannot read what it is
+/// forbidden to write (non-disclosure: get stays `not_found`, list filters).
+async fn session_is_agent_context(
+    state: &AppState,
+    session: &soland_application::identity::SessionIdentityState,
+) -> Result<bool, AppError> {
+    if session.agent_session.is_some() {
+        return Ok(true);
+    }
+    session_actor_is_agent_runtime(state.identity_application(), &session.actor).await
 }
 
 async fn persist_account_data_event(
@@ -340,8 +361,7 @@ async fn put_account_data(
     // as its actor.
     if let Some(spec) = registered_account_data_type(&data_type)
         && spec.controller_private
-        && (session.agent_session.is_some()
-            || session_actor_is_agent_runtime(state.identity_application(), &session.actor).await?)
+        && session_is_agent_context(state, &session).await?
     {
         return Err(AppError::capability_denied(format!(
             "{} is controller-private; agent runtimes cannot write it",
@@ -413,8 +433,11 @@ async fn get_account_data(
     validate_registered_account_data_key(&data_type)?;
 
     // Controller-private entries are indistinguishable from absent ones for
-    // Agent runtime sessions (fail closed, no existence disclosure).
-    if is_controller_private_account_data_key(&data_type) && session.agent_session.is_some() {
+    // Agent runtime sessions (fail closed, no existence disclosure). Same
+    // predicate as put/delete: agent grant marker OR native agent principal.
+    if is_controller_private_account_data_key(&data_type)
+        && session_is_agent_context(state, &session).await?
+    {
         return Err(AppError::not_found("not found"));
     }
 
@@ -442,7 +465,9 @@ async fn list_account_data(
 ) -> JsonResult<AccountDataList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let agent_session = session.agent_session.is_some();
+    // Same predicate as put/delete: agent grant marker OR native agent
+    // principal (non-disclosure list filtering).
+    let agent_context = session_is_agent_context(state, &session).await?;
     let entries = state
         .account_data_application()
         .entries_for_actor(&session.actor)
@@ -450,7 +475,7 @@ async fn list_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .filter(|record| {
-            !(agent_session && is_controller_private_account_data_key(&record.data_type))
+            !(agent_context && is_controller_private_account_data_key(&record.data_type))
         })
         .map(entry_from)
         .collect();
@@ -476,8 +501,7 @@ async fn delete_account_data(
     validate_registered_account_data_key(&data_type)?;
 
     if is_controller_private_account_data_key(&data_type)
-        && (session.agent_session.is_some()
-            || session_actor_is_agent_runtime(state.identity_application(), &session.actor).await?)
+        && session_is_agent_context(state, &session).await?
     {
         return Err(AppError::capability_denied(format!(
             "{data_type} is controller-private; agent runtimes cannot delete it"
@@ -761,6 +785,39 @@ mod tests {
         )
         .unwrap_err();
         assert!(err.to_string().contains("plaintext"));
+    }
+
+    /// S-1 (spec review): the retired `ak.agent.sidecar_projection.v1` prefix
+    /// must be hard-rejected for put/get/delete regardless of session kind.
+    /// All three handlers call `validate_registered_account_data_key` before
+    /// any session/agent branching, so this validator-level rejection is the
+    /// shared invalid_param outcome for agent sessions and plain sessions
+    /// alike; and legacy stored rows stay controller-private so agent-session
+    /// list filtering and the account-stream skip both keep applying.
+    #[test]
+    fn retired_sidecar_projection_prefix_is_rejected_and_stays_controller_private() {
+        for key in [
+            "ak.agent.sidecar_projection.v1",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:0196419b-0000-7000-8000-000000000000",
+        ] {
+            let err = validate_registered_account_data_key(key).unwrap_err();
+            assert!(
+                err.to_string().contains("registered private key pattern"),
+                "retired key `{key}` must fail the shared key validator"
+            );
+            assert!(
+                is_controller_private_account_data_key(key),
+                "legacy rows under `{key}` must remain controller-private"
+            );
+        }
+        // The active view-state surface is unaffected.
+        assert!(
+            validate_registered_account_data_key(
+                "ak.agent.sidecar_view_state.v1:did:web:alice.example"
+            )
+            .is_ok()
+        );
     }
 
     #[tokio::test]

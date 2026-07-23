@@ -48,6 +48,30 @@ const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION,
 ];
 
+/// Account-data key prefixes that were removed from the registry and MUST stay
+/// hard-rejected. Without this guard a retired prefix falls through to the
+/// permissive unregistered-key fallback at the end of
+/// [`validate_encrypted_account_data_key`], silently reopening the key space
+/// to every session (fail-open). `ak.agent.sidecar_projection.v1` was retired
+/// on 2026-07-23: the exchange projection is a controller-device-local
+/// Event-fold cache and never an account-data surface (zh/models/sidecar.md
+/// §7.2.4, forbidden-wire-fields.json `sidecar_exchange_binding`).
+const RETIRED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &["ak.agent.sidecar_projection.v1"];
+
+/// True when `data_type` is a retired private account-data key (bare prefix or
+/// prefix with a `:`-delimited tail). Retired keys are rejected on write /
+/// read / delete, and legacy stored rows remain controller-private so agent
+/// sessions never observe them.
+pub(crate) fn is_retired_encrypted_account_data_key(data_type: &str) -> bool {
+    RETIRED_ENCRYPTED_ACCOUNT_DATA_PREFIXES
+        .iter()
+        .any(|prefix| {
+            data_type
+                .strip_prefix(prefix)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
+        })
+}
+
 const FORBIDDEN_PLAINTEXT_FIELDS: &[&str] = &[
     "body",
     "target_ref",
@@ -135,6 +159,12 @@ pub(crate) fn encrypted_account_data_prefix(data_type: &str) -> Option<&'static 
 pub(crate) fn validate_encrypted_account_data_key(
     data_type: &str,
 ) -> Result<(), AccountDataEncryptionError> {
+    // Retired prefixes are hard-rejected before any other rule so they can
+    // never reach the unregistered-key fallback below (fail closed for new
+    // writes, reads, and deletes alike).
+    if is_retired_encrypted_account_data_key(data_type) {
+        return Err(AccountDataEncryptionError::InvalidKeyPattern);
+    }
     if EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS.contains(&data_type) {
         return Ok(());
     }
@@ -432,6 +462,25 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
+    }
+
+    #[test]
+    fn retired_sidecar_projection_prefix_is_hard_rejected() {
+        for key in [
+            "ak.agent.sidecar_projection.v1",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example",
+            "ak.agent.sidecar_projection.v1:did:web:alice.example:ak:realm:0196419b-0000-7000-8000-000000000000:ak:strand:0196419b-0000-7000-8000-000000000001",
+        ] {
+            assert!(is_retired_encrypted_account_data_key(key));
+            assert_eq!(
+                validate_encrypted_account_data_key(key).unwrap_err(),
+                AccountDataEncryptionError::InvalidKeyPattern
+            );
+        }
+        // Unrelated keys are not swept up by the retired-prefix guard.
+        assert!(!is_retired_encrypted_account_data_key(
+            "ak.agent.sidecar_view_state.v1:did:web:alice.example"
+        ));
     }
 
     #[test]

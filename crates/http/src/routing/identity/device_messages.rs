@@ -302,6 +302,24 @@ fn device_message_intent_conflict() -> AppError {
         .with_reason_code("message_id_conflict")
 }
 
+/// Fan an actor-private update (account-data / blocklist / read-cursor
+/// deltas, plaintext `content`) out to the actor's *other* devices.
+///
+/// Sidecar isolation note (zh/models/sidecar.md §7 / private-objects.md
+/// §4.2): controller-private account-data plaintext travels over this surface,
+/// and the target set is exactly `devices_for_actor(actor)` — the device
+/// directory rows registered under the controller principal itself. Agent
+/// runtime endpoints are NOT in that set: agent pairing never writes a
+/// `DeviceIdentity` row under the controller (there is no `save_device` call
+/// anywhere in the pairing flow), agent sessions authenticate as the agent's
+/// own DID with `ak.agent.key.authorize`, and their to-device endpoints are
+/// MLS key-package rows keyed by the *agent* principal
+/// (`active_agent_keypackage_endpoint` resolves `row.actor_id ==
+/// agent principal`). Controller-actor device rows can only be created by the
+/// controller's own device flows (registration placeholder, login/device
+/// pair, and the `ak.device.authorize` projection for the controller
+/// principal), so this fanout is naturally isolated from agent-bound devices;
+/// `fanout_skips_devices_registered_under_other_principals` pins that fact.
 pub(crate) async fn fanout_actor_private_update(
     state: &AppState,
     actor: &str,
@@ -583,6 +601,109 @@ fn note_unknown_device(
         devices.push(json!(device_id));
     } else {
         *entry = json!([device_id]);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use soland_application::identity::{DeviceIdentity, SaveDeviceCommand};
+
+    use super::*;
+
+    fn test_state() -> AppState {
+        let config = crate::config::AppConfig {
+            object_storage: crate::config::ObjectStorageConfig::local(
+                std::env::temp_dir().join("soland-device-messages-test-blobs"),
+            ),
+            development_mode: true,
+            seed_demo_data: false,
+            ..crate::config::AppConfig::test_default()
+        };
+        AppState::new(config, soland_storage_postgres::Db { pool: None })
+    }
+
+    async fn save_active_device(state: &AppState, actor: &str, device_id: &str) {
+        let registered_at = now();
+        state
+            .identity_application()
+            .save_device(SaveDeviceCommand {
+                actor_id: actor.to_owned(),
+                device_id: device_id.to_owned(),
+                display_name: None,
+                device: DeviceIdentity {
+                    actor_id: actor.to_owned(),
+                    device_id: device_id.to_owned(),
+                    display_name: None,
+                    verification_state: "verified".to_owned(),
+                    payload: json!({"device_id": device_id}),
+                    created_at: registered_at,
+                    updated_at: registered_at,
+                    revoked_at: None,
+                },
+            })
+            .await
+            .expect("device saved");
+    }
+
+    /// S-3 (spec review): controller-private account-data plaintext fanned out
+    /// by `fanout_actor_private_update` only reaches device rows registered
+    /// under the controller principal itself. Agent runtime devices live under
+    /// the agent's own actor id (agent pairing registers no controller-actor
+    /// device row), so the fanout surface is naturally isolated from agents —
+    /// this test pins that fact by registering an agent-actor device and
+    /// asserting the controller fanout never enqueues anything for it.
+    #[tokio::test]
+    async fn fanout_skips_devices_registered_under_other_principals() {
+        let state = test_state();
+        let controller = "did:web:alice.example";
+        let agent = "did:web:agent.alice.example";
+        let origin_device = "ak:device:01904100-0000-7000-8000-0000000000c0";
+        let other_controller_device = "ak:device:01904100-0000-7000-8000-0000000000c1";
+        let agent_device = "ak:device:01904100-0000-7000-8000-0000000000a1";
+        save_active_device(&state, controller, origin_device).await;
+        save_active_device(&state, controller, other_controller_device).await;
+        // The agent runtime's device row belongs to the agent actor, mirroring
+        // how agent endpoints are keyed in production.
+        save_active_device(&state, agent, agent_device).await;
+
+        let delivered = fanout_actor_private_update(
+            &state,
+            controller,
+            origin_device,
+            ACCOUNT_DATA_UPDATE_TYPE,
+            json!({"data_type": "ak.account.blocklist", "content": {"private": true}}),
+        )
+        .await;
+
+        assert_eq!(
+            delivered, 1,
+            "only the controller's other device receives the fanout"
+        );
+        let controller_queue = state
+            .delivery_application()
+            .device_messages_after(controller, other_controller_device, 0)
+            .await
+            .expect("controller queue");
+        assert_eq!(controller_queue.len(), 1);
+        let agent_queue = state
+            .delivery_application()
+            .device_messages_after(agent, agent_device, 0)
+            .await
+            .expect("agent queue");
+        assert!(
+            agent_queue.is_empty(),
+            "agent-actor devices must never receive controller-private fanout"
+        );
+        let cross_queue = state
+            .delivery_application()
+            .device_messages_after(controller, agent_device, 0)
+            .await
+            .expect("cross queue");
+        assert!(
+            cross_queue.is_empty(),
+            "the agent device id is not addressable under the controller actor"
+        );
     }
 }
 

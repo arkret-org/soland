@@ -1,14 +1,71 @@
 use super::super::*;
 
-/// Wire-shape validators applied on the event ingest path.
-///
-/// Each maps a [`soland_http::wire_validators::WireRejection`] to a
-/// `schema_violation`-class [`EventValidationError`] carrying the precise
-/// reason code.
+// Wire-shape validators applied on the event ingest path.
+//
+// Each maps a [`soland_http::wire_validators::WireRejection`] to a
+// `schema_violation`-class [`EventValidationError`] carrying the precise
+// reason code.
+
+/// Forbidden-wire-fields registry entry `sidecar_exchange_binding`
+/// (spec/v1/artifacts/registry/forbidden-wire-fields.json, zh/models/sidecar.md
+/// §7.2.1): the Agent Sidecar exchange binding, exchange control plaintext,
+/// and `exchange_id` are legal only inside MLS-encrypted payload/metadata of
+/// Sidecar-backing-Circle-scoped events. Any plaintext occurrence on the
+/// submitted wire — the key `sidecar_exchange_binding`, the key `exchange_id`,
+/// or a string value equal to one of the two Sidecar schema ids — is a
+/// hard-reject `schema_violation`. `ak.agent.sidecar.exchange.control` needs
+/// no exemption: its outer payload carries only `strand_id` plus an
+/// `encrypted_payload` envelope whose ciphertext is an opaque string, so
+/// conforming producers never trip this structural scan.
+const SIDECAR_FORBIDDEN_WIRE_KEYS: &[&str] = &["sidecar_exchange_binding", "exchange_id"];
+const SIDECAR_FORBIDDEN_WIRE_STRING_VALUES: &[&str] = &[
+    "ak.schema.agent_sidecar_event_exchange_binding.v1",
+    "ak.schema.agent_sidecar_exchange_control.v1",
+];
+
+fn scan_sidecar_forbidden_wire_fields(value: &Value) -> Result<(), EventValidationError> {
+    match value {
+        Value::Object(object) => {
+            for (key, nested) in object {
+                if SIDECAR_FORBIDDEN_WIRE_KEYS.contains(&key.as_str()) {
+                    return Err(sidecar_forbidden_wire_field_error(key));
+                }
+                scan_sidecar_forbidden_wire_fields(nested)?;
+            }
+            Ok(())
+        }
+        Value::Array(values) => {
+            for nested in values {
+                scan_sidecar_forbidden_wire_fields(nested)?;
+            }
+            Ok(())
+        }
+        Value::String(text) => {
+            if SIDECAR_FORBIDDEN_WIRE_STRING_VALUES.contains(&text.as_str()) {
+                return Err(sidecar_forbidden_wire_field_error(text));
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn sidecar_forbidden_wire_field_error(token: &str) -> EventValidationError {
+    event_validation_error(
+        StatusCode::BAD_REQUEST,
+        "schema_violation",
+        format!(
+            "`{token}` is Sidecar-exchange material and must not appear in plaintext event payloads \
+             (forbidden-wire-fields sidecar_exchange_binding)"
+        ),
+    )
+}
+
 pub(super) fn validate_pre_schema_wire_shape(
     kind: &str,
     payload: &Value,
 ) -> Result<(), EventValidationError> {
+    scan_sidecar_forbidden_wire_fields(payload)?;
     if kind == arkret_wire::events::EventKind::MEMBER_IDENTITY_UPDATE {
         soland_http::wire_validators::member_identity::validate_member_identity_update_payload(
             payload,
@@ -230,6 +287,91 @@ mod tests {
                 "history_visibility": "restricted"
             }
         })
+    }
+
+    #[test]
+    fn plaintext_sidecar_exchange_binding_key_is_rejected_pre_schema() {
+        let payload = json!({
+            "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "content": {"kind": "ak.content.text", "body": "hello"},
+            "metadata": {
+                "sidecar_exchange_binding": {
+                    "role": "request"
+                }
+            }
+        });
+        let error = validate_pre_schema_wire_shape(
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            &payload,
+        )
+        .expect_err("plaintext metadata must not carry the exchange binding");
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, "schema_violation");
+    }
+
+    #[test]
+    fn plaintext_exchange_id_field_is_rejected_pre_schema() {
+        let payload = json!({
+            "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "content": {"kind": "ak.content.text", "body": "hello"},
+            "refs": [{"role": "after", "exchange_id": "018f-abc"}]
+        });
+        let error = validate_pre_schema_wire_shape(
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            &payload,
+        )
+        .expect_err("plaintext exchange_id must be rejected in any nested position");
+        assert_eq!(error.status, StatusCode::BAD_REQUEST);
+        assert_eq!(error.code, "schema_violation");
+    }
+
+    #[test]
+    fn plaintext_sidecar_schema_id_values_are_rejected_pre_schema() {
+        for schema_id in [
+            "ak.schema.agent_sidecar_event_exchange_binding.v1",
+            "ak.schema.agent_sidecar_exchange_control.v1",
+        ] {
+            let payload = json!({
+                "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+                "metadata": {"fields": {"schema": schema_id}}
+            });
+            let error = validate_pre_schema_wire_shape(
+                arkret_wire::events::EventKind::MESSAGE_CREATE,
+                &payload,
+            )
+            .expect_err("Sidecar schema ids must never appear as plaintext wire values");
+            assert_eq!(error.status, StatusCode::BAD_REQUEST);
+            assert_eq!(error.code, "schema_violation");
+        }
+    }
+
+    #[test]
+    fn ordinary_message_and_exchange_control_outer_payload_pass_the_sidecar_scan() {
+        let message = json!({
+            "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "content": {"kind": "ak.content.text", "body": "hello"},
+            "metadata": {"fields": {"jira_status": "open"}}
+        });
+        validate_pre_schema_wire_shape(arkret_wire::events::EventKind::MESSAGE_CREATE, &message)
+            .expect("ordinary messages are unaffected by the sidecar forbidden-wire scan");
+
+        // The exchange control Event's outer payload is only strand_id plus an
+        // opaque encrypted envelope; the structural scan must not reject it.
+        let control = json!({
+            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "encrypted_payload": {
+                "ciphertext": "b3BhcXVlLW1scy1jaXBoZXJ0ZXh0",
+                "content_type": "application/vnd.arkret.mls-ciphertext"
+            }
+        });
+        validate_pre_schema_wire_shape(
+            arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+            &control,
+        )
+        .expect("conforming exchange control outer payloads carry no plaintext exchange material");
     }
 
     #[test]

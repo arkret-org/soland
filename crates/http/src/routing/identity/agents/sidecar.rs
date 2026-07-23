@@ -791,11 +791,15 @@ pub(crate) fn validate_sidecar_exchange_control_event(
         return Err(REASON);
     }
     let projection = state.projection_application().snapshot();
-    let circle_id = projection
-        .strands
-        .get(strand_id)
-        .and_then(|strand| strand.scope_circle_id.as_deref())
-        .ok_or(REASON)?;
+    let strand = projection.strands.get(strand_id).ok_or(REASON)?;
+    // §7.2.3: the control Event must be submitted into the private Strand's
+    // own Realm. A mismatched operation.realm_id would let a caller route the
+    // control Event through another Realm's admission/capability context while
+    // still naming the Sidecar Strand.
+    if strand.realm_id != operation.realm_id.as_str() {
+        return Err(REASON);
+    }
+    let circle_id = strand.scope_circle_id.as_deref().ok_or(REASON)?;
     let sidecar = projection
         .sidecars
         .values()
