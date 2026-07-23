@@ -20,6 +20,7 @@ pub struct PgPersistenceStore {
     contacts: PgContactStore,
     invite_receive_policies: PgInviteReceivePolicyStore,
     invite_locators: PgInviteLocatorStore,
+    join_applications: PgJoinApplicationStore,
     consent_cells: PgConsentCellStore,
     direct_conversation_bindings: PgDirectConversationBindingStore,
     blobs: PgBlobStore,
@@ -83,6 +84,7 @@ impl PgPersistenceStore {
             contacts: PgContactStore { pool: pool.clone() },
             invite_receive_policies: PgInviteReceivePolicyStore { pool: pool.clone() },
             invite_locators: PgInviteLocatorStore { pool: pool.clone() },
+            join_applications: PgJoinApplicationStore { pool: pool.clone() },
             consent_cells: PgConsentCellStore { pool: pool.clone() },
             direct_conversation_bindings: PgDirectConversationBindingStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
@@ -258,6 +260,10 @@ impl FederationGovernanceStoreRegistry for PgPersistenceStore {
 
     fn audit(&self) -> &dyn AuditStore {
         &self.audit
+    }
+
+    fn join_applications(&self) -> &dyn JoinApplicationStore {
+        &self.join_applications
     }
 }
 

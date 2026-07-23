@@ -15,6 +15,7 @@ pub mod federation;
 pub(crate) mod identity;
 mod interop;
 pub(crate) mod invites;
+pub(crate) mod join_applications;
 // G3.S1: MLS lifecycle (KeyPackage claim, Welcome to-device, commit_epoch).
 pub(crate) mod mls;
 pub(crate) mod organizations;

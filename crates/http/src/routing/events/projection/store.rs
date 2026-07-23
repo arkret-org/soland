@@ -320,6 +320,7 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
     if let Some(effect) = reducer_effect {
         mirror_mls_effect_to_persistence(state, origin, "", operation, &effect).await;
     }
+    mirror_join_authorisation_consumption(state, origin, operation).await;
     let _ = append_projection_event(
         state,
         projection_event_from_operation(operation, Some(origin)),

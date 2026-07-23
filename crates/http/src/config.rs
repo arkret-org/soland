@@ -466,14 +466,11 @@ pub struct AppConfig {
     /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
     /// When true, soland claims the `ak.profile.candidate.join_policy.v1`
-    /// candidate profile and exposes the product-local join-policy
-    /// member-application read surface
-    /// (`GET /_soland/self/realms/{realm_id}/applications`,
-    /// `org.arkret.soland.member_application.query.list`). `member.application`
-    /// is a spec candidate concept (`governance/join-policy.md` §7.2) that MUST
-    /// stay off the `/_arkret/...` protocol root and out of the `ak.*` namespace
-    /// until formally registered; the read surface is fail-closed (404) unless
-    /// this profile is declared.
+    /// candidate profile and exposes its complete profile-private signed
+    /// receipt carrier at the standard
+    /// `/_arkret/self/realms/{realm_id}/join-applications` surface.
+    /// Application/review/cancel remain private records and never become
+    /// Realm Event kinds.
     /// Env: `SOLAND_CANDIDATE_JOIN_POLICY` (default false).
     pub candidate_join_policy_enabled: bool,
     /// Stream-F (Wave 2C) — cross-Principal-Server erasure-receipt

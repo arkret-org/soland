@@ -29,13 +29,15 @@ pub(crate) use soland_storage::{
     FederationTransactionRecord, FederationTransactionStore, HandleReleaseStore, IdempotencyRecord,
     IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
     IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore,
-    MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore,
-    MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore,
-    ModerationStore, MorphProjectionRecord, MorphProjectionStore, MultisigPendingRecord,
-    MultisigPendingStore, NotificationStore, OrganizationPolicyRecord, OrganizationPolicyStore,
-    OrganizationRecord, OrganizationStore, OutboundPushBridgeCacheRecord, PeerEventsPageQuery,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
+    JoinApplicationRecord, JoinApplicationStore, KeyBackupStore, MlsCommitEpochAdvance,
+    MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow,
+    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
+    OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
+    OutboundPushBridgeCacheRecord, PeerEventsPageQuery, PeerKeyPackageClaimAttempt,
+    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult,
     PolicyDocumentRecord, PolicyDocumentStore, PresenceRecord, PresenceStore,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
@@ -84,6 +86,7 @@ mod federation;
 mod governance;
 mod idempotency;
 mod invite_locators;
+mod join_applications;
 mod key_backup;
 mod mls;
 mod moderation;
@@ -119,6 +122,7 @@ pub use federation::*;
 pub use governance::*;
 pub use idempotency::*;
 pub use invite_locators::*;
+pub use join_applications::*;
 pub use key_backup::*;
 pub use mls::*;
 pub use moderation::*;

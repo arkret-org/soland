@@ -1,25 +1,17 @@
-//! Join-policy application-review workflow reducer (spec
-//! `governance/join-policy.md` §7). The `member.application` /
-//! `member.application.review` / `member.application.cancel` records are
-//! candidate profile-private payloads (§1, §7.2, §7.3): they are NOT
-//! standalone `ak.*` Event kinds and MUST NOT be written to shared Realm
-//! history under a bare name. soland carries them as profile-private
-//! sub-objects on the active `ak.member.state` event:
+//! Profile-private join-application projection.
 //!
-//!   - stage 1 knock: `ak.member.state{membership=knock}` with an `application` object → opens an
-//!     application record.
-//!   - stage 2 review: `ak.member.state{membership=knock|leave}` with an `application_review`
-//!     object → records reviewer accept / reject / request_changes. `reject` drives the member to
-//!     `leave` and stamps a `cooldown_after_reject` anchor (§3, §12).
-//!   - cancel: `ak.member.state{membership=leave}` with an `application_cancel` object → applicant
-//!     withdraws; no cooldown (§7.4).
-//!
-//! The reducer enforces the §3 / §12 anti-abuse limits
-//! (`max_open_applications_per_actor`, `application_ttl`,
-//! `cooldown_after_reject`) at submit time and binds the §7.5
-//! `refs[role="join_authorised_by"]` invite reference to a fresh, unconsumed
-//! review accept whose reviewer still holds `review_capability`.
+//! `member.application`, `member.application.review`, and
+//! `member.application.cancel` are signed private receipts. They never enter
+//! shared Realm Event history and are never represented as extension fields
+//! on `ak.member.state`. The public membership reducer only establishes the
+//! stage-1 `knock`; this module mirrors the durable private store into a
+//! rebuildable cache so `ak.invite.create.refs[role="join_authorised_by"]`
+//! can be checked synchronously during Event admission.
 
+use arkret_models_collaboration::governance::join_policy::{
+    JoinApplicationDecision, JoinApplicationPrivateBody, JoinApplicationReceipt,
+    JoinApplicationReviewReceipt, JoinApplicationStatus,
+};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
@@ -35,47 +27,48 @@ pub struct MemberApplicationView {
     pub application_receipt_digest: String,
     pub status: String,
     pub submitted_at: String,
-    pub answers: Option<Value>,
+    pub private_body: Option<Value>,
     pub application_pending: Option<bool>,
+    pub latest_review_ref: Option<String>,
 }
 
-/// Open-application projection state for one `(realm_id, applicant)` pair.
 #[derive(Clone, Debug)]
 pub struct MemberApplicationState {
     pub realm_id: String,
     pub applicant: String,
-    /// Stable receipt digest the review / invite reference. Derived from the
-    /// opening knock event's canonical digest (or its `event_id`).
     pub receipt_digest: String,
-    pub knock_ref: Option<String>,
-    pub policy_version_digest: Option<String>,
-    pub answers: Value,
-    /// `pending` / `awaiting_review` / `changes_requested` / `accepted` /
-    /// `rejected` / `canceled` / `expired`.
+    pub knock_ref: String,
+    pub policy_version_digest: String,
+    pub application_revision_digest: String,
+    pub private_body: Value,
     pub status: String,
-    /// Reviewer DID on the accepted review (set once accepted).
     pub accepted_by: Option<String>,
-    /// `reviewer_capability_proof.grant_id` on the accepted review; used to
-    /// re-check reviewer capability when the invite is written (§7.5 #3).
     pub accepted_grant_id: Option<String>,
-    /// Digest of the accepted review record, the `join_authorised_by` target.
-    pub review_receipt_digest: Option<String>,
-    /// True once a `ak.invite.create` consumed the accept (anti-replay §7.5).
+    pub review_receipt_digests: Vec<String>,
+    pub required_accept_refs: Vec<String>,
     pub invite_consumed: bool,
-    /// `applicant_visibility` floor copied from the policy at open time.
+    pub superseded: bool,
     pub applicant_visibility: String,
     pub submitted_at: DateTime<Utc>,
-    /// Submit-time + TTL; reducer rejects accepts past this instant.
     pub expires_at: DateTime<Utc>,
 }
 
 impl MemberApplicationState {
     fn is_open(&self) -> bool {
-        matches!(
-            self.status.as_str(),
-            "pending" | "awaiting_review" | "changes_requested"
-        )
+        !self.superseded
+            && matches!(
+                self.status.as_str(),
+                "awaiting_review" | "changes_requested"
+            )
     }
+}
+
+#[derive(Clone, Debug)]
+pub struct JoinApplicationAdmission {
+    pub application_ttl: Duration,
+    pub cooldown_after_reject: Duration,
+    pub max_open_applications: usize,
+    pub applicant_visibility: String,
 }
 
 fn join_policy_duration_or(join_policy: &Value, field: &str, default: &str) -> Duration {
@@ -96,132 +89,230 @@ fn join_policy_review_capability(join_policy: &Value) -> String {
         .to_owned()
 }
 
-fn application_receipt_digest(operation: &Operation) -> String {
-    if let Some(digest) = operation
-        .canonical_event_digest
-        .as_deref()
-        .filter(|value| !value.trim().is_empty())
-    {
-        return digest.to_owned();
+fn status_name(status: &JoinApplicationStatus) -> &'static str {
+    match status {
+        JoinApplicationStatus::AwaitingReview => "awaiting_review",
+        JoinApplicationStatus::ChangesRequested => "changes_requested",
+        JoinApplicationStatus::Accepted => "accepted",
+        JoinApplicationStatus::Rejected => "rejected",
+        JoinApplicationStatus::Canceled => "canceled",
+        JoinApplicationStatus::Expired => "expired",
+        JoinApplicationStatus::Consumed => "consumed",
     }
-    if let Some(event_id) = operation
-        .payload
-        .get("event_id")
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-    {
-        return event_id.to_owned();
-    }
-    operation.operation_id.as_str().to_owned()
-}
-
-fn member_from_payload(operation: &Operation) -> Option<&str> {
-    operation
-        .payload
-        .get("actor_id")
-        .or_else(|| operation.payload.get("member"))
-        .or_else(|| operation.payload.get("member_id"))
-        .or_else(|| operation.payload.get("subject"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.is_empty())
 }
 
 impl ProjectionState {
-    /// Submit-time gate for the application-review workflow. Runs before the
-    /// `ak.member.state` projection commits. Enforces the §3 / §12 limits and
-    /// the review-decision preconditions; returns the canonical `reason_code`
-    /// on rejection.
-    pub fn check_membership_application_admission(
+    pub fn check_private_join_application(
         &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::MEMBER_STATE)
+        receipt: &JoinApplicationReceipt,
+        private_body: &JoinApplicationPrivateBody,
+    ) -> Result<JoinApplicationAdmission, &'static str> {
+        let realm_id = receipt.realm_id.as_str();
+        let applicant = receipt.applicant_did.as_str();
+        let member = self
+            .member(realm_id, applicant)
+            .ok_or("failed_precondition")?;
+        if member.state != "knock"
+            || member.membership_event_ref.as_deref() != Some(receipt.knock_ref.as_str())
         {
-            return Ok(());
+            return Err("failed_precondition");
         }
-        let realm_id = operation.realm_id.as_str();
-        let Some(member) = member_from_payload(operation) else {
-            return Ok(());
-        };
-
-        if operation.payload.get("application").is_some() {
-            return self.check_application_open(operation, realm_id, member);
+        let join_policy = self
+            .realm_join_policy_cell_value(realm_id)
+            .ok_or("gate_check_failed")?;
+        validate_join_policy_payload(join_policy).map_err(|_| "gate_check_failed")?;
+        let policy_digest =
+            arkret_canonical::canonical_sha256(join_policy).map_err(|_| "gate_check_failed")?;
+        if policy_digest != receipt.policy_version_digest.as_str() {
+            return Err("failed_precondition");
         }
-        if let Some(review) = operation.payload.get("application_review") {
-            return self.check_application_review(review, realm_id);
-        }
-        Ok(())
-    }
-
-    fn check_application_open(
-        &self,
-        operation: &Operation,
-        realm_id: &str,
-        member: &str,
-    ) -> Result<(), &'static str> {
-        let Some(join_policy) = self.realm_join_policy_cell_value(realm_id) else {
-            return Ok(());
-        };
-        if validate_join_policy_payload(join_policy).is_err() {
+        validate_application_private_body_against_policy(private_body, join_policy)?;
+        if self
+            .realm_encryption_profile(realm_id)
+            .as_deref()
+            .is_some_and(|profile| profile == "mls_rfc9420")
+            && !matches!(
+                private_body,
+                JoinApplicationPrivateBody::ReviewerEnvelope { .. }
+            )
+        {
             return Err("gate_check_failed");
         }
-        let now = operation.created_at;
-        let cooldown = join_policy_duration_or(
+
+        let cooldown_after_reject = join_policy_duration_or(
             join_policy,
             "cooldown_after_reject",
             DEFAULT_COOLDOWN_AFTER_REJECT,
         );
         if let Some(rejected_at) = self
             .member_application_reject_at
-            .get(&(realm_id.to_owned(), member.to_owned()))
-            && now.signed_duration_since(*rejected_at) < cooldown
+            .get(&(realm_id.to_owned(), applicant.to_owned()))
+            && receipt.submitted_at.signed_duration_since(*rejected_at) < cooldown_after_reject
         {
             return Err("failed_precondition");
         }
-        let max_open = join_policy
+        let max_open_applications = join_policy
             .get("max_open_applications_per_actor")
             .and_then(Value::as_u64)
             .unwrap_or(1)
-            .max(1);
+            .clamp(1, 5) as usize;
         let open_count = self
             .member_applications
-            .get(&(realm_id.to_owned(), member.to_owned()))
-            .filter(|state| state.is_open())
-            .map(|_| 1u64)
-            .unwrap_or(0);
-        if open_count >= max_open {
+            .values()
+            .filter(|state| {
+                state.realm_id == realm_id
+                    && state.applicant == applicant
+                    && state.is_open()
+                    && !(state.status == "changes_requested"
+                        && state.knock_ref == receipt.knock_ref.as_str())
+            })
+            .count();
+        if open_count >= max_open_applications {
             return Err("failed_precondition");
         }
-        Ok(())
+        Ok(JoinApplicationAdmission {
+            application_ttl: join_policy_duration_or(
+                join_policy,
+                "application_ttl",
+                DEFAULT_APPLICATION_TTL,
+            ),
+            cooldown_after_reject,
+            max_open_applications,
+            applicant_visibility: join_policy
+                .get("applicant_visibility")
+                .and_then(Value::as_str)
+                .unwrap_or("reviewer_only")
+                .to_owned(),
+        })
     }
 
-    fn check_application_review(&self, review: &Value, realm_id: &str) -> Result<(), &'static str> {
-        let decision = review.get("decision").and_then(Value::as_str).unwrap_or("");
-        if !matches!(decision, "accept" | "reject" | "request_changes") {
-            return Err("failed_precondition");
-        }
-        let application_ref = review
-            .get("application_ref")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
+    pub fn check_private_join_application_review(
+        &self,
+        receipt: &JoinApplicationReviewReceipt,
+    ) -> Result<usize, &'static str> {
+        let realm_id = receipt.realm_id.as_str();
+        let application = self
+            .member_application_by_receipt(realm_id, receipt.application_ref.as_str())
             .ok_or("failed_precondition")?;
-        let Some(state) = self.member_application_by_receipt(realm_id, application_ref) else {
-            return Err("failed_precondition");
-        };
-        if !state.is_open() {
+        if application.status != "awaiting_review" || application.superseded {
             return Err("failed_precondition");
         }
-        if review.created_at_past_ttl(state) {
+        if receipt.reviewed_at >= application.expires_at {
             return Err("ttl_expired");
         }
-        Ok(())
+        if receipt.application_revision_digest.as_str() != application.application_revision_digest {
+            return Err("failed_precondition");
+        }
+        let join_policy = self
+            .realm_join_policy_cell_value(realm_id)
+            .ok_or("gate_check_failed")?;
+        let policy_digest =
+            arkret_canonical::canonical_sha256(join_policy).map_err(|_| "gate_check_failed")?;
+        if policy_digest != application.policy_version_digest {
+            return Err("failed_precondition");
+        }
+        let action = join_policy_review_capability(join_policy);
+        if !self.projected_capability_grant_matches(
+            receipt.reviewer_capability_proof.grant_id.as_str(),
+            receipt.reviewer_did.as_str(),
+            realm_id,
+            &action,
+            realm_id,
+        ) {
+            return Err("capability_denied");
+        }
+        join_policy_review_threshold(
+            self,
+            realm_id,
+            join_policy,
+            receipt.reviewer_did.as_str(),
+            &action,
+        )
     }
 
-    /// Submit-time gate for `ak.invite.create` carrying
-    /// `refs[role="join_authorised_by"]` (§7.5). The cited review accept MUST
-    /// still point at an open, unconsumed, unexpired application whose
-    /// reviewer still holds `review_capability` at the current frontier.
+    pub fn install_private_join_application(
+        &mut self,
+        receipt: &JoinApplicationReceipt,
+        private_body: &JoinApplicationPrivateBody,
+        status: &JoinApplicationStatus,
+        reviews: &[JoinApplicationReviewReceipt],
+        required_accept_refs: &[arkret_wire::Hash],
+        superseded_by: Option<&arkret_wire::Hash>,
+        invite_consumed: bool,
+        applicant_visibility: String,
+        expires_at: DateTime<Utc>,
+    ) {
+        if superseded_by.is_none() {
+            for previous in self.member_applications.values_mut().filter(|state| {
+                state.receipt_digest != receipt.application_receipt_digest.as_str()
+                    && state.realm_id == receipt.realm_id.as_str()
+                    && state.applicant == receipt.applicant_did.as_str()
+                    && state.knock_ref == receipt.knock_ref.as_str()
+                    && state.status == "changes_requested"
+                    && !state.superseded
+            }) {
+                previous.superseded = true;
+            }
+        }
+        let latest_accept = reviews.iter().rev().find(|review| {
+            review.decision == JoinApplicationDecision::Accept
+                && review.application_revision_digest == receipt.application_revision_digest
+        });
+        let state = MemberApplicationState {
+            realm_id: receipt.realm_id.as_str().to_owned(),
+            applicant: receipt.applicant_did.as_str().to_owned(),
+            receipt_digest: receipt.application_receipt_digest.as_str().to_owned(),
+            knock_ref: receipt.knock_ref.as_str().to_owned(),
+            policy_version_digest: receipt.policy_version_digest.as_str().to_owned(),
+            application_revision_digest: receipt.application_revision_digest.as_str().to_owned(),
+            private_body: serde_json::to_value(private_body).unwrap_or(Value::Null),
+            status: status_name(status).to_owned(),
+            accepted_by: latest_accept.map(|review| review.reviewer_did.as_str().to_owned()),
+            accepted_grant_id: latest_accept.map(|review| {
+                review
+                    .reviewer_capability_proof
+                    .grant_id
+                    .as_str()
+                    .to_owned()
+            }),
+            review_receipt_digests: reviews
+                .iter()
+                .filter(|review| review.decision == JoinApplicationDecision::Accept)
+                .map(|review| review.review_receipt_digest.as_str().to_owned())
+                .collect(),
+            required_accept_refs: required_accept_refs
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            invite_consumed,
+            superseded: superseded_by.is_some(),
+            applicant_visibility,
+            submitted_at: receipt.submitted_at,
+            expires_at,
+        };
+        if *status == JoinApplicationStatus::Rejected
+            && let Some(rejected_at) = reviews.last().map(|review| review.reviewed_at)
+        {
+            self.member_application_reject_at.insert(
+                (
+                    receipt.realm_id.as_str().to_owned(),
+                    receipt.applicant_did.as_str().to_owned(),
+                ),
+                rejected_at,
+            );
+        }
+        self.member_applications.insert(
+            (
+                receipt.realm_id.as_str().to_owned(),
+                receipt.application_receipt_digest.as_str().to_owned(),
+            ),
+            state,
+        );
+    }
+
+    /// Invite authorization is anchored at each accepted receipt's own review
+    /// basis. Later capability revocation does not retroactively invalidate a
+    /// counted accept.
     pub fn check_invite_join_authorisation(
         &self,
         operation: &Operation,
@@ -231,49 +322,59 @@ impl ProjectionState {
         {
             return Ok(());
         }
-        let refs = join_authorised_by_refs(operation);
-        if refs.is_empty() {
+        let review_refs = join_authorised_by_refs(operation);
+        if review_refs.is_empty() {
             return Ok(());
         }
-        let realm_id = operation.realm_id.as_str();
-        let review_capability = self
-            .realm_join_policy_cell_value(realm_id)
-            .map(join_policy_review_capability)
-            .unwrap_or_else(|| DEFAULT_REVIEW_CAPABILITY.to_owned());
-        for review_ref in refs {
-            let Some(state) = self.member_application_by_review(realm_id, &review_ref) else {
-                return Err("join_authorisation_invalid");
-            };
-            if state.status != "accepted" || state.invite_consumed {
-                return Err("join_authorisation_invalid");
-            }
-            if operation.created_at >= state.expires_at {
-                return Err("join_authorisation_invalid");
-            }
-            let Some(reviewer) = state.accepted_by.as_deref() else {
-                return Err("join_authorisation_invalid");
-            };
-            if !self.issuer_has_projected_capability(
-                reviewer,
-                realm_id,
-                &review_capability,
-                realm_id,
-            ) {
-                return Err("join_authorisation_invalid");
-            }
+        let supplied = review_refs.iter().cloned().collect::<BTreeSet<_>>();
+        if supplied.len() != review_refs.len() {
+            return Err("join_authorisation_invalid");
+        }
+        let state = self
+            .member_application_by_review(operation.realm_id.as_str(), &review_refs[0])
+            .ok_or("join_authorisation_invalid")?;
+        let required = state
+            .required_accept_refs
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if state.status != "accepted"
+            || state.invite_consumed
+            || operation.created_at >= state.expires_at
+            || required.is_empty()
+            || supplied != required
+        {
+            return Err("join_authorisation_invalid");
         }
         Ok(())
     }
 
-    /// Resolve the policy `review_capability` action token for a Realm
-    /// (defaults to `ak.realm.join.review` when no policy is projected).
+    pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
+        if crate::kinds::canonical_kind_for_operation(operation)
+            != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+        {
+            return;
+        }
+        let realm_id = operation.realm_id.as_str();
+        for review_ref in join_authorised_by_refs(operation) {
+            if let Some(state) = self.member_applications.values_mut().find(|state| {
+                state.realm_id == realm_id
+                    && state
+                        .review_receipt_digests
+                        .iter()
+                        .any(|digest| digest == &review_ref)
+            }) {
+                state.invite_consumed = true;
+                state.status = "consumed".to_owned();
+            }
+        }
+    }
+
     pub fn realm_join_policy_review_capability(&self, realm_id: &str) -> Option<String> {
         self.realm_join_policy_cell_value(realm_id)
             .map(join_policy_review_capability)
     }
 
-    /// Receipt digests of every projected application for a Realm. Used by the
-    /// read endpoint to emit one `ak.audit.accessed` per reviewer body read.
     pub fn member_application_receipts(&self, realm_id: &str) -> Vec<String> {
         self.member_applications
             .values()
@@ -282,201 +383,6 @@ impl ProjectionState {
             .collect()
     }
 
-    fn member_application_by_receipt(
-        &self,
-        realm_id: &str,
-        receipt_digest: &str,
-    ) -> Option<&MemberApplicationState> {
-        self.member_applications
-            .values()
-            .find(|state| state.realm_id == realm_id && state.receipt_digest == receipt_digest)
-    }
-
-    fn member_application_by_review(
-        &self,
-        realm_id: &str,
-        review_receipt_digest: &str,
-    ) -> Option<&MemberApplicationState> {
-        self.member_applications.values().find(|state| {
-            state.realm_id == realm_id
-                && state.review_receipt_digest.as_deref() == Some(review_receipt_digest)
-        })
-    }
-
-    /// Reducer-side projection step for the application-review sub-payloads on
-    /// an accepted `ak.member.state` event. Called from `apply_membership`
-    /// after the FSM transition is committed.
-    pub(crate) fn project_member_application(&mut self, operation: &Operation) {
-        let realm_id = operation.realm_id.as_str().to_owned();
-        let Some(member) = member_from_payload(operation).map(ToOwned::to_owned) else {
-            return;
-        };
-        if operation.payload.get("application").is_some() {
-            self.open_member_application(operation, &realm_id, &member);
-            return;
-        }
-        if let Some(review) = operation.payload.get("application_review").cloned() {
-            self.apply_member_application_review(operation, &realm_id, &review);
-            return;
-        }
-        if operation.payload.get("application_cancel").is_some()
-            && let Some(state) = self
-                .member_applications
-                .get_mut(&(realm_id.clone(), member.clone()))
-        {
-            state.status = "canceled".to_owned();
-        }
-    }
-
-    fn open_member_application(&mut self, operation: &Operation, realm_id: &str, member: &str) {
-        let application = operation
-            .payload
-            .get("application")
-            .cloned()
-            .unwrap_or(Value::Null);
-        let join_policy = self.realm_join_policy_cell_value(realm_id).cloned();
-        let ttl = join_policy
-            .as_ref()
-            .map(|policy| {
-                join_policy_duration_or(policy, "application_ttl", DEFAULT_APPLICATION_TTL)
-            })
-            .unwrap_or_else(|| Duration::hours(168));
-        let applicant_visibility = join_policy
-            .as_ref()
-            .and_then(|policy| policy.get("applicant_visibility").and_then(Value::as_str))
-            .unwrap_or("reviewer_only")
-            .to_owned();
-        let receipt_digest = application
-            .get("application_receipt_digest")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| application_receipt_digest(operation));
-        let submitted_at = operation.created_at;
-        let state = MemberApplicationState {
-            realm_id: realm_id.to_owned(),
-            applicant: member.to_owned(),
-            receipt_digest,
-            knock_ref: application
-                .get("knock_ref")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            policy_version_digest: application
-                .get("policy_version_digest")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            answers: application.get("answers").cloned().unwrap_or(Value::Null),
-            status: "awaiting_review".to_owned(),
-            accepted_by: None,
-            accepted_grant_id: None,
-            review_receipt_digest: None,
-            invite_consumed: false,
-            applicant_visibility,
-            submitted_at,
-            expires_at: submitted_at + ttl,
-        };
-        self.member_applications
-            .insert((realm_id.to_owned(), member.to_owned()), state);
-    }
-
-    fn apply_member_application_review(
-        &mut self,
-        operation: &Operation,
-        realm_id: &str,
-        review: &Value,
-    ) {
-        let Some(application_ref) = review
-            .get("application_ref")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            return;
-        };
-        let decision = review
-            .get("decision")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_owned();
-        let reviewer = review
-            .get("reviewer_did")
-            .and_then(Value::as_str)
-            .or_else(|| operation.payload.get("sender").and_then(Value::as_str))
-            .map(ToOwned::to_owned);
-        let grant_id = review
-            .get("reviewer_capability_proof")
-            .and_then(|proof| proof.get("grant_id"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned);
-        let review_receipt_digest = review
-            .get("review_receipt_digest")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| application_receipt_digest(operation));
-        let now = operation.created_at;
-
-        let Some((key, applicant)) = self
-            .member_applications
-            .iter()
-            .find(|(_, state)| {
-                state.realm_id == realm_id && state.receipt_digest == application_ref
-            })
-            .map(|(key, state)| (key.clone(), state.applicant.clone()))
-        else {
-            return;
-        };
-        if let Some(state) = self.member_applications.get_mut(&key) {
-            match decision.as_str() {
-                "accept" => {
-                    state.status = "accepted".to_owned();
-                    state.accepted_by = reviewer;
-                    state.accepted_grant_id = grant_id;
-                    state.review_receipt_digest = Some(review_receipt_digest);
-                }
-                "reject" => {
-                    state.status = "rejected".to_owned();
-                }
-                "request_changes" => {
-                    state.status = "changes_requested".to_owned();
-                }
-                _ => {}
-            }
-        }
-        if decision == "reject" {
-            self.member_application_reject_at
-                .insert((realm_id.to_owned(), applicant), now);
-        }
-    }
-
-    /// Mark the review accept cited by a `ak.invite.create` as consumed, so a
-    /// second invite cannot replay the same authorisation (§7.5 #3).
-    pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
-        if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::INVITE_CREATE)
-        {
-            return;
-        }
-        let realm_id = operation.realm_id.as_str().to_owned();
-        for review_ref in join_authorised_by_refs(operation) {
-            if let Some(key) = self
-                .member_applications
-                .iter()
-                .find(|(_, state)| {
-                    state.realm_id == realm_id
-                        && state.review_receipt_digest.as_deref() == Some(review_ref.as_str())
-                })
-                .map(|(key, _)| key.clone())
-                && let Some(state) = self.member_applications.get_mut(&key)
-            {
-                state.invite_consumed = true;
-            }
-        }
-    }
-
-    /// Read-side listing of applications for a Realm, scoped by viewer. When
-    /// the viewer does not hold `review_capability` (and is not the applicant)
-    /// the answers are redacted to honour `applicant_visibility=reviewer_only`
-    /// (§3 #2, §8.1).
     pub fn member_applications_for_viewer(
         &self,
         realm_id: &str,
@@ -488,7 +394,7 @@ impl ProjectionState {
             .values()
             .filter(|state| state.realm_id == realm_id)
             .map(|state| {
-                let effective_status = if state.is_open() && now >= state.expires_at {
+                let status = if state.is_open() && now >= state.expires_at {
                     "expired"
                 } else {
                     state.status.as_str()
@@ -497,73 +403,244 @@ impl ProjectionState {
                     || state.applicant == viewer
                     || state.applicant_visibility == "public"
                     || (state.applicant_visibility == "members_after_join"
-                        && state.status == "accepted");
+                        && matches!(state.status.as_str(), "accepted" | "consumed"));
                 MemberApplicationView {
                     applicant_did: state.applicant.clone(),
                     application_receipt_digest: state.receipt_digest.clone(),
-                    status: effective_status.to_owned(),
+                    status: status.to_owned(),
                     submitted_at: arkret_canonical::format_timestamp_canonical(state.submitted_at),
-                    answers: can_see_body.then(|| state.answers.clone()),
+                    private_body: can_see_body.then(|| state.private_body.clone()),
                     application_pending: (!can_see_body).then_some(true),
+                    latest_review_ref: state.review_receipt_digests.last().cloned(),
                 }
             })
             .collect()
     }
+
+    fn member_application_by_receipt(
+        &self,
+        realm_id: &str,
+        receipt_digest: &str,
+    ) -> Option<&MemberApplicationState> {
+        self.member_applications
+            .get(&(realm_id.to_owned(), receipt_digest.to_owned()))
+    }
+
+    fn member_application_by_review(
+        &self,
+        realm_id: &str,
+        review_receipt_digest: &str,
+    ) -> Option<&MemberApplicationState> {
+        self.member_applications.values().find(|state| {
+            state.realm_id == realm_id
+                && state
+                    .review_receipt_digests
+                    .iter()
+                    .any(|digest| digest == review_receipt_digest)
+        })
+    }
+}
+
+fn validate_application_private_body_against_policy(
+    private_body: &JoinApplicationPrivateBody,
+    join_policy: &Value,
+) -> Result<(), &'static str> {
+    let JoinApplicationPrivateBody::ServerProtected {
+        answers,
+        gate_proofs: _,
+        applicant_note: _,
+    } = private_body
+    else {
+        return Ok(());
+    };
+    let supplied = answers
+        .iter()
+        .map(|answer| answer.question_id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let required = join_policy
+        .get("gates")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|gate| gate.get("kind").and_then(Value::as_str) == Some("application_form"))
+        .flat_map(|gate| {
+            gate.get("questions")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        })
+        .filter(|question| {
+            question
+                .get("required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+        })
+        .filter_map(|question| question.get("question_id").and_then(Value::as_str));
+    if required
+        .into_iter()
+        .any(|question| !supplied.contains(question))
+    {
+        return Err("gate_check_failed");
+    }
+    Ok(())
+}
+
+fn join_policy_review_threshold(
+    state: &ProjectionState,
+    realm_id: &str,
+    join_policy: &Value,
+    reviewer: &str,
+    action: &str,
+) -> Result<usize, &'static str> {
+    match join_policy.get("reviewer_quorum") {
+        None => Ok(1),
+        Some(Value::String(value)) if value == "any" => Ok(1),
+        Some(Value::String(value)) if value == "majority" || value == "all" => {
+            let eligible = state
+                .projected_capability_holder_count(realm_id, action)
+                .max(1);
+            Ok(if value == "all" {
+                eligible
+            } else {
+                eligible / 2 + 1
+            })
+        }
+        Some(Value::Object(quorum)) => {
+            let reviewers = quorum
+                .get("reviewers")
+                .and_then(Value::as_array)
+                .ok_or("gate_check_failed")?;
+            if !reviewers.iter().any(|candidate| {
+                candidate
+                    .as_str()
+                    .is_some_and(|candidate| candidate == reviewer)
+            }) {
+                return Err("capability_denied");
+            }
+            quorum
+                .get("threshold")
+                .and_then(Value::as_u64)
+                .map(|threshold| threshold as usize)
+                .filter(|threshold| *threshold > 0)
+                .ok_or("gate_check_failed")
+        }
+        _ => Err("gate_check_failed"),
+    }
 }
 
 fn join_authorised_by_refs(operation: &Operation) -> Vec<String> {
-    let refs = join_authorised_by_refs_from_event_refs(&operation.refs);
-    if !refs.is_empty() {
-        return refs;
-    }
-    join_authorised_by_refs_from_payload(&operation.payload)
-}
-
-fn join_authorised_by_refs_from_event_refs(refs: &[arkret_wire::EventRef]) -> Vec<String> {
-    refs.iter()
+    let direct = operation
+        .refs
+        .iter()
         .filter(|reference| reference.role == "join_authorised_by")
         .filter_map(|reference| {
             let value = reference.id.trim();
             (!value.is_empty()).then(|| value.to_owned())
         })
+        .collect::<Vec<_>>();
+    if !direct.is_empty() {
+        return direct;
+    }
+    operation
+        .payload
+        .get("refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|reference| {
+            if reference.get("role").and_then(Value::as_str) != Some("join_authorised_by") {
+                return None;
+            }
+            reference
+                .get("id")
+                .or_else(|| reference.get("digest"))
+                .and_then(Value::as_str)
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+        })
         .collect()
 }
 
-fn join_authorised_by_refs_from_payload(payload: &Value) -> Vec<String> {
-    payload
-        .get("refs")
-        .and_then(Value::as_array)
-        .map(|refs| {
-            refs.iter()
-                .filter_map(|reference| {
-                    let object = reference.as_object()?;
-                    if object.get("role").and_then(Value::as_str) != Some("join_authorised_by") {
-                        return None;
-                    }
-                    object
-                        .get("id")
-                        .or_else(|| object.get("digest"))
-                        .and_then(Value::as_str)
-                        .filter(|value| !value.trim().is_empty())
-                        .map(ToOwned::to_owned)
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
+#[cfg(test)]
+mod tests {
+    use arkret_identifiers::{OperationId, RealmId};
+    use arkret_wire::EventRef;
+    use chrono::{Duration, Utc};
+    use serde_json::json;
 
-trait ReviewTtlCheck {
-    fn created_at_past_ttl(&self, state: &MemberApplicationState) -> bool;
-}
+    use super::{MemberApplicationState, ProjectionState};
 
-impl ReviewTtlCheck for Value {
-    fn created_at_past_ttl(&self, state: &MemberApplicationState) -> bool {
-        let now = self
-            .get("reviewed_at")
-            .and_then(Value::as_str)
-            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
-            .map(|value| value.with_timezone(&Utc))
-            .unwrap_or_else(Utc::now);
-        now >= state.expires_at
+    const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
+    const APPLICATION: &str =
+        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    const REVIEW_ONE: &str =
+        "sha256:1111111111111111111111111111111111111111111111111111111111111111";
+    const REVIEW_TWO: &str =
+        "sha256:2222222222222222222222222222222222222222222222222222222222222222";
+
+    fn state() -> ProjectionState {
+        let mut state = ProjectionState::new();
+        let now = Utc::now();
+        state.member_applications.insert(
+            (REALM.to_owned(), APPLICATION.to_owned()),
+            MemberApplicationState {
+                realm_id: REALM.to_owned(),
+                applicant: "did:web:applicant.example".to_owned(),
+                receipt_digest: APPLICATION.to_owned(),
+                knock_ref: "ak:event:0196419b-0000-7000-8000-000000000001".to_owned(),
+                policy_version_digest:
+                    "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+                        .to_owned(),
+                application_revision_digest:
+                    "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+                        .to_owned(),
+                private_body: json!({"mode": "server_protected", "answers": []}),
+                status: "accepted".to_owned(),
+                accepted_by: Some("did:web:reviewer.example".to_owned()),
+                accepted_grant_id: Some("ak:grant:0196419b-0000-7000-8000-000000000010".to_owned()),
+                review_receipt_digests: vec![REVIEW_ONE.to_owned(), REVIEW_TWO.to_owned()],
+                required_accept_refs: vec![REVIEW_ONE.to_owned(), REVIEW_TWO.to_owned()],
+                invite_consumed: false,
+                superseded: false,
+                applicant_visibility: "reviewer_only".to_owned(),
+                submitted_at: now,
+                expires_at: now + Duration::hours(1),
+            },
+        );
+        state
+    }
+
+    fn invite(refs: &[&str]) -> arkret_event_draft::Operation {
+        let mut operation = arkret_event_draft::Operation::create(
+            OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000020".to_owned())
+                .unwrap(),
+            RealmId::new(REALM.to_owned()).unwrap(),
+            arkret_wire::events::EventKind::INVITE_CREATE,
+            json!({}),
+        );
+        operation.refs = refs
+            .iter()
+            .map(|reference| EventRef::new(*reference, "join_authorised_by"))
+            .collect();
+        operation
+    }
+
+    #[test]
+    fn invite_requires_the_complete_unique_quorum_receipt_set() {
+        let mut state = state();
+        assert!(
+            state
+                .check_invite_join_authorisation(&invite(&[REVIEW_ONE]))
+                .is_err()
+        );
+        assert!(
+            state
+                .check_invite_join_authorisation(&invite(&[REVIEW_ONE, REVIEW_ONE]))
+                .is_err()
+        );
+        let complete = invite(&[REVIEW_TWO, REVIEW_ONE]);
+        assert!(state.check_invite_join_authorisation(&complete).is_ok());
+        state.consume_join_authorisation(&complete);
+        assert!(state.check_invite_join_authorisation(&complete).is_err());
     }
 }

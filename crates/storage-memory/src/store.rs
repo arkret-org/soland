@@ -15,21 +15,22 @@ use super::{
     MemoryDirectConversationBindingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
     MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryFederationTransactionStore,
     MemoryHandleReleaseStore, MemoryIdempotencyStore, MemoryInviteLocatorStore,
-    MemoryInviteReceivePolicyStore, MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore,
-    MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
-    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
-    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationStore,
-    MemoryPolicyDocumentStore, MemoryPresenceStore, MemoryProjectionEventStore,
-    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryReadReceiptRelayStore,
-    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmModerationPolicyStore,
-    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
-    MemoryRecoveryReceiptStore, MemoryRecoverySessionStore, MemoryRetentionPolicyStore,
-    MemoryRetentionTombstoneStore, MemoryServiceIdentityStore, MemorySessionStore,
-    MemorySidecarStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
-    MemorySyncCursorStore, MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore,
-    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
-    MultisigPendingStore, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
-    OrganizationStore, PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
+    MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore, MemoryKeyBackupStore,
+    MemoryMessageStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore,
+    MemoryModerationStore, MemoryMorphProjectionStore, MemoryMultisigPendingStore,
+    MemoryNotificationStore, MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore,
+    MemoryOrganizationStore, MemoryPolicyDocumentStore, MemoryPresenceStore,
+    MemoryProjectionEventStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
+    MemoryReadReceiptRelayStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
+    MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
+    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore,
+    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
+    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore,
+    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
+    MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore,
+    MlsWelcomeStore, ModerationStore, MorphProjectionStore, MultisigPendingStore,
+    NotificationStore, OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore,
+    PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
     PushBridgeCacheStore, PushDeviceStore, ReadReceiptRelayStore, RealmInviteStore,
     RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
     RealmOrganizationStore, RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore,
@@ -69,6 +70,7 @@ pub struct SolandMemoryPersistenceStore {
     realm_organizations: MemoryRealmOrganizationStore,
     realm_organization_statements: MemoryRealmOrganizationStatementStore,
     realm_moderation_policies: MemoryRealmModerationPolicyStore,
+    join_applications: MemoryJoinApplicationStore,
     audit: MemoryAuditStore,
     moderation: MemoryModerationStore,
     federation_operations: MemoryFederationOperationsStore,
@@ -144,6 +146,7 @@ impl SolandMemoryPersistenceStore {
             realm_organizations: MemoryRealmOrganizationStore::new(),
             realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
             realm_moderation_policies: MemoryRealmModerationPolicyStore::new(),
+            join_applications: MemoryJoinApplicationStore::new(),
             audit: MemoryAuditStore::new(),
             moderation: MemoryModerationStore::new(),
             federation_operations: MemoryFederationOperationsStore::new(),
@@ -364,6 +367,10 @@ impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersisten
 
     fn audit(&self) -> &dyn AuditStore {
         &self.audit
+    }
+
+    fn join_applications(&self) -> &dyn soland_storage::JoinApplicationStore {
+        &self.join_applications
     }
 }
 

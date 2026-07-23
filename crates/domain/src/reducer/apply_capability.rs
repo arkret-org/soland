@@ -582,6 +582,68 @@ impl ProjectionState {
         })
     }
 
+    pub fn projected_capability_grant_matches(
+        &self,
+        grant_id: &str,
+        subject: &str,
+        realm_id: &str,
+        action: &str,
+        resource: &str,
+    ) -> bool {
+        if self
+            .realm_states
+            .get(realm_id)
+            .and_then(|realm| realm.owner.as_deref())
+            .is_some_and(|owner| owner == subject)
+        {
+            return true;
+        }
+        let Some(grant) = self.effective_engine_grant(grant_id) else {
+            return false;
+        };
+        let resource_expr = self.authz_resource_expr(realm_id, resource);
+        grant.realm_id == realm_id
+            && grant.subject == subject
+            && !grant.revoked
+            && grant
+                .expires_at
+                .is_none_or(|expires_at| expires_at > chrono::Utc::now())
+            && grant.actions.iter().any(|candidate| candidate == action)
+            && crate::capability::resource_matches(&grant.resource, &resource_expr)
+    }
+
+    pub fn projected_capability_holder_count(&self, realm_id: &str, action: &str) -> usize {
+        let mut holders = std::collections::BTreeSet::new();
+        if let Some(owner) = self
+            .realm_states
+            .get(realm_id)
+            .and_then(|realm| realm.owner.as_deref())
+        {
+            holders.insert(owner.to_owned());
+        }
+        const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
+        let resource_expr = self.authz_resource_expr(realm_id, realm_id);
+        for (cell_ref, cell_state) in &self.cells {
+            let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
+                continue;
+            };
+            let Some(grant) = engine_grant_from_capability_cell_state(grant_id, cell_state) else {
+                continue;
+            };
+            if grant.realm_id == realm_id
+                && !grant.revoked
+                && grant
+                    .expires_at
+                    .is_none_or(|expires_at| expires_at > chrono::Utc::now())
+                && grant.actions.iter().any(|candidate| candidate == action)
+                && crate::capability::resource_matches(&grant.resource, &resource_expr)
+            {
+                holders.insert(grant.subject);
+            }
+        }
+        holders.len()
+    }
+
     fn validate_grant_issuer_upper_bound(&self, operation: &Operation) -> Result<(), &'static str> {
         if let Some(parent_grant_id) = grant_parent_ref(&operation.payload) {
             return self.validate_delegated_grant_issuer_upper_bound(operation, parent_grant_id);

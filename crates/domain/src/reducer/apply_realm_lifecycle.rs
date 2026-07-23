@@ -280,7 +280,6 @@ impl ProjectionState {
         // join-policy.md §7 — project the candidate profile-private
         // application / review / cancel sub-payloads carried on this
         // `ak.member.state` event into the application-review workflow cache.
-        self.project_member_application(operation);
 
         ProjectionEffect::MembershipChanged {
             realm_id,

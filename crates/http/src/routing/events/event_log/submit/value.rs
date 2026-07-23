@@ -650,21 +650,10 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            // join-policy.md §3 / §7 / §12 — application-review workflow
-            // anti-abuse limits (cooldown_after_reject, application_ttl,
-            // max_open_applications_per_actor) and review-decision
-            // preconditions for the candidate profile-private payloads.
-            if let Err(reason) = proj.check_membership_application_admission(operation) {
-                return Err(SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    reason,
-                    reason,
-                ));
-            }
             // join-policy.md §7.5 — `ak.invite.create` with
             // `refs[role="join_authorised_by"]` MUST bind to a fresh,
-            // unconsumed review accept whose reviewer still holds
-            // `review_capability`.
+            // unconsumed review accept set. Each accepted review remains
+            // valid at its own authorization basis after later revocation.
             if let Err(reason) = proj.check_invite_join_authorisation(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

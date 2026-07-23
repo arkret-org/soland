@@ -181,6 +181,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         service_type: arkret_wire::ServiceType::DirectoryService,
         protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
+        profile_bindings: Default::default(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS
             .iter()
             .map(|operation| (*operation).to_owned())

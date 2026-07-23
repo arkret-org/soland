@@ -55,7 +55,7 @@ pub(super) fn invite_create_actor_is_inviter(
 /// In both cases the applicant is not yet a member, so the generic
 /// `realm_has_member` gate would wrongly reject the entry. The actual
 /// join-policy gate / review enforcement runs in
-/// `check_membership_join_admission` / `check_membership_application_admission`
+/// `check_membership_join_admission`
 /// later in the submit pipeline, not here.
 pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
     if object.get("kind").and_then(Value::as_str)

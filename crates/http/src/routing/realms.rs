@@ -36,8 +36,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::projection::{
-    MemberApplicationReadModel, RealmLinkReadModel as RealmLinkState, check_realm_link_admissible,
-    effective_policy_for_realm,
+    RealmLinkReadModel as RealmLinkState, check_realm_link_admissible, effective_policy_for_realm,
 };
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
@@ -53,6 +52,7 @@ use crate::state::AppState;
 /// operations live here — every URL has an `operation-registry.json` entry.
 pub(crate) fn router() -> Router {
     Router::with_path("realms")
+        .push(super::join_applications::router())
         .push(
             Router::with_path("{realm_id}/links")
                 .get(list_realm_links)
@@ -60,19 +60,6 @@ pub(crate) fn router() -> Router {
         )
         .push(Router::with_path("{realm_id}/links/{target_realm_id}").delete(delete_realm_link))
         .push(Router::with_path("{realm_id}/effective-policy").get(get_effective_policy))
-}
-
-/// Product-local realm routes, mounted under `/_soland/self/realms/...`.
-///
-/// Hosts the join-policy member-application read surface. `member.application`
-/// is a spec **candidate** workflow concept (`governance/join-policy.md` §7.2,
-/// `conformance/schema-registry.md:178`) that MUST NOT use the `ak.*` prefix or
-/// occupy the `/_arkret/...` protocol root before formal registration. It is
-/// gated behind the `ak.profile.candidate.join_policy.v1` profile and uses the
-/// reverse-domain `org.arkret.soland.*` operation namespace.
-pub(crate) fn local_router() -> Router {
-    Router::with_path("realms")
-        .push(Router::with_path("{realm_id}/applications").get(list_member_applications))
 }
 
 fn stored_realm_id(field: &str, value: &str) -> Result<RealmId, AppError> {
@@ -153,133 +140,6 @@ pub(crate) async fn list_realm_links(
         realm_id,
         direction: direction_enum,
         links: entries,
-    })
-}
-
-/// A single member-application entry in the join-policy read surface.
-///
-/// Reviewers (holders of the policy `review_capability`, the Realm owner, or
-/// the applicant themselves) see the full `answers`; other callers see only the
-/// `application_pending` placeholder, honouring `applicant_visibility=reviewer_only`
-/// (join-policy.md §3 #2, §8.1). Exactly one of `answers` / `application_pending`
-/// is present per entry.
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct MemberApplicationEntry {
-    /// DID of the applicant.
-    pub applicant_did: String,
-    /// Canonical receipt digest of the application record.
-    pub application_receipt_digest: String,
-    /// Effective application status (`open` / `accepted` / `rejected` /
-    /// `cancelled` / `expired`).
-    pub status: String,
-    /// RFC 3339 submission timestamp.
-    pub submitted_at: String,
-    /// Applicant-supplied answers, present only when the viewer is authorised
-    /// to read the application body.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub answers: Option<Value>,
-    /// Placeholder flag (`true`) shown to viewers who may not read the body.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub application_pending: Option<bool>,
-}
-
-impl From<MemberApplicationReadModel> for MemberApplicationEntry {
-    fn from(value: MemberApplicationReadModel) -> Self {
-        Self {
-            applicant_did: value.applicant_did,
-            application_receipt_digest: value.application_receipt_digest,
-            status: value.status,
-            submitted_at: value.submitted_at,
-            answers: value.answers,
-            application_pending: value.application_pending,
-        }
-    }
-}
-
-/// Outcome of the product-local member-application listing
-/// (`org.arkret.soland.member_application.query.list`).
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct MemberApplicationListOutcome {
-    /// The Realm the applications are scoped to.
-    pub realm_id: RealmId,
-    /// Whether the viewer holds the join-policy `review_capability`.
-    pub viewer_is_reviewer: bool,
-    /// The viewer-scoped application entries.
-    pub applications: Vec<MemberApplicationEntry>,
-}
-
-/// join-policy.md §7 / §9 — list the Realm's member applications scoped to the
-/// viewer. `member.application` is a spec **candidate** concept (§7.2,
-/// schema-registry.md:178): it MUST stay off the `/_arkret/...` protocol root and
-/// the `ak.*` namespace until formally registered, so this read surface lives on
-/// the product-local `/_soland/self/realms/{realm_id}/applications` URL under the
-/// reverse-domain `org.arkret.soland.*` namespace and is fail-closed (404) unless
-/// the deployment declares `ak.profile.candidate.join_policy.v1`. Each reviewer
-/// read of an application body is logged as `ak.audit.accessed` (§8.1).
-#[handler]
-#[tracing::instrument(
-    skip_all,
-    fields(op = "org.arkret.soland.member_application.query.list")
-)]
-async fn list_member_applications(
-    aa: AuthArgs,
-    realm_id: PathParam<String>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<MemberApplicationListOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    // Fail-closed unless the candidate join-policy profile is declared:
-    // surface a canonical 404 so the candidate read surface is indistinguishable
-    // from an unrecognised endpoint when the profile is off.
-    if !state.settings().candidate_join_policy_enabled {
-        return Err(AppError::not_found("unrecognized_endpoint"));
-    }
-    let session = aa.authenticated_session(state, req).await?;
-    let realm_id = RealmId::new(realm_id.into_inner())
-        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
-    let viewer = session.actor.clone();
-    let (applications, viewer_is_reviewer, receipts) = {
-        let projection = state.projection_application().snapshot();
-        let review_capability = projection
-            .realm_join_policy_review_capability(realm_id.as_str())
-            .unwrap_or_else(|| "ak.realm.join.review".to_owned());
-        let viewer_is_reviewer = projection.issuer_has_projected_capability(
-            &viewer,
-            realm_id.as_str(),
-            &review_capability,
-            realm_id.as_str(),
-        );
-        let applications = projection
-            .member_applications_for_viewer(realm_id.as_str(), &viewer, viewer_is_reviewer)
-            .into_iter()
-            .map(MemberApplicationEntry::from)
-            .collect();
-        let receipts = projection.member_application_receipts(realm_id.as_str());
-        (applications, viewer_is_reviewer, receipts)
-    };
-    // §8.1 — write one `ak.audit.accessed` per reviewer body read.
-    if viewer_is_reviewer {
-        for receipt_digest in receipts {
-            super::admin::audit::append_audit_log(
-                state,
-                Some(&viewer),
-                arkret_wire::events::EventKind::AUDIT_ACCESSED,
-                json!({
-                    "access_kind": "join_application_review",
-                    "realm_id": realm_id.as_str(),
-                    "application_receipt_digest": receipt_digest,
-                    "writer_did": viewer.clone(),
-                    "purpose": "join_application_review",
-                }),
-                "accepted",
-            )
-            .await;
-        }
-    }
-    json_ok(MemberApplicationListOutcome {
-        realm_id,
-        viewer_is_reviewer,
-        applications,
     })
 }
 

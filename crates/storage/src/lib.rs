@@ -38,6 +38,7 @@ mod idempotency;
 #[doc(hidden)]
 pub mod ids;
 mod invite_locators;
+mod join_applications;
 mod key_backup;
 mod mls;
 mod moderation;
@@ -69,6 +70,7 @@ pub use federation::*;
 pub use governance::*;
 pub use idempotency::*;
 pub use invite_locators::*;
+pub use join_applications::*;
 pub use key_backup::*;
 pub use mls::*;
 pub use moderation::*;
@@ -148,6 +150,7 @@ pub trait FederationGovernanceStoreRegistry: Send + Sync {
     fn realm_organization_statements(&self) -> &dyn RealmOrganizationStatementStore;
     fn realm_moderation_policies(&self) -> &dyn RealmModerationPolicyStore;
     fn audit(&self) -> &dyn AuditStore;
+    fn join_applications(&self) -> &dyn JoinApplicationStore;
 }
 
 /// Delivery, policy, recovery, and service identity persistence registry.

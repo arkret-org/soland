@@ -17,6 +17,7 @@ use crate::identity::{
     ServiceRegistrationCommitResult,
 };
 use crate::jobs::RuntimeHealthPort;
+use crate::join_applications::JoinApplicationApplicationService;
 use crate::persistence_delivery::build_persistence_delivery_application;
 use crate::persistence_events::{
     PersistenceEventApplications, build_persistence_event_applications,
@@ -225,6 +226,10 @@ impl PersistenceHandle {
             runtime_health,
             sync_cursor_hmac_key,
         )
+    }
+
+    pub fn join_application_service(&self) -> JoinApplicationApplicationService {
+        JoinApplicationApplicationService::new(self.persistence.clone())
     }
 
     pub async fn hydrate_realm_directory(&self, local_service_id: &str) -> RealmDirectoryIndex {

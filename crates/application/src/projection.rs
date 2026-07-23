@@ -18,7 +18,7 @@ use soland_domain::reducer::{
     AppletProjection, FanoutPeerStatus, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect,
     ProjectionState, SolandMembershipState, SolandRealmState,
 };
-use soland_storage::{PersistenceResult, PersistenceStore};
+use soland_storage::{JoinApplicationRecord, PersistenceResult, PersistenceStore};
 
 use crate::authorization::{
     AuthorizationApplicationService, RealmPolicyServerConfig, RealmPolicyServerConfigView,
@@ -667,6 +667,20 @@ impl ProjectionApplicationService {
     #[must_use]
     pub fn snapshot(&self) -> ProjectionState {
         self.state.lock().clone()
+    }
+
+    pub fn install_join_application_record(&self, record: &JoinApplicationRecord) {
+        self.state.lock().install_private_join_application(
+            &record.receipt,
+            &record.private_body,
+            &record.status,
+            &record.reviews,
+            &record.required_accept_refs,
+            record.superseded_by.as_ref(),
+            record.invite_consumed,
+            record.applicant_visibility.clone(),
+            record.expires_at,
+        );
     }
 
     pub fn realm_policy_server_config(

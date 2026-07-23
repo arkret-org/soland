@@ -951,6 +951,7 @@ pub fn describe(
             profiles.push("ak.profile.accountable_principals.strict_reject.v1".to_owned());
             profiles
         },
+        profile_bindings: Default::default(),
         plaintext_visibility,
         implemented_features: implemented_features_seed,
         claimed_profiles,

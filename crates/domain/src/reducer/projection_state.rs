@@ -282,15 +282,10 @@ pub struct ProjectionState {
     /// by the `erasure_receipts_endpoint` server-describe surface and
     /// by `apply_audit_erasure_receipt_dispatch`.
     pub erasure_receipts: Vec<ErasureReceiptRecord>,
-    /// Join-policy application-review workflow projection keyed by
-    /// `(realm_id, applicant_did)`. Spec
-    /// `governance/join-policy.md` §7. The application / review / cancel
-    /// records are candidate profile-private payloads carried on the
-    /// active `ak.member.state` event under the `application` /
-    /// `application_review` / `application_cancel` sub-objects; this cache
-    /// tracks the open application state, its TTL deadline, the reviewer
-    /// accept receipt digest (for the `join_authorised_by` ref binding),
-    /// and the `applicant_visibility` floor so reads can be scoped.
+    /// Rebuildable mirror of profile-private join-application records, keyed
+    /// by `(realm_id, application_receipt_digest)`. The durable private store,
+    /// not shared Event history, owns application/review/cancel receipts and
+    /// bodies.
     pub member_applications: BTreeMap<(String, String), MemberApplicationState>,
     /// Per-`(realm_id, applicant_did)` reject cooldown anchor. Spec
     /// `governance/join-policy.md` §3 `cooldown_after_reject` / §12:

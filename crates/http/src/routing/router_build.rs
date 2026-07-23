@@ -263,13 +263,7 @@ fn soland_local_router() -> Router {
                 .push(access::product_router())
                 // Organization governance CRUD is deployment-local product
                 // state; it must not occupy the `ak.self.*` protocol surface.
-                .push(organizations::router())
-                // Join-policy candidate member-application read surface
-                // (`/_soland/self/realms/{realm_id}/applications`). `member.application`
-                // is a spec candidate concept that must stay off the protocol root;
-                // the handler is fail-closed (404) unless the
-                // `ak.profile.candidate.join_policy.v1` profile is declared.
-                .push(realms::local_router()),
+                .push(organizations::router()),
         )
         // `/_soland/find/directory/*` mirror retired — directory
         // discovery is served only from the canonical `/_arkret/find/...`

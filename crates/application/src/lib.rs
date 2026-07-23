@@ -8,6 +8,7 @@ pub mod governance;
 pub mod hydration;
 pub mod identity;
 pub mod jobs;
+pub mod join_applications;
 pub mod operation_semantics;
 pub mod persistence;
 #[doc(hidden)]

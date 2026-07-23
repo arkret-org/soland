@@ -73,6 +73,7 @@ mod federation;
 mod governance;
 mod idempotency;
 mod invite_locators;
+mod join_applications;
 mod key_backup;
 mod mls;
 mod moderation;
@@ -123,6 +124,7 @@ pub(crate) use governance::{
 };
 pub(crate) use idempotency::MemoryIdempotencyStore;
 pub(crate) use invite_locators::MemoryInviteLocatorStore;
+pub(crate) use join_applications::MemoryJoinApplicationStore;
 pub(crate) use key_backup::MemoryKeyBackupStore;
 pub(crate) use mls::{MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore};
 pub(crate) use moderation::MemoryModerationStore;

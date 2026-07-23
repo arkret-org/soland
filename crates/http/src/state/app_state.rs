@@ -41,6 +41,7 @@ use soland_application::identity::{
     SessionApplicationService,
 };
 use soland_application::jobs::{JobsApplicationService, RuntimeHealthPort};
+use soland_application::join_applications::JoinApplicationApplicationService;
 use soland_application::persistence::PersistenceHandle;
 use soland_application::persistence_events::PersistenceEventApplications;
 use soland_application::persistence_identity::PersistenceIdentityApplications;
@@ -106,6 +107,7 @@ pub struct AppState {
     governance_application: GovernanceApplicationService,
     sync_application: SyncApplicationService,
     jobs_application: JobsApplicationService,
+    join_application_service: JoinApplicationApplicationService,
     projection_application: ProjectionApplicationService,
     authorization_application: AuthorizationApplicationService,
     realm_directory_application: RealmDirectoryApplicationService,
@@ -747,6 +749,7 @@ impl AppState {
             runtime_health,
             sync_cursor_hmac_key,
         );
+        let join_application_service = persistence.join_application_service();
         federation_application.install_sovereign_state(SovereignDeploymentState {
             upstream_available: true,
             ..Default::default()
@@ -784,6 +787,7 @@ impl AppState {
             governance_application,
             sync_application,
             jobs_application,
+            join_application_service,
             projection_application,
             realm_directory_application,
             account_registration_policy: Arc::new(Mutex::new(AccountRegistrationPolicy::default())),
@@ -915,6 +919,10 @@ impl AppState {
         &self.jobs_application
     }
 
+    pub(crate) fn join_application_service(&self) -> &JoinApplicationApplicationService {
+        &self.join_application_service
+    }
+
     pub(crate) fn projection_application(&self) -> &ProjectionApplicationService {
         &self.projection_application
     }
@@ -1006,14 +1014,49 @@ impl AppState {
                 .filter_map(|entry| RealmId::new(entry.realm_id.to_string()).ok())
                 .collect()
         };
+        // Install profile-private join records before replaying Realm Events.
+        // Historical invite.create reducers can then consume their cited
+        // review receipts without ever placing the private body in Event
+        // history.
+        for realm_id in &hydrated_realm_ids {
+            for record in self
+                .join_application_service
+                .list(realm_id.as_str(), chrono::Utc::now())
+                .await?
+            {
+                self.projection_application
+                    .install_join_application_record(&record);
+            }
+        }
         self.persistence
             .hydrate_projection(
                 &self.projection_application,
                 &self.authorization_application,
                 &RuntimeHydrationProjectionAdapter,
-                hydrated_realm_ids,
+                hydrated_realm_ids.clone(),
             )
             .await?;
+        // Reconcile the durable consumed flag after a crash between Event
+        // acceptance and the private-store mirror. The operation is
+        // idempotent for records already marked consumed.
+        for record in self.event_query_application.canonical_events().await? {
+            if record.kind != arkret_wire::events::EventKind::INVITE_CREATE {
+                continue;
+            }
+            let Some(operation) =
+                crate::routing::events::event_log::projection_operation_from_canonical_record(
+                    &record,
+                )
+            else {
+                continue;
+            };
+            crate::routing::events::projection::mirror_join_authorisation_consumption(
+                self,
+                &record.actor_id,
+                &operation,
+            )
+            .await;
+        }
 
         // Hydrate per-subject invite_receive_policy overrides into the
         // application-owned working projection.

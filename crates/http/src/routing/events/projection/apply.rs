@@ -276,6 +276,72 @@ pub async fn project_accepted_operations(state: &AppState, origin: &str, operati
     project_accepted_operations_inner(state, origin, "", operations, None).await;
 }
 
+pub async fn mirror_join_authorisation_consumption(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+) {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+    {
+        return;
+    }
+    let mut refs = operation
+        .refs
+        .iter()
+        .filter(|reference| reference.role == "join_authorised_by")
+        .filter_map(|reference| {
+            let value = reference.id.trim();
+            (!value.is_empty()).then(|| value.to_owned())
+        })
+        .collect::<Vec<_>>();
+    if refs.is_empty() {
+        refs = operation
+            .payload
+            .get("refs")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter(|reference| {
+                reference.get("role").and_then(serde_json::Value::as_str)
+                    == Some("join_authorised_by")
+            })
+            .filter_map(|reference| {
+                reference
+                    .get("id")
+                    .or_else(|| reference.get("digest"))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.trim().is_empty())
+                    .map(ToOwned::to_owned)
+            })
+            .collect();
+    }
+    if refs.is_empty() {
+        return;
+    }
+    match state
+        .join_application_service()
+        .consume_review_authorisations(
+            operation.realm_id.as_str(),
+            &refs,
+            origin,
+            operation.created_at,
+        )
+        .await
+    {
+        Ok(true) => {}
+        Ok(false) => tracing::error!(
+            operation_id = %operation.operation_id,
+            "accepted invite could not consume its private join authorization"
+        ),
+        Err(error) => tracing::error!(
+            operation_id = %operation.operation_id,
+            %error,
+            "failed to persist private join-authorization consumption"
+        ),
+    }
+}
+
 pub async fn project_trusted_sidecar_member_operation(
     state: &AppState,
     controller: &str,
@@ -434,6 +500,7 @@ async fn project_accepted_operations_inner(
             // (no longer written directly by HTTP handlers).
             refresh_authz_index_from_capability_effect(state, &effect);
         }
+        mirror_join_authorisation_consumption(state, origin, operation).await;
         // Write through Space-container/Strand/Morph projection changes to durable
         // persistence. Captures the in-memory projection snapshot
         // (under lock), then upserts to persistence after releasing the
