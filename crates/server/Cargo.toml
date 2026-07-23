@@ -47,7 +47,6 @@ ed25519-dalek = {workspace = true}
 futures-util = {workspace = true}
 hex = {workspace = true}
 hmac = {workspace = true}
-metrics = {workspace = true}
 object_store = {workspace = true,features = ["aws"]}
 opentelemetry = {workspace = true,default-features = false,features = ["trace"],optional = true}
 opentelemetry-otlp = {workspace = true,default-features = false,features = ["trace", "grpc-tonic"],optional = true}

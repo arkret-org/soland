@@ -301,24 +301,54 @@ impl MemberIdentityRegistry {
                 .then_with(|| a.event_id.cmp(&b.event_id))
         });
 
-        let effective_entries: Vec<EffectiveIdentityEntry> = effective
+        let effective: Vec<(&MemberIdentityEventRecord, EffectiveIdentityEntry)> = effective
             .iter()
-            .map(|r| {
-                Some(EffectiveIdentityEntry {
-                    event_id: arkret_identifiers::EventId::new(r.event_id.clone()).ok()?,
+            .filter_map(|record| {
+                let event_id = match arkret_identifiers::EventId::new(record.event_id.clone()) {
+                    Ok(event_id) => event_id,
+                    Err(error) => {
+                        tracing::warn!(
+                            event_id = %record.event_id,
+                            %error,
+                            "skipping corrupt member-identity record with invalid event id"
+                        );
+                        return None;
+                    }
+                };
+                let payload_digest =
+                    match arkret_identifiers::Hash::new(record.payload_digest.clone()) {
+                        Ok(payload_digest) => payload_digest,
+                        Err(error) => {
+                            tracing::warn!(
+                                event_id = %record.event_id,
+                                payload_digest = %record.payload_digest,
+                                %error,
+                                "skipping corrupt member-identity record with invalid payload digest"
+                            );
+                            return None;
+                        }
+                    };
+                Some((
+                    *record,
+                    EffectiveIdentityEntry {
+                    event_id,
                     segment: arkret_models_identity::member_identity::MemberIdentitySegment::MemberIdentity,
-                    payload_digest: arkret_identifiers::Hash::new(r.payload_digest.clone()).ok()?,
-                })
+                    payload_digest,
+                },
+                ))
             })
-            .collect::<Option<Vec<_>>>()?;
+            .collect();
+        let effective_entries: Vec<EffectiveIdentityEntry> =
+            effective.iter().map(|(_, entry)| entry.clone()).collect();
 
         // ROST-SOL-2 (R3.2) — read the disclosed `subject_id` from the
         // first effective plaintext `MemberIdentity` carrier. Encrypted
         // carriers do not expose it; `None` then. Disclosure gating
         // (whether to actually emit it on the wire) is enforced at the
         // sync layer per Realm policy.
-        let subject_id = effective.iter().find_map(|r| {
-            r.raw_event
+        let subject_id = effective.iter().find_map(|(record, _)| {
+            record
+                .raw_event
                 .get("payload")
                 .and_then(|payload| payload.get("identity_payload"))
                 .and_then(|carrier| carrier.get("member_identity"))
@@ -339,11 +369,17 @@ impl MemberIdentityRegistry {
             display_state_digest(realm_id, actor_id, &effective_entries, &[]);
 
         Some(MemberIdentitySnapshot {
-            identity_event_ids: effective.iter().map(|r| r.event_id.clone()).collect(),
+            identity_event_ids: effective
+                .iter()
+                .map(|(record, _)| record.event_id.clone())
+                .collect(),
             effective_entries,
             member_display_state_digest,
             subject_id,
-            identity_events: effective.iter().map(|r| r.raw_event.clone()).collect(),
+            identity_events: effective
+                .iter()
+                .map(|(record, _)| record.raw_event.clone())
+                .collect(),
         })
     }
 }
@@ -448,5 +484,58 @@ fn canonical_digest(
             tracing::warn!(%err, %realm_id, %actor_id, %label, "member identity digest canonicalization failed");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn corrupt_record_is_skipped_without_hiding_valid_snapshot_entries() {
+        let subject = MemberIdentitySubjectKey {
+            realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            actor_id: "did:web:alice.example".to_owned(),
+            segment: "member_identity".to_owned(),
+        };
+        let mut registry = MemberIdentityRegistry::new();
+        for (event_id, payload_digest) in [
+            (
+                "not-an-event-id",
+                "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            ),
+            (
+                "ak:event:01904100-0000-7000-8000-000000000002",
+                "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            ),
+        ] {
+            registry.insert(MemberIdentityEventRecord {
+                event_id: event_id.to_owned(),
+                subject: subject.clone(),
+                payload_digest: payload_digest.to_owned(),
+                replaces: Vec::new(),
+                raw_event: json!({
+                    "payload": {
+                        "identity_payload": {
+                            "member_identity": {
+                                "subject_id": "did:web:alice.example"
+                            }
+                        }
+                    }
+                }),
+            });
+        }
+
+        let snapshot = registry
+            .snapshot_for_actor(&subject.realm_id, &subject.actor_id)
+            .expect("the valid record should still produce a snapshot");
+        assert_eq!(
+            snapshot.identity_event_ids,
+            ["ak:event:01904100-0000-7000-8000-000000000002"]
+        );
+        assert_eq!(snapshot.effective_entries.len(), 1);
+        assert_eq!(snapshot.identity_events.len(), 1);
     }
 }

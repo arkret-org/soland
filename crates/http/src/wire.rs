@@ -462,11 +462,7 @@ pub struct DevLoginRequestBody {
     pub display_name: Option<String>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-pub struct LogoutOutcome {
-    pub ok: bool,
-    pub revoked: bool,
-}
+pub type LogoutOutcome = arkret_models_identity::AccountLogoutOutcome;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SolandAccountRegisterOutcome {
@@ -1323,6 +1319,7 @@ pub fn describe(
         snapshot_frontier: Vec::new(),
         reducer_profile: Some("ak.reducer.v1".to_owned()),
         last_materialized_at: None,
+        extensions: Default::default(),
     }
 }
 

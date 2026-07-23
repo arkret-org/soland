@@ -20,6 +20,7 @@ use std::collections::BTreeMap;
 use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
 use arkret_models_collaboration::governance::realm_lifecycle::RealmDestroyPayload;
+use arkret_wire::JoinRule;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -64,7 +65,7 @@ pub(super) struct AdminRealmItem {
     topic: Option<String>,
     category: Option<String>,
     realm_class: Option<String>,
-    default_join_rule: Option<String>,
+    default_join_rule: Option<JoinRule>,
     tags: Vec<String>,
     public: bool,
     member_count: usize,
@@ -222,7 +223,7 @@ pub(super) struct AdminCreateRealmRequestBody {
     #[serde(default)]
     discoverability: Option<String>,
     #[serde(default, rename = "default_join_rule")]
-    default_join_rule: Option<String>,
+    default_join_rule: Option<JoinRule>,
     #[serde(default)]
     is_encrypted: bool,
     realm_class: String,
@@ -273,7 +274,7 @@ pub(super) async fn admin_create_realm(
         "title": title,
         "summary": body.topic.filter(|value| !value.trim().is_empty()),
         "default_discoverability": discoverability,
-        "default_join_rule": body.default_join_rule.unwrap_or_else(|| "invite".to_owned()),
+        "default_join_rule": body.default_join_rule.unwrap_or(JoinRule::Invite),
         "history_visibility": "joined",
         "encryption_profile": if body.is_encrypted { "mls_rfc9420" } else { "plaintext" },
         "realm_class": body.realm_class,
@@ -474,7 +475,9 @@ async fn admin_realm_item_value(
         topic: realm.description,
         category: realm.category,
         realm_class: realm.realm_class,
-        default_join_rule: realm.default_join_rule,
+        default_join_rule: realm
+            .default_join_rule
+            .and_then(|value| serde_json::from_value(Value::String(value)).ok()),
         tags: realm.tags.into_iter().collect(),
         public: realm.public,
         member_count: realm.members.len(),

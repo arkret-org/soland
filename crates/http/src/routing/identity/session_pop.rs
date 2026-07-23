@@ -126,11 +126,12 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
                 "PoP Content-Digest does not match exact request bytes: {error}"
             ))
         })?;
-        arkret_canonical::validate_canonical_bytes(&body).map_err(|error| {
-            AppError::unauthenticated(format!(
-                "PoP-signed request body is not canonical JSON: {error}"
-            ))
-        })?;
+        arkret_signatures::http_signature::validate_signed_canonical_json_body(false, &body)
+            .map_err(|error| {
+                AppError::unauthenticated(format!(
+                    "PoP-signed request body is not canonical JSON: {error}"
+                ))
+            })?;
     }
 
     let method = req.method().as_str().to_owned();

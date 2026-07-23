@@ -58,7 +58,7 @@ pub fn validate_canonical_json_body(
     body_bytes: &[u8],
     canonical_error: impl FnOnce(String) -> AppError,
 ) -> Result<(), AppError> {
-    arkret_canonical::validate_canonical_bytes(body_bytes)
+    arkret_signatures::http_signature::validate_signed_canonical_json_body(false, body_bytes)
         .map_err(|error| canonical_error(error.to_string()))
 }
 
@@ -66,10 +66,11 @@ pub fn reject_content_encoding(
     req: &Request,
     encoded_error: impl FnOnce() -> AppError,
 ) -> Result<(), AppError> {
-    if req.headers().contains_key("content-encoding") {
-        return Err(encoded_error());
-    }
-    Ok(())
+    arkret_signatures::http_signature::validate_signed_canonical_json_body(
+        req.headers().contains_key("content-encoding"),
+        b"{}",
+    )
+    .map_err(|_| encoded_error())
 }
 
 pub fn required_header(

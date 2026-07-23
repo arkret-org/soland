@@ -37,7 +37,7 @@ pub(super) fn router() -> Router {
 
 // Deployment-local server-to-server product surface, mounted under the
 // `/_soland/root/...` negative-space root (NOT the `/_arkret/*` protocol
-// root). Per service-http-binding.md §2.1.3(b), a product / deployment-private
+// root). Per service-http-binding.md §2.1.4(b), a product / deployment-private
 // capability between the Auth Server (coauth) and this Principal Server MUST
 // live on the implementation's own root and MUST NOT occupy a `/_arkret/*`
 // production trust-surface segment. coauth issues this fanout in its Auth-Server

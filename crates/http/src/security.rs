@@ -1,4 +1,6 @@
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, ToSocketAddrs};
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+#[cfg(test)]
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::time::Duration;
 
 use reqwest::Url;
@@ -140,22 +142,16 @@ fn resolve_and_validate_url_for_egress(
     purpose: &str,
     allow_private_networks: bool,
 ) -> Result<Vec<SocketAddr>, String> {
-    match url.scheme() {
-        "http" | "https" => {}
-        scheme => return Err(format!("{purpose}: URL scheme {scheme:?} is not allowed")),
-    }
+    let policy = outbound_policy(allow_private_networks);
+    policy
+        .validate_url(url)
+        .map_err(|error| format!("{purpose}: {error}"))?;
     let host = url
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
     validate_sovereign_enclave_host_policy(host, purpose)?;
     validate_host_policy(host, purpose)?;
-    if !allow_private_networks
-        && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
-    {
-        return Err(format!("{purpose}: localhost egress target is not allowed"));
-    }
-
     let port = url.port_or_known_default().unwrap_or(443);
     let addrs: Vec<SocketAddr> = if let Ok(ip) = host.parse::<IpAddr>() {
         vec![SocketAddr::new(ip, port)]
@@ -165,12 +161,9 @@ fn resolve_and_validate_url_for_egress(
             .map_err(|error| format!("{purpose}: DNS resolution for {host} failed: {error}"))?
             .collect()
     };
-    if addrs.is_empty() {
-        return Err(format!("{purpose}: DNS resolution returned no addresses"));
-    }
-    for addr in &addrs {
-        validate_ip_for_egress(addr.ip(), purpose, allow_private_networks)?;
-    }
+    policy
+        .validate_resolved_addresses(&addrs)
+        .map_err(|error| format!("{purpose}: {error}"))?;
     Ok(addrs)
 }
 
@@ -183,30 +176,28 @@ fn validate_url_for_egress_with_resolver<F>(
 where
     F: FnMut(&str, u16) -> Result<Vec<IpAddr>, String>,
 {
-    match url.scheme() {
-        "http" | "https" => {}
-        scheme => return Err(format!("{purpose}: URL scheme {scheme:?} is not allowed")),
-    }
+    let policy = outbound_policy(allow_private_networks);
+    policy
+        .validate_url(url)
+        .map_err(|error| format!("{purpose}: {error}"))?;
     let host = url
         .host_str()
         .filter(|host| !host.trim().is_empty())
         .ok_or_else(|| format!("{purpose}: URL host is required"))?;
     validate_sovereign_enclave_host_policy(host, purpose)?;
     validate_host_policy(host, purpose)?;
-    if !allow_private_networks
-        && (host.eq_ignore_ascii_case("localhost") || host.ends_with(".localhost"))
-    {
-        return Err(format!("{purpose}: localhost egress target is not allowed"));
-    }
     if let Ok(ip) = host.parse::<IpAddr>() {
         return validate_ip_for_egress(ip, purpose, allow_private_networks);
     }
 
     let port = url.port_or_known_default().unwrap_or(443);
-    for ip in resolve_host(host, port)? {
-        validate_ip_for_egress(ip, purpose, allow_private_networks)?;
-    }
-    Ok(())
+    let addresses = resolve_host(host, port)?
+        .into_iter()
+        .map(|ip| SocketAddr::new(ip, port))
+        .collect::<Vec<_>>();
+    policy
+        .validate_resolved_addresses(&addresses)
+        .map_err(|error| format!("{purpose}: {error}"))
 }
 
 fn record_egress_denial(url: &Url, purpose: &str, error: &str) {
@@ -300,76 +291,21 @@ fn federation_target_denied_with_entries(
     })
 }
 
-fn validate_resolved_ip(ip: IpAddr, purpose: &str) -> Result<(), String> {
-    if let Some(reason) = blocked_ip_reason(ip) {
-        return Err(format!(
-            "{purpose}: egress target resolved to {reason} address {ip}"
-        ));
-    }
-    Ok(())
-}
-
 fn validate_ip_for_egress(
     ip: IpAddr,
     purpose: &str,
     allow_private_networks: bool,
 ) -> Result<(), String> {
-    if let Some(reason) = hard_blocked_ip_reason(ip) {
-        return Err(format!(
-            "{purpose}: egress target resolved to {reason} address {ip}"
-        ));
-    }
-    if !allow_private_networks {
-        validate_resolved_ip(ip, purpose)?;
-    }
-    Ok(())
+    outbound_policy(allow_private_networks)
+        .validate_ip(ip)
+        .map_err(|error| format!("{purpose}: {error}"))
 }
 
-fn blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
-    match ip {
-        IpAddr::V4(ip) => blocked_ipv4_reason(ip),
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ipv4_mapped(ip) {
-                return blocked_ipv4_reason(v4);
-            }
-            if let Some((_, v4)) = ipv4_embedded_transition(ip) {
-                return blocked_ipv4_reason(v4);
-            }
-            blocked_ipv6_reason(ip)
-        }
-    }
-}
-
-fn hard_blocked_ip_reason(ip: IpAddr) -> Option<&'static str> {
-    match ip {
-        IpAddr::V4(ip) => {
-            let [a, b, c, d] = ip.octets();
-            if a == 169 && b == 254 && c == 169 && d == 254 {
-                Some("cloud_metadata")
-            } else if a == 169 && b == 254 {
-                Some("link_local")
-            } else {
-                None
-            }
-        }
-        IpAddr::V6(ip) => {
-            if let Some(v4) = ipv4_mapped(ip) {
-                return hard_blocked_ip_reason(IpAddr::V4(v4));
-            }
-            if let Some((_, v4)) = ipv4_embedded_transition(ip)
-                && let Some(reason) = hard_blocked_ip_reason(IpAddr::V4(v4))
-            {
-                return Some(reason);
-            }
-            let segments = ip.segments();
-            if (segments[0] & 0xfe00) == 0xfc00 {
-                Some("private_network")
-            } else if (segments[0] & 0xffc0) == 0xfe80 {
-                Some("link_local")
-            } else {
-                None
-            }
-        }
+fn outbound_policy(allow_private_networks: bool) -> arkret_egress_policy::OutboundPolicy {
+    if allow_private_networks {
+        arkret_egress_policy::OutboundPolicy::controlled_network(true)
+    } else {
+        arkret_egress_policy::OutboundPolicy::public_https()
     }
 }
 
@@ -405,77 +341,6 @@ fn egress_denial_reason(error: &str) -> &'static str {
     } else {
         "policy_denied"
     }
-}
-
-fn blocked_ipv4_reason(ip: Ipv4Addr) -> Option<&'static str> {
-    let [a, b, _, _] = ip.octets();
-    if a == 0 {
-        Some("unspecified")
-    } else if a == 127 {
-        Some("loopback")
-    } else if a == 10 || (a == 172 && (16..=31).contains(&b)) || (a == 192 && b == 168) {
-        Some("private_network")
-    } else if a == 169 && b == 254 {
-        Some("link_local")
-    } else if a == 100 && (64..=127).contains(&b) {
-        Some("carrier_grade_nat")
-    } else if a == 198 && (b == 18 || b == 19) {
-        Some("benchmark_reserved")
-    } else if a >= 224 {
-        Some("multicast")
-    } else {
-        None
-    }
-}
-
-fn blocked_ipv6_reason(ip: Ipv6Addr) -> Option<&'static str> {
-    let segments = ip.segments();
-    if ip.is_loopback() {
-        Some("loopback")
-    } else if ip.is_unspecified() {
-        Some("unspecified")
-    } else if ip.is_multicast() {
-        Some("multicast")
-    } else if (segments[0] & 0xfe00) == 0xfc00 {
-        Some("private_network")
-    } else if (segments[0] & 0xffc0) == 0xfe80 {
-        Some("link_local")
-    } else if segments[0] == 0x2001 && segments[1] == 0x0db8 {
-        Some("documentation")
-    } else {
-        None
-    }
-}
-
-fn ipv4_mapped(ip: Ipv6Addr) -> Option<Ipv4Addr> {
-    let segments = ip.segments();
-    if segments[..5] == [0, 0, 0, 0, 0] && segments[5] == 0xffff {
-        let high = segments[6].to_be_bytes();
-        let low = segments[7].to_be_bytes();
-        Some(Ipv4Addr::new(high[0], high[1], low[0], low[1]))
-    } else {
-        None
-    }
-}
-
-fn ipv4_embedded_transition(ip: Ipv6Addr) -> Option<(&'static str, Ipv4Addr)> {
-    let segments = ip.segments();
-    if segments[..6] == [0x0064, 0xff9b, 0, 0, 0, 0] {
-        let high = segments[6].to_be_bytes();
-        let low = segments[7].to_be_bytes();
-        return Some(("nat64", Ipv4Addr::new(high[0], high[1], low[0], low[1])));
-    }
-    if segments[0] == 0x2002 {
-        let high = segments[1].to_be_bytes();
-        let low = segments[2].to_be_bytes();
-        return Some(("6to4", Ipv4Addr::new(high[0], high[1], low[0], low[1])));
-    }
-    if segments[0] == 0x2001 && segments[1] == 0 {
-        let high = (!segments[6]).to_be_bytes();
-        let low = (!segments[7]).to_be_bytes();
-        return Some(("teredo", Ipv4Addr::new(high[0], high[1], low[0], low[1])));
-    }
-    None
 }
 
 fn federation_denylist_entries() -> Vec<String> {
@@ -667,7 +532,6 @@ mod tests {
         for raw in [
             "http://169.254.169.254/latest/meta-data",
             "http://169.254.1.1/x",
-            "http://[fd00::1]/x",
             "http://[64:ff9b::a9fe:a9fe]/x",
         ] {
             let url = Url::parse(raw).unwrap();
@@ -676,6 +540,8 @@ mod tests {
                 "{raw} should stay blocked"
             );
         }
+        let controlled_private = Url::parse("http://[fd00::1]/x").unwrap();
+        assert!(validate_url_for_egress(&controlled_private, "test", true).is_ok());
     }
 
     #[test]
@@ -686,7 +552,7 @@ mod tests {
             Ok(vec![IpAddr::V4(Ipv4Addr::new(10, 42, 0, 12))])
         })
         .unwrap_err();
-        assert!(error.contains("private_network"));
+        assert!(error.contains("private address"));
     }
 
     #[test]

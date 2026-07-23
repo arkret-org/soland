@@ -28,7 +28,7 @@ arkret-event-draft = { workspace = true, features = ["salvo-oapi"] }
 arkret-auth.workspace = true
 arkret-bootstrap.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data"] }
-arkret-http-client.workspace = true
+arkret-egress-policy.workspace = true
 arkret-hlc.workspace = true
 arkret-identifiers = { workspace = true, features = ["salvo"] }
 arkret-identity.workspace = true
@@ -47,7 +47,6 @@ arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["salvo"] }
 arkret-wire = { workspace = true, features = ["salvo-oapi"] }
-dotenvy.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
@@ -72,7 +71,6 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
-proptest.workspace = true
 salvo = { workspace = true, features = ["test"] }
 soland-application = { workspace = true, features = ["test-support"] }
 soland-domain.workspace = true

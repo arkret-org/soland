@@ -3,12 +3,14 @@
 //! `org.arkret.soland.root.authz.capability_fanout.submit`).
 //!
 //! This is a deployment-internal product contract (service-http-binding.md
-//! §2.1.3(b)), not a spec operation, so the types live in `soland-contracts`
+//! §2.1.4(b)), not a spec operation, so the types live in `soland-contracts`
 //! rather than the SDK registry surface — the same pattern the sodmin admin
 //! seal DTOs already use. Both ends (soland handler, coauth producer) MUST
 //! consume these definitions instead of hand-writing mirrors (SOL-DRY-03).
 
 use serde::{Deserialize, Serialize};
+
+pub const CAPABILITY_FANOUT_KIND: &str = "org.arkret.coauth.collaboration_capability.fanout.v1";
 use serde_json::Value;
 
 /// Request body coauth POSTs to `/_soland/root/authz/capability-fanout`.

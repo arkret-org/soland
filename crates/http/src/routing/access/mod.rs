@@ -26,7 +26,7 @@ pub fn product_router() -> Router {
 /// (`org.arkret.soland.root.authz.capability_fanout.submit`). This is a
 /// product / deployment-internal S2S contract — the Auth Server (coauth) has
 /// no principal session, so it cannot use the principal-authenticated protocol
-/// `POST /_arkret/self/events` path. Per `service-http-binding.md` §2.1.3(b)
+/// `POST /_arkret/self/events` path. Per `service-http-binding.md` §2.1.4(b)
 /// such a capability MUST live on the implementation's own negative-space root
 /// (`/_soland/*`), NOT the `/_arkret/*` protocol root, and is not a v1 core
 /// conformance operation.

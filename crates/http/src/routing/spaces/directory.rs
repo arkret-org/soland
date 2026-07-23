@@ -230,6 +230,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         snapshot_frontier: Vec::new(),
         reducer_profile: None,
         last_materialized_at: None,
+        extensions: Default::default(),
     };
     description
         .validate()
