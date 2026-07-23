@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_core::RealmId;
+use arkret_identifiers::RealmId;
 use soland_storage::{PersistenceResult, PersistenceStore};
 
 use crate::authorization::AuthorizationApplicationService;
@@ -43,13 +43,14 @@ pub struct PersistenceHandle {
 impl PersistenceHandle {
     pub async fn stored_service_identity(
         &self,
-    ) -> crate::ApplicationResult<Option<arkret_core::StoredServiceIdentity>> {
+    ) -> crate::ApplicationResult<Option<arkret_identity::service_identity::StoredServiceIdentity>>
+    {
         Ok(self.persistence.service_identity().get().await?)
     }
 
     pub async fn store_service_identity(
         &self,
-        identity: arkret_core::StoredServiceIdentity,
+        identity: arkret_identity::service_identity::StoredServiceIdentity,
     ) -> crate::ApplicationResult<()> {
         self.persistence.service_identity().put(identity).await?;
         Ok(())
@@ -57,8 +58,10 @@ impl PersistenceHandle {
 
     pub async fn service_registration(
         &self,
-        key: &arkret_core::ServiceRegistrationKey,
-    ) -> crate::ApplicationResult<Option<arkret_core::ServiceRegistrationOutcome>> {
+        key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
+    ) -> crate::ApplicationResult<
+        Option<arkret_models_identity::service_identity::ServiceRegistrationOutcome>,
+    > {
         Ok(self
             .persistence
             .webvh()
@@ -85,8 +88,8 @@ impl PersistenceHandle {
 
     pub async fn commit_service_registration(
         &self,
-        key: arkret_core::ServiceRegistrationKey,
-        outcome: arkret_core::ServiceRegistrationOutcome,
+        key: arkret_models_identity::service_identity::ServiceRegistrationKey,
+        outcome: arkret_models_identity::service_identity::ServiceRegistrationOutcome,
         document: DidDocumentState,
         event: DidLogEvent,
     ) -> crate::ApplicationResult<ServiceRegistrationCommitResult> {

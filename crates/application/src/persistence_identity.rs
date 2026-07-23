@@ -424,7 +424,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
 impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolicies {
     async fn save_policy(
         &self,
-        policy: arkret_core::InviteReceivePolicy,
+        policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> crate::ApplicationResult<()> {
         self.0.invite_receive_policies().put(&policy).await?;
         Ok(())
@@ -432,7 +432,12 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
 
     async fn policies(
         &self,
-    ) -> crate::ApplicationResult<Vec<(String, arkret_core::InviteReceivePolicy)>> {
+    ) -> crate::ApplicationResult<
+        Vec<(
+            String,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
+    > {
         Ok(self.0.invite_receive_policies().snapshot_all().await?)
     }
 }
@@ -1651,15 +1656,17 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
 
     async fn service_registration(
         &self,
-        key: &arkret_core::ServiceRegistrationKey,
-    ) -> crate::ApplicationResult<Option<arkret_core::ServiceRegistrationOutcome>> {
+        key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
+    ) -> crate::ApplicationResult<
+        Option<arkret_models_identity::service_identity::ServiceRegistrationOutcome>,
+    > {
         Ok(self.0.webvh().get_service_registration(key).await?)
     }
 
     async fn commit_service_registration(
         &self,
-        key: arkret_core::ServiceRegistrationKey,
-        outcome: arkret_core::ServiceRegistrationOutcome,
+        key: arkret_models_identity::service_identity::ServiceRegistrationKey,
+        outcome: arkret_models_identity::service_identity::ServiceRegistrationOutcome,
         document: crate::identity::DidDocumentState,
         event: crate::identity::DidLogEvent,
     ) -> crate::ApplicationResult<crate::identity::ServiceRegistrationCommitResult> {

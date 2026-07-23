@@ -1,13 +1,15 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use arkret_core::{CellRef, Move, MoveId, Operation, RealmId, Seal, SealId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{CellRef, MoveId, RealmId, SealId};
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
     CellLatticeBinding, MoveReject, MoveStore, SealEffect, SealLeafUnionProof, SealReject,
     SealStore, SealedMoveRecord, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
+use arkret_wire::{Move, Seal};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -173,8 +175,8 @@ pub struct ReadMarkerView {
     pub actor_id: String,
     pub device_id: String,
     pub realm_id: String,
-    pub read_scope: arkret_core::ReadCursorScope,
-    pub position: arkret_core::ReadCursorPosition,
+    pub read_scope: arkret_wire::ReadCursorScope,
+    pub position: arkret_models_collaboration::objects::read_receipts::ReadCursorPosition,
     pub updated_at: DateTime<Utc>,
 }
 
@@ -693,7 +695,7 @@ impl ProjectionApplicationService {
 
     pub fn invite_claim_proof_context(
         &self,
-        operation: &arkret_core::Operation,
+        operation: &arkret_event_draft::Operation,
     ) -> Result<Option<InviteClaimProofContext>, &'static str> {
         if !crate::operation_semantics::operation_is_invite_claim(operation) {
             return Ok(None);
@@ -933,16 +935,22 @@ impl ProjectionApplicationService {
                 let (child_scope_policy, child_scope_policy_scope_circle_id) =
                     match row.child_scope_policy.as_ref() {
                         None => (None, None),
-                        Some(arkret_core::ChildScopePolicy::AllowAny {}) => {
+                        Some(
+                            arkret_models_collaboration::objects::space::ChildScopePolicy::AllowAny {},
+                        ) => {
                             (Some("allow_any".to_owned()), None)
                         }
-                        Some(arkret_core::ChildScopePolicy::RequireE2ee {}) => {
+                        Some(
+                            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireE2ee {},
+                        ) => {
                             (Some("require_e2ee".to_owned()), None)
                         }
-                        Some(arkret_core::ChildScopePolicy::RequireSameScope {}) => {
+                        Some(
+                            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireSameScope {},
+                        ) => {
                             (Some("require_same_scope".to_owned()), None)
                         }
-                        Some(arkret_core::ChildScopePolicy::RequireScopeCircleId {
+                        Some(arkret_models_collaboration::objects::space::ChildScopePolicy::RequireScopeCircleId {
                             scope_circle_id,
                         }) => (
                             Some("require_scope_circle_id".to_owned()),
@@ -1304,21 +1312,25 @@ impl ProjectionApplicationService {
         &self,
         actor_id: &str,
         backup_class: &str,
-    ) -> Option<arkret_core::KeyBackupActiveSeries> {
+    ) -> Option<
+        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
+    > {
         let state = self.state.lock();
         let row = state.key_backup_active_series(actor_id, backup_class)?;
-        Some(arkret_core::KeyBackupActiveSeries {
+        Some(
+            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries {
             schema: "ak.schema.key_backup_active_series.v1".to_owned(),
-            actor_id: arkret_core::Did::new(row.actor_id.clone()).ok()?,
-            backup_class: arkret_core::BackupClass::try_from(row.backup_class.as_str()).ok()?,
-            active_series_id: arkret_core::BackupSeriesId::new(row.active_series_id.clone())
+            actor_id: arkret_identifiers::Did::new(row.actor_id.clone()).ok()?,
+            backup_class: arkret_models_crypto::BackupClass::try_from(row.backup_class.as_str())
+                .ok()?,
+            active_series_id: arkret_identifiers::BackupSeriesId::new(row.active_series_id.clone())
                 .ok()?,
             series_pointer_version: row.series_pointer_version,
             previous_series_ids: row
                 .previous_series_ids
                 .iter()
                 .cloned()
-                .map(arkret_core::BackupSeriesId::new)
+                .map(arkret_identifiers::BackupSeriesId::new)
                 .collect::<Result<Vec<_>, _>>()
                 .ok()?,
             frontier_ref: row.frontier_ref.clone(),

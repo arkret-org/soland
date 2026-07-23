@@ -155,7 +155,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
-        receipt: Option<arkret_core::EventBatchReceipt>,
+        receipt: Option<arkret_wire::EventBatchReceipt>,
         device: Option<crate::events::IdentityAnchorDeviceState>,
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
@@ -252,7 +252,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Vec<arkret_core::EventBatchReceipt>> {
+    ) -> crate::ApplicationResult<Vec<arkret_wire::EventBatchReceipt>> {
         Ok(self.0.events().batch_receipts_for_event(event_id).await?)
     }
     async fn realm_event_stats(
@@ -564,7 +564,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
     async fn persist_projected_operation(
         &self,
         origin: &str,
-        operation: &arkret_core::Operation,
+        operation: &arkret_event_draft::Operation,
     ) -> crate::ApplicationResult<()> {
         let event_type = soland_domain::kinds::canonical_kind_string(operation);
         let is_message_create = soland_domain::kinds::operation_is_message_create(operation);

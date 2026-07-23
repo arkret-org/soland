@@ -1,8 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    AppletPackage, Did, PlaintextDataClassKind, PlaintextVisibleServicesPayload, RealmId,
-};
+use arkret_identifiers::{CircleId, Did, OperationId, RealmId};
+use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
+use arkret_models_collaboration::objects::space::ChildScopePolicy;
+use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
+use arkret_models_integration::applet::AppletPackage;
+use arkret_wire::{Event, PlaintextDataClassKind};
 use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{CanonicalEventRecord, PersistenceResult, RealmMetaRecord};
@@ -15,7 +18,7 @@ pub trait HydrationProjectionAdapter: Send + Sync {
     fn operation_from_canonical_record(
         &self,
         record: &crate::events::CanonicalEventRecord,
-    ) -> Option<arkret_core::Operation>;
+    ) -> Option<arkret_event_draft::Operation>;
 }
 
 fn application_canonical_event(
@@ -133,7 +136,9 @@ fn canonical_realm_alias(service_id: &str, input: &str) -> Option<String> {
     } else {
         format!("{body}:{domain}")
     };
-    let alias = arkret_core::RealmAlias::prepare(&canonical_input).ok()?;
+    let alias =
+        arkret_models_collaboration::objects::realm_alias::RealmAlias::prepare(&canonical_input)
+            .ok()?;
     (alias.domain() == domain).then(|| alias.canonical().to_owned())
 }
 
@@ -144,16 +149,16 @@ fn canonical_value_digest(value: &Value) -> Option<String> {
 pub fn parse_child_scope_policy(
     kind: Option<&str>,
     scope_circle_id: Option<&str>,
-) -> Result<Option<arkret_core::ChildScopePolicy>, &'static str> {
+) -> Result<Option<ChildScopePolicy>, &'static str> {
     let policy = match (kind, scope_circle_id) {
         (None, None) => return Ok(None),
-        (Some("allow_any"), None) => arkret_core::ChildScopePolicy::AllowAny {},
-        (Some("require_e2ee"), None) => arkret_core::ChildScopePolicy::RequireE2ee {},
-        (Some("require_same_scope"), None) => arkret_core::ChildScopePolicy::RequireSameScope {},
+        (Some("allow_any"), None) => ChildScopePolicy::AllowAny {},
+        (Some("require_e2ee"), None) => ChildScopePolicy::RequireE2ee {},
+        (Some("require_same_scope"), None) => ChildScopePolicy::RequireSameScope {},
         (Some("require_scope_circle_id"), Some(scope_circle_id)) => {
-            let scope_circle_id = arkret_core::CircleId::new(scope_circle_id.to_owned())
-                .map_err(|_| "invalid_scope_circle_id")?;
-            arkret_core::ChildScopePolicy::RequireScopeCircleId { scope_circle_id }
+            let scope_circle_id =
+                CircleId::new(scope_circle_id.to_owned()).map_err(|_| "invalid_scope_circle_id")?;
+            ChildScopePolicy::RequireScopeCircleId { scope_circle_id }
         }
         _ => return Err("invalid_child_scope_policy"),
     };
@@ -168,13 +173,13 @@ pub async fn hydrate_cross_signing_from_persistence(
         let payload = projection_context_stripped_payload(&event.payload);
         match event.event_kind.as_str() {
             arkret_wire::events::EventKind::CROSS_SIGNING_PUBLISH => {
-                let publish = serde_json::from_value::<arkret_core::CrossSigningPublish>(payload)
-                    .map_err(|error| {
-                    soland_storage::PersistenceError::Internal(format!(
-                        "cross-signing publish {} failed hydration decode: {error}",
-                        event.event_id
-                    ))
-                })?;
+                let publish =
+                    serde_json::from_value::<CrossSigningPublish>(payload).map_err(|error| {
+                        soland_storage::PersistenceError::Internal(format!(
+                            "cross-signing publish {} failed hydration decode: {error}",
+                            event.event_id
+                        ))
+                    })?;
                 manager
                     .record_cross_signing_publish(publish)
                     .map_err(|error| {
@@ -185,14 +190,14 @@ pub async fn hydrate_cross_signing_from_persistence(
                     })?;
             }
             arkret_wire::events::EventKind::CROSS_SIGNING_RESET => {
-                let reset =
-                    serde_json::from_value::<arkret_core::CrossSigningResetPayload>(payload)
-                        .map_err(|error| {
-                            soland_storage::PersistenceError::Internal(format!(
-                                "cross-signing reset {} failed hydration decode: {error}",
-                                event.event_id
-                            ))
-                        })?;
+                let reset = serde_json::from_value::<CrossSigningResetPayload>(payload).map_err(
+                    |error| {
+                        soland_storage::PersistenceError::Internal(format!(
+                            "cross-signing reset {} failed hydration decode: {error}",
+                            event.event_id
+                        ))
+                    },
+                )?;
                 manager
                     .record_cross_signing_reset(&reset)
                     .map_err(|error| {
@@ -211,26 +216,26 @@ pub async fn hydrate_cross_signing_from_persistence(
 fn operation_from_projection_event(
     event: &soland_storage::ProjectionEventRecord,
     projection_name: &str,
-) -> soland_storage::PersistenceResult<arkret_core::Operation> {
+) -> soland_storage::PersistenceResult<arkret_event_draft::Operation> {
     let operation_id = event.operation_id.as_deref().ok_or_else(|| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has no operation_id",
             event.event_id
         ))
     })?;
-    let operation_id = arkret_core::OperationId::new(operation_id.to_owned()).map_err(|_| {
+    let operation_id = OperationId::new(operation_id.to_owned()).map_err(|_| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has an invalid operation_id",
             event.event_id
         ))
     })?;
-    let realm_id = arkret_core::RealmId::new(event.realm_id.clone()).map_err(|_| {
+    let realm_id = RealmId::new(event.realm_id.clone()).map_err(|_| {
         soland_storage::PersistenceError::Internal(format!(
             "{projection_name} projection event {} has an invalid realm_id",
             event.event_id
         ))
     })?;
-    let mut operation = arkret_core::Operation::create(
+    let mut operation = arkret_event_draft::Operation::create(
         operation_id,
         realm_id,
         event.event_kind.clone(),
@@ -557,7 +562,7 @@ async fn hydrate_canonical_realm_bootstraps(
 
         let typed_events = unit
             .iter()
-            .map(|record| serde_json::from_value::<arkret_core::Event>(record.envelope.clone()))
+            .map(|record| serde_json::from_value::<Event>(record.envelope.clone()))
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| {
                 soland_storage::PersistenceError::Internal(format!(

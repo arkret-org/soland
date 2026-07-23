@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_core::{
-    AccountabilityGrantPayload, Did, EventBatchReceipt, Operation, PrincipalLocatorDisplayHint,
-    RealmId,
-};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, RealmId};
+use arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload;
+use arkret_models_collaboration::governance::invite_addressing::PrincipalLocatorDisplayHint;
+use arkret_wire::EventBatchReceipt;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_storage::RealmEventStats;
@@ -63,7 +64,7 @@ pub struct SpaceContainerProjectionRecord {
 pub struct StrandProjectionRecord {
     pub strand_id: String,
     pub realm_id: String,
-    pub tracks: BTreeMap<String, arkret_core::StrandTrackConfig>,
+    pub tracks: BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
     pub title: String,
     pub summary: Option<String>,
     pub state: String,
@@ -1268,7 +1269,7 @@ pub struct RealmMetadata {
     pub encryption_profile: Option<String>,
     pub plaintext_visible_services: BTreeSet<String>,
     pub plaintext_visible_service_classes:
-        BTreeMap<String, BTreeSet<arkret_core::PlaintextDataClassKind>>,
+        BTreeMap<String, BTreeSet<arkret_wire::PlaintextDataClassKind>>,
     pub minimal_metadata_realm: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1278,7 +1279,7 @@ impl RealmMetadata {
     pub fn allows_plaintext_data_class(
         &self,
         service_id: &str,
-        data_class: arkret_core::PlaintextDataClassKind,
+        data_class: arkret_wire::PlaintextDataClassKind,
     ) -> bool {
         self.plaintext_visible_service_classes
             .get(service_id)

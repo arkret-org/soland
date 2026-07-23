@@ -150,7 +150,7 @@ pub struct PresenceState {
     pub last_active_at: Option<String>,
     pub expires_at: Option<DateTime<Utc>>,
     pub updated_at: DateTime<Utc>,
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -160,7 +160,7 @@ pub struct TypingState {
     pub scope_id: Option<String>,
     pub position: i64,
     pub expires_at: DateTime<Utc>,
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 }
 
 #[derive(Clone, Debug)]
@@ -170,7 +170,7 @@ pub struct CallSignalState {
     pub sender_device: String,
     pub call_id: String,
     pub expires_at: DateTime<Utc>,
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
     pub position: u64,
 }
 
@@ -184,7 +184,7 @@ pub struct ReadReceiptState {
     pub target_actor: Option<String>,
     pub visibility: String,
     pub receipt: Value,
-    pub envelope: arkret_core::EphemeralEnvelope,
+    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
     pub position: u64,
@@ -202,7 +202,7 @@ pub struct BlobState {
     pub encryption: Option<Value>,
     pub legal_hold: bool,
     pub redacted: bool,
-    pub visibility: arkret_core::BlobVisibility,
+    pub visibility: arkret_models_collaboration::objects::blob::BlobVisibility,
     pub uploaded_by: String,
     pub created_at: DateTime<Utc>,
 }

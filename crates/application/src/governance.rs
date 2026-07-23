@@ -90,7 +90,7 @@ pub struct RetentionTombstoneRecord {
 }
 
 pub trait AdminSigningKeyPort: Send + Sync {
-    fn load_admin_key(&self, admin_did: &arkret_core::Did) -> Result<Vec<u8>, String>;
+    fn load_admin_key(&self, admin_did: &arkret_identifiers::Did) -> Result<Vec<u8>, String>;
 }
 
 #[async_trait]
@@ -359,7 +359,10 @@ impl GovernanceApplicationService {
         }
     }
 
-    pub fn admin_signing_key(&self, admin_did: &arkret_core::Did) -> Result<Vec<u8>, String> {
+    pub fn admin_signing_key(
+        &self,
+        admin_did: &arkret_identifiers::Did,
+    ) -> Result<Vec<u8>, String> {
         self.admin_signing_keys.load_admin_key(admin_did)
     }
 
@@ -672,7 +675,7 @@ mod tests {
     struct NoRuntimeSettings;
 
     impl AdminSigningKeyPort for NoAdminSigningKeys {
-        fn load_admin_key(&self, _admin_did: &arkret_core::Did) -> Result<Vec<u8>, String> {
+        fn load_admin_key(&self, _admin_did: &arkret_identifiers::Did) -> Result<Vec<u8>, String> {
             Err("not configured".to_owned())
         }
     }

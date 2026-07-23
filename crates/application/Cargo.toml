@@ -15,9 +15,13 @@ test-support = []
 
 [dependencies]
 arkret-canonical.workspace = true
-arkret-core.workspace = true
+arkret-event-draft.workspace = true
+arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-models-collaboration.workspace = true
+arkret-models-crypto.workspace = true
+arkret-models-identity.workspace = true
+arkret-models-integration.workspace = true
 arkret-policy.workspace = true
 arkret-state.workspace = true
 arkret-wire.workspace = true

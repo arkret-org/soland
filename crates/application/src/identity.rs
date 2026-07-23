@@ -1,12 +1,15 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_core::{
-    AccountStatus, BlobRef, CrossSigningPublish, CrossSigningResetPayload, DeviceGenerationStatus,
-    DeviceId, Did, Hash, NonEmptyString, RecoveryIdentityModel, SealBasis, ServiceRegistrationKey,
-    ServiceRegistrationOutcome,
-};
+use arkret_identifiers::{BlobRef, DeviceId, Did, Hash};
 use arkret_identity::IdentityError;
+use arkret_models_collaboration::objects::account_status::AccountStatus;
+use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
+use arkret_models_identity::service_identity::{
+    ServiceRegistrationKey, ServiceRegistrationOutcome,
+};
+use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
+use arkret_wire::{NonEmptyString, SealBasis};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -199,8 +202,18 @@ pub trait ContactPort: Send + Sync {
 
 #[async_trait]
 pub trait InviteReceivePolicyPort: Send + Sync {
-    async fn save_policy(&self, policy: arkret_core::InviteReceivePolicy) -> ApplicationResult<()>;
-    async fn policies(&self) -> ApplicationResult<Vec<(String, arkret_core::InviteReceivePolicy)>>;
+    async fn save_policy(
+        &self,
+        policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+    ) -> ApplicationResult<()>;
+    async fn policies(
+        &self,
+    ) -> ApplicationResult<
+        Vec<(
+            String,
+            arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+        )>,
+    >;
 }
 
 #[async_trait]
@@ -219,7 +232,14 @@ pub struct ContactApplicationService {
     contacts: Arc<dyn ContactPort>,
     invite_policies: Arc<dyn InviteReceivePolicyPort>,
     direct_bindings: Arc<dyn DirectConversationBindingPort>,
-    runtime_invite_policies: Arc<Mutex<BTreeMap<String, arkret_core::InviteReceivePolicy>>>,
+    runtime_invite_policies: Arc<
+        Mutex<
+            BTreeMap<
+                String,
+                arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+            >,
+        >,
+    >,
     runtime_direct_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
 }
 
@@ -280,7 +300,7 @@ impl ContactApplicationService {
 
     pub async fn save_invite_policy(
         &self,
-        policy: arkret_core::InviteReceivePolicy,
+        policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
     ) -> ApplicationResult<()> {
         self.invite_policies.save_policy(policy.clone()).await?;
         self.runtime_invite_policies
@@ -291,12 +311,21 @@ impl ContactApplicationService {
 
     pub fn replace_runtime_invite_policies(
         &self,
-        policies: impl IntoIterator<Item = (String, arkret_core::InviteReceivePolicy)>,
+        policies: impl IntoIterator<
+            Item = (
+                String,
+                arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
+            ),
+        >,
     ) {
         *self.runtime_invite_policies.lock() = policies.into_iter().collect();
     }
 
-    pub fn invite_policy(&self, subject_id: &str) -> Option<arkret_core::InviteReceivePolicy> {
+    pub fn invite_policy(
+        &self,
+        subject_id: &str,
+    ) -> Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy>
+    {
         self.runtime_invite_policies.lock().get(subject_id).cloned()
     }
 
@@ -1451,7 +1480,7 @@ pub struct KeyBackupApplicationService {
 pub struct AgentSessionState {
     pub granted_scope: Vec<String>,
     pub scope_details: Value,
-    pub freshness_state: arkret_core::FreshnessState,
+    pub freshness_state: arkret_wire::FreshnessState,
 }
 
 #[derive(Clone, Debug)]

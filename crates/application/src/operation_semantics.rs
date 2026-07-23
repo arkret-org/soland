@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::Value;
 
 pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = soland_domain::kinds::AUDIT_COMPLIANCE_PROFILES;

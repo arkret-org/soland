@@ -274,7 +274,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     }
     async fn append_operation(
         &self,
-        operation: arkret_core::Operation,
+        operation: arkret_event_draft::Operation,
     ) -> crate::ApplicationResult<()> {
         self.0.federation_operations().append(operation).await?;
         Ok(())
@@ -289,14 +289,14 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn operations_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<arkret_core::Operation>> {
+    ) -> crate::ApplicationResult<Vec<arkret_event_draft::Operation>> {
         Ok(self
             .0
             .federation_operations()
             .list_for_realm(realm_id)
             .await?)
     }
-    async fn operations(&self) -> crate::ApplicationResult<Vec<arkret_core::Operation>> {
+    async fn operations(&self) -> crate::ApplicationResult<Vec<arkret_event_draft::Operation>> {
         Ok(self.0.federation_operations().snapshot_all().await?)
     }
     async fn frontier_exchange(

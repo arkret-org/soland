@@ -4981,9 +4981,13 @@ name = "soland-application"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
- "arkret-core",
+ "arkret-event-draft",
+ "arkret-identifiers",
  "arkret-identity",
  "arkret-models-collaboration",
+ "arkret-models-crypto",
+ "arkret-models-identity",
+ "arkret-models-integration",
  "arkret-policy",
  "arkret-state",
  "arkret-wire",
