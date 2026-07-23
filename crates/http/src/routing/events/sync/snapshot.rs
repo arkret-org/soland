@@ -1118,6 +1118,14 @@ async fn account_data_events(
         let Some(key) = event.payload.get("key").and_then(Value::as_str) else {
             continue;
         };
+        // Agent runtime sessions never receive controller-private account
+        // data over the account stream, even when their session presents the
+        // controller as actor (fail closed; private-objects.md §4.2).
+        if session.agent_session.is_some()
+            && crate::routing::identity::account_data::is_controller_private_account_data_key(key)
+        {
+            continue;
+        }
         let replace = latest
             .get(key)
             .is_none_or(|(received_at, _)| record.received_at > *received_at);

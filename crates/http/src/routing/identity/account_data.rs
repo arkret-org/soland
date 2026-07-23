@@ -47,10 +47,10 @@ const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
         data_type: "ak.agent.draft.v1",
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
-        controller_private: true,
-    },
+    // `ak.agent.sidecar_projection.v1` was removed from the account-data
+    // registry on 2026-07-23: the exchange projection is a controller-device
+    // local Event-fold cache and never an account-data surface
+    // (zh/models/sidecar.md §7.2.4).
     AccountDataTypeSpec {
         data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
         controller_private: true,
@@ -112,6 +112,14 @@ fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataT
     REGISTERED_ACCOUNT_DATA_TYPES
         .iter()
         .find(|spec| spec.data_type == canonical_type)
+}
+
+/// Controller-private account data never crosses to Agent runtime sessions:
+/// neither over resource reads nor over the account stream, even when an
+/// agent-granted session presents the controller as its actor
+/// (zh/models/sidecar.md §7 / private-objects.md §4.2).
+pub(crate) fn is_controller_private_account_data_key(data_type: &str) -> bool {
+    registered_account_data_type(data_type).is_some_and(|spec| spec.controller_private)
 }
 
 fn validate_registered_account_data_key(data_type: &str) -> Result<(), AppError> {
@@ -327,10 +335,13 @@ async fn put_account_data(
     validate_registered_account_data_key(&data_type)?;
 
     // AKP-0008 / AKP-0009: registered personal-agent account-data types are
-    // controller-private; native agent principals cannot write them directly.
+    // controller-private; native agent principals cannot write them directly,
+    // and neither can an agent-granted session that presents the controller
+    // as its actor.
     if let Some(spec) = registered_account_data_type(&data_type)
         && spec.controller_private
-        && session_actor_is_agent_runtime(state.identity_application(), &session.actor).await?
+        && (session.agent_session.is_some()
+            || session_actor_is_agent_runtime(state.identity_application(), &session.actor).await?)
     {
         return Err(AppError::capability_denied(format!(
             "{} is controller-private; agent runtimes cannot write it",
@@ -401,6 +412,12 @@ async fn get_account_data(
     validate_data_type(&data_type)?;
     validate_registered_account_data_key(&data_type)?;
 
+    // Controller-private entries are indistinguishable from absent ones for
+    // Agent runtime sessions (fail closed, no existence disclosure).
+    if is_controller_private_account_data_key(&data_type) && session.agent_session.is_some() {
+        return Err(AppError::not_found("not found"));
+    }
+
     match state
         .account_data_application()
         .entry(&session.actor, &data_type)
@@ -425,12 +442,16 @@ async fn list_account_data(
 ) -> JsonResult<AccountDataList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let agent_session = session.agent_session.is_some();
     let entries = state
         .account_data_application()
         .entries_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
+        .filter(|record| {
+            !(agent_session && is_controller_private_account_data_key(&record.data_type))
+        })
         .map(entry_from)
         .collect();
     json_ok(AccountDataList { entries })
@@ -453,6 +474,15 @@ async fn delete_account_data(
     let data_type = data_type.into_inner();
     validate_data_type(&data_type)?;
     validate_registered_account_data_key(&data_type)?;
+
+    if is_controller_private_account_data_key(&data_type)
+        && (session.agent_session.is_some()
+            || session_actor_is_agent_runtime(state.identity_application(), &session.actor).await?)
+    {
+        return Err(AppError::capability_denied(format!(
+            "{data_type} is controller-private; agent runtimes cannot delete it"
+        )));
+    }
 
     persist_account_data_event(state, &session, &data_type, None).await?;
 

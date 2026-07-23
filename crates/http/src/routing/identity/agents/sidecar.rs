@@ -761,6 +761,52 @@ pub(crate) async fn expected_sidecar_mls_binding(
     })
 }
 
+/// Admission gate for `ak.agent.sidecar.exchange.control`
+/// (zh/models/sidecar.md §7.2.3). The Event is legal only inside a Sidecar
+/// backing-Circle-scoped private Strand and only from that Sidecar's
+/// controller; the service never decrypts the control plaintext. Every
+/// failure returns one uniform reason so unauthorized callers cannot probe
+/// Sidecar existence.
+pub(crate) fn validate_sidecar_exchange_control_event(
+    state: &AppState,
+    actor_id: &str,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if operation.object_type.as_str()
+        != arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL
+    {
+        return Ok(());
+    }
+    const REASON: &str = "sidecar_exchange_control_forbidden";
+    let strand_id = operation
+        .payload
+        .get("strand_id")
+        .and_then(Value::as_str)
+        .ok_or(REASON)?;
+    if !operation
+        .payload
+        .get("encrypted_payload")
+        .is_some_and(Value::is_object)
+    {
+        return Err(REASON);
+    }
+    let projection = state.projection_application().snapshot();
+    let circle_id = projection
+        .strands
+        .get(strand_id)
+        .and_then(|strand| strand.scope_circle_id.as_deref())
+        .ok_or(REASON)?;
+    let sidecar = projection
+        .sidecars
+        .values()
+        .find(|sidecar| sidecar.backing_circle_id == circle_id)
+        .ok_or(REASON)?;
+    if actor_id != sidecar.controller_id {
+        return Err(REASON);
+    }
+    Ok(())
+}
+
 pub(crate) async fn validate_sidecar_mls_event_binding(
     state: &AppState,
     actor_id: &str,

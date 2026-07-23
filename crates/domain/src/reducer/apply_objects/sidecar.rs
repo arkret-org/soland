@@ -56,6 +56,46 @@ impl ProjectionState {
             .insert(sidecar.id.to_string(), control_ref);
         ProjectionEffect::Ignored
     }
+
+    /// `ak.agent.sidecar.exchange.control` (zh/models/sidecar.md §7.2.3).
+    /// The Event is a durable, controller-authored ordered-log entry whose
+    /// plaintext only controller devices can read: the reducer verifies the
+    /// outer routing shape and the Sidecar backing-Circle scope, then leaves
+    /// projections untouched — exchange folding is client-side only. One
+    /// uniform rejection reason avoids Sidecar existence disclosure.
+    pub(crate) fn apply_sidecar_exchange_control(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
+        const REASON: &str = "sidecar_exchange_control_forbidden";
+        let Some(strand_id) = operation.payload.get("strand_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: REASON.to_owned(),
+            };
+        };
+        if !operation
+            .payload
+            .get("encrypted_payload")
+            .is_some_and(Value::is_object)
+        {
+            return ProjectionEffect::Rejected {
+                reason: REASON.to_owned(),
+            };
+        }
+        let sidecar_scoped = self
+            .strand_scope_circle_id(strand_id)
+            .is_some_and(|circle_id| {
+                self.sidecars
+                    .values()
+                    .any(|sidecar| sidecar.backing_circle_id == circle_id)
+            });
+        if !sidecar_scoped {
+            return ProjectionEffect::Rejected {
+                reason: REASON.to_owned(),
+            };
+        }
+        ProjectionEffect::Ignored
+    }
 }
 
 #[cfg(test)]
@@ -104,6 +144,76 @@ mod tests {
         assert!(matches!(
             state.apply(&second, &ServerHlc::new("sidecar-test")),
             ProjectionEffect::Rejected { reason } if reason == "sidecar_singleton_conflict"
+        ));
+    }
+
+    fn exchange_control(strand_id: &str, payload: serde_json::Value) -> Operation {
+        Operation::create(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01964137-0000-7000-8000-000000000050",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
+                .unwrap(),
+            arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+            serde_json::json!({
+                "strand_id": strand_id,
+                "encrypted_payload": payload,
+            }),
+        )
+    }
+
+    #[test]
+    fn exchange_control_requires_sidecar_backing_scope_and_stays_projection_free() {
+        let mut state = ProjectionState::default();
+        state.apply(
+            &create("ak:sidecar:01964137-0000-7000-8000-000000000042"),
+            &ServerHlc::new("sidecar-test"),
+        );
+        let private_strand = "ak:strand:01964137-0000-7000-8000-000000000044";
+        state.strands.insert(
+            private_strand.to_owned(),
+            crate::reducer::projections::StrandProjection {
+                strand_id: private_strand.to_owned(),
+                realm_id: "ak:realm:01964137-0000-7000-8000-000000000030".to_owned(),
+                tracks: BTreeMap::new(),
+                title: String::new(),
+                summary: None,
+                fields: BTreeMap::new(),
+                state: crate::reducer::projections::ObjectLifecycleState::Active,
+                state_changed_at: None,
+                created_by: "did:web:example.com:users:alice".to_owned(),
+                created_at: chrono::Utc::now(),
+                history_basis_seals: Vec::new(),
+                updated_by: None,
+                updated_at: None,
+                scope_circle_id: Some("ak:circle:01964137-0000-7000-8000-000000000041".to_owned()),
+            },
+        );
+
+        let before = state.clone();
+        let accepted = exchange_control(private_strand, serde_json::json!({"ciphertext": "AAA"}));
+        assert!(matches!(
+            state.apply(&accepted, &ServerHlc::new("sidecar-test")),
+            ProjectionEffect::Ignored
+        ));
+        assert_eq!(
+            state.sidecars, before.sidecars,
+            "exchange control never mutates server projections"
+        );
+        assert_eq!(state.strands, before.strands);
+
+        let ordinary_strand = "ak:strand:01964137-0000-7000-8000-000000000045";
+        let outside_scope = exchange_control(ordinary_strand, serde_json::json!({"c": "AAA"}));
+        assert!(matches!(
+            state.apply(&outside_scope, &ServerHlc::new("sidecar-test")),
+            ProjectionEffect::Rejected { reason } if reason == "sidecar_exchange_control_forbidden"
+        ));
+
+        let plaintext = exchange_control(private_strand, serde_json::Value::Null);
+        assert!(matches!(
+            state.apply(&plaintext, &ServerHlc::new("sidecar-test")),
+            ProjectionEffect::Rejected { reason } if reason == "sidecar_exchange_control_forbidden"
         ));
     }
 }

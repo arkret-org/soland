@@ -2,7 +2,7 @@ use salvo::prelude::*;
 
 pub(super) mod account;
 pub(crate) use account::{project_canonical_direct_binding, validate_direct_binding_operation};
-pub(super) mod account_data;
+pub(crate) mod account_data;
 pub(crate) mod agents;
 pub(crate) mod auth;
 // api-conventions.md §3.3 — `/_arkret/self/*` inbound credential: a

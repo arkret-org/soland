@@ -39,9 +39,11 @@ const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     arkret_wire::constants::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
 ];
 
+// `ak.agent.sidecar_projection.v1` is intentionally absent: the exchange
+// projection is a controller-device-local fold cache and never registers an
+// account-data key surface (zh/models/sidecar.md §7.2.4).
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     ACCOUNT_DATA_TYPE_AGENT_DRAFT,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION,
     arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
     ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION,
 ];
@@ -160,10 +162,6 @@ pub(crate) fn validate_encrypted_account_data_key(
     }
     if let Some(rest) = data_type
         .strip_prefix(ACCOUNT_DATA_TYPE_AGENT_DRAFT)
-        .or_else(|| {
-            data_type
-                .strip_prefix(arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_PROJECTION)
-        })
         .or_else(|| {
             data_type
                 .strip_prefix(arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE)

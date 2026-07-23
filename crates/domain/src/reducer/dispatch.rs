@@ -502,6 +502,14 @@ fn apply_sidecar_create_dispatch(
     s.apply_sidecar_create(op)
 }
 
+fn apply_sidecar_exchange_control_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_sidecar_exchange_control(op)
+}
+
 fn apply_applet_registration_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -1173,6 +1181,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_wire::events::EventKind::SIDECAR_CREATE,
         apply_sidecar_create_dispatch,
+    );
+    m.insert(
+        arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+        apply_sidecar_exchange_control_dispatch,
     );
     m.insert(
         arkret_wire::events::EventKind::APPLET_REGISTRATION,
