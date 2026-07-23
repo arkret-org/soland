@@ -252,6 +252,7 @@ fn build_contact_envelope(
     event.proofs.push(Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
+        proof_purpose: None,
         verification_method: format!("{issuer}#device"),
         event_digest,
         created_at: event.created_at,

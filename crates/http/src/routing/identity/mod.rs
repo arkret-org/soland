@@ -92,16 +92,9 @@ pub fn protocol_router() -> Router {
 
 pub fn local_router() -> Router {
     Router::new()
-        // `gate` — authentication entry (session-grant / dev-login / logout /
-        // agent-key-pair). Trust segment: outermost authenticated edge.
-        // `gate/auth/*` carries soland's auth extension namespace; the
-        // spec-canonical agent key-pair authorization sits at
-        // `gate/account/agent-key-pair`.
-        .push(
-            Router::with_path("gate")
-                .push(auth::router())
-                .push(Router::with_path("account").push(agents::agent_key_pair_router())),
-        )
+        // Product-private authentication entry. Canonical account operations
+        // are exposed only by `protocol_router` under `/_arkret`.
+        .push(Router::with_path("gate").push(auth::router()))
         // Server-to-server device signing-key directory read at
         // `/_soland/gate/account/device-signing-keys/query`. The Auth Server
         // (coauth) calls this while verifying a device holder proof
@@ -115,18 +108,9 @@ pub fn local_router() -> Router {
         .push(
             Router::with_path("root").push(
                 Router::with_path("identity")
-                    .push(Router::with_path("describe").get(did::identity_describe))
-                    .push(Router::with_path("resolve").post(did::identity_resolve))
-                    .push(Router::with_path("document").get(did::identity_document))
                     .push(Router::with_path("{did}/did-document").get(did::identity_did_document))
-                    .push(Router::with_path("log").get(did::identity_log))
-                    .push(
-                        Router::with_path("submit-did-operation")
-                            .post(did::identity_submit_did_operation),
-                    )
                     .push(Router::with_path("webvh/register").post(did::embedded_webvh_register))
-                    .push(Router::with_path("webvh/rotate").post(did::embedded_webvh_rotate))
-                    .push(Router::with_path("receipts").get(did::identity_receipts)),
+                    .push(Router::with_path("webvh/rotate").post(did::embedded_webvh_rotate)),
             ),
         )
         .push(Router::with_path("root").push(recovery::router()))

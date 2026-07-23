@@ -1389,6 +1389,7 @@ fn sign_event_batch_receipt(
     Ok(Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
+        proof_purpose: None,
         verification_method,
         event_digest: Hash::new(receipt_digest).map_err(|error| {
             SubmitOneError::new(
@@ -1429,6 +1430,7 @@ mod tests {
         event.proofs = vec![arkret_wire::Proof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             alg: "EdDSA".to_owned(),
+            proof_purpose: None,
             verification_method: verification_method.to_owned(),
             event_digest: digest,
             created_at: event.created_at,
@@ -1611,6 +1613,7 @@ mod tests {
             event.proofs.push(arkret_wire::Proof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
+                proof_purpose: None,
                 verification_method: format!("{actor}#key-1"),
                 event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64)))
                     .unwrap(),

@@ -117,7 +117,8 @@ pub(super) async fn directory_subscribe(
     let body = body.into_inner();
     let _ = body;
     json_ok(DirectoryPushRegisterOutcome {
-        subscription_id: ids::generate("directory_subscription"),
+        subscription_id: SubscriptionId::new(ids::generate("subscription"))
+            .map_err(|error| AppError::internal(format!("generated subscription id: {error}")))?,
         effective_at: now(),
     })
 }

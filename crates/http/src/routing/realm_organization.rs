@@ -51,7 +51,7 @@ fn de_str<T: DeserializeOwned>(field: &str, value: &str) -> Result<T, AppError> 
     summary = "List projected ak.realm.organization relationships for a Realm (SOL-ORG-06)"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_organization.query.list"))]
-async fn list_realm_organizations(
+pub(crate) async fn list_realm_organizations(
     aa: AuthArgs,
     realm_id: PathParam<String>,
     depot: &mut Depot,

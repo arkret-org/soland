@@ -309,6 +309,7 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     let proof = arkret_wire::Proof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
+        proof_purpose: None,
         verification_method: verification_method.to_owned(),
         event_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
             proof_binding_bytes,

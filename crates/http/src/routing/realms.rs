@@ -109,7 +109,7 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
     summary = "List typed cross-Realm links projected from ak.realm.link"
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.list"))]
-async fn list_realm_links(
+pub(crate) async fn list_realm_links(
     aa: AuthArgs,
     realm_id: PathParam<String>,
     direction: QueryParam<String, false>,

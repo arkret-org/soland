@@ -41,6 +41,7 @@ fn broadcast_ephemeral_envelope_signed_by(
     let event_digest = arkret_canonical::sha256_digest(&canonical);
     let verification_method = format!("{actor_id}#{device_id}");
     let mut proof = arkret_wire::Proof {
+        proof_purpose: None,
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: verification_method.clone(),

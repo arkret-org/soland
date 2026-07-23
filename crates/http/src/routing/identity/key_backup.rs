@@ -45,6 +45,10 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("keys/backups").get(list_key_backups))
 }
 
+pub(crate) fn admin_router() -> Router {
+    Router::with_path("key-backups").get(list_key_backups)
+}
+
 const KEY_BACKUP_CLASSES: &[&str] = &["did_recovery", "secret_storage", "mls_history"];
 const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
     "recovery_key_share",

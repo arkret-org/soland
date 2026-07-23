@@ -1109,6 +1109,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     }];
     let digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
     event.proofs.push(arkret_wire::Proof {
+        proof_purpose: None,
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:alice.example#device-key".to_owned(),

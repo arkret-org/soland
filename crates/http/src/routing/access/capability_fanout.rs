@@ -16,7 +16,7 @@ use soland_http::util::{bearer_token, sha256_hex};
 
 use crate::state::AppState;
 
-const FANOUT_KIND: &str = "ak.coauth.collaboration_capability.fanout.v1";
+const FANOUT_KIND: &str = "org.arkret.coauth.collaboration_capability.fanout.v1";
 const SOURCE_DEVICE_ID: &str = "coauth-capability-fanout";
 const DIGEST_HEADER: &str = "x-arkret-capability-fanout-digest";
 

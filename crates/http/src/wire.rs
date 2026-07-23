@@ -555,6 +555,10 @@ const SUPPORTED_OPERATION_SURFACES: &[&str] = &[
 ];
 
 const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
+    "ak.gate.account.command.register",
+    "ak.gate.account.command.pair_device",
+    "ak.gate.account.command.logout",
+    "ak.gate.account.command.revoke_session",
     "ak.find.directory.query.describe",
     "ak.find.directory.query.search_realms",
     "ak.find.directory.query.resolve_realm",
@@ -574,7 +578,7 @@ const SUPPORTED_STANDALONE_OPERATION_IDS: &[&str] = &[
 
 /// Spec operations soland deliberately does NOT declare even though their
 /// surface group is otherwise supported.
-const UNDECLARED_OPERATION_IDS: &[&str] = &[];
+const UNDECLARED_OPERATION_IDS: &[&str] = &["ak.find.directory.command.takedown_appeal"];
 
 fn canonical_supported_operations() -> Vec<String> {
     let missing_surfaces =

@@ -8,7 +8,7 @@
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
 use arkret_canonical as canonical;
-use arkret_identifiers::{Did, Hash};
+use arkret_identifiers::{Did, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
     DisclosedOutcome, DisclosureLevel, DisclosurePolicy, IntroductionEvidence,
     InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
@@ -118,13 +118,14 @@ fn set_invite_locator_secret_response_headers(res: &mut Response) {
 fn locator_issue_outcome(
     record: &InviteLocatorRecord,
     locator_token: String,
-) -> InviteLocatorIssueOutcome {
-    InviteLocatorIssueOutcome {
-        locator_id: record.locator_id.clone(),
+) -> Result<InviteLocatorIssueOutcome, AppError> {
+    Ok(InviteLocatorIssueOutcome {
+        locator_id: InviteLocatorId::new(record.locator_id.clone())
+            .map_err(|error| AppError::internal(format!("stored invite locator id: {error}")))?,
         locator_token,
         expires_at: record.expires_at,
         one_time_use: record.one_time_use,
-    }
+    })
 }
 
 #[endpoint(operation_id = "ak.self.invite_locator.command.issue", tags("self"))]
@@ -147,7 +148,7 @@ async fn issue_invite_locator(
     {
         InviteLocatorInsertOutcome::Inserted => {
             set_invite_locator_secret_response_headers(res);
-            json_ok(locator_issue_outcome(&record, token))
+            json_ok(locator_issue_outcome(&record, token)?)
         }
         InviteLocatorInsertOutcome::ActiveLimitReached => Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -181,14 +182,14 @@ async fn rotate_invite_locator(
     };
     let Some(record) = state
         .realm_invite_application()
-        .rotate_locator(&session.actor, &body.locator_id, &mutation, now())
+        .rotate_locator(&session.actor, body.locator_id.as_str(), &mutation, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator rotate: {error}")))?
     else {
         return Err(invite_locator_not_found());
     };
     set_invite_locator_secret_response_headers(res);
-    json_ok(locator_issue_outcome(&record, token))
+    json_ok(locator_issue_outcome(&record, token)?)
 }
 
 #[endpoint(operation_id = "ak.self.invite_locator.command.revoke", tags("self"))]
@@ -206,14 +207,15 @@ async fn revoke_invite_locator(
     let revoked_at = now();
     let Some(record) = state
         .realm_invite_application()
-        .revoke_locator(&session.actor, &body.locator_id, revoked_at)
+        .revoke_locator(&session.actor, body.locator_id.as_str(), revoked_at)
         .await
         .map_err(|error| AppError::internal(format!("invite locator revoke: {error}")))?
     else {
         return Err(invite_locator_not_found());
     };
     json_ok(InviteLocatorRevokeOutcome {
-        locator_id: record.locator_id,
+        locator_id: InviteLocatorId::new(record.locator_id)
+            .map_err(|error| AppError::internal(format!("stored invite locator id: {error}")))?,
         status: InviteLocatorStatus::Revoked,
         revoked_at: record.revoked_at.unwrap_or(revoked_at),
     })

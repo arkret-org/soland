@@ -692,16 +692,23 @@ fn sdk_event_from_record(
         actor_id,
         actor_seq: record.actor_seq,
         created_at,
-        hlc,
+        hlc: Some(hlc),
         prev_refs: event_id_list(object.get("prev_refs"))?,
         effective_scope: sdk_effective_scope(record, &realm_id),
         refs: event_refs(object.get("refs")),
+        causal_refs: hash_list(object.get("causal_refs"))?,
         preconditions: json_array_field(object, "preconditions"),
         effects: json_array_field(object, "effects"),
         seal_ref: object
             .get("seal_ref")
             .and_then(Value::as_str)
             .and_then(|value| arkret_identifiers::SealId::new(value.to_owned()).ok()),
+        conflict_keys_digest: object
+            .get("conflict_keys_digest")
+            .and_then(Value::as_str)
+            .map(|value| Hash::new(value.to_owned()))
+            .transpose()
+            .map_err(|error| AppError::internal(format!("stored conflict keys digest: {error}")))?,
         auth_context: object
             .get("auth_context")
             .cloned()
@@ -801,6 +808,20 @@ fn event_id_list(value: Option<&Value>) -> Result<Vec<EventId>, AppError> {
         .collect()
 }
 
+fn hash_list(value: Option<&Value>) -> Result<Vec<Hash>, AppError> {
+    let Some(values) = value.and_then(Value::as_array) else {
+        return Ok(Vec::new());
+    };
+    values
+        .iter()
+        .filter_map(Value::as_str)
+        .map(|value| {
+            Hash::new(value.to_owned())
+                .map_err(|error| AppError::internal(format!("stored hash: {error}")))
+        })
+        .collect()
+}
+
 fn event_refs(value: Option<&Value>) -> Vec<EventRef> {
     value
         .cloned()
@@ -888,6 +909,7 @@ fn sdk_event_proofs(
         .map_err(|error| AppError::internal(error.to_string()))?;
     Ok(vec![Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
+        proof_purpose: None,
         alg: proof
             .and_then(|proof| proof.get("alg"))
             .and_then(Value::as_str)

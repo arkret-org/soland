@@ -1052,7 +1052,7 @@ async fn delete_account_localpart(
     status_codes(200, 401, 404, 500)
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.query.viewer"))]
-async fn account_viewer(
+pub(crate) async fn account_viewer(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,

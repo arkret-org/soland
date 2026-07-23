@@ -26,7 +26,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_canonical as canonical;
 use arkret_hlc::CursorPurpose;
-use arkret_identifiers::{BlobRef, Did, MessageId, RealmId, StrandId};
+use arkret_identifiers::{BlobRef, Did, MessageId, RealmId, StrandId, SubscriptionId};
 use arkret_models_discovery::{
     ActorPreview, DirectoryActorSearchOutcome, DirectoryAgentSelectorResolutionOutcome,
     DirectoryAnnounceOutcome, DirectoryAnnounceRequestBody, DirectoryHandleResolutionOutcome,

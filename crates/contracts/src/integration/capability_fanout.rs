@@ -15,7 +15,7 @@ use serde_json::Value;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CapabilityFanoutBody {
-    /// Fixed envelope kind `ak.coauth.collaboration_capability.fanout.v1`.
+    /// Fixed envelope kind `org.arkret.coauth.collaboration_capability.fanout.v1`.
     pub kind: String,
     /// The coauth-side operation this fanout materializes (e.g. grant /
     /// revoke), echoed back in the response.

@@ -377,7 +377,7 @@ pub(super) async fn put_key_backup(
     )
 )]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.query.list"))]
-pub(super) async fn list_key_backups(
+pub(crate) async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
