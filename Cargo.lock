@@ -5006,7 +5006,10 @@ name = "soland-contracts"
 version = "0.3.0"
 dependencies = [
  "arkret-canonical",
- "arkret-core",
+ "arkret-identifiers",
+ "arkret-models-collaboration",
+ "arkret-models-crypto",
+ "arkret-wire",
  "chrono",
  "salvo",
  "serde",

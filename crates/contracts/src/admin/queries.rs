@@ -23,7 +23,9 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{AccountStatus, Did, GrantConstraint};
+use arkret_identifiers::Did;
+use arkret_models_collaboration::governance::grant_constraint::GrantConstraint;
+use arkret_models_collaboration::objects::account_status::AccountStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

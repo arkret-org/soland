@@ -5,7 +5,8 @@
 //! consumes it) so producers and consumers still use one strong type without
 //! presenting product-local endpoints as protocol models.
 
-use arkret_core::{DeviceId, DeviceStatus, Did, EventId};
+use arkret_identifiers::{DeviceId, Did, EventId};
+use arkret_models_crypto::DeviceStatus;
 use serde::{Deserialize, Serialize};
 
 /// Request for the product-local device signing-key directory.

@@ -11,11 +11,20 @@ description = "Shared deployment-local contracts for Soland integrations."
 
 [features]
 default = []
-salvo = ["dep:salvo", "arkret-core/salvo"]
+salvo = [
+    "dep:salvo",
+    "arkret-identifiers/salvo",
+    "arkret-models-collaboration/salvo-oapi",
+    "arkret-models-crypto/salvo-oapi",
+    "arkret-wire/salvo-oapi",
+]
 
 [dependencies]
 arkret-canonical.workspace = true
-arkret-core = {workspace = true,default-features = false}
+arkret-identifiers.workspace = true
+arkret-models-collaboration.workspace = true
+arkret-models-crypto.workspace = true
+arkret-wire.workspace = true
 chrono = {workspace = true,features = ["serde"]}
 salvo = {workspace = true,optional = true,features = ["oapi"]}
 serde = {workspace = true,features = ["derive"]}
