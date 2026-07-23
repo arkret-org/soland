@@ -20,12 +20,13 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
-use arkret_core::{
-    Did, FreshnessState, Hash, PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody,
-    PolicyCheckSignature, PolicyCheckSource, RealmId,
-};
+use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_identity::{DidDocument, DidResolver, DidWebResolver};
-use arkret_wire::AuthzDecision;
+use arkret_models_collaboration::governance::policy_check::{
+    PolicyCheckBoundTo, PolicyCheckOutcome, PolicyCheckRequestBody, PolicyCheckSignature,
+    PolicyCheckSource,
+};
+use arkret_wire::{AuthzDecision, FreshnessState};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey};

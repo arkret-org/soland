@@ -56,7 +56,7 @@ pub(crate) fn signed_keys_upload_body(
     fallback_keys: Value,
 ) -> Value {
     let signing_input = keys_upload_signing_input(device_id, &one_time_keys, &fallback_keys);
-    let sig = arkret_core::base64url_encode(signing_key.sign(&signing_input).to_bytes());
+    let sig = arkret_canonical::base64url_encode(signing_key.sign(&signing_input).to_bytes());
     serde_json::json!({
         "device_id": device_id,
         "one_time_keys": one_time_keys,

@@ -72,7 +72,7 @@ async fn run() -> anyhow::Result<()> {
     let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
     let bootstrap = if matches!(
         bootstrap.state,
-        arkret_core::ServiceIdentityState::WaitingProvider { .. }
+        arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
     ) {
         tracing::warn!(
             retry_seconds = 5,
@@ -493,7 +493,7 @@ where
                 Ok(bootstrap)
                     if matches!(
                         bootstrap.state,
-                        arkret_core::ServiceIdentityState::WaitingProvider { .. }
+                        arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
                     ) =>
                 {
                     tracing::warn!("service identity Provider remains unavailable; retrying");
@@ -554,7 +554,7 @@ fn spawn_service_identity_supervisor(
 ) {
     if !matches!(
         state.service_identity_state().as_ref(),
-        arkret_core::ServiceIdentityState::DegradedStored { .. }
+        arkret_identity::service_identity::ServiceIdentityState::DegradedStored { .. }
     ) {
         return;
     }
@@ -573,8 +573,8 @@ fn spawn_service_identity_supervisor(
                 Ok(bootstrap) => {
                     let keep_retrying = matches!(
                         bootstrap.state,
-                        arkret_core::ServiceIdentityState::DegradedStored { .. }
-                            | arkret_core::ServiceIdentityState::WaitingProvider { .. }
+                        arkret_identity::service_identity::ServiceIdentityState::DegradedStored { .. }
+                            | arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
                     );
                     if let Some(identity) = bootstrap.state.identity()
                         && identity.service_id.as_str() != state.service_id()
@@ -645,7 +645,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 match client.describe().await {
                     Ok(description)
                         if description.service_type
-                            == arkret_core::ServiceType::PrincipalServer
+                            == arkret_wire::ServiceType::PrincipalServer
                             && description.service_id.as_str() != state.service_id() =>
                     {
                         let document_view = match client
@@ -666,9 +666,10 @@ fn spawn_federation_peer_discovery(state: AppState) {
                         let document_value = serde_json::Value::Object(
                             document_view.did_document.into_iter().collect(),
                         );
-                        let document = match serde_json::from_value::<arkret_core::ServiceDidDocument>(
-                            document_value,
-                        ) {
+                        let document = match serde_json::from_value::<
+                            arkret_models_identity::service_identity::ServiceDidDocument,
+                        >(document_value)
+                        {
                             Ok(document) => document,
                             Err(error) => {
                                 tracing::warn!(
@@ -680,7 +681,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 continue;
                             }
                         };
-                        let public_base = match arkret_core::CanonicalServiceUrl::canonicalize(
+                        let public_base = match arkret_models_identity::service_identity::CanonicalServiceUrl::canonicalize(
                             endpoint.as_str(),
                         ) {
                             Ok(public_base) => public_base,
@@ -689,8 +690,8 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 continue;
                             }
                         };
-                        let registration_key = match arkret_core::ServiceRegistrationKey::new(
-                            arkret_core::ServiceType::PrincipalServer,
+                        let registration_key = match arkret_models_identity::service_identity::ServiceRegistrationKey::new(
+                            arkret_wire::ServiceType::PrincipalServer,
                             public_base,
                         ) {
                             Ok(key) => key,
@@ -731,7 +732,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             continue;
                         };
                         let verifying_key =
-                            match arkret_core::decode_ed25519_multibase(public_key_multibase)
+                            match arkret_canonical::decode_ed25519_multibase(public_key_multibase)
                                 .map_err(|error| error.to_string())
                                 .and_then(|raw| {
                                     ed25519_dalek::VerifyingKey::from_bytes(&raw)

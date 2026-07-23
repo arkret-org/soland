@@ -445,7 +445,7 @@ async fn describe_separates_claim_levels() {
                 && notes.contains("operation-registry canonical paths")
         }));
     }
-    let _: arkret_core::ServiceDescribe = serde_json::from_value(describe)
+    let _: arkret_models_discovery::ServiceDescribe = serde_json::from_value(describe)
         .expect("server describe must deserialize with the SDK client model");
 }
 

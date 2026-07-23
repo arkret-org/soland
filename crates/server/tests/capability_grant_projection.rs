@@ -13,7 +13,8 @@
 //! events and read back the projected cell + the engine-shaped effective
 //! grant the projection driver folds into `SolandAuthzEngine`.
 
-use arkret_core::{Operation, OperationId, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{OperationId, RealmId};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
@@ -46,7 +47,7 @@ fn grant_op(grant_id: &str) -> Operation {
 }
 
 fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> Operation {
-    let registry_digest = arkret_core::current_capability_action_registry_digest()
+    let registry_digest = arkret_policy::current_capability_action_registry_digest()
         .expect("embedded capability action registry");
     op(
         arkret_wire::events::EventKind::CAPABILITY_GRANT,
@@ -115,7 +116,7 @@ fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resou
 }
 
 fn grant_cell_items(state: &ProjectionState, grant_id: &str) -> Vec<Value> {
-    let cell_ref = arkret_core::CellRef::new(format!(
+    let cell_ref = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.capability.grant.v1:{grant_id}"
     ))
     .unwrap();

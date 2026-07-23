@@ -31,12 +31,14 @@ bs58 = {workspace = true}
 bytes = {workspace = true}
 chrono = {workspace = true,features = ["serde"]}
 arkret-canonical.workspace = true
-arkret-core = {workspace = true,features = ["salvo"]}
 arkret-bootstrap.workspace = true
 arkret-crypto = {workspace = true,features = ["account-data"]}
+arkret-event-draft.workspace = true
 arkret-http-client.workspace = true
+arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-keystore.workspace = true
+arkret-models-identity.workspace = true
 arkret-signatures = {workspace = true,features = ["protocol", "signer"]}
 arkret-state = {workspace = true,features = ["salvo"]}
 arkret-wire.workspace = true
@@ -78,6 +80,8 @@ tracing-subscriber = {workspace = true,features = ["env-filter", "json"]}
 uuid = {workspace = true,features = ["v4", "v7", "serde"]}
 
 [dev-dependencies]
+arkret-models-collaboration.workspace = true
+arkret-models-crypto.workspace = true
 arkret-models-discovery.workspace = true
 arkret-models-integration.workspace = true
 arkret-policy.workspace = true

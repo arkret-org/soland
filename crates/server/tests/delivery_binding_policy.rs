@@ -7,7 +7,7 @@
 //! Move/Seal pipeline. The HTTP wire path that feeds these reducer
 //! calls is exercised separately in `tests/http_api/`.
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState};
@@ -16,8 +16,9 @@ const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        arkret_core::RealmId::new(realm_id).unwrap(),
+        arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+        arkret_identifiers::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )

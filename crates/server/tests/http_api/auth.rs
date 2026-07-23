@@ -6,8 +6,8 @@ use soland_storage::DeviceMessageRecord;
 
 use super::common::*;
 
-fn registration_secret_digest(value: &str) -> arkret_core::Hash {
-    arkret_core::Hash::new(arkret_canonical::sha256_digest(value.as_bytes())).unwrap()
+fn registration_secret_digest(value: &str) -> arkret_identifiers::Hash {
+    arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(value.as_bytes())).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -88,17 +88,17 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let state = soland_test_support::app_state(test_config());
     {
         let mut policy = state.test_account_registration_policy().lock();
-        *policy = arkret_core::AccountRegistrationPolicy {
-            verification_code: arkret_core::AccountRegistrationVerificationPolicy {
+        *policy = arkret_models_identity::AccountRegistrationPolicy {
+            verification_code: arkret_models_identity::AccountRegistrationVerificationPolicy {
                 required: true,
                 code_digest: Some(registration_secret_digest("246810")),
             },
             organization_allowlist: vec!["example.edu".to_owned()],
-            invitation: arkret_core::AccountRegistrationInvitationPolicy {
+            invitation: arkret_models_identity::AccountRegistrationInvitationPolicy {
                 required: true,
                 token_digests: vec![registration_secret_digest("invite-token")],
             },
-            ..arkret_core::AccountRegistrationPolicy::default()
+            ..arkret_models_identity::AccountRegistrationPolicy::default()
         };
     }
 
@@ -226,7 +226,7 @@ async fn account_registration_policy_evidence_and_rate_limit_are_enforced() {
     let rate_limited_state = soland_test_support::app_state(test_config());
     {
         let mut policy = rate_limited_state.test_account_registration_policy().lock();
-        policy.rate_limit = Some(arkret_core::AccountRegistrationRateLimitPolicy {
+        policy.rate_limit = Some(arkret_models_identity::AccountRegistrationRateLimitPolicy {
             max_attempts: 1,
             window_seconds: 60,
         });

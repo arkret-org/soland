@@ -8,12 +8,11 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{
-    AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
-    AppletPackage, AppletWireNamespaces, Did, WebhookAuth,
-};
+use arkret_identifiers::Did;
 use arkret_models_integration::applet::{
-    AppletEndpointPolicy, AppletGhostPolicy, WebhookSignatureAlg,
+    AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletEndpointPolicy,
+    AppletGhostPolicy, AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, WebhookAuth,
+    WebhookSignatureAlg,
 };
 use arkret_signatures::Ed25519MoveSigner;
 use base64::Engine as _;
@@ -56,7 +55,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
     meta.plaintext_visible_services.insert(service_id.clone());
     meta.plaintext_visible_service_classes.insert(
         service_id,
-        std::collections::BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
+        std::collections::BTreeSet::from([arkret_wire::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = chrono::Utc::now();
     state
@@ -70,7 +69,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
 async fn dev_token(state: AppState) -> String {
     state.hydrate().await.unwrap();
     let actor = "did:web:alice.example";
-    let typed_realm_id = arkret_core::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let typed_realm_id = arkret_identifiers::RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
     let actor_did = Did::new(actor.to_owned()).unwrap();
     let now = chrono::Utc::now();
     {
@@ -173,7 +172,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let realm_id = DEMO_REALM_ID;
-    let applet_id = arkret_core::new_prefixed_uuid7("ak:applet:");
+    let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.install.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
@@ -248,7 +247,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = arkret_core::new_prefixed_uuid7("ak:applet:");
+    let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.provision.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
@@ -390,7 +389,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = arkret_core::new_prefixed_uuid7("ak:applet:");
+    let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.no-ghost-scope.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
@@ -443,7 +442,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let token = dev_token(state.clone()).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = arkret_core::new_prefixed_uuid7("ak:applet:");
+    let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.namespace.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
@@ -593,7 +592,7 @@ fn applet_message_event(
         },
     });
     let event = json!({
-        "event_id": arkret_core::new_prefixed_uuid7("ak:event:"),
+        "event_id": arkret_identifiers::new_prefixed_uuid7("ak:event:"),
         "kind": "ak.message.create",
         "realm_id": realm_id,
         "actor_id": actor_id,
@@ -619,7 +618,7 @@ fn applet_message_event(
         package.service_id.clone(),
         verification_method.clone(),
     );
-    let mut event: arkret_core::Event = serde_json::from_value(event).unwrap();
+    let mut event: arkret_wire::Event = serde_json::from_value(event).unwrap();
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -679,7 +678,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
     allow_service_message_plaintext(&state, DEMO_REALM_ID).await;
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
-    let applet_id = arkret_core::new_prefixed_uuid7("ak:applet:");
+    let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
     let namespace = format!("bridge.smoke.{suffix}");
     let package = signed_applet_package(&applet_id, &namespace);
     ingest_applet_service_id_document(&state, &package).await;
@@ -896,9 +895,12 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     );
     let service_document = applet_service_id_document(&package);
     let registration_epoch_evidence =
-        arkret_core::AppletRegistrationEpochEvidence::from_did_document(
+        arkret_models_integration::applet::AppletRegistrationEpochEvidence::from_did_document(
             &service_document,
-            arkret_core::AppletDidMethodVersionEvidence::unversioned("did:web").unwrap(),
+            arkret_models_integration::applet::AppletDidMethodVersionEvidence::unversioned(
+                "did:web",
+            )
+            .unwrap(),
         )
         .unwrap();
     package.requested_scopes = vec![
@@ -949,13 +951,13 @@ fn applet_service_id_document(package: &AppletPackage) -> arkret_identity::DidDo
         verification_methods: BTreeMap::from([
             (
                 package.webhook_auth.key_ref.clone(),
-                arkret_core::ed25519_pubkey_to_did_key_multibase(
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                     applet_signing_key.verifying_key().as_bytes(),
                 ),
             ),
             (
                 notary_method,
-                arkret_core::ed25519_pubkey_to_did_key_multibase(
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                     signing_key.verifying_key().as_bytes(),
                 ),
             ),

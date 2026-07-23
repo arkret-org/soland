@@ -8,7 +8,8 @@ pub(crate) use std::sync::LazyLock;
 pub(crate) use std::sync::atomic::{AtomicU64, Ordering};
 pub(crate) use std::time::Duration;
 
-pub(crate) use arkret_core::{Did, Operation, OperationId, RealmId, new_prefixed_uuid7};
+pub(crate) use arkret_event_draft::Operation;
+pub(crate) use arkret_identifiers::{Did, OperationId, RealmId, new_prefixed_uuid7};
 pub(crate) use base64::Engine;
 pub(crate) use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 pub(crate) use ed25519_dalek::{Signature, Signer, SigningKey, Verifier};
@@ -41,7 +42,7 @@ static TEST_EVENT_SIGNER_DID: LazyLock<String> = LazyLock::new(|| {
     let key = SigningKey::from_bytes(&[21_u8; 32]);
     format!(
         "did:key:{}",
-        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 });
 
@@ -493,13 +494,13 @@ pub(crate) async fn seed_test_realm(
             (
                 service.clone(),
                 std::collections::BTreeSet::from([
-                    arkret_core::PlaintextDataClassKind::MessageContent,
-                    arkret_core::PlaintextDataClassKind::AttachmentPlaintext,
-                    arkret_core::PlaintextDataClassKind::AttachmentPreview,
-                    arkret_core::PlaintextDataClassKind::Thumbnail,
-                    arkret_core::PlaintextDataClassKind::FullTextIndex,
-                    arkret_core::PlaintextDataClassKind::NotificationSummary,
-                    arkret_core::PlaintextDataClassKind::MediaPlaintext,
+                    arkret_wire::PlaintextDataClassKind::MessageContent,
+                    arkret_wire::PlaintextDataClassKind::AttachmentPlaintext,
+                    arkret_wire::PlaintextDataClassKind::AttachmentPreview,
+                    arkret_wire::PlaintextDataClassKind::Thumbnail,
+                    arkret_wire::PlaintextDataClassKind::FullTextIndex,
+                    arkret_wire::PlaintextDataClassKind::NotificationSummary,
+                    arkret_wire::PlaintextDataClassKind::MediaPlaintext,
                 ]),
             )
         })
@@ -762,7 +763,7 @@ pub(crate) fn signed_canonical_event(
     payload: Value,
 ) -> Value {
     let now = chrono::Utc::now();
-    let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let actor = arkret_identifiers::Did::new(actor_id.to_owned()).expect("fixture actor DID");
     let device_id = if device_id.starts_with("ak:device:") {
         device_id.to_owned()
     } else {
@@ -772,13 +773,13 @@ pub(crate) fn signed_canonical_event(
         || format!("{actor_id}#{device_id}"),
         |key| format!("{actor_id}#{key}"),
     );
-    let mut event = arkret_core::Event::new_with_id_at(
-        arkret_core::EventId::new(event_id.to_owned()).expect("fixture Event id"),
+    let mut event = arkret_wire::Event::new_with_id_at(
+        arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor.clone(),
         actor_seq,
-        arkret_core::Hlc::new(format!(
+        arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))
@@ -789,7 +790,7 @@ pub(crate) fn signed_canonical_event(
     .expect("SDK Event builder accepts HTTP fixture");
     event.prev_refs = prev_refs
         .into_iter()
-        .map(|event_id| arkret_core::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
+        .map(|event_id| arkret_wire::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
         .collect();
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
@@ -811,7 +812,7 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
         .as_str()
         .expect("fixture verification method")
         .to_owned();
-    let mut typed: arkret_core::Event =
+    let mut typed: arkret_wire::Event =
         serde_json::from_value(event.clone()).expect("fixture Event roundtrip");
     typed.proofs.clear();
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
@@ -973,11 +974,13 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     .take_json()
     .await
     .expect("typed HTTP fixture actor Realm frontier");
-    let frontier: arkret_core::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         serde_json::from_value(frontier_value.clone()).unwrap_or_else(|error| {
             panic!("invalid typed HTTP fixture actor Realm frontier: {error}; {frontier_value}")
         });
-    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
         panic!("combined Realm+actor selector returned the wrong variant");
     };
     event["actor_seq"] = Value::Number(frontier.next_actor_seq.into());
@@ -1113,7 +1116,7 @@ pub(crate) async fn authorize_test_plaintext_message_service(
     meta.plaintext_visible_service_classes
         .entry(state.service_id().clone())
         .or_default()
-        .insert(arkret_core::PlaintextDataClassKind::MessageContent);
+        .insert(arkret_wire::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
         .test_persistence()
@@ -1416,44 +1419,43 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
         arkret_wire::events::EventKind::SPACE_ARCHIVE
-        | arkret_wire::events::EventKind::SPACE_RESTORE => {
-            serde_json::to_value(arkret_core::SpaceStateTransitionPayload {
+        | arkret_wire::events::EventKind::SPACE_RESTORE => serde_json::to_value(
+            arkret_models_collaboration::object_lifecycle::SpaceStateTransitionPayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
                 effective_at: None,
-            })
-            .expect("space lifecycle payload serialization")
-        }
-        arkret_wire::events::EventKind::SPACE_TOMBSTONE => {
-            serde_json::to_value(arkret_core::SpaceObjectTombstonePayload {
+            },
+        )
+        .expect("space lifecycle payload serialization"),
+        arkret_wire::events::EventKind::SPACE_TOMBSTONE => serde_json::to_value(
+            arkret_models_collaboration::object_lifecycle::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
                 replacement_space: optional_space_id(&payload, "replacement_space"),
                 replacement_event: optional_event_ref(&payload, "replacement_event"),
                 effective_at: None,
-            })
-            .expect("space tombstone payload serialization")
-        }
+            },
+        )
+        .expect("space tombstone payload serialization"),
         _ => payload,
     }
 }
 
-fn required_space_id(payload: &Value, field: &str) -> arkret_core::SpaceId {
+fn required_space_id(payload: &Value, field: &str) -> arkret_identifiers::SpaceId {
     let value = payload
         .get(field)
         .and_then(Value::as_str)
         .expect("space lifecycle payload requires space_id");
-    arkret_core::SpaceId::new(value.to_owned()).expect("valid space id")
+    arkret_identifiers::SpaceId::new(value.to_owned()).expect("valid space id")
 }
 
-fn optional_space_id(payload: &Value, field: &str) -> Option<arkret_core::SpaceId> {
-    payload
-        .get(field)
-        .and_then(Value::as_str)
-        .map(|value| arkret_core::SpaceId::new(value.to_owned()).expect("valid optional space id"))
+fn optional_space_id(payload: &Value, field: &str) -> Option<arkret_identifiers::SpaceId> {
+    payload.get(field).and_then(Value::as_str).map(|value| {
+        arkret_identifiers::SpaceId::new(value.to_owned()).expect("valid optional space id")
+    })
 }
 
-fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_core::EventRef> {
+fn optional_event_ref(payload: &Value, field: &str) -> Option<arkret_wire::EventRef> {
     payload
         .get(field)
         .map(|value| serde_json::from_value(value.clone()).expect("valid optional event ref"))
@@ -1595,33 +1597,37 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 fn typed_morph_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_wire::events::EventKind::MORPH_ARCHIVE => arkret_core::ObjectLifecyclePayload::new(
-            required_string(&payload, "target_ref", "morph lifecycle target_ref"),
-        )
-        .with_target_state("archived")
-        .to_value()
-        .expect("morph archive payload serialization"),
-        arkret_wire::events::EventKind::MORPH_RESTORE => arkret_core::ObjectLifecyclePayload::new(
-            required_string(&payload, "target_ref", "morph lifecycle target_ref"),
-        )
-        .with_target_state("active")
-        .to_value()
-        .expect("morph restore payload serialization"),
+        arkret_wire::events::EventKind::MORPH_ARCHIVE => {
+            arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
+                required_string(&payload, "target_ref", "morph lifecycle target_ref"),
+            )
+            .with_target_state("archived")
+            .to_value()
+            .expect("morph archive payload serialization")
+        }
+        arkret_wire::events::EventKind::MORPH_RESTORE => {
+            arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
+                required_string(&payload, "target_ref", "morph lifecycle target_ref"),
+            )
+            .with_target_state("active")
+            .to_value()
+            .expect("morph restore payload serialization")
+        }
         arkret_wire::events::EventKind::MORPH_UPDATE => {
-            let morph_id = arkret_core::MorphId::new(required_string(
+            let morph_id = arkret_identifiers::MorphId::new(required_string(
                 &payload,
                 "target_ref",
                 "morph update target_ref",
             ))
             .expect("valid morph id");
-            let patch: arkret_core::Patch = serde_json::from_value(
+            let patch: arkret_wire::Patch = serde_json::from_value(
                 payload
                     .get("patch")
                     .cloned()
                     .expect("morph update payload requires patch"),
             )
             .expect("valid morph update patch");
-            arkret_core::MorphUpdatePayload::for_morph(morph_id, patch)
+            arkret_models_collaboration::events_payloads::morph_message::MorphUpdatePayload::for_morph(morph_id, patch)
                 .expect("valid morph update payload")
                 .to_value()
                 .expect("morph update payload serialization")
@@ -1667,7 +1673,10 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let to_ref = relation_payload_str(&payload, &["to_ref", "to"])
         .expect("relation create payload requires to_ref");
     let rank = relation_payload_str(&payload, &["rank"]);
-    let mut typed = arkret_core::RelationCreatePayload::new(kind, from_ref, to_ref);
+    let mut typed =
+        arkret_models_collaboration::governance::membership_invite::RelationCreatePayload::new(
+            kind, from_ref, to_ref,
+        );
     if let Some(rank) = rank {
         typed = typed.with_rank(rank);
     }

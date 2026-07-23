@@ -1,7 +1,8 @@
 use std::collections::BTreeSet;
 use std::sync::LazyLock;
 
-use arkret_core::{Did, PlaintextDataClassKind, RealmId, new_prefixed_uuid7};
+use arkret_identifiers::{Did, RealmId, new_prefixed_uuid7};
+use arkret_wire::PlaintextDataClassKind;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland_domain::reducer::{
@@ -23,7 +24,7 @@ fn test_signer_did(seed: [u8; 32]) -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&seed);
     format!(
         "did:key:{}",
-        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 }
 
@@ -135,7 +136,7 @@ async fn allow_service_message_plaintext(state: &AppState, realm_id: &str) {
     meta.plaintext_visible_services.insert(service_id.clone());
     meta.plaintext_visible_service_classes.insert(
         service_id,
-        BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
+        BTreeSet::from([arkret_wire::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = chrono::Utc::now();
     state
@@ -376,8 +377,8 @@ fn install_projected_strand_scope(
             strand_id: strand_id.to_owned(),
             realm_id: realm_id.to_owned(),
             tracks: std::collections::BTreeMap::from([(
-                arkret_core::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                arkret_core::StrandTrackConfig::discussion_primary(),
+                arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
+                arkret_models_collaboration::objects::profiles::StrandTrackConfig::discussion_primary(),
             )]),
             title: "Confidential discussion".to_owned(),
             summary: None,
@@ -544,33 +545,36 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         kind,
         payload,
     } = input;
-    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor_id}&realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .expect("typed discussion actor Realm frontier");
-    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::get(format!(
+            "http://server/_arkret/self/events/frontier?actor_id={actor_id}&realm_id={realm_id}"
+        ))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .expect("typed discussion actor Realm frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
         panic!("combined Realm+actor selector returned the wrong variant");
     };
     let actor_seq = frontier.next_actor_seq;
     let prev_refs = frontier.frontier_event_ids;
     let now = chrono::Utc::now();
-    let actor = arkret_core::Did::new(actor_id.to_owned()).expect("fixture actor DID");
+    let actor = arkret_identifiers::Did::new(actor_id.to_owned()).expect("fixture actor DID");
     let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
         || format!("{actor_id}#{device_id}"),
         |key| format!("{actor_id}#{key}"),
     );
-    let mut event = arkret_core::Event::new_with_id_at(
-        arkret_core::EventId::new(event_id.to_owned()).expect("fixture Event id"),
+    let mut event = arkret_wire::Event::new_with_id_at(
+        arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor.clone(),
         actor_seq,
-        arkret_core::Hlc::new(format!(
+        arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))

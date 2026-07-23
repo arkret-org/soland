@@ -13,7 +13,7 @@
 //! HTTP ingress that fans wire payloads into these reducer calls is
 //! out of scope for T4.2.
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState, PushRouteSubject};
@@ -37,8 +37,9 @@ const GATEWAY_DID: &str = "did:web:gateway.example";
 
 fn op(payload: Value) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        arkret_core::RealmId::new(PLACEHOLDER_REALM).unwrap(),
+        arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+        arkret_identifiers::RealmId::new(PLACEHOLDER_REALM).unwrap(),
         arkret_wire::events::EventKind::DEVICE_PUSH_ROUTE,
         payload,
     )

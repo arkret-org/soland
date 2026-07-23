@@ -7,16 +7,19 @@
 
 use std::sync::Arc;
 
-use arkret_core::{
-    CanonicalServiceUrl, Did, FileIdentityBundleBackend, IdentityBundleBackend,
-    IdentityBundleBackendAvailability, LocalServiceIdentity, ServiceIdentityBundle,
-    ServiceIdentityDiagnostic, ServiceIdentityKeyRef, ServiceIdentityProviderRef,
-    ServiceIdentityState, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
-    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceType,
-    ServiceWebvhDataIntegrityProof, StoredServiceIdentity,
-};
 use arkret_http_client::{Auth, Client, ClientBuilder};
+use arkret_identifiers::Did;
+use arkret_identity::service_identity::{
+    FileIdentityBundleBackend, IdentityBundleBackend, IdentityBundleBackendAvailability,
+    LocalServiceIdentity, ServiceIdentityBundle, ServiceIdentityDiagnostic, ServiceIdentityKeyRef,
+    ServiceIdentityProviderRef, ServiceIdentityState, StoredServiceIdentity,
+};
 use arkret_keystore::KeyStore;
+use arkret_models_identity::service_identity::{
+    CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
+    ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
+};
+use arkret_wire::ServiceType;
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -704,7 +707,7 @@ async fn restore_identity_bundle(
         seq: 1,
         method_evidence: json!({
             "mode": "service_identity_bundle_restore",
-            "operation": arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_type": registration_key.service_type().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id,
@@ -798,7 +801,7 @@ fn validate_registration_receipt_signature(
         &receipt.provider_service_id,
         &receipt.proof.verification_method,
     )?;
-    let signature_bytes = arkret_core::decode_ed25519_signature_multibase(
+    let signature_bytes = arkret_canonical::decode_ed25519_signature_multibase(
         &receipt.proof.proof_value,
     )
     .map_err(|error| anyhow::anyhow!("identity bundle receipt proof is invalid: {error}"))?;
@@ -936,7 +939,7 @@ fn validate_service_signing_binding(
     stored: &StoredServiceIdentity,
     signing_seed: &[u8; 32],
 ) -> anyhow::Result<()> {
-    let expected = arkret_core::ed25519_pubkey_to_did_key_multibase(
+    let expected = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         SigningKey::from_bytes(signing_seed)
             .verifying_key()
             .as_bytes(),
@@ -1066,7 +1069,7 @@ async fn mint_local_service_identity(
         seq: 1,
         method_evidence: json!({
             "mode": "service_registration_provider",
-            "operation": arkret_core::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
+            "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
             "service_type": registration_key.service_type().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id,
@@ -1171,7 +1174,7 @@ fn sign_registration_receipt(
             cryptosuite: "eddsa-jcs-2022".to_owned(),
             verification_method,
             proof_purpose: "assertionMethod".to_owned(),
-            proof_value: arkret_core::encode_multibase_base58btc(signature.to_bytes()),
+            proof_value: arkret_canonical::encode_multibase_base58btc(signature.to_bytes()),
         },
     };
     receipt.validate_for(key, &receipt.service_id)?;
@@ -1304,7 +1307,7 @@ fn load_seed(
 }
 
 fn seed_public_multibase(seed: &[u8; 32]) -> String {
-    arkret_core::ed25519_pubkey_to_did_key_multibase(
+    arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         SigningKey::from_bytes(seed).verifying_key().as_bytes(),
     )
 }

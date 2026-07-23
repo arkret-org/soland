@@ -1,6 +1,6 @@
 use std::collections::BTreeMap;
 
-use arkret_core::CellRef;
+use arkret_identifiers::CellRef;
 use arkret_state::lattice::CellState;
 use arkret_state::state::compute_state_root;
 use base64::Engine as _;

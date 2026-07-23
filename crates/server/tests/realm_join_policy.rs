@@ -4,7 +4,7 @@
 //! `ak.realm.policy_components.join_policy` contains it, `membership=join`
 //! must pass before the member FSM is updated.
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
@@ -17,8 +17,9 @@ const MALLORY: &str = "did:web:mallory.example";
 
 fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
-        arkret_core::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
-        arkret_core::RealmId::new(realm_id).unwrap(),
+        arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+            .unwrap(),
+        arkret_identifiers::RealmId::new(realm_id).unwrap(),
         kind,
         payload,
     )

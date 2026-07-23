@@ -1,4 +1,4 @@
-use arkret_core::{Did, RealmId};
+use arkret_identifiers::{Did, RealmId};
 use salvo::http::StatusCode;
 use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
@@ -12,7 +12,7 @@ fn test_event_signer_did() -> String {
     let key = ed25519_dalek::SigningKey::from_bytes(&[21_u8; 32]);
     format!(
         "did:key:{}",
-        arkret_core::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
+        arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.verifying_key().as_bytes())
     )
 }
 
@@ -95,7 +95,7 @@ async fn put_account_data(
 }
 
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
-    let realm_id = arkret_core::new_prefixed_uuid7("ak:realm:");
+    let realm_id = arkret_identifiers::new_prefixed_uuid7("ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -127,7 +127,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
                 plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                     "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service".to_owned(),
                     std::collections::BTreeSet::from([
-                        arkret_core::PlaintextDataClassKind::MessageContent,
+                        arkret_wire::PlaintextDataClassKind::MessageContent,
                     ]),
                 )]),
                 minimal_metadata_realm: false,
@@ -161,22 +161,22 @@ fn signed_actor_private_event_envelope(
     kind: &str,
     payload: Value,
     actor_seq: u64,
-    prev_refs: Vec<arkret_core::EventId>,
+    prev_refs: Vec<arkret_wire::EventId>,
 ) -> Value {
     let now = chrono::Utc::now();
-    let actor_id = arkret_core::Did::new(actor.to_owned()).expect("fixture actor DID");
+    let actor_id = arkret_identifiers::Did::new(actor.to_owned()).expect("fixture actor DID");
     let verification_method = actor.strip_prefix("did:key:").map_or_else(
         || format!("{actor}#{device_id}"),
         |key| format!("{actor}#{key}"),
     );
-    let mut event = arkret_core::Event::new_with_id_at(
-        arkret_core::EventId::new(arkret_core::new_prefixed_uuid7("ak:event:"))
+    let mut event = arkret_wire::Event::new_with_id_at(
+        arkret_wire::EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
             .expect("fixture Event id"),
         kind,
-        arkret_core::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         actor_id.clone(),
         actor_seq,
-        arkret_core::Hlc::new(format!(
+        arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-00000000",
             now.timestamp_millis().max(0) as u64
         ))
@@ -210,16 +210,19 @@ async fn submit_actor_private_event(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .expect("typed actor Realm frontier");
-    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::get(format!(
+            "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
+        ))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .expect("typed actor Realm frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
         panic!("combined Realm+actor selector returned the wrong variant");
     };
     frontier.validate().expect("valid actor Realm frontier");
@@ -258,7 +261,7 @@ fn read_cursor_payload(
     hlc: &str,
 ) -> Value {
     json!({
-        "id": arkret_core::new_prefixed_uuid7("ak:read_cursor:"),
+        "id": arkret_identifiers::new_prefixed_uuid7("ak:read_cursor:"),
         "schema": "ak.schema.read_cursor.v1",
         "actor_id": actor,
         "device_id": device_id,
@@ -370,7 +373,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
             .is_some_and(|proofs| !proofs.is_empty())
     );
     assert!(!event.to_string().contains("first"));
-    serde_json::from_value::<arkret_core::Event>(event.clone())
+    serde_json::from_value::<arkret_wire::Event>(event.clone())
         .expect("sync account_data entry is a typed canonical Event");
 
     state

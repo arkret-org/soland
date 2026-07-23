@@ -5,20 +5,20 @@
 use super::common::*;
 
 struct ControllerSealSigner {
-    did: arkret_core::Did,
+    did: arkret_identifiers::Did,
     verification_method: String,
     signing_key: SigningKey,
 }
 
-impl arkret_core::MoveSigner for ControllerSealSigner {
+impl arkret_wire::MoveSigner for ControllerSealSigner {
     fn sign_move(
         &self,
-        _unsigned: &arkret_core::UnsignedMove,
-    ) -> Result<arkret_core::Move, arkret_core::WireError> {
+        _unsigned: &arkret_wire::UnsignedMove,
+    ) -> Result<arkret_wire::Move, arkret_wire::WireError> {
         unreachable!("managed Agent PCR test only signs a Seal")
     }
 
-    fn signer_did(&self) -> &arkret_core::Did {
+    fn signer_did(&self) -> &arkret_identifiers::Did {
         &self.did
     }
 
@@ -29,11 +29,11 @@ impl arkret_core::MoveSigner for ControllerSealSigner {
     fn sign_payload(
         &self,
         canonical_bytes: &[u8],
-    ) -> Result<arkret_core::MoveSignature, arkret_core::WireError> {
-        Ok(arkret_core::MoveSignature {
+    ) -> Result<arkret_wire::MoveSignature, arkret_wire::WireError> {
+        Ok(arkret_wire::MoveSignature {
             alg: "EdDSA".to_owned(),
             verification_method: self.verification_method.clone(),
-            payload_digest: arkret_core::Hash::new(arkret_canonical::sha256_digest(
+            payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
                 canonical_bytes,
             ))?,
             created_at: chrono::Utc::now(),
@@ -49,8 +49,8 @@ async fn fetch_chunked_mls_governance_proof(
     realm_id: &str,
     mut request_value: Value,
 ) -> (
-    Vec<arkret_core::MlsGovernanceProofBundle>,
-    arkret_core::MaterializedMlsGovernanceProofBundle,
+    Vec<arkret_models_crypto::MlsGovernanceProofBundle>,
+    arkret_models_crypto::MaterializedMlsGovernanceProofBundle,
 ) {
     let mut frontier_response = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
@@ -59,11 +59,14 @@ async fn fetch_chunked_mls_governance_proof(
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
-    let frontier: arkret_core::EventsFrontierAccountClientState = frontier_response
-        .take_json()
-        .await
-        .expect("typed Realm Seal frontier");
-    let arkret_core::EventsFrontierView::RealmSeal(frontier) = frontier.frontier else {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        frontier_response
+            .take_json()
+            .await
+            .expect("typed Realm Seal frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+        frontier.frontier
+    else {
         panic!("Realm frontier must materialize a Seal view");
     };
     let object = request_value
@@ -75,7 +78,7 @@ async fn fetch_chunked_mls_governance_proof(
     );
     object.insert("chunk_index".to_owned(), Value::from(0));
     object.remove("expected_bundle_digest");
-    let base_request: arkret_core::MlsGovernanceProofRequest =
+    let base_request: arkret_models_crypto::MlsGovernanceProofRequest =
         serde_json::from_value(request_value).expect("typed chunk-0 proof request");
 
     let mut first_response =
@@ -87,7 +90,7 @@ async fn fetch_chunked_mls_governance_proof(
     let first_status = first_response.status_code.expect("proof status");
     let first_body: Value = first_response.take_json().await.expect("proof body");
     assert_eq!(first_status, StatusCode::OK, "proof response: {first_body}");
-    let first: arkret_core::MlsGovernanceProofBundle =
+    let first: arkret_models_crypto::MlsGovernanceProofBundle =
         serde_json::from_value(first_body).expect("typed proof chunk 0");
     let mut chunks = vec![first.clone()];
     for chunk_index in 1..first.chunk_manifest.chunk_count {
@@ -105,8 +108,9 @@ async fn fetch_chunked_mls_governance_proof(
         assert_eq!(status, StatusCode::OK, "proof chunk response: {body}");
         chunks.push(serde_json::from_value(body).expect("typed proof chunk"));
     }
-    let materialized = arkret_core::assemble_mls_governance_proof_chunks(&base_request, &chunks)
-        .expect("complete proof chunks assemble");
+    let materialized =
+        arkret_models_crypto::assemble_mls_governance_proof_chunks(&base_request, &chunks)
+            .expect("complete proof chunks assemble");
     (chunks, materialized)
 }
 
@@ -147,7 +151,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
                     "capability_grant_refs": [],
                     "policy_refs": [],
                 }),
-                freshness_state: arkret_core::FreshnessState::Fresh,
+                freshness_state: arkret_wire::FreshnessState::Fresh,
             }),
             expires_at: now + chrono::Duration::minutes(5),
             created_at: now,
@@ -555,16 +559,19 @@ async fn events_describe_and_single_event_submit_work() {
     );
 
     // Actor selector → spec actor frontier `{actor_id, actor_seq, event_id}`.
-    let frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(
-        "http://server/_arkret/self/events/frontier?actor_id=did:web:alice.example",
-    )
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    let arkret_core::EventsFrontierView::ActorAggregate(frontier) = frontier.frontier else {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        TestClient::get(
+            "http://server/_arkret/self/events/frontier?actor_id=did:web:alice.example",
+        )
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let arkret_models_collaboration::event_sync::EventsFrontierView::ActorAggregate(frontier) =
+        frontier.frontier
+    else {
         panic!("actor-only selector must return non-authoring aggregate");
     };
     assert_eq!(frontier.actor_id.as_str(), "did:web:alice.example");
@@ -714,7 +721,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     assert_eq!(missing_body["reason"], "realm_founding_grant_missing");
 
     let grant_id = new_prefixed_uuid7("ak:grant:");
-    let mut grant: arkret_core::CapabilityGrant = serde_json::from_value(serde_json::json!({
+    let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant = serde_json::from_value(serde_json::json!({
         "id": grant_id,
         "schema": "ak.schema.capability.v1",
         "realm_id": realm_id,
@@ -725,7 +732,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "ak.capability.grant",
             "ak.capability.revoke"
         ],
-        "capability_action_registry_digest": arkret_core::current_capability_action_registry_digest().unwrap(),
+        "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
         "resources": [{
             "kind": "realm",
             "realm_id": realm_id,
@@ -738,17 +745,18 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     let verification_method = actor
         .strip_prefix("did:key:")
         .map_or_else(|| format!("{actor}#device"), |key| format!("{actor}#{key}"));
-    grant.proofs = vec![arkret_core::PayloadProof {
-        kind: arkret_core::proof_kind::DETACHED_JWS.to_owned(),
+    grant.proofs = vec![arkret_wire::PayloadProof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method,
-        payload_digest: arkret_core::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+        payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+            .unwrap(),
         created_at: chrono::DateTime::parse_from_rfc3339(created_at)
             .unwrap()
             .with_timezone(&chrono::Utc),
         domain: None,
         audience: None,
-        proof_purpose: Some(arkret_core::PayloadProofPurpose::IssuerAttestation),
+        proof_purpose: Some(arkret_wire::PayloadProofPurpose::IssuerAttestation),
         jws: "pending".to_owned(),
     }];
     grant.proofs[0].payload_digest = grant.payload_digest().unwrap();
@@ -926,7 +934,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
                 serde_json::json!("listed"),
             ),
         ] {
-            let cell = arkret_core::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
+            let cell =
+                arkret_identifiers::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
             assert_eq!(projection.cell_value(&cell), Some(&expected));
         }
     }
@@ -997,7 +1006,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     );
     {
         let restarted_projection = restarted.test_projection().lock();
-        let grant_cell = arkret_core::CellRef::new(format!(
+        let grant_cell = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.capability.grant.v1:{grant_id}"
         ))
         .unwrap();
@@ -1022,7 +1031,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
                 serde_json::json!("listed"),
             ),
         ] {
-            let cell = arkret_core::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
+            let cell =
+                arkret_identifiers::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
             assert_eq!(
                 restarted_projection.cell_value(&cell),
                 Some(&expected),
@@ -1046,7 +1056,11 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     });
     let (_, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request).await;
-    arkret_core::verify_mls_governance_proof_bundle::<arkret_wire::WireError, _, _>(
+    arkret_state::mls_governance_proof::verify_mls_governance_proof_bundle::<
+        arkret_wire::WireError,
+        _,
+        _,
+    >(
         &bundle,
         &bundle.governance_binding,
         &bundle.trusted_anchor_seal_id,
@@ -1063,12 +1077,12 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let realm_id = DEMO_REALM_ID.to_owned();
     let typed_realm = RealmId::new(realm_id.clone()).unwrap();
     let actor = Did::new("did:web:alice.example").unwrap();
-    let mut event = arkret_core::Event::new(
+    let mut event = arkret_wire::Event::new(
         arkret_wire::events::EventKind::MEMBER_STATE,
         typed_realm.clone(),
         actor,
         1,
-        arkret_core::Hlc::new("01980b44cc00-0000-aabbccdd").unwrap(),
+        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbccdd").unwrap(),
         serde_json::json!({
             "actor_id": "did:web:alice.example",
             "membership": "join"
@@ -1078,13 +1092,13 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     event.effective_scope = Some(arkret_wire::EffectiveScope::Realm {
         realm_id: typed_realm.clone(),
     });
-    event.effects = vec![arkret_core::Effect {
-        cell: arkret_core::CellRef::new(
+    event.effects = vec![arkret_wire::Effect {
+        cell: arkret_identifiers::CellRef::new(
             "ak:cell:ak.component.member.state.v1:did.web.alice.example",
         )
         .unwrap(),
-        op: arkret_core::LatticeOp {
-            op_type: arkret_core::LatticeOpType::Transition,
+        op: arkret_wire::LatticeOp {
+            op_type: arkret_wire::LatticeOpType::Transition,
             tag: None,
             value: None,
             from: Some(serde_json::json!("leave")),
@@ -1093,8 +1107,8 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
             issuer_seq: None,
         },
     }];
-    let digest = arkret_core::Hash::new(event.event_digest().unwrap()).unwrap();
-    event.proofs.push(arkret_core::Proof {
+    let digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+    event.proofs.push(arkret_wire::Proof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:alice.example#device-key".to_owned(),
@@ -1134,7 +1148,11 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     });
     let (proof_chunks, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
-    let verified = arkret_core::verify_mls_governance_proof_bundle::<arkret_wire::WireError, _, _>(
+    let verified = arkret_state::mls_governance_proof::verify_mls_governance_proof_bundle::<
+        arkret_wire::WireError,
+        _,
+        _,
+    >(
         &bundle,
         &bundle.governance_binding,
         &bundle.trusted_anchor_seal_id,
@@ -1148,12 +1166,12 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     valid_request_value["trusted_anchor_seal_id"] =
         Value::String(bundle.trusted_anchor_seal_id.to_string());
     valid_request_value["chunk_index"] = Value::from(0);
-    let valid_request: arkret_core::MlsGovernanceProofRequest =
+    let valid_request: arkret_models_crypto::MlsGovernanceProofRequest =
         serde_json::from_value(valid_request_value).expect("typed proof request");
 
     let mut unreachable_request = valid_request.clone();
     unreachable_request.trusted_anchor_seal_id =
-        arkret_core::SealId::new(format!("ak:seal:sha256:{}", "ff".repeat(32))).unwrap();
+        arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "ff".repeat(32))).unwrap();
     let mut unreachable =
         TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -1170,7 +1188,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     let mut stale_manifest_request = valid_request.clone();
     stale_manifest_request.chunk_index = 1;
     stale_manifest_request.expected_bundle_digest =
-        Some(arkret_core::Hash::new(format!("sha256:{}", "ee".repeat(32))).unwrap());
+        Some(arkret_identifiers::Hash::new(format!("sha256:{}", "ee".repeat(32))).unwrap());
     let mut stale_manifest =
         TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
@@ -1277,12 +1295,12 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     )
     .unwrap()
     .with_timezone(&chrono::Utc);
-    let mut create = arkret_core::Event::new(
+    let mut create = arkret_wire::Event::new(
         arkret_wire::events::EventKind::REALM_CREATE,
         RealmId::new(realm_id.clone()).unwrap(),
         Did::new(agent_id.clone()).unwrap(),
         0,
-        arkret_core::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
+        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::json!({
             "object": {
                 "id": realm_id,
@@ -1382,13 +1400,13 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .unwrap();
     let events = records
         .into_iter()
-        .map(|record| serde_json::from_value::<arkret_core::Event>(record.envelope).unwrap())
+        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(events.len(), 1, "managed Agent PCR must start at create");
     let seal = arkret_bootstrap::build_managed_agent_pcr_event_seal(
         &events,
         None,
-        arkret_core::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
+        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
         &signer,
     )
     .unwrap();
@@ -1421,7 +1439,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         StatusCode::OK,
         "managed Agent PCR frontier failed: {frontier_body}"
     );
-    let returned_head: arkret_core::Seal =
+    let returned_head: arkret_wire::Seal =
         serde_json::from_value(frontier_body["receipts"][0]["seal"].clone())
             .expect("managed PCR frontier signed-head receipt");
     assert_eq!(returned_head.id, seal.id);
@@ -1439,12 +1457,12 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     // device-signed Seal. Frontier must keep returning the accepted signed
     // predecessor (including its full receipt) so the controller can author
     // that successor; it must not ask the service notary to synthesize one.
-    let mut pending = arkret_core::Event::new(
+    let mut pending = arkret_wire::Event::new(
         arkret_wire::events::EventKind::MLS_GENESIS,
         RealmId::new(realm_id.clone()).unwrap(),
         Did::new(agent_id.clone()).unwrap(),
         2,
-        arkret_core::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
+        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
         serde_json::json!({}),
     )
     .unwrap();
@@ -1490,7 +1508,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     assert_eq!(lagging_frontier.status_code, Some(StatusCode::OK));
     let lagging_body: Value = lagging_frontier.take_json().await.unwrap();
     assert_eq!(lagging_body["frontier"]["seal_id"], seal.id.as_str());
-    let lagging_head: arkret_core::Seal =
+    let lagging_head: arkret_wire::Seal =
         serde_json::from_value(lagging_body["receipts"][0]["seal"].clone()).unwrap();
     assert_eq!(lagging_head.id, seal.id);
     assert_eq!(
@@ -1511,12 +1529,12 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .unwrap();
     let events = records
         .into_iter()
-        .map(|record| serde_json::from_value::<arkret_core::Event>(record.envelope).unwrap())
+        .map(|record| serde_json::from_value::<arkret_wire::Event>(record.envelope).unwrap())
         .collect::<Vec<_>>();
     let successor = arkret_bootstrap::build_managed_agent_pcr_event_seal(
         &events,
         Some(&lagging_head),
-        arkret_core::Hlc::new("01980b44cc00-0000-aabbcce3").unwrap(),
+        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce3").unwrap(),
         &signer,
     )
     .unwrap();

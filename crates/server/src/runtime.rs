@@ -26,7 +26,7 @@ pub fn build_app_state(
     config: AppConfig,
     db: Db,
     persistence: PersistenceHandle,
-    service_identity: arkret_core::ServiceIdentityState,
+    service_identity: arkret_identity::service_identity::ServiceIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {
     let cell_registry =
@@ -88,10 +88,10 @@ struct RuntimeProjectedOperationPersistence(Option<PgPool>);
 impl EventSealCommitPort for RuntimeEventSealCommitter {
     fn commit_if_frontier(
         &self,
-        seal: &arkret_core::Seal,
-        expected_store_frontier: &[arkret_core::SealId],
-        new_ops: &[(arkret_core::CellRef, arkret_state::lattice::SealedOp)],
-        covered: &BTreeSet<arkret_core::MoveId>,
+        seal: &arkret_wire::Seal,
+        expected_store_frontier: &[arkret_wire::SealId],
+        new_ops: &[(arkret_identifiers::CellRef, arkret_state::lattice::SealedOp)],
+        covered: &BTreeSet<arkret_wire::MoveId>,
     ) -> arkret_state::state::StoreResult<bool> {
         self.0
             .commit_if_frontier(seal, expected_store_frontier, new_ops, covered)
@@ -152,7 +152,7 @@ impl ProjectedOperationPersistencePort for RuntimeProjectedOperationPersistence 
     async fn persist_projected_operation(
         &self,
         origin: &str,
-        operation: &arkret_core::Operation,
+        operation: &arkret_event_draft::Operation,
         event_type: &str,
         is_message_create: bool,
         is_membership_or_realm_lifecycle: bool,

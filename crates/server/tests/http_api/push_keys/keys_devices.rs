@@ -896,11 +896,13 @@ fn tier2_publish_and_authorize(
     ssk: &SigningKey,
     device_signing: &SigningKey,
 ) -> (Value, Value, String, String) {
-    use arkret_core::{
-        CrossSigningPublish, DeviceId, KeyFormat, NonEmptyString, PublishedKey,
-        SubordinateSignedKey, SubordinateSignedKeyBinding,
-    };
     use arkret_crypto::DeviceTrustBinding;
+    use arkret_identifiers::DeviceId;
+    use arkret_models_identity::{
+        CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey,
+        SubordinateSignedKeyBinding,
+    };
+    use arkret_wire::NonEmptyString;
 
     let principal_did = Did::new(principal.to_owned()).unwrap();
     let device_id = DeviceId::new(device.to_owned()).unwrap();
@@ -910,7 +912,8 @@ fn tier2_publish_and_authorize(
 
     let mut publish = CrossSigningPublish {
         principal_id: principal_did.clone(),
-        trust_domain: arkret_core::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+        trust_domain: arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net")
+            .unwrap(),
         principal_signing_key: PublishedKey {
             kid: NonEmptyString::new(format!("{principal}#ak_principal_signing_v1")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
@@ -952,7 +955,7 @@ fn tier2_publish_and_authorize(
     // PSK signs the SSK record over the §5.1 canonical input.
     let ssk_input = publish.self_signing_binding_input().unwrap();
     publish.self_signing_key.binding.signature = NonEmptyString::new(
-        arkret_core::base64url_encode(psk.sign(&ssk_input).to_bytes()),
+        arkret_canonical::base64url_encode(psk.sign(&ssk_input).to_bytes()),
     )
     .unwrap();
 
@@ -969,7 +972,7 @@ fn tier2_publish_and_authorize(
         1,
     )
     .unwrap();
-    let binding_signature = arkret_core::base64url_encode(ssk.sign(&device_input).to_bytes());
+    let binding_signature = arkret_canonical::base64url_encode(ssk.sign(&device_input).to_bytes());
 
     let publish_payload = serde_json::to_value(&publish).unwrap();
     let authorize_payload = serde_json::json!({
@@ -1006,11 +1009,13 @@ fn tier2_publish_and_authorize(
 /// client that DID-anchored the PSK), while a tampered device binding fails.
 #[tokio::test]
 async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
-    use arkret_core::{CrossSigningPublish, DeviceId, QueryDeviceCrossSigningBinding};
     use arkret_crypto::{
         DeviceCrossSigningChainVerification, DeviceTrustBinding, DeviceTrustState,
         verify_device_cross_signing_chain,
     };
+    use arkret_identifiers::DeviceId;
+    use arkret_models_crypto::QueryDeviceCrossSigningBinding;
+    use arkret_models_identity::CrossSigningPublish;
     use arkret_signatures::PublicKeyMaterial;
 
     let state = soland_test_support::app_state(test_config());
@@ -1117,9 +1122,9 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
 
     // Tampering the device binding signature → not CrossSigned (fail-closed).
     let mut tampered = trust_binding.clone();
-    let mut raw = arkret_core::base64url_decode(&tampered.signature).unwrap();
+    let mut raw = arkret_canonical::base64url_decode(&tampered.signature).unwrap();
     raw[0] ^= 0xff;
-    tampered.signature = arkret_core::base64url_encode(&raw);
+    tampered.signature = arkret_canonical::base64url_encode(&raw);
     let state_bad = verify_device_cross_signing_chain(DeviceCrossSigningChainVerification {
         publish: &publish,
         binding: &tampered,

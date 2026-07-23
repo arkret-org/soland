@@ -1,6 +1,6 @@
 //! Integration tests - personal-agent HTTP surfaces.
 
-use arkret_core::MoveSigner as _;
+use arkret_wire::MoveSigner as _;
 
 use super::common::*;
 
@@ -101,23 +101,23 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     let realm_id = soland_test_support::principal_control_realm_for_did(controller);
     let created_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now.timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", created_at.timestamp_millis());
-    let realm = arkret_core::RealmId::new(realm_id.clone()).unwrap();
-    let actor = arkret_core::Did::new(controller.to_owned()).unwrap();
+    let realm = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
+    let actor = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let mut bootstrap = arkret_bootstrap::build_self_principal_pcr_create(
         arkret_bootstrap::SelfPrincipalPcrCreateInput {
             principal_id: actor.clone(),
             realm_id: realm.clone(),
-            trust_domain: arkret_core::TypedTrustDomainId::new(
+            trust_domain: arkret_identifiers::TypedTrustDomainId::new(
                 "ak:trust_domain:soland.local".to_owned(),
             )
             .unwrap(),
-            did_inception_ref: arkret_core::EventRef::new(
+            did_inception_ref: arkret_wire::EventRef::new(
                 format!("sha256:{}", "1".repeat(64)),
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
-            event_id: arkret_core::EventId::new(new_prefixed_uuid7("ak:event:")).unwrap(),
+            event_id: arkret_wire::EventId::new(new_prefixed_uuid7("ak:event:")).unwrap(),
             created_at,
-            hlc: arkret_core::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
+            hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
         },
     )
     .unwrap();
@@ -135,40 +135,40 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     )
     .unwrap();
     let authorization_ref =
-        arkret_core::NonEmptyString::new(format!("{controller}#device-enrollment-authority"))
+        arkret_wire::NonEmptyString::new(format!("{controller}#device-enrollment-authority"))
             .unwrap();
-    let authorize_payload = arkret_core::DeviceAuthorizePayload {
+    let authorize_payload = arkret_models_collaboration::events_payloads::device_identity::DeviceAuthorizePayload {
         principal_id: actor.clone(),
-        device_id: arkret_core::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
-        device_public_key: arkret_core::NonEmptyString::new(test_ed25519_multibase_public(
+        device_id: arkret_identifiers::DeviceId::new(CONTROLLER_DEVICE_ID).unwrap(),
+        device_public_key: arkret_wire::NonEmptyString::new(test_ed25519_multibase_public(
             &signing_key,
         ))
         .unwrap(),
-        hpke_key: arkret_core::NonEmptyString::new("z6LSDeviceHpkeKey").unwrap(),
+        hpke_key: arkret_wire::NonEmptyString::new("z6LSDeviceHpkeKey").unwrap(),
         algorithms: vec![
-            arkret_core::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
+            arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
         ],
-        device_key_algorithm: Some(arkret_core::NonEmptyString::new("EdDSA").unwrap()),
-        authorized_by: arkret_core::DeviceOrPrincipalRef::Did(actor.clone()),
+        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("EdDSA").unwrap()),
+        authorized_by: arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(actor.clone()),
         scopes: None,
         not_before: created_at,
         expires_at: None,
         device_signature: None,
         proof: None,
         cross_signing_binding: None,
-        enrollment_authority_binding: Some(arkret_core::DeviceEnrollmentAuthorityBinding {
-            kind: arkret_core::DeviceEnrollmentAuthorityBindingKind::ServiceAttested,
+        enrollment_authority_binding: Some(arkret_models_identity::DeviceEnrollmentAuthorityBinding {
+            kind: arkret_models_identity::DeviceEnrollmentAuthorityBindingKind::ServiceAttested,
             authority_did: actor.clone(),
             authorization_ref: authorization_ref.clone(),
         }),
         recovery_session_id: None,
     };
-    let mut authorize = arkret_core::Event::new_at(
+    let mut authorize = arkret_wire::Event::new_at(
         arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
         realm,
         actor.clone(),
         1,
-        arkret_core::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
+        arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
         serde_json::to_value(authorize_payload).unwrap(),
         created_at,
     )
@@ -186,7 +186,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     let bootstrap_seal = arkret_bootstrap::build_self_principal_bootstrap_seal(
         &bootstrap,
         &authorize,
-        arkret_core::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap(),
+        arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap(),
         &bootstrap_signer,
     )
     .unwrap();
@@ -274,12 +274,12 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         .unwrap();
 
     let realm_id = soland_test_support::principal_control_realm_for_did(controller);
-    let typed_realm_id = arkret_core::RealmId::new(realm_id.clone()).unwrap();
+    let typed_realm_id = arkret_identifiers::RealmId::new(realm_id.clone()).unwrap();
     let mut entry =
         soland_http::state::RealmDirectoryEntry::new(typed_realm_id, "Principal Control");
     entry
         .members
-        .insert(arkret_core::Did::new(controller.to_owned()).unwrap());
+        .insert(arkret_identifiers::Did::new(controller.to_owned()).unwrap());
     state.test_realms().lock().upsert(entry);
     state
         .test_persistence()
@@ -370,22 +370,26 @@ async fn provision_agent_sdk_commit_attempt(
     }
     assert_eq!(preparation["status"], "awaiting_controller_events");
 
-    let controller_id = arkret_core::Did::new(controller.to_owned()).unwrap();
+    let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let agent_id =
-        serde_json::from_value::<arkret_core::Did>(preparation["agent_id"].clone()).unwrap();
-    let controller_realm_id =
-        serde_json::from_value::<arkret_core::RealmId>(preparation["controller_realm_id"].clone())
-            .unwrap();
+        serde_json::from_value::<arkret_identifiers::Did>(preparation["agent_id"].clone()).unwrap();
+    let controller_realm_id = serde_json::from_value::<arkret_identifiers::RealmId>(
+        preparation["controller_realm_id"].clone(),
+    )
+    .unwrap();
     let principal_control_realm_id = preparation["principal_control_realm_id"].clone();
-    let scope =
-        serde_json::from_value::<arkret_core::AgentKeyScope>(requested_scope.clone()).unwrap();
+    let scope = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
+    >(requested_scope.clone())
+    .unwrap();
     let expected_scope_digest =
-        arkret_core::agent_requested_scope_digest(&agent_id, &controller_id, &scope).unwrap();
+        arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
+            .unwrap();
     assert_eq!(
         preparation["requested_scope_digest"],
         expected_scope_digest.as_str()
     );
-    let actor_frontier: arkret_core::EventsFrontierAccountClientState = TestClient::get(format!(
+    let actor_frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={controller}&realm_id={controller_realm_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
@@ -394,7 +398,8 @@ async fn provision_agent_sdk_commit_attempt(
     .take_json()
     .await
     .expect("controller actor frontier");
-    let arkret_core::EventsFrontierView::RealmActor(actor_frontier) = actor_frontier.frontier
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(actor_frontier) =
+        actor_frontier.frontier
     else {
         panic!("combined Realm+actor selector must return realm_actor frontier");
     };
@@ -418,10 +423,13 @@ async fn provision_agent_sdk_commit_attempt(
         arkret_bootstrap::AgentProvisionEventDraftOptions {
             created_at: now,
             accountability_actor_seq: next_actor_seq,
-            accountability_hlc: arkret_core::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e"))
-                .unwrap(),
+            accountability_hlc: arkret_identifiers::Hlc::new(format!(
+                "{timestamp_hex}-0001-a13f9c2e"
+            ))
+            .unwrap(),
             selector_actor_seq: next_actor_seq + 1,
-            selector_hlc: arkret_core::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
+            selector_hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e"))
+                .unwrap(),
         },
         &signer,
     )
@@ -441,11 +449,14 @@ async fn provision_agent_sdk_commit_attempt(
             .expect("frontier error body");
         panic!("controller Realm Seal frontier failed: {body}");
     }
-    let frontier: arkret_core::EventsFrontierAccountClientState = frontier_response
-        .take_json()
-        .await
-        .expect("typed controller Realm Seal frontier");
-    let arkret_core::EventsFrontierView::RealmSeal(frontier) = frontier.frontier else {
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        frontier_response
+            .take_json()
+            .await
+            .expect("typed controller Realm Seal frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+        frontier.frontier
+    else {
         panic!("controller Realm frontier must materialize a Seal view");
     };
     for event in [&mut events.accountability_grant, &mut events.selector_claim] {
@@ -557,7 +568,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
             .to_vec(),
     };
     for replayed in provision_events {
-        let event: arkret_core::Event = serde_json::from_value(replayed).unwrap();
+        let event: arkret_wire::Event = serde_json::from_value(replayed).unwrap();
         event.validate_proof_bindings().unwrap();
         assert_eq!(event.proofs.len(), 1);
         let canonical_bytes =
@@ -710,15 +721,16 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     seed_controller_session(&state, token, controller).await;
     seed_agent_provision_prerequisites(&state, controller).await;
 
-    let controller_id = arkret_core::Did::new(controller.to_owned()).unwrap();
-    let controller_realm_id = arkret_core::RealmId::new(
+    let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
+    let controller_realm_id = arkret_identifiers::RealmId::new(
         soland_domain::identity::principal_control_realm_for_did(controller),
     )
     .unwrap();
     let now = chrono::Utc::now();
     let hlc =
-        arkret_core::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis())).unwrap();
-    let accountability = arkret_core::Event::new(
+        arkret_identifiers::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis()))
+            .unwrap();
+    let accountability = arkret_wire::Event::new(
         arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
         controller_realm_id.clone(),
         controller_id.clone(),
@@ -727,7 +739,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
         serde_json::json!({}),
     )
     .unwrap();
-    let selector = arkret_core::Event::new(
+    let selector = arkret_wire::Event::new(
         arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM,
         controller_realm_id,
         controller_id,

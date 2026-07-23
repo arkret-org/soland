@@ -17,7 +17,8 @@
 //! 5. `ak.circle.tombstone` flips the projection to the terminal state and the read helper hides
 //!    the row.
 
-use arkret_core::{Did, Operation, OperationId, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{Did, OperationId, RealmId};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{

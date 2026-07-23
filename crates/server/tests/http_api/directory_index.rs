@@ -613,11 +613,11 @@ fn preview_token_for_address(
     realm_id: &str,
     preview_policy_digest: &str,
 ) -> String {
-    let parsed = arkret_core::parse_address(address).unwrap();
-    let mut descriptor = arkret_core::TargetDescriptor::from_parsed(&parsed);
+    let parsed = arkret_wire::parse_address(address).unwrap();
+    let mut descriptor = arkret_wire::TargetDescriptor::from_parsed(&parsed);
     descriptor.set_realm_id(realm_id);
-    descriptor.link_type = arkret_core::LinkType::Preview;
-    let target_digest = arkret_core::target_digest(&descriptor).unwrap();
+    descriptor.link_type = arkret_wire::LinkType::Preview;
+    let target_digest = arkret_wire::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
         "iss": state.service_id().clone(),
         "aud": "anonymous",

@@ -41,7 +41,7 @@ async fn set_demo_realm_visibility(
             plaintext_visible_service_classes: std::collections::BTreeMap::from([(
                 state.service_id().clone(),
                 std::collections::BTreeSet::from([
-                    arkret_core::PlaintextDataClassKind::MessageContent,
+                    arkret_wire::PlaintextDataClassKind::MessageContent,
                 ]),
             )]),
             minimal_metadata_realm: false,
@@ -55,7 +55,7 @@ async fn set_demo_realm_visibility(
         std::collections::BTreeSet::from([state.service_id().clone()]);
     meta.plaintext_visible_service_classes.insert(
         state.service_id().clone(),
-        std::collections::BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
+        std::collections::BTreeSet::from([arkret_wire::PlaintextDataClassKind::MessageContent]),
     );
     meta.updated_at = now;
     state

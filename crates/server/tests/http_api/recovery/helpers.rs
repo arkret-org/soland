@@ -6,7 +6,7 @@
 
 use std::sync::Arc;
 
-use arkret_core::{
+use arkret_models_crypto::{
     KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
 };
 use serde_json::{Map, Value};
@@ -258,8 +258,8 @@ pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Va
     let principal = session["principal_id"].as_str().unwrap();
     let device = session["requesting_device_id"].as_str().unwrap();
     let generation = session["ssk_generation"].as_u64().unwrap();
-    let did = arkret_core::Did::new(principal.to_owned()).unwrap();
-    let device_id = arkret_core::DeviceId::new(device.to_owned()).unwrap();
+    let did = arkret_identifiers::Did::new(principal.to_owned()).unwrap();
+    let device_id = arkret_identifiers::DeviceId::new(device.to_owned()).unwrap();
     // The new device's real keypair — its multibase public key is what the
     // server records, and what a later recovery_receipt MUST be signed by.
     let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
@@ -329,7 +329,7 @@ pub(crate) fn seed_cross_signing(
         "generation": 1,
         "issued_at": "2026-05-30T00:00:00.000Z",
     });
-    let content: arkret_core::CrossSigningPublish =
+    let content: arkret_models_identity::CrossSigningPublish =
         serde_json::from_value(publish).expect("cross-signing publish content");
     state
         .test_record_cross_signing_publish(content)

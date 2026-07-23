@@ -44,7 +44,7 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
 }
 
 fn resign_federation_event(event: Value) -> Value {
-    let mut event: arkret_core::Event =
+    let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
     let verification_method = format!("{}#cotest", event.actor_id);
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
@@ -398,7 +398,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
         .insert(SERVICE_ID.to_owned());
     realm_meta.plaintext_visible_service_classes.insert(
         SERVICE_ID.to_owned(),
-        BTreeSet::from([arkret_core::PlaintextDataClassKind::MessageContent]),
+        BTreeSet::from([arkret_wire::PlaintextDataClassKind::MessageContent]),
     );
     state
         .test_persistence()
@@ -666,7 +666,7 @@ async fn seed_peer_read_authorization(state: &AppState, source_service_id: &str,
     meta.plaintext_visible_service_classes
         .entry(source_service_id.to_owned())
         .or_default()
-        .insert(arkret_core::PlaintextDataClassKind::MessageContent);
+        .insert(arkret_wire::PlaintextDataClassKind::MessageContent);
     meta.updated_at = now;
     state
         .test_persistence()

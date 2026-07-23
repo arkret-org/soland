@@ -31,7 +31,7 @@ fn cross_signing_reset_event(
         Vec::new(),
         payload,
     );
-    let mut event: arkret_core::Event =
+    let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("reset Event roundtrip");
     event.proofs.clear();
     let verification_method = actor.strip_prefix("did:key:").map_or_else(
@@ -68,7 +68,7 @@ fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value
 }
 
 fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
-    let content: arkret_core::CrossSigningResetPayload =
+    let content: arkret_models_identity::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     let signature = URL_SAFE_NO_PAD.encode(signing.sign(&input).to_bytes());
@@ -76,7 +76,7 @@ fn sign_reset_payload(payload: &mut Value, signing: &SigningKey) {
 }
 
 fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]) {
-    let content: arkret_core::CrossSigningResetPayload =
+    let content: arkret_models_identity::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let input = content.reset_signing_input().expect("reset signing input");
     for (idx, signing) in signings.iter().enumerate() {
@@ -86,7 +86,7 @@ fn sign_device_quorum_reset_payload(payload: &mut Value, signings: &[SigningKey]
 }
 
 fn bind_recovery_unlock_commitment(payload: &mut Value) {
-    let content: arkret_core::CrossSigningResetPayload =
+    let content: arkret_models_identity::CrossSigningResetPayload =
         serde_json::from_value(payload.clone()).expect("reset content");
     let commitment = content
         .recovery_unlock_commitment()
@@ -218,7 +218,7 @@ async fn seed_verified_reset_recovery_session(
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
             policy_id: policy_id.to_owned(),
             policy_version: 1,
-            identity_model: arkret_core::RecoveryIdentityModel::CrossSigning,
+            identity_model: arkret_models_crypto::RecoveryIdentityModel::CrossSigning,
             ssk_generation: Some(1),
             current_device_generation_ref: None,
             device_generation_status: None,
@@ -1446,7 +1446,7 @@ async fn recovery_complete_rejected_after_cross_signing_reset() {
         "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
         "issued_at": "2026-05-30T00:00:00.000Z",
     });
-    let content: arkret_core::CrossSigningResetPayload =
+    let content: arkret_models_identity::CrossSigningResetPayload =
         serde_json::from_value(reset).expect("reset content");
     state
         .test_record_cross_signing_reset(&content)

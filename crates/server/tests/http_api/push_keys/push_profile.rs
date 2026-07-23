@@ -40,17 +40,17 @@ fn broadcast_ephemeral_envelope_signed_by(
     let canonical = arkret_canonical::canonical_json_bytes(&env).unwrap();
     let event_digest = arkret_canonical::sha256_digest(&canonical);
     let verification_method = format!("{actor_id}#{device_id}");
-    let mut proof = arkret_core::Proof {
+    let mut proof = arkret_wire::Proof {
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: verification_method.clone(),
-        event_digest: arkret_core::Hash::new(event_digest).unwrap(),
+        event_digest: arkret_identifiers::Hash::new(event_digest).unwrap(),
         created_at: sent_at,
         domain: None,
         audience: None,
         jws: String::new(),
     };
-    let actor = arkret_core::Did::new(actor_id.to_owned()).unwrap();
+    let actor = arkret_identifiers::Did::new(actor_id.to_owned()).unwrap();
     let binding = proof.canonical_ephemeral_binding_bytes(&actor).unwrap();
     let signer = arkret_signatures::Ed25519DetachedJwsSigner::new(signing_key, verification_method);
     proof.jws = signer.sign_detached_jws(&binding);
@@ -1144,8 +1144,9 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
             strand_id: strand_id.to_owned(),
             realm_id: DEMO_REALM_ID.to_owned(),
             tracks: std::collections::BTreeMap::from([(
-                arkret_core::STRAND_TRACK_NAME_DISCUSSION.to_owned(),
-                arkret_core::StrandTrackConfig {
+                arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
+                    .to_owned(),
+                arkret_models_collaboration::objects::profiles::StrandTrackConfig {
                     enabled: discussion_enabled,
                     is_primary: Some(true),
                     profile: Some("discussion".to_owned()),
@@ -1181,7 +1182,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
         "did:web:alice.example".to_owned(),
         "did:web:alice.example".to_owned(),
         DEMO_REALM_ID.to_owned(),
-        vec![arkret_core::CapabilityActionId::CALL_SIGNAL_SEND.to_owned()],
+        vec![arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND.to_owned()],
         vec![],
     );
     let call_id = "ak:call:01904100-0000-7000-8000-ca110000001a";

@@ -187,9 +187,10 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     config.did_resolver_allow_methods =
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let state = soland_test_support::app_state(config);
-    let key = arkret_core::ServiceRegistrationKey::new(
-        arkret_core::ServiceType::AuthServer,
-        arkret_core::CanonicalServiceUrl::new("https://auth.example/").unwrap(),
+    let key = arkret_models_identity::service_identity::ServiceRegistrationKey::new(
+        arkret_wire::ServiceType::AuthServer,
+        arkret_models_identity::service_identity::CanonicalServiceUrl::new("https://auth.example/")
+            .unwrap(),
     )
     .unwrap();
     let provider_endpoint = url::Url::parse("https://soland.example/").unwrap();
@@ -205,12 +206,13 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         },
     )
     .unwrap();
-    let request = arkret_core::ServiceRegistrationEnsureRequestBody::new(
-        key.clone(),
-        prepared.service_registration_operation().unwrap(),
-        None,
-    )
-    .unwrap();
+    let request =
+        arkret_models_identity::service_identity::ServiceRegistrationEnsureRequestBody::new(
+            key.clone(),
+            prepared.service_registration_operation().unwrap(),
+            None,
+        )
+        .unwrap();
 
     let unauthorized =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
@@ -232,13 +234,13 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         StatusCode::OK,
         "service registration response: {created_body}"
     );
-    let created: arkret_core::ServiceRegistrationOutcome =
+    let created: arkret_models_identity::service_identity::ServiceRegistrationOutcome =
         serde_json::from_value(created_body).unwrap();
     assert!(created.created);
     assert_eq!(created.service_id, request.inception_operation.state.id);
     created.validate_for(&key).unwrap();
 
-    let existing: arkret_core::ServiceRegistrationOutcome =
+    let existing: arkret_models_identity::service_identity::ServiceRegistrationOutcome =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
             .add_header("authorization", "Bearer test-webvh-token", true)
             .json(&request)
@@ -254,7 +256,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         created.registration_receipt.receipt_id
     );
 
-    let fetched: arkret_core::ServiceRegistrationOutcome = TestClient::get(
+    let fetched: arkret_models_identity::service_identity::ServiceRegistrationOutcome = TestClient::get(
         "http://server/_arkret/root/identity/service-registrations?service_type=auth_server&public_base=https%3A%2F%2Fauth.example%2F",
     )
     .add_header("authorization", "Bearer test-webvh-token", true)
@@ -278,12 +280,13 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         },
     )
     .unwrap();
-    let fork_request = arkret_core::ServiceRegistrationEnsureRequestBody::new(
-        key,
-        fork.service_registration_operation().unwrap(),
-        None,
-    )
-    .unwrap();
+    let fork_request =
+        arkret_models_identity::service_identity::ServiceRegistrationEnsureRequestBody::new(
+            key,
+            fork.service_registration_operation().unwrap(),
+            None,
+        )
+        .unwrap();
     let mut fork_response =
         TestClient::post("http://server/_arkret/root/identity/service-registrations:ensure")
             .add_header("authorization", "Bearer test-webvh-token", true)

@@ -330,7 +330,8 @@ async fn mimi_provider_facade_contracts_work() {
         .as_str()
         .expect("encoded group_info missing");
     let decoded_group_info: Value = serde_json::from_slice(
-        &arkret_core::base64url_decode(encoded_group_info).expect("group_info must be base64url"),
+        &arkret_canonical::base64url_decode(encoded_group_info)
+            .expect("group_info must be base64url"),
     )
     .expect("group_info must contain JSON");
     assert_eq!(

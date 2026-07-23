@@ -2,10 +2,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    CrossSigningPublish, KeyFormat, MoveSigner as _, NonEmptyString, PublishedKey,
-    SubordinateSignedKey, SubordinateSignedKeyBinding, TypedTrustDomainId,
+use arkret_identifiers::TypedTrustDomainId;
+use arkret_models_identity::{
+    CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };
+use arkret_wire::{MoveSigner as _, NonEmptyString};
 use chrono::Utc;
 
 use super::common::*;
@@ -69,37 +70,40 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
     .add_header("authorization", format!("Bearer {token}"), true)
     .send(&app_from_state(state.clone()))
     .await;
-    let (mut actor_seq, mut previous_event_ids) =
-        if frontier_response.status_code == Some(StatusCode::OK) {
-            let frontier: arkret_core::EventsFrontierAccountClientState =
-                frontier_response.take_json().await.unwrap();
-            let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
-                panic!("combined Realm+actor selector returned the wrong frontier variant");
-            };
-            (frontier.next_actor_seq, frontier.frontier_event_ids)
-        } else {
-            assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
-            assert_eq!(
-                drafts[0]["kind"],
-                arkret_wire::events::EventKind::REALM_CREATE
-            );
-            (0, Vec::new())
+    let (mut actor_seq, mut previous_event_ids) = if frontier_response.status_code
+        == Some(StatusCode::OK)
+    {
+        let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+            frontier_response.take_json().await.unwrap();
+        let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+            frontier.frontier
+        else {
+            panic!("combined Realm+actor selector returned the wrong frontier variant");
         };
+        (frontier.next_actor_seq, frontier.frontier_event_ids)
+    } else {
+        assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
+        assert_eq!(
+            drafts[0]["kind"],
+            arkret_wire::events::EventKind::REALM_CREATE
+        );
+        (0, Vec::new())
+    };
     let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
     let signer = arkret_signatures::Ed25519MoveSigner::new(
         signing_key,
-        arkret_core::Did::new(actor.to_owned()).unwrap(),
+        arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
         verification_method.clone(),
     );
     let mut events = Vec::with_capacity(drafts.len());
     for draft in drafts {
         let mut draft = (*draft).clone();
         if draft["kind"] == arkret_wire::events::EventKind::CAPABILITY_GRANT {
-            let mut grant: arkret_core::CapabilityGrant =
+            let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant =
                 serde_json::from_value(draft["payload"]["grant"].clone()).unwrap();
             grant.proofs = vec![
                 serde_json::from_value(serde_json::json!({
-                    "kind": arkret_core::proof_kind::DETACHED_JWS,
+                    "kind": arkret_wire::proof_kind::DETACHED_JWS,
                     "alg": "EdDSA",
                     "verification_method": verification_method,
                     "payload_digest": format!("sha256:{}", "0".repeat(64)),
@@ -118,7 +122,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
             grant.proofs[0].jws = signature.jws;
             draft["payload"]["grant"] = serde_json::to_value(grant).unwrap();
         }
-        let mut event: arkret_core::Event = serde_json::from_value(draft).unwrap();
+        let mut event: arkret_wire::Event = serde_json::from_value(draft).unwrap();
         event.actor_seq = actor_seq;
         event.prev_refs = previous_event_ids;
         event.proofs.clear();
@@ -186,19 +190,21 @@ async fn submit_direct_event_draft(
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(frontier_response.status_code, Some(StatusCode::OK));
-    let frontier: arkret_core::EventsFrontierAccountClientState =
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         frontier_response.take_json().await.unwrap();
-    let arkret_core::EventsFrontierView::RealmActor(frontier) = frontier.frontier else {
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmActor(frontier) =
+        frontier.frontier
+    else {
         panic!("combined Realm+actor selector returned the wrong frontier variant");
     };
-    let mut event: arkret_core::Event = serde_json::from_value(draft.clone()).unwrap();
+    let mut event: arkret_wire::Event = serde_json::from_value(draft.clone()).unwrap();
     event.actor_seq = frontier.next_actor_seq;
     event.prev_refs = frontier.frontier_event_ids;
     event.proofs.clear();
     let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
     let signer = arkret_signatures::Ed25519MoveSigner::new(
         signing_key,
-        arkret_core::Did::new(actor.to_owned()).unwrap(),
+        arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
         verification_method.clone(),
     );
     arkret_signatures::sign_event(
@@ -297,7 +303,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
     let capabilities = serde_json::json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
-    let unsigned: arkret_core::KeyPackagesUploadUnsignedRequest =
+    let unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
         serde_json::from_value(serde_json::json!({
             "principal_id": BOB_DID,
             "device_id": BOB_DEVICE,
@@ -313,7 +319,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
             }]
         }))
         .unwrap();
-    let signature = arkret_core::sign_keypackages_upload_request(
+    let signature = arkret_signatures::keypackages::sign_keypackages_upload_request(
         &unsigned,
         &format!("{BOB_DID}#{BOB_DEVICE}"),
         &signing_key.to_bytes(),
@@ -409,24 +415,26 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     let destination_service_id = state.service_id().to_owned();
     let signing_key = seed_remote_claim_prerequisites(&state, &source_service_id).await;
     let trust_domain =
-        arkret_core::TypedTrustDomainId::new(state.config().trust_domain.clone()).unwrap();
-    let requester = arkret_core::Did::new("did:web:alice.example".to_owned()).unwrap();
-    let target = arkret_core::Did::new(BOB_DID.to_owned()).unwrap();
-    let pair_key = arkret_core::direct_conversation_pair_key(
+        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone()).unwrap();
+    let requester = arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap();
+    let target = arkret_identifiers::Did::new(BOB_DID.to_owned()).unwrap();
+    let pair_key = arkret_models_collaboration::objects::direct_conversation::direct_conversation_pair_key(
         trust_domain.clone(),
-        arkret_core::DirectConversationPairKeyParticipant::unmapped(requester.clone()),
-        arkret_core::DirectConversationPairKeyParticipant::unmapped(target.clone()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(requester.clone()),
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationPairKeyParticipant::unmapped(target.clone()),
     )
     .unwrap();
     let claim_request_id = URL_SAFE_NO_PAD.encode([41_u8; 16]);
     let claim_nonce = URL_SAFE_NO_PAD.encode([42_u8; 16]);
-    let realm_id =
-        arkret_core::RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000294".to_owned())
-            .unwrap();
-    let strand_id =
-        arkret_core::StrandId::new("ak:strand:0196419b-0000-7000-8000-000000000295".to_owned())
-            .unwrap();
-    let unsigned: arkret_core::PeerKeyPackagesClaimUnsignedRequest =
+    let realm_id = arkret_identifiers::RealmId::new(
+        "ak:realm:0196419b-0000-7000-8000-000000000294".to_owned(),
+    )
+    .unwrap();
+    let strand_id = arkret_identifiers::StrandId::new(
+        "ak:strand:0196419b-0000-7000-8000-000000000295".to_owned(),
+    )
+    .unwrap();
+    let unsigned: arkret_models_crypto::PeerKeyPackagesClaimUnsignedRequest =
         serde_json::from_value(serde_json::json!({
             "claim_request_id": claim_request_id,
             "target_principal_id": target,
@@ -447,7 +455,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
         }))
         .unwrap();
     let verification_method = format!("{}#{}", unsigned.requester, ALICE_SIGNING_DEVICE);
-    let mut authorization: arkret_core::PeerKeyPackageRequesterAuthorization =
+    let mut authorization: arkret_models_crypto::PeerKeyPackageRequesterAuthorization =
         serde_json::from_value(serde_json::json!({
             "verification_method": verification_method,
             "requester_device_id": ALICE_SIGNING_DEVICE,
@@ -456,23 +464,26 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "signature": {"kid": verification_method, "alg": "EdDSA", "sig": "AA"}
         }))
         .unwrap();
-    let draft = arkret_core::PeerKeyPackagesClaimAuthorizationDraft {
+    let draft = arkret_models_crypto::PeerKeyPackagesClaimAuthorizationDraft {
         request: unsigned.clone(),
-        transport_binding: arkret_core::PeerKeyPackagesClaimTransportBinding {
-            source_service_id: arkret_core::Did::new(source_service_id.clone()).unwrap(),
-            destination_service_id: arkret_core::Did::new(destination_service_id.clone()).unwrap(),
+        transport_binding: arkret_models_crypto::PeerKeyPackagesClaimTransportBinding {
+            source_service_id: arkret_identifiers::Did::new(source_service_id.clone()).unwrap(),
+            destination_service_id: arkret_identifiers::Did::new(destination_service_id.clone())
+                .unwrap(),
             source_trust_domain: trust_domain.clone(),
             destination_trust_domain: trust_domain,
         },
     };
-    let signing_bytes =
-        arkret_core::peer_keypackage_claim_authorization_signing_bytes(&draft, &authorization)
-            .unwrap();
-    authorization.signature.sig = arkret_core::Base64UrlString::new(
+    let signing_bytes = arkret_models_crypto::peer_keypackage_claim_authorization_signing_bytes(
+        &draft,
+        &authorization,
+    )
+    .unwrap();
+    authorization.signature.sig = arkret_wire::Base64UrlString::new(
         URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_bytes).to_bytes()),
     )
     .unwrap();
-    let request: arkret_core::PeerKeyPackagesClaimRequestBody =
+    let request: arkret_models_crypto::PeerKeyPackagesClaimRequestBody =
         serde_json::from_value(serde_json::json!({
             "claim_request_id": unsigned.claim_request_id,
             "target_principal_id": unsigned.target_principal_id,
@@ -509,7 +520,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     let status = response.status_code;
     let outcome_value: Value = response.take_json().await.unwrap();
     assert_eq!(status, Some(StatusCode::OK), "body: {outcome_value}");
-    let outcome: arkret_core::PeerKeyPackagesClaimOutcome =
+    let outcome: arkret_models_crypto::PeerKeyPackagesClaimOutcome =
         serde_json::from_value(outcome_value).unwrap();
     assert_eq!(outcome.claims.len(), 1);
     assert_ne!(outcome.claims[0].last_resort, Some(true));
@@ -535,7 +546,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     for (name, value) in replay_headers {
         replay = replay.add_header(name, value, true);
     }
-    let replayed: arkret_core::PeerKeyPackagesClaimOutcome = replay
+    let replayed: arkret_models_crypto::PeerKeyPackagesClaimOutcome = replay
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -581,12 +592,12 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
     }
     let mut response = builder.send(&app_from_state(state.clone())).await;
     let status = response.status_code;
-    let queried: arkret_core::PeerKeyPackagesClaimQueryOutcome =
+    let queried: arkret_models_crypto::PeerKeyPackagesClaimQueryOutcome =
         response.take_json().await.unwrap();
     assert_eq!(status, Some(StatusCode::OK));
     assert_eq!(
         queried.state,
-        arkret_core::PeerKeyPackagesClaimQueryState::Claimed
+        arkret_models_crypto::PeerKeyPackagesClaimQueryState::Claimed
     );
     assert_eq!(
         queried.claim_outcome.unwrap().claims[0].claim_id,

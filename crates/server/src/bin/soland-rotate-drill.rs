@@ -243,8 +243,9 @@ struct ResolvedServiceIdentity {
 fn load_service_identity(path: &str) -> anyhow::Result<ResolvedServiceIdentity> {
     let bytes = std::fs::read(path)
         .map_err(|error| anyhow::anyhow!("read identity bundle {path}: {error}"))?;
-    let bundle: arkret_core::ServiceIdentityBundle = serde_json::from_slice(&bytes)
-        .map_err(|error| anyhow::anyhow!("parse identity bundle {path}: {error}"))?;
+    let bundle: arkret_identity::service_identity::ServiceIdentityBundle =
+        serde_json::from_slice(&bytes)
+            .map_err(|error| anyhow::anyhow!("parse identity bundle {path}: {error}"))?;
     bundle
         .validate()
         .map_err(|error| anyhow::anyhow!("invalid identity bundle {path}: {error}"))?;
@@ -285,7 +286,7 @@ fn validate_seed_binding(
             seed_bytes.len()
         ))
     })?;
-    let actual = arkret_core::ed25519_pubkey_to_did_key_multibase(
+    let actual = arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         SigningKey::from_bytes(&seed).verifying_key().as_bytes(),
     );
     if actual != identity.signing_key_multibase {
