@@ -113,7 +113,7 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
     });
-    let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).unwrap();
+    let bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
@@ -153,7 +153,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         "expires_at": session["expires_at"],
         "proof_body": proof_body,
     });
-    let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).unwrap();
+    let bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
@@ -346,7 +346,7 @@ pub(crate) async fn seed_control_event(
     payload: Value,
 ) {
     let envelope = serde_json::json!({ "payload": payload });
-    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
     state
         .test_persistence()
         .events()
@@ -859,7 +859,7 @@ pub(crate) fn sign_recovery_payload(
         "signed_fields": signed_fields,
         "payload": Value::Object(signed_payload),
     });
-    let transcript_bytes = arkret_core::canonical::canonical_json_bytes(&transcript).unwrap();
+    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
     let signature = signing.sign(&transcript_bytes);
     payload["auth_data"]["signature"] =
         serde_json::json!(URL_SAFE_NO_PAD.encode(signature.to_bytes()));

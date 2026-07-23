@@ -550,7 +550,7 @@ impl NotaryWorker {
     ) -> Result<MoveSignature, NotaryError> {
         // payload_digest = sha256(canonical_bytes), prefix-encoded via the
         // shared SDK digest helper.
-        let payload_digest = Hash::new(arkret_core::canonical::sha256_digest(canonical_bytes))
+        let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))
             .map_err(|e| NotaryError::Construction(format!("payload hash: {e}")))?;
 
         let signing_key = state.notary_signing_key();
@@ -1270,7 +1270,7 @@ mod tests {
                 "cell": cell,
                 "state": { "value": value },
             });
-            let preimage = arkret_core::canonical::canonical_json_bytes(&leaf_input).unwrap();
+            let preimage = arkret_canonical::canonical_json_bytes(&leaf_input).unwrap();
             let mut h = Sha256::new();
             h.update([0x00u8]);
             h.update(&preimage);

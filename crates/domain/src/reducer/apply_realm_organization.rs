@@ -128,8 +128,8 @@ impl ProjectionState {
                 "relationship": relationship,
                 "status": status,
                 "control_scopes": control_scopes_str(&payload),
-                "issued_at": arkret_core::canonical::format_timestamp_canonical(payload.issued_at),
-                "updated_at": arkret_core::canonical::format_timestamp_canonical(now),
+                "issued_at": arkret_canonical::format_timestamp_canonical(payload.issued_at),
+                "updated_at": arkret_canonical::format_timestamp_canonical(now),
                 "operation_id": operation.operation_id.as_str(),
             });
             self.cells
@@ -279,13 +279,13 @@ fn proof_digest(proof: &SignatureMaterial) -> Option<String> {
     let bytes = match proof {
         SignatureMaterial::NonEmptyString(s) => s.as_bytes().to_vec(),
         SignatureMaterial::Variant1(map) => {
-            arkret_core::canonical::canonical_json_bytes(map).unwrap_or_default()
+            arkret_canonical::canonical_json_bytes(map).unwrap_or_default()
         }
     };
     if bytes.is_empty() {
         return None;
     }
-    Some(arkret_core::canonical::sha256_digest(&bytes))
+    Some(arkret_canonical::sha256_digest(&bytes))
 }
 
 fn relationship_str(payload: &RealmOrganizationPayload) -> &'static str {

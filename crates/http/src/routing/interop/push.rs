@@ -88,7 +88,7 @@ fn derive_push_target_id(
         "push_route_id": push_route_id,
         "salt_epoch_id": salt_epoch_id,
     });
-    let canonical = arkret_core::canonical::canonical_json_bytes(&input)
+    let canonical = arkret_canonical::canonical_json_bytes(&input)
         .map_err(|error| AppError::internal(format!("push target canonicalize: {error}")))?;
     let epoch_key = hmac_sha256(root_key, salt_epoch_id.as_bytes());
     let tag = hmac_sha256(&epoch_key, &canonical);

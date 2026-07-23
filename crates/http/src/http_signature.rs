@@ -50,7 +50,7 @@ pub fn rfc9530_content_digest(bytes: &[u8]) -> String {
 pub fn exact_body_digests(body_bytes: &[u8]) -> CanonicalBodyDigests {
     CanonicalBodyDigests {
         content_digest: rfc9530_content_digest(body_bytes),
-        request_digest: arkret_core::canonical::sha256_digest(body_bytes),
+        request_digest: arkret_canonical::sha256_digest(body_bytes),
     }
 }
 
@@ -58,7 +58,7 @@ pub fn validate_canonical_json_body(
     body_bytes: &[u8],
     canonical_error: impl FnOnce(String) -> AppError,
 ) -> Result<(), AppError> {
-    arkret_core::canonical::validate_canonical_bytes(body_bytes)
+    arkret_canonical::validate_canonical_bytes(body_bytes)
         .map_err(|error| canonical_error(error.to_string()))
 }
 
@@ -199,7 +199,7 @@ mod tests {
         assert_eq!(digests.content_digest, rfc9530_content_digest(body));
         assert_eq!(
             digests.request_digest,
-            arkret_core::canonical::sha256_digest(body)
+            arkret_canonical::sha256_digest(body)
         );
         assert!(digests.content_digest.starts_with("sha-256=:"));
     }

@@ -144,7 +144,7 @@ fn validate_header_digest(req: &Request, body: &Value) -> Result<(), AppError> {
     else {
         return Ok(());
     };
-    let actual = arkret_core::canonical::canonical_sha256(body)
+    let actual = arkret_canonical::canonical_sha256(body)
         .map_err(|error| AppError::invalid_param(format!("fanout body digest failed: {error}")))?;
     if expected != actual {
         return Err(AppError::invalid_param(

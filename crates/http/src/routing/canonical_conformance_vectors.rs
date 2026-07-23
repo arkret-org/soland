@@ -14,7 +14,7 @@ fn validator_accepts_sorted_snake_case_keys() {
 fn validator_accepts_sdk_canonical_encoding() {
     let value = json!({"a": 1, "b": 2});
     assert!(validate_canonical_json_value(&value).is_ok());
-    let canonical = arkret_core::canonical::canonical_json_string(&value).unwrap();
+    let canonical = arkret_canonical::canonical_json_string(&value).unwrap();
     assert_eq!(canonical, r#"{"a":1,"b":2}"#);
 }
 

@@ -1170,7 +1170,7 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
         "realm_id": realm_id,
         "actor_id": actor_id,
         "actor_seq": 0,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(created_at),
         "hlc": hlc,
         "prev_refs": [],
         "payload": row.get("payload").cloned().unwrap_or_else(|| json!({})),

@@ -12,7 +12,7 @@ pub(super) fn federation_verify_actor_digest(
 ) -> Result<String, &'static str> {
     let value = serde_json::to_value(body)
         .map_err(|_| "federation verify-actor request must serialize to JSON")?;
-    arkret_core::canonical::canonical_sha256(&value)
+    arkret_canonical::canonical_sha256(&value)
         .map_err(|_| "federation verify-actor request must be canonical JSON")
 }
 
@@ -25,7 +25,7 @@ pub(super) fn federation_verify_actor_unsigned_digest(
         return Err("federation verify-actor request must serialize to a JSON object");
     };
     object.remove("signature");
-    arkret_core::canonical::canonical_sha256(&value)
+    arkret_canonical::canonical_sha256(&value)
         .map_err(|_| "federation verify-actor unsigned request must be canonical JSON")
 }
 
@@ -91,7 +91,7 @@ pub(super) async fn verify_federation_actor_signature(
     })?;
 
     let transcript = federation_verify_actor_signature_transcript(body, unsigned_request_digest);
-    let transcript_bytes = arkret_core::canonical::canonical_json_bytes(&transcript)
+    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("verify-actor transcript failed: {error}")))?;
 
     if let Some(jws) = actor_signature.jws.as_deref() {

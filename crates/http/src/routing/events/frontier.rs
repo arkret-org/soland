@@ -2,7 +2,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{Did, EventId, Hash, RealmId, canonical};
+use arkret_canonical as canonical;
+use arkret_core::{Did, EventId, Hash, RealmId};
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
 
@@ -111,7 +112,7 @@ pub(crate) fn frontier_signature_payload(
         "frontier_root": frontier_root.as_str(),
         "realm_id": realm_id.map(RealmId::as_str),
         "issuer": issuer.as_str(),
-        "observed_at": arkret_core::canonical::format_timestamp_canonical(observed_at),
+        "observed_at": arkret_canonical::format_timestamp_canonical(observed_at),
     })
 }
 
@@ -138,7 +139,7 @@ pub(crate) fn sign_frontier_root(
         "scheme": "ed25519-detached-jws",
         "verification_method": format!("{}#frontier-key", service_id.as_str()),
         "payload_digest": payload_digest,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(observed_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(observed_at),
         "jws": jws,
         "signed_payload": signed_payload,
     }))

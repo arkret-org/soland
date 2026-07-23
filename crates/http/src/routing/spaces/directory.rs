@@ -24,6 +24,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use arkret_canonical as canonical;
 use arkret_core::models::{
     Handle as SdkHandle, HandleBindingState, HandleClaim as SdkHandleClaim, HandleVisibility,
 };
@@ -47,7 +48,7 @@ use arkret_core::{
     RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
     RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview, RealmRef,
     RecipientServiceType, ServiceDescribe, StrandId, TargetDescriptor, TargetKind,
-    UserSearchOutcome, canonical, parse_address, proof_kind, target_digest, validate_agent_slug,
+    UserSearchOutcome, parse_address, proof_kind, target_digest, validate_agent_slug,
 };
 use arkret_hlc::CursorPurpose;
 use arkret_server::{

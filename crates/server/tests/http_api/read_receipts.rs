@@ -180,8 +180,8 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
         "device_id": device_id,
-        "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+        "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "payload": {
             "receipt_type": "read",
             "schema": "ak.schema.read_receipt.v1",
@@ -189,17 +189,17 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
             "actor_id": actor,
             "event_id": event_id,
             "read_scope": {"kind": "realm"},
-            "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at)
+            "created_at": arkret_canonical::format_timestamp_canonical(sent_at)
         }
     });
-    let canonical = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = arkret_core::canonical::sha256_digest(&canonical);
+    let canonical = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = arkret_canonical::sha256_digest(&canonical);
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
         "verification_method": format!("{actor}#{device_id}"),
         "event_digest": event_digest,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
         "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
     });
     envelope

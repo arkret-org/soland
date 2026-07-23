@@ -291,7 +291,7 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
                 "device_id": marker.device_id.clone(),
                 "read_scope": marker.read_scope.clone(),
                 "position": marker.position.clone(),
-                "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                "updated_at": arkret_canonical::format_timestamp_canonical(
                     marker.updated_at
                 ),
             })

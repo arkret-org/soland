@@ -296,7 +296,7 @@ fn pairwise_turn_username(
         "issued_at_bucket": bucket,
         "nonce": URL_SAFE_NO_PAD.encode(nonce),
     });
-    let pseudonym_bytes = arkret_core::canonical::canonical_json_bytes(&pseudonym_input)
+    let pseudonym_bytes = arkret_canonical::canonical_json_bytes(&pseudonym_input)
         .unwrap_or_else(|_| pseudonym_input.to_string().into_bytes());
     let tag = hmac_sha256(&secret, &pseudonym_bytes);
     format!("ak_pseudonym_call_{}", hex::encode(&tag[..8]))
@@ -339,7 +339,7 @@ fn sign_ice_config_outcome(
     let payload_bytes = outcome
         .canonical_signature_payload()
         .map_err(|error| AppError::internal(format!("ICE config canonicalize: {error}")))?;
-    let payload_digest = arkret_core::canonical::sha256_digest(&payload_bytes);
+    let payload_digest = arkret_canonical::sha256_digest(&payload_bytes);
     let signing_input = outcome
         .signature_input()
         .map_err(|error| AppError::internal(format!("ICE config transcript: {error}")))?;
@@ -1174,7 +1174,7 @@ fn issue_signed_backend_token(
         },
         "nonce": nonce,
     });
-    let token_bytes = arkret_core::canonical::canonical_json_bytes(&token_payload)
+    let token_bytes = arkret_canonical::canonical_json_bytes(&token_payload)
         .unwrap_or_else(|_| token_payload.to_string().into_bytes());
     let payload_b64 = URL_SAFE_NO_PAD.encode(&token_bytes);
     let signing_input = format!(

@@ -10,6 +10,7 @@ authors.workspace = true
 description = "Persistence records and storage ports for Soland."
 
 [dependencies]
+arkret-canonical.workspace = true
 arkret-core.workspace = true
 arkret-wire.workspace = true
 async-trait = {workspace = true}

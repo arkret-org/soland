@@ -16,7 +16,7 @@ fn agent_provision_allocation_hash(
     requested_scope: &Value,
     pairing_ttl_ms: Option<u64>,
 ) -> Result<String, AppError> {
-    arkret_core::canonical::canonical_sha256(&json!({
+    arkret_canonical::canonical_sha256(&json!({
         "controller_id": controller_id,
         "agent_id": agent_id,
         "principal_control_realm_id": principal_control_realm_id,

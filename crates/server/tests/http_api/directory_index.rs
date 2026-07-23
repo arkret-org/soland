@@ -526,7 +526,7 @@ async fn directory_resolve_target_preview_returns_policy_limited_projection() {
         "audiences": ["link_token_holder"],
         "fields": ["title", "summary", "join_rule", "history_visibility", "member_count_bucket"]
     });
-    let policy_digest = arkret_core::canonical::canonical_sha256(&policy).unwrap();
+    let policy_digest = arkret_canonical::canonical_sha256(&policy).unwrap();
     let mut meta = state
         .test_persistence()
         .realm_meta()
@@ -621,7 +621,7 @@ fn preview_token_for_address(
     let mut claim = serde_json::json!({
         "iss": state.service_id().clone(),
         "aud": "anonymous",
-        "exp": arkret_core::canonical::format_timestamp_canonical(
+        "exp": arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(10)
         ),
         "nonce": new_prefixed_uuid7("ak:nonce:"),
@@ -629,8 +629,8 @@ fn preview_token_for_address(
         "link_type": "preview",
         "preview_policy_digest": preview_policy_digest,
     });
-    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&claim).unwrap();
-    let payload_digest = arkret_core::canonical::sha256_digest(&canonical_bytes);
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(&claim).unwrap();
+    let payload_digest = arkret_canonical::sha256_digest(&canonical_bytes);
     let signing_key = state.notary_signing_key();
     let jws =
         arkret_signatures::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();

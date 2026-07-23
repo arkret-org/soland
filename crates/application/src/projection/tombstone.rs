@@ -203,7 +203,7 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
             "expiry_trigger": expiry.trigger.as_str(),
             "expiry_reason": expiry.reason_code(),
             "expired_at": expiry.expires_at.map(
-                arkret_core::canonical::format_timestamp_canonical
+                arkret_canonical::format_timestamp_canonical
             ),
             "physical_delete": false,
             "cache_invalidation": message_expiry_cache_invalidation_value(),
@@ -217,7 +217,7 @@ pub fn message_expiry_payload_value(payload: &Value, expiry: &MessageExpiryProje
         object.insert("expiry_reason".to_owned(), json!(reason));
     }
     if let Some(expires_at) = expiry.expires_at.as_ref() {
-        let expires_at = arkret_core::canonical::format_timestamp_canonical(*expires_at);
+        let expires_at = arkret_canonical::format_timestamp_canonical(*expires_at);
         object.insert("expired_at".to_owned(), json!(expires_at));
         object.insert("expires_at".to_owned(), json!(expires_at));
     }
@@ -254,10 +254,10 @@ pub fn retention_tombstone_payload_value(
             "retention_tombstone": true,
             "retention_state": "tombstoned",
             "retention_reason": tombstone.reason.as_str(),
-            "retention_expired_at": arkret_core::canonical::format_timestamp_canonical(
+            "retention_expired_at": arkret_canonical::format_timestamp_canonical(
                 tombstone.expired_at
             ),
-            "retention_tombstoned_at": arkret_core::canonical::format_timestamp_canonical(
+            "retention_tombstoned_at": arkret_canonical::format_timestamp_canonical(
                 tombstone.tombstoned_at
             ),
             "retention_seal_preserved": tombstone.sealed,
@@ -277,13 +277,13 @@ pub fn retention_tombstone_payload_value(
     );
     object.insert(
         "retention_expired_at".to_owned(),
-        json!(arkret_core::canonical::format_timestamp_canonical(
+        json!(arkret_canonical::format_timestamp_canonical(
             tombstone.expired_at
         )),
     );
     object.insert(
         "retention_tombstoned_at".to_owned(),
-        json!(arkret_core::canonical::format_timestamp_canonical(
+        json!(arkret_canonical::format_timestamp_canonical(
             tombstone.tombstoned_at
         )),
     );

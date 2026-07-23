@@ -409,7 +409,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
     );
     let mut signed_payload = ice.clone();
     signed_payload.as_object_mut().unwrap().remove("signature");
-    let payload_bytes = arkret_core::canonical::canonical_json_bytes(&signed_payload).unwrap();
+    let payload_bytes = arkret_canonical::canonical_json_bytes(&signed_payload).unwrap();
     assert_eq!(
         ice["signature"]["payload_digest"],
         format!("sha256:{}", hex::encode(Sha256::digest(&payload_bytes)))

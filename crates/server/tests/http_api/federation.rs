@@ -111,9 +111,8 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
         Vec::new(),
     );
     let created_at = Utc::now();
-    event["created_at"] = serde_json::json!(arkret_core::canonical::format_timestamp_canonical(
-        created_at
-    ));
+    event["created_at"] =
+        serde_json::json!(arkret_canonical::format_timestamp_canonical(created_at));
     resign_canonical_event(&mut event);
     put_event_record(&state, event, created_at).await;
 
@@ -499,7 +498,7 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
         "realm_id": TEST_REALM_ID,
         "circle_id": TEST_CIRCLE_ID
     });
-    event["created_at"] = serde_json::json!(arkret_core::canonical::format_timestamp_canonical(
+    event["created_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(
         now - ChronoDuration::seconds(5)
     ));
     resign_canonical_event(&mut event);
@@ -785,7 +784,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "requester_did": "did:web:alice.example",
             "ssk_generation": 1,
             "nonce": b64(format!("{claim_id}-nonce-128-bit-material").as_bytes()),
-            "welcome_digest": arkret_core::canonical::sha256_digest(ciphertext.as_bytes()),
+            "welcome_digest": arkret_canonical::sha256_digest(ciphertext.as_bytes()),
             "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
@@ -853,7 +852,7 @@ async fn put_event_record(state: &AppState, event: Value, received_at: DateTime<
     let kind = event["kind"].as_str().unwrap().to_owned();
     let schema_id = "ak.schema.event_envelope.v1".to_owned();
     let canonical_digest = event_canonical_digest(&event);
-    let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&event).unwrap();
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(&event).unwrap();
     state
         .test_persistence()
         .events()

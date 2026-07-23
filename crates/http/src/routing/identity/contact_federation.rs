@@ -15,10 +15,11 @@
 //! - receiver: [`peer_contacts_submit`] — accept a delivered fact and project it into the local
 //!   target holder's contact projection.
 
+use arkret_canonical as canonical;
 use arkret_core::{
     ContactIntroductionEvidence, Did, DisclosedOutcome, Event, EventId, Hash, Hlc,
     InviteReceiveAction, PeerContactAddress, PeerContactDeliveryRequest, PeerContactFactKind,
-    Proof, RealmId, canonical, proof_kind,
+    Proof, RealmId, proof_kind,
 };
 use chrono::Duration;
 use salvo::prelude::*;
@@ -376,7 +377,7 @@ async fn peer_contacts_submit(
             return json_ok(PeerContactDeliveryOutcome {
                 status: "deferred".to_owned(),
                 disclosed_outcome: decision.disclosed_outcome.map(disclosed_outcome_str),
-                received_at: Some(arkret_core::canonical::format_timestamp_canonical(now())),
+                received_at: Some(arkret_canonical::format_timestamp_canonical(now())),
                 retry_after_ms: None,
             });
         }
@@ -422,7 +423,7 @@ async fn peer_contacts_submit(
     json_ok(PeerContactDeliveryOutcome {
         status: outcome.to_owned(),
         disclosed_outcome: None,
-        received_at: Some(arkret_core::canonical::format_timestamp_canonical(now())),
+        received_at: Some(arkret_canonical::format_timestamp_canonical(now())),
         retry_after_ms: None,
     })
 }

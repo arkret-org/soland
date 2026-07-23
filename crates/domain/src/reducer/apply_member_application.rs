@@ -502,9 +502,7 @@ impl ProjectionState {
                     applicant_did: state.applicant.clone(),
                     application_receipt_digest: state.receipt_digest.clone(),
                     status: effective_status.to_owned(),
-                    submitted_at: arkret_core::canonical::format_timestamp_canonical(
-                        state.submitted_at,
-                    ),
+                    submitted_at: arkret_canonical::format_timestamp_canonical(state.submitted_at),
                     answers: can_see_body.then(|| state.answers.clone()),
                     application_pending: (!can_see_body).then_some(true),
                 }

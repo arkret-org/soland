@@ -396,7 +396,7 @@ mod tests {
         assert_eq!(v[0].verifier_did.as_str(), "did:web:cotest.example");
         assert_eq!(v[0].signature, "eddsa-jcs-b64url:test-principal-signature");
         assert_eq!(
-            arkret_core::canonical::format_timestamp_canonical(v[0].expires_at.unwrap()),
+            arkret_canonical::format_timestamp_canonical(v[0].expires_at.unwrap()),
             "2026-06-20T00:00:00.000Z"
         );
     }

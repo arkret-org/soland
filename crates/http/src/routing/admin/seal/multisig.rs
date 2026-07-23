@@ -127,7 +127,7 @@ pub(crate) async fn admin_submit_multisig_partial(
         json!({
             "signature_b64": body.signature_b64,
             "kid": body.kid,
-            "submitted_at": arkret_core::canonical::format_timestamp_canonical(
+            "submitted_at": arkret_canonical::format_timestamp_canonical(
                 chrono::Utc::now()
             ),
         }),
@@ -212,9 +212,7 @@ pub(crate) async fn admin_list_multisig_pending(
                 signers: collected_signers.into_iter().collect(),
                 missing_signers: missing,
                 state_root: None,
-                created_at: Some(arkret_core::canonical::format_timestamp_canonical(
-                    r.created_at,
-                )),
+                created_at: Some(arkret_canonical::format_timestamp_canonical(r.created_at)),
                 admin_can_sign: false,
             }
         })

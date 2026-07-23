@@ -189,10 +189,10 @@ async fn audit_erasure_receipts(
                             AuditErasureReceiptPeerStatus {
                                 sent_at: status
                                     .sent_at
-                                    .map(arkret_core::canonical::format_timestamp_canonical),
+                                    .map(arkret_canonical::format_timestamp_canonical),
                                 acked_at: status
                                     .acked_at
-                                    .map(arkret_core::canonical::format_timestamp_canonical),
+                                    .map(arkret_canonical::format_timestamp_canonical),
                                 outcome: status.outcome.clone(),
                             },
                         )
@@ -208,7 +208,7 @@ async fn audit_erasure_receipts(
                     scope_realm_id: r.scope_realm_id.clone(),
                     fanout_status: r.fanout_status.clone(),
                     peer_status,
-                    recorded_at: arkret_core::canonical::format_timestamp_canonical(r.recorded_at),
+                    recorded_at: arkret_canonical::format_timestamp_canonical(r.recorded_at),
                     payload: r.payload.clone(),
                 }
             })
@@ -398,7 +398,7 @@ fn franking_proof_digest(proof: &FrankingProofVerifyRequestBody) -> String {
         "event_canonical_digest": proof.event_canonical_digest.as_deref().unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    arkret_core::canonical::sha256_digest(&bytes)
+    arkret_canonical::sha256_digest(&bytes)
 }
 
 pub async fn append_audit_log(

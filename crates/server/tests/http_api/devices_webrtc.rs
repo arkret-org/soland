@@ -12,7 +12,7 @@ fn device_message_target(kind: &str, content: Value) -> Value {
         "message_id": new_prefixed_uuid7("ak:device_message:"),
         "kind": kind,
         "content": content,
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+        "expires_at": arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(10)
         ),
     })
@@ -252,8 +252,8 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let request_content = serde_json::json!({
         "transaction_id": "txn-device-pair-1",
         "from_device": new_device,
-        "timestamp": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+        "timestamp": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
+        "expires_at": arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(10)
         ),
         "methods": ["ak.sas.v1", "ak.qr.v1"],
@@ -1080,7 +1080,7 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         vec![serde_json::json!({
             "actor_id": bob,
             "action": "ban",
-            "removed_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+            "removed_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         })],
     );
 
@@ -1213,8 +1213,8 @@ fn call_signal_envelope(
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor,
         "device_id": device_id,
-        "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+        "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "payload": {
             "call_id": call_id,
             "signal_type": signal_type,
@@ -1222,14 +1222,14 @@ fn call_signal_envelope(
             "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         }
     });
-    let canonical = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = arkret_core::canonical::sha256_digest(&canonical);
+    let canonical = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
+    let event_digest = arkret_canonical::sha256_digest(&canonical);
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
         "alg": "EdDSA",
         "verification_method": format!("{actor}#{device_id}"),
         "event_digest": event_digest,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
         "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
     });
     envelope

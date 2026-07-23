@@ -954,7 +954,7 @@ mod sdk_artifact_schema_tests {
 
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_publish() {
-        let issued_at = arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now());
+        let issued_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
         let operation = cross_signing_publish(json!({
             "principal_id": "did:web:alice.example",
             "trust_domain": "ak:trust_domain:soland.local",
@@ -1022,7 +1022,7 @@ mod sdk_artifact_schema_tests {
 
     #[test]
     fn artifact_backed_kind_and_payload_validator_cover_cross_signing_reset() {
-        let issued_at = arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now());
+        let issued_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
         // Round R2/R3 (T08) — trust_domain + reset_event_id are now wire-breaking
         // required fields.
         let operation = cross_signing_reset(json!({
@@ -1059,7 +1059,7 @@ mod sdk_artifact_schema_tests {
             "reset_reason_code": "rotation",
             "trust_domain": "ak:trust_domain:soland.local",
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
-            "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
+            "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert_eq!(
             validate_operation_schema_from_sdk_artifact("ak.cross_signing.reset", &missing_proof),
@@ -1079,7 +1079,7 @@ mod sdk_artifact_schema_tests {
                 "signature": "abc"
             },
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
-            "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
+            "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert!(
             validate_operation_schema(
@@ -1105,7 +1105,7 @@ mod sdk_artifact_schema_tests {
             },
             "trust_domain": "ak:trust_domain:soland.local",
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
-            "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
+            "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
         }));
         assert_eq!(
             validate_cross_signing_reset_replay_batch(&[reset.clone(), reset.clone()]),
@@ -1125,7 +1125,7 @@ mod sdk_artifact_schema_tests {
             },
             "trust_domain": "ak:trust_domain:soland.local",
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000002",
-            "issued_at": arkret_core::canonical::format_timestamp_canonical(
+            "issued_at": arkret_canonical::format_timestamp_canonical(
                 chrono::Utc::now() - chrono::Duration::seconds(
                     CROSS_SIGNING_RESET_MAX_CLOCK_SKEW_SECONDS + 1
                 )

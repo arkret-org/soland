@@ -124,9 +124,8 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let canonical_bytes = manifest
         .unsigned_canonical_bytes()
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let payload_digest =
-        arkret_core::Hash::new(arkret_core::canonical::sha256_digest(&canonical_bytes))
-            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let payload_digest = arkret_core::Hash::new(arkret_canonical::sha256_digest(&canonical_bytes))
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
     let jws = arkret_signatures::jws::sign_jws_ed25519(
         &canonical_bytes,
         state.notary_signing_key().as_ref(),
@@ -292,9 +291,9 @@ fn snapshot_auth_state_digest(
         "frontier_event_ids": frontier_event_ids,
         "checked_at": checked_at,
     });
-    let bytes = arkret_core::canonical::canonical_json_bytes(&commitment)
+    let bytes = arkret_canonical::canonical_json_bytes(&commitment)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    arkret_core::Hash::new(arkret_core::canonical::sha256_digest(&bytes))
+    arkret_core::Hash::new(arkret_canonical::sha256_digest(&bytes))
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))
 }
 

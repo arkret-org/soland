@@ -7,6 +7,7 @@
 // auth/DID-proof type (re-exported explicitly), which shadows the
 // invite-addressing one from the `model::*` glob. Import the
 // invite-addressing variant via its `model` module path to disambiguate.
+use arkret_canonical as canonical;
 use arkret_core::models::{DisclosurePolicy, HandleClaim};
 use arkret_core::{
     CandidateIntent, CandidateValidationContext, ContactIntroductionEvidence, DetachedPayloadProof,
@@ -17,7 +18,7 @@ use arkret_core::{
     InviteLocatorRotateRequestBody, InviteLocatorStatus, InviteReceiveAction, InviteReceivePolicy,
     MemberDeliveryBindingCandidate, PrincipalLocator, PrincipalLocatorProof,
     PrincipalLocatorProofPurpose, ReceivePolicyConstraints, ReceivePolicySurface,
-    UnknownInviteAction, canonical,
+    UnknownInviteAction,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;

@@ -119,12 +119,12 @@ impl PolicyCheckRequestInput {
             "auth_context": self.auth_context,
         });
         // SDK is the single source of canonical-JSON + sha256 + `sha256:` prefix
-        // (arkret_core::canonical::canonical_sha256), shared with jws_verify /
+        // (arkret_canonical::canonical_sha256), shared with jws_verify /
         // notary / reducer so the digest is byte-identical across paths. Preserve
         // the prior fail-open all-zeros fallback for the (canonicalization-error)
         // edge case rather than introducing a new failure mode here.
-        let digest = arkret_core::canonical::canonical_sha256(&canonical_input)
-            .unwrap_or_else(|_| arkret_core::canonical::sha256_digest(b""));
+        let digest = arkret_canonical::canonical_sha256(&canonical_input)
+            .unwrap_or_else(|_| arkret_canonical::sha256_digest(b""));
         Hash::new(digest)
             .unwrap_or_else(|_| Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap())
     }
@@ -670,12 +670,12 @@ pub(crate) fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
-    arkret_core::canonical::canonical_json_bytes(&transcript)
+    arkret_canonical::canonical_json_bytes(&transcript)
         .map_err(|e| PolicyClientError::BadResponse(format!("policy transcript canonicalize: {e}")))
 }
 
 fn format_canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
-    arkret_core::canonical::format_timestamp_canonical(*ts)
+    arkret_canonical::format_timestamp_canonical(*ts)
 }
 
 fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {

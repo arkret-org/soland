@@ -825,7 +825,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.mls.rfc9420"],
             "claim_nonce": claim_nonce,
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(now() + chrono::Duration::minutes(5)),
+            "expires_at": arkret_canonical::format_timestamp_canonical(now() + chrono::Duration::minutes(5)),
             "target_device_ids": [],
             "minimal_metadata_allowed": true,
             "timeout_ms": 5000,
@@ -898,8 +898,8 @@ pub(crate) async fn complete_remote_direct_binding_with_realm(
         .map_err(|error| AppError::internal(format!("signed peer claim encode: {error}")))?;
     let drafted_unsigned = serde_json::to_value(&context.claim_authorization_draft.request)
         .map_err(|error| AppError::internal(format!("drafted peer claim encode: {error}")))?;
-    if arkret_core::canonical::canonical_sha256(&signed_unsigned).ok()
-        != arkret_core::canonical::canonical_sha256(&drafted_unsigned).ok()
+    if arkret_canonical::canonical_sha256(&signed_unsigned).ok()
+        != arkret_canonical::canonical_sha256(&drafted_unsigned).ok()
     {
         return Err(AppError::conflict(
             "peer claim request does not match the reserved authorization draft",
@@ -1015,7 +1015,7 @@ async fn execute_remote_peer_claim(
     })?;
     let request_value = serde_json::to_value(&federated_claim)
         .map_err(|error| AppError::internal(format!("remote peer claim encode: {error}")))?;
-    let request_digest = arkret_core::canonical::canonical_sha256(&request_value)
+    let request_digest = arkret_canonical::canonical_sha256(&request_value)
         .map_err(|error| AppError::internal(format!("remote peer claim digest: {error}")))?;
 
     let recovery = if context.claim_command_dispatched {
@@ -1230,7 +1230,7 @@ async fn verify_remote_peer_claim_outcome(
     }
     let claims_value = serde_json::to_value(&outcome.claims)
         .map_err(|error| AppError::internal(format!("remote claims encode: {error}")))?;
-    let claims_digest = arkret_core::canonical::canonical_sha256(&claims_value)
+    let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
         .map_err(|error| AppError::internal(format!("remote claims digest: {error}")))?;
     if outcome.claim_receipt.claims_digest.as_str() != claims_digest {
         return Err(AppError::new(
@@ -1301,7 +1301,7 @@ async fn send_signed_peer_json(
     idempotency_key: Option<&str>,
 ) -> Result<(reqwest::StatusCode, Vec<u8>), String> {
     let target_url = format!("{}{}", peer_url.trim_end_matches('/'), endpoint);
-    let body_bytes = arkret_core::canonical::canonical_json_bytes(body)
+    let body_bytes = arkret_canonical::canonical_json_bytes(body)
         .map_err(|error| format!("canonical request body: {error}"))?;
     let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
         &target_url,
@@ -2175,10 +2175,10 @@ pub(super) fn direct_member_join_operation(
             "binding_source": "explicit",
             "delivery_modes": ["events", "sync", "to_device", "key_packages"],
             "service_endpoint": service_endpoint,
-            "resolved_at": arkret_core::canonical::format_timestamp_canonical(created_at),
+            "resolved_at": arkret_canonical::format_timestamp_canonical(created_at),
             "service_acceptance_ref": service_acceptance_ref,
             "holder_proof_ref": service_acceptance_ref,
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(created_at + chrono::Duration::days(30))
+            "expires_at": arkret_canonical::format_timestamp_canonical(created_at + chrono::Duration::days(30))
         });
     }
     let mut operation = arkret_core::Operation::create(

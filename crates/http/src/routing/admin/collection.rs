@@ -437,7 +437,7 @@ pub(super) async fn admin_realm_member_items(
     let owner = realm_meta.as_ref().map(|meta| meta.owner.as_str());
     let joined_at = realm_meta
         .as_ref()
-        .map(|meta| arkret_core::canonical::format_timestamp_canonical(meta.created_at));
+        .map(|meta| arkret_canonical::format_timestamp_canonical(meta.created_at));
     Ok(members
         .into_iter()
         .map(|actor_id| AdminRealmMemberItem {
@@ -573,10 +573,10 @@ fn admin_applet_items(state: &AppState) -> Vec<Value> {
                 "namespace": applet.namespace,
                 "manifest": applet.manifest,
                 "capabilities": applet.capabilities,
-                "registered_at": arkret_core::canonical::format_timestamp_canonical(
+                "registered_at": arkret_canonical::format_timestamp_canonical(
                     applet.registered_at
                 ),
-                "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                "updated_at": arkret_canonical::format_timestamp_canonical(
                     applet.updated_at
                 ),
             })
@@ -611,7 +611,7 @@ pub(super) fn admin_invite_item(
         invitee: invite.invitee.clone(),
         invite_delivery_target: invite.invite_delivery_target.clone(),
         introduction_evidence_digest: invite.introduction_evidence_digest.clone(),
-        token_hash: arkret_core::canonical::sha256_digest(invite.invite_token.as_bytes()),
+        token_hash: arkret_canonical::sha256_digest(invite.invite_token.as_bytes()),
         status: invite.status.clone(),
         uses_allowed: 1,
         uses_completed: if invite.status == "accepted" { 1 } else { 0 },

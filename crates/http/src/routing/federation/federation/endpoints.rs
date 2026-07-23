@@ -359,7 +359,7 @@ fn local_peer_policy_digest_for_transaction(
                     json!({
                         "realm_id": record.realm_id.as_str(),
                         "payload": record.payload.clone(),
-                        "updated_at": arkret_core::canonical::format_timestamp_canonical(
+                        "updated_at": arkret_canonical::format_timestamp_canonical(
                             record.updated_at
                         ),
                     })
@@ -378,13 +378,12 @@ fn local_peer_policy_digest_for_transaction(
         "realm_policies": realm_policies,
         "realm_moderation_policies": moderation_policies,
     });
-    let canonical =
-        arkret_core::canonical::canonical_json_bytes(&policy_state).map_err(|error| {
-            AppError::internal(format!(
-                "federation local peer policy digest canonicalization: {error}"
-            ))
-        })?;
-    Ok(arkret_core::canonical::sha256_digest(&canonical))
+    let canonical = arkret_canonical::canonical_json_bytes(&policy_state).map_err(|error| {
+        AppError::internal(format!(
+            "federation local peer policy digest canonicalization: {error}"
+        ))
+    })?;
+    Ok(arkret_canonical::sha256_digest(&canonical))
 }
 
 #[endpoint(

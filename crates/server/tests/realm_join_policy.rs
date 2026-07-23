@@ -80,7 +80,7 @@ fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
             "challenge_id": "chg_01HXY9PM0AB6Y7VN2C7M4WG5KQ",
             "issued_by": "did:web:captcha.example",
             "challenge_kind": "captcha",
-            "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
+            "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
             "proof": "base64url:test-proof"
         }
     })

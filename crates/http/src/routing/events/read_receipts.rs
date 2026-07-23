@@ -51,7 +51,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         .observe_message_read_for_expiry(
             &session.actor,
             &normalized.event_id,
-            &arkret_core::canonical::format_timestamp_canonical(normalized.created_at),
+            &arkret_canonical::format_timestamp_canonical(normalized.created_at),
             normalized.created_at,
         );
 

@@ -341,7 +341,7 @@ async fn policy_check(
             format!(
                 "{}@{}",
                 policy.policy_id,
-                arkret_core::canonical::format_timestamp_canonical(policy.updated_at)
+                arkret_canonical::format_timestamp_canonical(policy.updated_at)
             )
         })
         .collect();
@@ -440,13 +440,13 @@ async fn policy_check(
 
 /// Canonical-JSON sha256 digest helper used to build each of the four
 /// Policy-check frontier hashes. Delegates to the SDK
-/// [`arkret_core::canonical::canonical_sha256`] so the digest is computed over
+/// [`arkret_canonical::canonical_sha256`] so the digest is computed over
 /// canonical JSON bytes and emitted in the wire `sha256:<hex>` form. There is
 /// **no** non-canonical fallback: if canonicalization fails the error is
 /// surfaced to the caller rather than silently hashing a non-canonical
 /// `serde_json::to_vec` byte stream.
 fn canonical_hash(value: &Value) -> Result<Hash, AppError> {
-    let digest = arkret_core::canonical::canonical_sha256(value)
+    let digest = arkret_canonical::canonical_sha256(value)
         .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))?;
     Hash::new(digest).map_err(|e| AppError::internal(format!("digest shape failed: {e}")))
 }

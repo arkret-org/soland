@@ -54,10 +54,10 @@ pub(super) async fn export_account(
             device_id: device.device_id,
             display_name: device.display_name,
             verification_state: device.verification_state,
-            created_at: arkret_core::canonical::format_timestamp_canonical(device.created_at),
+            created_at: arkret_canonical::format_timestamp_canonical(device.created_at),
             revoked_at: device
                 .revoked_at
-                .map(arkret_core::canonical::format_timestamp_canonical),
+                .map(arkret_canonical::format_timestamp_canonical),
         })
         .collect::<Vec<_>>();
 
@@ -72,7 +72,7 @@ pub(super) async fn export_account(
             realm_id,
             discoverability: meta.discoverability,
             history_visibility: meta.history_visibility,
-            created_at: arkret_core::canonical::format_timestamp_canonical(meta.created_at),
+            created_at: arkret_canonical::format_timestamp_canonical(meta.created_at),
         })
         .collect();
 
@@ -96,7 +96,7 @@ pub(super) async fn export_account(
 
     json_ok(AccountExportOutcome {
         did: actor,
-        exported_at: arkret_core::canonical::format_timestamp_canonical(now()),
+        exported_at: arkret_canonical::format_timestamp_canonical(now()),
         account: account_payload,
         profile,
         realms,
@@ -163,7 +163,7 @@ pub(crate) struct AccountLifecycleChange {
     pub state: String,
     pub changed_by: String,
     pub reason: Option<String>,
-    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
     pub changed_at: chrono::DateTime<chrono::Utc>,
     pub sessions_revoked: usize,
     pub devices_revoked: usize,
@@ -417,7 +417,7 @@ async fn append_account_state_change_audit(
         "to": next_state,
         "changed_by": changed_by,
         "reason": reason,
-        "timestamp": arkret_core::canonical::format_timestamp_canonical(changed_at),
+        "timestamp": arkret_canonical::format_timestamp_canonical(changed_at),
         "sessions_revoked": sessions_revoked,
         "devices_revoked": devices_revoked,
         "applet_delegated_sessions_revoked": applet_delegated_sessions_revoked,
@@ -645,7 +645,7 @@ pub(super) async fn deactivate_account(
         did: change.did,
         previous_state: change.previous_state,
         state: change.state,
-        deactivated_at: arkret_core::canonical::format_timestamp_canonical(change.changed_at),
+        deactivated_at: arkret_canonical::format_timestamp_canonical(change.changed_at),
         sessions_revoked: change.sessions_revoked,
         devices_revoked: change.devices_revoked,
         applet_delegated_sessions_revoked: change.applet_delegated_sessions_revoked,
@@ -790,7 +790,7 @@ pub(super) async fn erase_account(
     append_audit_redaction_marker(state, &actor).await;
 
     let completed_at = now();
-    let completed_at_wire = arkret_core::canonical::format_timestamp_canonical(completed_at);
+    let completed_at_wire = arkret_canonical::format_timestamp_canonical(completed_at);
     let erasure_receipt = account_erasure_receipt(state, &actor, completed_at)?;
     let realm_erasure_receipts = affected_realms
         .iter()
@@ -1031,7 +1031,7 @@ fn build_erasure_receipt_value(
     let retained_stub_value = serde_json::to_value(&retained_stub)
         .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?;
     let retained_stub_digest = arkret_core::Hash::new(
-        arkret_core::canonical::canonical_sha256(&retained_stub_value)
+        arkret_canonical::canonical_sha256(&retained_stub_value)
             .map_err(|error| AppError::internal(format!("erasure retained stub: {error}")))?,
     )
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
@@ -1112,7 +1112,7 @@ fn erasure_retained_stub(
             .map_err(|error| AppError::internal(format!("erasure stub subject: {error}")))?,
         "scope": serde_json::to_value(scope)
             .map_err(|error| AppError::internal(format!("erasure stub scope: {error}")))?,
-        "completed_at": arkret_core::canonical::format_timestamp_canonical(completed_at),
+        "completed_at": arkret_canonical::format_timestamp_canonical(completed_at),
     }))
     .map_err(|error| AppError::internal(format!("erasure retained stub encode: {error}")))
 }
@@ -1146,7 +1146,7 @@ fn erasure_receipt_proof_signature(
         "alg": "EdDSA",
         "kid": verification_method,
     });
-    let protected = arkret_core::canonical::canonical_json_bytes(&protected)
+    let protected = arkret_canonical::canonical_json_bytes(&protected)
         .map_err(|error| AppError::internal(format!("erasure proof header: {error}")))?;
     let protected_b64 = URL_SAFE_NO_PAD.encode(protected);
     let payload_b64 = URL_SAFE_NO_PAD.encode(payload);

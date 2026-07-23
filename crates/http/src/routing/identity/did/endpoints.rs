@@ -876,7 +876,7 @@ fn key_log_head_hash(value: Option<String>) -> Result<Option<Hash>, AppError> {
 }
 
 fn did_log_event_digest(operation: &Value) -> Result<String, AppError> {
-    arkret_core::canonical::canonical_sha256(operation)
+    arkret_canonical::canonical_sha256(operation)
         .map_err(|error| AppError::internal(format!("DID log entry digest failed: {error}")))
 }
 

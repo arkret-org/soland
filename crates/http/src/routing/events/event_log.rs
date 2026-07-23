@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 
+use arkret_canonical as canonical;
 use arkret_core::{
     ActorAggregateFrontierKind, ActorAggregateFrontierView, Audience, Did, Event, EventId,
     EventRef, EventsFrontierAccountClientState, EventsFrontierView,
@@ -22,7 +23,7 @@ use arkret_core::{
     MAX_EVENT_ENVELOPE_BYTES, MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_RESOLVE,
     MAX_EVENT_SUBMIT_BATCH, ManagedAgentPcrSealHeadReceipt, ManagedAgentPcrSealHeadReceiptKind,
     NotarySig, Operation, OperationId, Proof, RealmActorFrontierView, RealmId,
-    RealmSealFrontierView, Seal, TypedTrustDomainId, canonical, proof_kind,
+    RealmSealFrontierView, Seal, TypedTrustDomainId, proof_kind,
 };
 use arkret_models_collaboration::http_bodies::{
     EventSealSubmitOutcome, EventView, EventsResolveOutcome, EventsResolveRequestBody,

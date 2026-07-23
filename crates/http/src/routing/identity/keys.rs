@@ -408,7 +408,7 @@ fn keys_upload_signing_input(
         "one_time_keys": one_time_keys,
         "fallback_keys": fallback_keys,
     });
-    let canonical = arkret_core::canonical::canonical_json_bytes(&body)
+    let canonical = arkret_canonical::canonical_json_bytes(&body)
         .map_err(|error| AppError::invalid_param(format!("keys/upload canonicalize: {error}")))?;
     let mut input = Vec::with_capacity(KEYS_UPLOAD_SIGNATURE_PREFIX.len() + canonical.len());
     input.extend_from_slice(KEYS_UPLOAD_SIGNATURE_PREFIX);

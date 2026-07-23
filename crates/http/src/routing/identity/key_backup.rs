@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(value["actor_id"], ACTOR);
         assert_eq!(value["backup_id"], BACKUP_ID);
         assert_eq!(
-            arkret_core::canonical::sha256_digest(&canonical),
+            arkret_canonical::sha256_digest(&canonical),
             "sha256:0488d1f92328d1c7f0261963d88ac2705904456fffa7a3113fe23cad044ac34c"
         );
     }

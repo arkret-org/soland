@@ -56,9 +56,9 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionApplicationState)
         "identity_model": record.identity_model,
         "challenge": record.challenge,
         "state": record.state,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
-        "updated_at": arkret_core::canonical::format_timestamp_canonical(record.updated_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
+        "updated_at": arkret_canonical::format_timestamp_canonical(record.updated_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
     });
     match record.identity_model {
         RecoveryIdentityModel::CrossSigning => {
@@ -104,8 +104,8 @@ pub(super) fn recovery_proof_summary(record: &RecoverySessionApplicationState) -
     let kind = proof.get("kind").and_then(Value::as_str)?;
     let verification_method = proof.get("verification_method").and_then(Value::as_str);
     let transcript = recovery_proof_summary_transcript(record, proof)?;
-    let transcript_bytes = arkret_core::canonical::canonical_json_bytes(&transcript).ok()?;
-    let proof_digest = arkret_core::canonical::sha256_digest(&transcript_bytes);
+    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript).ok()?;
+    let proof_digest = arkret_canonical::sha256_digest(&transcript_bytes);
     let mut summary = json!({ "kind": kind, "proof_digest": proof_digest });
     if let Some(vm) = verification_method {
         summary["verification_method"] = json!(vm);
@@ -653,7 +653,7 @@ pub(super) async fn verify_principal_signing_proof(
 
     let transcript = recovery_proof_transcript(record, "principal_signing");
     let transcript_bytes =
-        arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
         })?;
 
@@ -739,7 +739,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
     let transcript =
         generic_recovery_proof_transcript(record, "trusted_recovery_service", proof_body);
     let transcript_bytes =
-        arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery proof transcript failed: {error}"))
         })?;
     let signature_b64 = required_proof_string(proof, "signature")?;
@@ -821,7 +821,7 @@ pub(super) async fn verify_recovery_unlock_proof(
     let transcript =
         generic_recovery_proof_transcript(record, "recovery_unlock", Value::Object(proof_body));
     let transcript_bytes =
-        arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+        arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
             AppError::internal(format!("recovery_unlock transcript failed: {error}"))
         })?;
 
@@ -1066,8 +1066,8 @@ pub(super) fn recovery_proof_transcript(
         "challenge": record.challenge,
         // created_at is the SESSION creation/signing time (not proof time), per
         // recovery-session.schema.json $defs/principal_signing_transcript.
-        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
     })
 }
 
@@ -1088,8 +1088,8 @@ pub(super) fn generic_recovery_proof_transcript(
         "identity_model": record.identity_model,
         "model_generation_ref": recovery_model_generation_ref(record),
         "challenge": record.challenge,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
         "proof_body": proof_body,
     })
 }
@@ -1483,7 +1483,7 @@ pub(super) async fn recovery_session_complete(
             "policy_version": record.policy_version,
             "trust_domain": record.trust_domain,
             "proof_summary": proof_summary,
-            "authorized_at": arkret_core::canonical::format_timestamp_canonical(now),
+            "authorized_at": arkret_canonical::format_timestamp_canonical(now),
         }),
     );
     device_payload_object.insert(

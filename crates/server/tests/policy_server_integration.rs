@@ -175,7 +175,7 @@ fn policy_decision_transcript_bytes(
     request: &PolicyCheckRequestBody,
     response: &PolicyCheckOutcome,
 ) -> Vec<u8> {
-    let expires_at = arkret_core::canonical::format_timestamp_canonical(response.expires_at);
+    let expires_at = arkret_canonical::format_timestamp_canonical(response.expires_at);
     let transcript = PolicyDecisionTranscript {
         kind: "ak.policy.check.transcript.v1",
         request_id: request.request_id.as_str(),
@@ -189,7 +189,7 @@ fn policy_decision_transcript_bytes(
         expires_at: expires_at.as_str(),
         obligations: &response.obligations,
     };
-    arkret_core::canonical::canonical_json_bytes(&transcript).unwrap()
+    arkret_canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
 /// G3.S2 — soland calls coauth's `/policy/check` end-to-end. Asserts

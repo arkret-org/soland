@@ -89,23 +89,22 @@ async fn send_device_messages(
     }
     let idempotency_key = idempotency_key.to_owned();
     let body = body.into_inner();
-    let request_digest = arkret_core::canonical::canonical_sha256(&body)
+    let request_digest = arkret_canonical::canonical_sha256(&body)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let request_key =
-        arkret_core::canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
-            .map_err(|error| AppError::internal(error.to_string()))?;
+    let request_key = arkret_canonical::canonical_sha256(&json!([session.actor, idempotency_key,]))
+        .map_err(|error| AppError::internal(error.to_string()))?;
     let mut prepared_targets = Vec::new();
     let mut idempotency_expires_at = now();
     for (recipient, devices) in body.messages {
         for (device_id, target) in devices {
             idempotency_expires_at = idempotency_expires_at.max(target.expires_at);
-            let message_key = arkret_core::canonical::canonical_sha256(&json!({
+            let message_key = arkret_canonical::canonical_sha256(&json!({
                 "sender_principal_id": session.actor,
                 "sender_device_id": session.device_id,
                 "message_id": target.message_id,
             }))
             .map_err(|error| AppError::internal(error.to_string()))?;
-            let intent_digest = arkret_core::canonical::canonical_sha256(&json!({
+            let intent_digest = arkret_canonical::canonical_sha256(&json!({
                 "message_id": target.message_id,
                 "kind": target.kind,
                 "sender_principal_id": session.actor,

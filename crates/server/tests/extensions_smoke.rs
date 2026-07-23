@@ -526,7 +526,7 @@ async fn post_signed_applet_message_transaction(
         "source_service_id": package.service_id.to_string(),
         "events": [event],
     });
-    let body_bytes = arkret_core::canonical::canonical_json_bytes(&body).unwrap();
+    let body_bytes = arkret_canonical::canonical_json_bytes(&body).unwrap();
     let content_digest = content_digest_header(&body_bytes);
     let verification_method = format!("{}#applet-service-key", package.service_id);
     let created = chrono::Utc::now().timestamp();
@@ -583,7 +583,7 @@ fn applet_message_event(
         ..
     } = request;
     let now = chrono::Utc::now();
-    let created_at = arkret_core::canonical::format_timestamp_canonical(now);
+    let created_at = arkret_canonical::format_timestamp_canonical(now);
     let payload = json!({
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",

@@ -147,7 +147,7 @@ pub(crate) fn augment_repair_winner_value(
 }
 
 pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {
-    arkret_core::canonical::format_timestamp_canonical(now)
+    arkret_canonical::format_timestamp_canonical(now)
 }
 
 /// SOL-ORG-01 — parse the `realm_id` out of a `ak.component.realm.metadata.v1`
@@ -638,8 +638,8 @@ pub(crate) fn document_version_from_operation(
         .and_then(Value::as_str)
         .unwrap_or(operation.operation_id.as_str())
         .to_owned();
-    let body_digest = arkret_core::canonical::canonical_sha256(&body)
-        .unwrap_or_else(|_| arkret_core::canonical::sha256_digest(body.to_string().as_bytes()));
+    let body_digest = arkret_canonical::canonical_sha256(&body)
+        .unwrap_or_else(|_| arkret_canonical::sha256_digest(body.to_string().as_bytes()));
     DocumentVersionProjection {
         version_id: format!("{morph_id}:version:{event_id}"),
         event_id,

@@ -166,7 +166,7 @@ fn verify_key_backup_auth_data_signature(
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
     }
-    let canonical = arkret_core::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!(
             "key backup envelope canonicalization failed: {error}"
         ))
@@ -203,10 +203,10 @@ pub(super) fn key_backup_canonical_digest_without_signature(
     {
         auth_data.remove("signature");
     }
-    let bytes = arkret_core::canonical::canonical_json_bytes(&canonical).map_err(|error| {
+    let bytes = arkret_canonical::canonical_json_bytes(&canonical).map_err(|error| {
         AppError::internal(format!("key backup canonical digest failed: {error}"))
     })?;
-    Ok(arkret_core::canonical::sha256_digest(&bytes))
+    Ok(arkret_canonical::sha256_digest(&bytes))
 }
 
 pub(super) fn recovery_session_proof_summary(
@@ -225,14 +225,11 @@ pub(super) fn recovery_session_proof_summary(
         "recovery_session_id": record.recovery_session_id.as_str(),
         "ssk_generation": record.ssk_generation,
         "challenge": record.challenge.as_str(),
-        "created_at": arkret_core::canonical::format_timestamp_canonical(record.created_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(record.expires_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
     });
-    let bytes = arkret_core::canonical::canonical_json_bytes(&transcript).ok()?;
-    Some((
-        kind.to_owned(),
-        arkret_core::canonical::sha256_digest(&bytes),
-    ))
+    let bytes = arkret_canonical::canonical_json_bytes(&transcript).ok()?;
+    Some((kind.to_owned(), arkret_canonical::sha256_digest(&bytes)))
 }
 
 pub(super) fn required_proof_string<'a>(
@@ -417,7 +414,7 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
     if let Some(auth_data) = unsigned.get_mut("auth_data").and_then(Value::as_object_mut) {
         auth_data.remove("signature");
     }
-    let canonical = arkret_core::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let canonical = arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!(
             "key backup unlock proof canonicalization failed: {error}"
         ))

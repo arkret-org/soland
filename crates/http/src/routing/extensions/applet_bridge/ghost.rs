@@ -1,9 +1,10 @@
 //! Ghost / bot actor provisioning, revocation, and the formal applet event
 //! build + persistence path.
 
+use arkret_canonical as canonical;
 use arkret_core::{
     ActorProfileId, AppletDelegatedEventAuthorization, AppletId, AppletNamespaceDomain, Did, Event,
-    EventRef, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId, canonical,
+    EventRef, GhostActorProvisionRequestBody, Hash, Hlc, PayloadProof, RealmId,
     namespace_pattern_matches,
 };
 use arkret_event_draft::GhostActorProfileRequest;
@@ -315,7 +316,7 @@ pub(super) fn production_payload_proof(
     let binding = json!({
         "label": label,
         "payload": payload,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
+        "created_at": arkret_canonical::format_timestamp_canonical(created_at),
     });
     let binding_bytes = canonical::canonical_json_bytes(&binding).map_err(|error| {
         AppError::internal(format!(

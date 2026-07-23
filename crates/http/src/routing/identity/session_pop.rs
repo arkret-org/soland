@@ -126,7 +126,7 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
                 "PoP Content-Digest does not match exact request bytes: {error}"
             ))
         })?;
-        arkret_core::canonical::validate_canonical_bytes(&body).map_err(|error| {
+        arkret_canonical::validate_canonical_bytes(&body).map_err(|error| {
             AppError::unauthenticated(format!(
                 "PoP-signed request body is not canonical JSON: {error}"
             ))

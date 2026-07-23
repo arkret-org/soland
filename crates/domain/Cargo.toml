@@ -10,6 +10,7 @@ authors.workspace = true
 description = "Pure deterministic domain rules and projections for Soland."
 
 [dependencies]
+arkret-canonical = {workspace = true}
 arkret-core.workspace = true
 arkret-hlc = {workspace = true}
 arkret-lattice-registry = {workspace = true}

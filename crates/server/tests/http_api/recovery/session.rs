@@ -63,7 +63,7 @@ fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value
         "new_generation": 2,
         "reset_reason_code": "rotation",
         "proof": proof,
-        "issued_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+        "issued_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
     })
 }
 
@@ -131,8 +131,8 @@ async fn seed_reset_recovery_policy(
         "version": 1,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": [allowed_kind],
-        "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+        "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
     });
     if let (Some(target), Some(extra)) = (raw_payload.as_object_mut(), extra.as_object()) {
         for (key, value) in extra {
@@ -197,8 +197,7 @@ async fn seed_verified_recovery_session_for_reset_test(
         .await
         .unwrap();
     session["state"] = serde_json::json!("verified");
-    session["updated_at"] =
-        serde_json::json!(arkret_core::canonical::format_timestamp_canonical(now));
+    session["updated_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(now));
     (session, session_id)
 }
 
@@ -344,7 +343,7 @@ async fn recovery_session_derives_enrollment_authority_model_and_rejects_a_model
             }),
         ),
     ] {
-        let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
+        let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
         bootstrap_records.push(CanonicalEventRecord {
             event_id: event_id.to_owned(),
             actor_id: principal_id.to_owned(),
@@ -1318,7 +1317,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
                 content: serde_json::json!({
                     "kind": kind,
                     "content": content,
-                    "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                    "expires_at": arkret_canonical::format_timestamp_canonical(
                         now + chrono::Duration::hours(1)
                     ),
                 }),

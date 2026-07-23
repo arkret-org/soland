@@ -86,7 +86,7 @@ pub fn verify_jws_shape(
         return Err("empty canonical bytes".to_owned());
     }
 
-    let payload_digest = Hash::new(arkret_core::canonical::sha256_digest(canonical_bytes))
+    let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))
         .map_err(|error| error.to_string())?;
     let proof = build_proof_envelope(
         "detached_jws",
@@ -721,7 +721,7 @@ async fn did_document_key_log_head(
     }
     let value = serde_json::to_value(document)
         .map_err(|error| format!("DID document serialization failed: {error}"))?;
-    let digest = arkret_core::canonical::canonical_sha256(&value)
+    let digest = arkret_canonical::canonical_sha256(&value)
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
 }

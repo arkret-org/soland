@@ -102,7 +102,7 @@ pub(super) async fn operation_frontier_outcome(
         "realm_id": realm_id,
         "operation_ids": operation_ids.clone(),
     });
-    let frontier_digest = arkret_core::canonical::canonical_sha256(&digest_payload)
+    let frontier_digest = arkret_canonical::canonical_sha256(&digest_payload)
         .map(|digest| {
             if digest.starts_with("sha256:") {
                 digest
@@ -139,7 +139,7 @@ pub(super) fn federation_request_digest(
 ) -> Result<String, &'static str> {
     let value =
         serde_json::to_value(body).map_err(|_| "federation transaction must serialize to JSON")?;
-    arkret_core::canonical::canonical_sha256(&value)
+    arkret_canonical::canonical_sha256(&value)
         .map_err(|_| "federation transaction must be canonical JSON")
 }
 

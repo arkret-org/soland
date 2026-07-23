@@ -357,9 +357,7 @@ mod tests {
                     ),
                     (
                         "expires_at".to_owned(),
-                        json!(arkret_core::canonical::format_timestamp_canonical(
-                            expires_at
-                        )),
+                        json!(arkret_canonical::format_timestamp_canonical(expires_at)),
                     ),
                     (
                         "signature".to_owned(),

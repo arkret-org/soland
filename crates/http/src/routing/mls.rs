@@ -326,7 +326,7 @@ async fn upload_keypackage(
             }
         };
         let keypackage_digest = entry.keypackage_digest.to_string();
-        let computed_keypackage_digest = arkret_core::canonical::sha256_digest(&key_package_bytes);
+        let computed_keypackage_digest = arkret_canonical::sha256_digest(&key_package_bytes);
         if keypackage_digest != computed_keypackage_digest {
             rejected.push(keypackage_failure(
                 &entry,
@@ -525,7 +525,7 @@ async fn peer_claim_keypackage(
         .map_err(|error| peer_claim_schema_violation(error.to_string()))?;
     validate_peer_claim_time_window(&body)?;
 
-    let request_digest = arkret_core::canonical::canonical_sha256(&body_value)
+    let request_digest = arkret_canonical::canonical_sha256(&body_value)
         .map_err(|error| AppError::internal(format!("peer claim digest: {error}")))?;
     revoke_expired_peer_claims(state).await?;
     if let Some(existing) = state
@@ -1006,7 +1006,7 @@ fn build_peer_claim_outcome(
     let claims = vec![keypackage_claim_record(claimed, body.claim_nonce.as_str())?];
     let claims_value = serde_json::to_value(&claims)
         .map_err(|error| AppError::internal(format!("peer claim records serialize: {error}")))?;
-    let claims_digest = arkret_core::canonical::canonical_sha256(&claims_value)
+    let claims_digest = arkret_canonical::canonical_sha256(&claims_value)
         .map_err(|error| AppError::internal(format!("peer claims digest: {error}")))?;
     let verification_method = format!("{}#notary-key", state.service_id());
     let mut receipt = PeerKeyPackageClaimReceipt {
@@ -2079,8 +2079,8 @@ fn decode_key_package(encoded: &str) -> Result<Vec<u8>, String> {
 }
 
 fn canonical_capabilities_digest(capabilities: &[String]) -> Result<String, String> {
-    arkret_core::canonical::canonical_json_bytes(&capabilities.to_vec())
-        .map(arkret_core::canonical::sha256_digest)
+    arkret_canonical::canonical_json_bytes(&capabilities.to_vec())
+        .map(arkret_canonical::sha256_digest)
         .map_err(|_| "capabilities_digest_failed".to_owned())
 }
 

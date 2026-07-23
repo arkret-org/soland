@@ -76,7 +76,7 @@ pub(crate) fn binding_canonical_value(
 
 /// Canonical bytes of a binding value (`binding_canonical_value` output).
 pub(crate) fn binding_canonical_bytes(binding: &Value) -> Vec<u8> {
-    arkret_core::canonical::canonical_json_bytes(binding)
+    arkret_canonical::canonical_json_bytes(binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -322,7 +322,7 @@ pub(crate) fn verify_call_state_participant_bindings(
         // (c) freshness — reject an already-expired binding.
         let expires_at = binding_str(binding, "expires_at")
             .ok_or("participant_binding_invalid: participant_binding.expires_at is required")?;
-        let expires_at = arkret_core::canonical::parse_timestamp_canonical(expires_at).map_err(
+        let expires_at = arkret_canonical::parse_timestamp_canonical(expires_at).map_err(
             |_| "participant_binding_invalid: participant_binding.expires_at is not canonical",
         )?;
         if expires_at <= event_created_at {

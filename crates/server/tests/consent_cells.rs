@@ -225,7 +225,7 @@ async fn revoke_cell(
 }
 
 fn iso_now() -> String {
-    arkret_core::canonical::format_timestamp_canonical(Utc::now())
+    arkret_canonical::format_timestamp_canonical(Utc::now())
 }
 
 fn signing_actor(seed: [u8; 32]) -> String {
@@ -529,7 +529,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
             "consent_id": consent_id,
             "peer": bob,
             "consent_scope": "direct_message",
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            "expires_at": arkret_canonical::format_timestamp_canonical(
                 Utc::now() + Duration::days(1)
             ),
         }),
@@ -557,7 +557,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
     let revoke_payload = serde_json::json!({
         "consent_id": consent_id,
         "observed_dots": [grant_dot],
-        "revoked_at": arkret_core::canonical::format_timestamp_canonical(
+        "revoked_at": arkret_canonical::format_timestamp_canonical(
             Utc::now() + Duration::seconds(1)
         ),
     });
@@ -608,7 +608,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 
     request_contact(&app, &bob_token, alice, "invite").await;
     let expired_at =
-        arkret_core::canonical::format_timestamp_canonical(Utc::now() - Duration::seconds(1));
+        arkret_canonical::format_timestamp_canonical(Utc::now() - Duration::seconds(1));
     let expired = grant_cell(&app, &alice_token, alice, bob, "invite", Some(expired_at)).await;
     assert_eq!(expired["state"], "pending");
     assert!(expired["active_grant_dots"].as_array().unwrap().is_empty());
@@ -683,7 +683,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
             "consent_id": consent_id,
             "peer": alice,
             "consent_scope": "invite",
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            "expires_at": arkret_canonical::format_timestamp_canonical(
                 Utc::now() + Duration::days(1)
             ),
         }),

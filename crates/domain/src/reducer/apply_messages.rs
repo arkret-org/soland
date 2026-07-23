@@ -475,17 +475,18 @@ impl ProjectionState {
                 };
             }
         };
-        let occurrence_key = match arkret_core::canonical_calendar_rsvp_occurrence_key(
-            &strand.fields,
-            occurrence_value,
-        ) {
-            Ok(value) => value,
-            Err(_) => {
-                return ProjectionEffect::Rejected {
-                    reason: "rsvp_occurrence_invalid".to_owned(),
-                };
-            }
-        };
+        let occurrence_key =
+            match arkret_models_collaboration::objects::productivity::canonical_calendar_rsvp_occurrence_key(
+                &strand.fields,
+                occurrence_value,
+            ) {
+                Ok(value) => value,
+                Err(_) => {
+                    return ProjectionEffect::Rejected {
+                        reason: "rsvp_occurrence_invalid".to_owned(),
+                    };
+                }
+            };
         let occurrence = (occurrence_key != "series").then(|| occurrence_key.clone());
         let actor_id = operation_actor_id(operation);
         let key = (event_ref.to_owned(), occurrence_key, actor_id.clone());
@@ -1002,8 +1003,7 @@ fn rsvp_lww_hlc(operation: &Operation) -> String {
         .created_at
         .timestamp_millis()
         .clamp(0, 0xFFFF_FFFF_FFFF);
-    let operation_hash =
-        arkret_core::canonical::sha256_hex(operation.operation_id.as_str().as_bytes());
+    let operation_hash = arkret_canonical::sha256_hex(operation.operation_id.as_str().as_bytes());
     format!("{millis:012x}-0000-{}", &operation_hash[..8])
 }
 

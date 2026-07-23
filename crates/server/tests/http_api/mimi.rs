@@ -31,9 +31,9 @@ fn signed_mimi_headers(
     body: &Value,
     room_uri: Option<&str>,
 ) -> Vec<(&'static str, String)> {
-    let body_bytes = arkret_core::canonical::canonical_json_bytes(body).unwrap();
+    let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
-    let request_digest = arkret_core::canonical::sha256_digest(&body_bytes);
+    let request_digest = arkret_canonical::sha256_digest(&body_bytes);
     let created = chrono::Utc::now().timestamp();
     let expires = created + 300;
     let verification_method = format!("{MIMI_SOURCE_SERVICE_ID}#mimi-provider-test-key");
@@ -97,7 +97,7 @@ fn mimi_room_uri(room_id: &str) -> String {
 }
 
 fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
-    let bytes = arkret_core::canonical::canonical_json_bytes(&value).unwrap();
+    let bytes = arkret_canonical::canonical_json_bytes(&value).unwrap();
     let mut object = serde_json::Map::new();
     object.insert(
         "content_type".to_owned(),
@@ -109,7 +109,7 @@ fn mimi_opaque_payload(value: Value, digest_field: &str) -> Value {
     );
     object.insert(
         digest_field.to_owned(),
-        json!(arkret_core::canonical::sha256_digest(&bytes)),
+        json!(arkret_canonical::sha256_digest(&bytes)),
     );
     object.insert("payload".to_owned(), json!(URL_SAFE_NO_PAD.encode(&bytes)));
     Value::Object(object)
@@ -208,7 +208,7 @@ fn text_mimi_message(message_id: &str, body: &str) -> Value {
     json!({
         "source_format": "application/mimi-content",
         "mimi_message_id": message_id,
-        "original_envelope_hash": arkret_core::canonical::sha256_digest(message_id.as_bytes()),
+        "original_envelope_hash": arkret_canonical::sha256_digest(message_id.as_bytes()),
         "content": {
             "kind": "ak.content.composite",
             "body": body,
@@ -228,7 +228,7 @@ fn event_kind(event: &Value) -> Option<&str> {
 }
 
 fn identifier_commitment(identifier: &str) -> String {
-    arkret_core::canonical::sha256_digest(identifier.as_bytes())
+    arkret_canonical::sha256_digest(identifier.as_bytes())
 }
 
 #[tokio::test]

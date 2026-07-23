@@ -238,7 +238,7 @@ async fn sync_token_for_state_positions(
 
 #[cfg(test)]
 pub(crate) fn encode_sync_cursor_value(cursor: Value) -> String {
-    let bytes = arkret_core::canonical::canonical_json_bytes(&cursor)
+    let bytes = arkret_canonical::canonical_json_bytes(&cursor)
         .unwrap_or_else(|_| cursor.to_string().into_bytes());
     format!("ak:cursor:{}", URL_SAFE_NO_PAD.encode(bytes))
 }
@@ -289,7 +289,7 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
         "to_device": to_device_position,
         "notifications": notification_position,
     });
-    arkret_core::canonical::canonical_json_bytes(&binding)
+    arkret_canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -308,7 +308,7 @@ pub(crate) fn events_query_cursor_handle_binding(
         "purpose": STREAM_CURSOR_PURPOSE,
         "target": target,
     });
-    arkret_core::canonical::canonical_json_bytes(&binding)
+    arkret_canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -329,7 +329,7 @@ fn service_cursor_handle_binding(
         "device_lists": {},
         "to_device": 0,
     });
-    arkret_core::canonical::canonical_json_bytes(&binding)
+    arkret_canonical::canonical_json_bytes(&binding)
         .unwrap_or_else(|_| binding.to_string().into_bytes())
 }
 
@@ -770,8 +770,8 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
     let binding = json!({
         "filter": filter,
     });
-    arkret_core::canonical::canonical_sha256(&binding)
-        .unwrap_or_else(|_| arkret_core::canonical::sha256_digest(binding.to_string().as_bytes()))
+    arkret_canonical::canonical_sha256(&binding)
+        .unwrap_or_else(|_| arkret_canonical::sha256_digest(binding.to_string().as_bytes()))
 }
 
 /// `POST /_arkret/self/account/cursor/revoke` — `ak.self.account.command.revoke_cursor`.

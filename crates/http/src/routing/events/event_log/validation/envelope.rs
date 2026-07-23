@@ -38,7 +38,7 @@ fn event_digest_suite(
             .realm_digest_algorithm(realm_id)
     }
     .unwrap_or_else(|| "sha256".to_owned());
-    arkret_core::canonical::digest_suite(&suite)
+    arkret_canonical::digest_suite(&suite)
         .map(|_| suite.clone())
         .map_err(|_| unsupported_digest_algorithm_error(&suite))
 }
@@ -57,7 +57,7 @@ fn realm_create_digest_algorithm(object: &serde_json::Map<String, Value>) -> Opt
 }
 
 fn event_digest_for_suite(bytes: &[u8], suite: &str) -> Result<String, EventValidationError> {
-    arkret_core::canonical::canonical_digest_with_suite(bytes, suite)
+    arkret_canonical::canonical_digest_with_suite(bytes, suite)
         .map_err(|_| unsupported_digest_algorithm_error(suite))
 }
 

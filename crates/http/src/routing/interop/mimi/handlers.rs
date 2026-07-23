@@ -256,7 +256,7 @@ pub(super) async fn mimi_room_message(
         .get("original_envelope_hash")
         .and_then(|value| value.as_str())
         .map(str::to_owned)
-        .unwrap_or_else(|| arkret_core::canonical::sha256_digest(body.to_string().as_bytes()));
+        .unwrap_or_else(|| arkret_canonical::sha256_digest(body.to_string().as_bytes()));
 
     // Map the MIMI message into the canonical Arkret timeline.
     // Append a MessageRecord + a `ak.message.create` projection event so
@@ -300,7 +300,7 @@ pub(super) async fn mimi_room_message(
         "original_sender": sender,
         "original_envelope_hash": original_hash,
         "source_format": source_format,
-        "accepted_at": arkret_core::canonical::format_timestamp_canonical(created_at),
+        "accepted_at": arkret_canonical::format_timestamp_canonical(created_at),
     });
     let event_payload = json!({
         "strand_id": thread_id.clone(),
@@ -629,7 +629,7 @@ async fn consume_mimi_consent_proof_replay(
     body: &MimiUpdateConsentRequestBody,
 ) -> Result<(), AppError> {
     let proof = &body.signature;
-    let replay_digest = arkret_core::canonical::canonical_sha256(&json!({
+    let replay_digest = arkret_canonical::canonical_sha256(&json!({
         "actor_id": body.actor_id,
         "payload_digest": proof.payload_digest,
         "jws": proof.jws,

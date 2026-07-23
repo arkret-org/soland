@@ -51,7 +51,7 @@ fn federation_headers(digest: &str) -> FederationTrustHeaders {
 fn verify_actor_digest_uses_canonical_json() {
     let body = verify_actor_body();
     let value = serde_json::to_value(&body).unwrap();
-    let expected = arkret_core::canonical::canonical_sha256(&value).unwrap();
+    let expected = arkret_canonical::canonical_sha256(&value).unwrap();
 
     assert_eq!(federation_verify_actor_digest(&body).unwrap(), expected);
 }

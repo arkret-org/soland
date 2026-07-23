@@ -536,7 +536,7 @@ fn validate_destination_authority(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
     if let Some(observed_digest) = observed {
-        let expected_digest = arkret_core::canonical::sha256_digest(
+        let expected_digest = arkret_canonical::sha256_digest(
             state
                 .config()
                 .public_base_url

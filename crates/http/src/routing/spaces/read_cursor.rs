@@ -46,7 +46,7 @@ pub(super) async fn set_read_cursor(
     let operation_id = ids::generate_operation_id();
     let read_at = chrono::DateTime::<chrono::Utc>::from_timestamp(now().timestamp(), 0)
         .ok_or_else(|| AppError::invalid_param("system clock timestamp out of range"))?;
-    let read_at_wire = arkret_core::canonical::format_timestamp_canonical(read_at);
+    let read_at_wire = arkret_canonical::format_timestamp_canonical(read_at);
     let payload = json!({
         "id": ids::generate_read_cursor_id(),
         "schema": "ak.schema.read_cursor.v1",

@@ -255,7 +255,7 @@ pub(super) async fn resolve_target(
         source_refs: Vec::new(),
         join_candidates,
         policy_revision: arkret_core::NonEmptyString::new(policy_revision.unwrap_or_else(|| {
-            arkret_core::canonical::sha256_digest(
+            arkret_canonical::sha256_digest(
                 format!("{}:{discoverability}:{join_rule}", realm_entry.realm_id).as_bytes(),
             )
         }))

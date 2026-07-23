@@ -207,7 +207,7 @@ async fn policy_request_for_operation(
             format!(
                 "{}@{}",
                 policy.policy_id,
-                arkret_core::canonical::format_timestamp_canonical(policy.updated_at)
+                arkret_canonical::format_timestamp_canonical(policy.updated_at)
             )
         })
         .collect::<Vec<_>>();
@@ -238,8 +238,7 @@ async fn policy_request_for_operation(
 }
 
 fn digest_value(value: &str) -> Result<Hash, String> {
-    Hash::new(arkret_core::canonical::sha256_digest(value.as_bytes()))
-        .map_err(|error| error.to_string())
+    Hash::new(arkret_canonical::sha256_digest(value.as_bytes())).map_err(|error| error.to_string())
 }
 
 fn zero_frontiers() -> PolicyFrontierSnapshot {
@@ -279,7 +278,7 @@ fn policy_frontier_snapshot_for_operation(
 }
 
 fn canonical_policy_hash(value: &Value) -> Result<Hash, PolicyGateRejection> {
-    let digest = arkret_core::canonical::canonical_sha256(value)
+    let digest = arkret_canonical::canonical_sha256(value)
         .map_err(|error| PolicyGateRejection::internal(format!("canonical digest: {error}")))?;
     Hash::new(digest).map_err(|error| PolicyGateRejection::internal(format!("hash shape: {error}")))
 }

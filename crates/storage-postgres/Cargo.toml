@@ -11,6 +11,7 @@ description = "PostgreSQL storage adapter and database bootstrap for Soland."
 
 [dependencies]
 anyhow = {workspace = true}
+arkret-canonical.workspace = true
 arkret-core.workspace = true
 arkret-state.workspace = true
 async-trait = {workspace = true}

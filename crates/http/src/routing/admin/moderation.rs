@@ -203,9 +203,7 @@ async fn assign_queue_item(
         obj.insert("status".to_owned(), json!("reviewing"));
         obj.insert(
             "updated_at".to_owned(),
-            json!(arkret_core::canonical::format_timestamp_canonical(
-                Utc::now()
-            )),
+            json!(arkret_canonical::format_timestamp_canonical(Utc::now())),
         );
     }
     state
@@ -268,9 +266,7 @@ async fn prioritise_queue_item(
         obj.insert("priority".to_owned(), json!(priority));
         obj.insert(
             "updated_at".to_owned(),
-            json!(arkret_core::canonical::format_timestamp_canonical(
-                Utc::now()
-            )),
+            json!(arkret_canonical::format_timestamp_canonical(Utc::now())),
         );
     }
     state

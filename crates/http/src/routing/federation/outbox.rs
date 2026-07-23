@@ -173,7 +173,7 @@ pub(crate) fn rfc9421_sign(
     target_url: &str,
     body: &[u8],
 ) -> reqwest::header::HeaderMap {
-    let request_canonical_digest = arkret_core::canonical::sha256_digest(body);
+    let request_canonical_digest = arkret_canonical::sha256_digest(body);
     insert_header_if_valid(
         &mut headers,
         "request-canonical-digest",

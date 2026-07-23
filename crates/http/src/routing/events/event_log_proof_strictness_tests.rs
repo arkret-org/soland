@@ -968,7 +968,7 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
     .unwrap();
     event.unsigned.insert("age_ms".to_owned(), json!(10));
     let expected =
-        arkret_core::canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+        arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
     let mut envelope = serde_json::to_value(&event).unwrap();
     envelope["canonical_digest"] = json!("sha256:old");
     let bytes = event_canonical_bytes(&envelope).unwrap();
@@ -1321,7 +1321,7 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
     // A matching payload-only hash must not create a development-only
     // durable Event protocol.
     let payload_bytes = canonical::canonical_json_bytes(&object["payload"]).unwrap();
-    let payload_digest = arkret_core::canonical::sha256_digest(&payload_bytes);
+    let payload_digest = arkret_canonical::sha256_digest(&payload_bytes);
     if let Some(proofs) = object.get_mut("proofs").and_then(Value::as_array_mut)
         && let Some(proof) = proofs.first_mut()
         && let Some(map) = proof.as_object_mut()
@@ -1349,7 +1349,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
     // passes and this test focuses on JWS signature verification failure.
     ingest_fresh_webvh_document(&state, "did:web:alice.example").await;
     let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
-    let event_digest = arkret_core::canonical::sha256_digest(canonical_bytes);
+    let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
         "proofs".to_owned(),
@@ -1369,7 +1369,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         &state,
         &session,
         "did:web:alice.example",
-        &arkret_core::canonical::sha256_digest(canonical_bytes),
+        &arkret_canonical::sha256_digest(canonical_bytes),
         None,
     )
     .await
@@ -1392,7 +1392,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
     // Deliberately ingest no webvh document: the actor has no freshness
     // evidence in persistence.
     let canonical_bytes = br#"{"actor_id":"did:web:alice.example","event_id":"ak:event:test"}"#;
-    let event_digest = arkret_core::canonical::sha256_digest(canonical_bytes);
+    let event_digest = arkret_canonical::sha256_digest(canonical_bytes);
     let mut object = serde_json::Map::new();
     object.insert(
         "proofs".to_owned(),
@@ -1412,7 +1412,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         &state,
         &session,
         "did:web:alice.example",
-        &arkret_core::canonical::sha256_digest(canonical_bytes),
+        &arkret_canonical::sha256_digest(canonical_bytes),
         None,
     )
     .await

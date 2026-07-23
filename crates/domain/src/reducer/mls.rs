@@ -126,7 +126,7 @@ pub fn apply_keypackage_publish(
         .and_then(Value::as_str)
         .unwrap_or(id)
         .to_owned();
-    let computed_keypackage_digest = arkret_core::canonical::sha256_digest(&key_package_bytes);
+    let computed_keypackage_digest = arkret_canonical::sha256_digest(&key_package_bytes);
     let keypackage_digest = payload
         .get("keypackage_digest")
         .and_then(Value::as_str)
@@ -136,8 +136,8 @@ pub fn apply_keypackage_publish(
         return reject("mls_keypackage_digest_mismatch");
     }
     let capabilities = string_array(payload.get("capabilities"));
-    let capabilities_digest = match arkret_core::canonical::canonical_json_bytes(&capabilities) {
-        Ok(bytes) => arkret_core::canonical::sha256_digest(bytes),
+    let capabilities_digest = match arkret_canonical::canonical_json_bytes(&capabilities) {
+        Ok(bytes) => arkret_canonical::sha256_digest(bytes),
         Err(_) => return reject("mls_keypackage_capabilities_digest_failed"),
     };
     if let Some(published_digest) = payload.get("capabilities_digest").and_then(Value::as_str)
@@ -1144,7 +1144,7 @@ fn validate_welcome_trust_binding(
         .get("claim_envelope")
         .and_then(Value::as_object)
         .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
-    let expected_welcome_digest = arkret_core::canonical::sha256_digest(welcome_bytes);
+    let expected_welcome_digest = arkret_canonical::sha256_digest(welcome_bytes);
     if envelope.get("claim_id").and_then(Value::as_str) != Some(claim_id)
         || envelope.get("keypackage_ref").and_then(Value::as_str) != Some(keypackage_ref)
         || envelope.get("keypackage_digest").and_then(Value::as_str) != Some(keypackage_digest)

@@ -114,7 +114,7 @@ impl FederationIdempotencyKey {
     /// Strict key — equal to a cached entry only when ALL fields match,
     /// including the origin's current key state hash.
     pub(crate) fn strict(&self) -> String {
-        let canonical = arkret_core::canonical::canonical_json_bytes(&json!({
+        let canonical = arkret_canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
             "request_canonical_digest": self.request_canonical_digest,
@@ -122,20 +122,20 @@ impl FederationIdempotencyKey {
             "origin_key_state_digest": self.origin_key_state_digest,
         }))
         .unwrap_or_default();
-        arkret_core::canonical::sha256_digest(&canonical)
+        arkret_canonical::sha256_digest(&canonical)
     }
 
     /// Canonical-replay key — drops `origin_key_state_digest`. Used to
     /// detect a replay AFTER the source service rotated its keys.
     pub(crate) fn canonical_replay(&self) -> String {
-        let canonical = arkret_core::canonical::canonical_json_bytes(&json!({
+        let canonical = arkret_canonical::canonical_json_bytes(&json!({
             "source_did": self.source_did,
             "dest_did": self.dest_did,
             "request_canonical_digest": self.request_canonical_digest,
             "idempotency_key": self.idempotency_key,
         }))
         .unwrap_or_default();
-        arkret_core::canonical::sha256_digest(&canonical)
+        arkret_canonical::sha256_digest(&canonical)
     }
 }
 

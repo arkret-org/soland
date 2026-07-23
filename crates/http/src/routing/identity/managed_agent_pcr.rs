@@ -77,10 +77,10 @@ pub(crate) async fn persist_managed_agent_did_binding(
     )?;
     let operation = json!({
         "versionId": "1",
-        "versionTime": arkret_core::canonical::format_timestamp_canonical(now),
+        "versionTime": arkret_canonical::format_timestamp_canonical(now),
         "state": document,
     });
-    let digest = arkret_core::canonical::canonical_sha256(&operation).map_err(|error| {
+    let digest = arkret_canonical::canonical_sha256(&operation).map_err(|error| {
         AppError::internal(format!(
             "managed Agent DID inception digest failed: {error}"
         ))
@@ -533,7 +533,7 @@ async fn active_series_signature_is_valid(
         .as_object_mut()
         .ok_or_else(|| AppError::internal("active-series auth_data is not an object"))?
         .remove("signature");
-    let message = arkret_core::canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let message = arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
         AppError::internal(format!("active-series canonicalization failed: {error}"))
     })?;
     let signature = URL_SAFE_NO_PAD
@@ -1269,7 +1269,7 @@ fn current_backup_hpke_agreement(
 fn canonical_binding_bytes(binding: &ManagedPrincipalBinding) -> Result<Vec<u8>, AppError> {
     let value = serde_json::to_value(binding)
         .map_err(|error| AppError::internal(format!("managed binding encode failed: {error}")))?;
-    arkret_core::canonical::canonical_json_bytes(&value)
+    arkret_canonical::canonical_json_bytes(&value)
         .map_err(|error| schema_error(format!("managed binding canonicalization failed: {error}")))
 }
 

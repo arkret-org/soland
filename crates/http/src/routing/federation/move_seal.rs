@@ -334,7 +334,7 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
     let canonical_bytes = seal
         .canonical_bytes_for_id()
         .map_err(|error| seal_admission_error(format!("Seal canonical bytes: {error}")))?;
-    let expected_digest = arkret_core::canonical::sha256_digest(&canonical_bytes);
+    let expected_digest = arkret_canonical::sha256_digest(&canonical_bytes);
     if signature.payload_digest.as_str() != expected_digest {
         return Err(device_generation_fenced(
             "B-model device Seal signature payload_digest mismatch",
@@ -1569,7 +1569,7 @@ mod seal_delta_tests {
             alg: "EdDSA".to_owned(),
             verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
                 .to_owned(),
-            payload_digest: arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
+            payload_digest: arkret_core::Hash::new(arkret_canonical::sha256_digest(
                 &canonical_bytes,
             ))
             .unwrap(),

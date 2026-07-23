@@ -89,7 +89,7 @@ async fn get_realm_policy_server(
         cache_ttl_seconds: cfg.cache_ttl_seconds,
         timeout_ms: cfg.timeout_ms,
         on_timeout: cfg.on_timeout,
-        updated_at: arkret_core::canonical::format_timestamp_canonical(cfg.updated_at),
+        updated_at: arkret_canonical::format_timestamp_canonical(cfg.updated_at),
         from_org_fallback,
     })
 }
@@ -158,7 +158,7 @@ async fn put_realm_policy_server(
         cache_ttl_seconds: cfg.cache_ttl_seconds,
         timeout_ms: cfg.timeout_ms,
         on_timeout: cfg.on_timeout,
-        updated_at: arkret_core::canonical::format_timestamp_canonical(cfg.updated_at),
+        updated_at: arkret_canonical::format_timestamp_canonical(cfg.updated_at),
         from_org_fallback: false,
     })
 }

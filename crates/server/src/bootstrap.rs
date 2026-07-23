@@ -459,7 +459,7 @@ fn stored_external_identity_from_outcome(
     outcome
         .validate_for(registration_key)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
-    let now = arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let stored = StoredServiceIdentity {
         identity: LocalServiceIdentity {
             service_id: outcome.service_id,
@@ -520,7 +520,7 @@ fn validate_external_stored_identity(
 }
 
 fn registration_key_ref_suffix(key: &ServiceRegistrationKey) -> anyhow::Result<String> {
-    let bytes = arkret_core::canonical::canonical_json_bytes(key)
+    let bytes = arkret_canonical::canonical_json_bytes(key)
         .map_err(|error| anyhow::anyhow!(error.to_string()))?;
     let digest = Sha256::digest(bytes);
     Ok(digest[..16]
@@ -637,7 +637,7 @@ async fn ensure_identity_bundle(
         identity: stored.clone(),
         webvh_history: vec![inception],
         receipt_chain: vec![stored.registration_receipt.clone()],
-        exported_at: arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+        exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
     };
     backend
         .store(&bundle)
@@ -841,7 +841,7 @@ fn stored_identity_from_outcome(
         .map_err(|error| anyhow::anyhow!("stored service registration is invalid: {error}"))?;
     let signing_key_ref = signing_key_ref(config, &outcome.service_id, key_store)?;
     let generation = webvh_version_number(&outcome.version_id)?;
-    let now = arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now());
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let identity = LocalServiceIdentity {
         service_id: outcome.service_id,
         registration_key,
@@ -1108,7 +1108,7 @@ async fn mint_local_service_identity(
             identity: stored.clone(),
             webvh_history: vec![request.inception_operation],
             receipt_chain: vec![stored.registration_receipt.clone()],
-            exported_at: arkret_core::canonical::normalize_timestamp_canonical(chrono::Utc::now()),
+            exported_at: arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now()),
         };
         backend.store(&bundle).map_err(|error| {
             anyhow::anyhow!("persisting service identity bundle failed: {error}")
@@ -1125,7 +1125,7 @@ fn sign_registration_receipt(
     signing_seed: &[u8; 32],
     issued_at: chrono::DateTime<chrono::Utc>,
 ) -> anyhow::Result<ServiceRegistrationReceipt> {
-    let issued_at = arkret_core::canonical::normalize_timestamp_canonical(issued_at);
+    let issued_at = arkret_canonical::normalize_timestamp_canonical(issued_at);
     let log_head_digest = request.inception_operation.log_head_digest()?;
     let control_key_digest = request.inception_operation.control_key_digest()?;
     let receipt_claims = json!({
@@ -1134,10 +1134,10 @@ fn sign_registration_receipt(
         "version_id": request.inception_operation.version_id,
         "log_head_digest": log_head_digest,
         "control_key_digest": control_key_digest,
-        "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
+        "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
         "provider_service_id": provider_service_id,
     });
-    let receipt_digest = arkret_core::canonical::canonical_sha256(&receipt_claims)?;
+    let receipt_digest = arkret_canonical::canonical_sha256(&receipt_claims)?;
     let receipt_id = format!(
         "ak:service_registration_receipt:{}",
         receipt_digest
@@ -1203,14 +1203,14 @@ fn registration_receipt_signing_input(
         "version_id": version_id,
         "log_head_digest": log_head_digest,
         "control_key_digest": control_key_digest,
-        "issued_at": arkret_core::canonical::format_timestamp_canonical(issued_at),
+        "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
         "provider_service_id": provider_service_id,
     });
     let mut signing_input = Vec::with_capacity(64);
-    let proof_config_bytes = arkret_core::canonical::canonical_json_bytes(&proof_config)?;
-    let receipt_bytes = arkret_core::canonical::canonical_json_bytes(&signed_receipt)?;
-    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&proof_config_bytes));
-    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&receipt_bytes));
+    let proof_config_bytes = arkret_canonical::canonical_json_bytes(&proof_config)?;
+    let receipt_bytes = arkret_canonical::canonical_json_bytes(&signed_receipt)?;
+    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&proof_config_bytes));
+    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&receipt_bytes));
     Ok(signing_input)
 }
 

@@ -37,6 +37,7 @@ arkret-hlc = { version = "0.3.0", path = "../arkret-rust-sdk/crates/hlc", defaul
 arkret-event-draft = { version = "0.3.0", path = "../arkret-rust-sdk/crates/event-draft", default-features = false }
 arkret-auth = { version = "0.3.0", path = "../arkret-rust-sdk/crates/auth", default-features = false }
 arkret-bootstrap = { version = "0.3.0", path = "../arkret-rust-sdk/crates/bootstrap", default-features = false }
+arkret-canonical = { version = "0.3.0", path = "../arkret-rust-sdk/crates/canonical", default-features = false }
 arkret-crypto = { version = "0.3.0", path = "../arkret-rust-sdk/crates/crypto", default-features = false }
 arkret-http-client = { version = "0.3.0", path = "../arkret-rust-sdk/crates/http-client", default-features = false }
 arkret-identifiers = { version = "0.3.0", path = "../arkret-rust-sdk/crates/identifiers", default-features = false }

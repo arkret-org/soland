@@ -986,7 +986,7 @@ fn insert_approved_agent_action(
     agent_id: &str,
     approval_nonce: &str,
 ) {
-    let payload_digest = arkret_core::canonical::canonical_sha256(&message.payload).unwrap();
+    let payload_digest = arkret_canonical::canonical_sha256(&message.payload).unwrap();
     state.test_projection().lock().agent_action_requests.insert(
         request_id.to_owned(),
         soland_domain::reducer::AgentActionRequestProjection {

@@ -88,7 +88,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "event_canonical_digest": proof.get("event_canonical_digest").and_then(Value::as_str).unwrap_or_default(),
     });
     let bytes = serde_json::to_vec(&material).unwrap_or_default();
-    arkret_core::canonical::sha256_digest(&bytes)
+    arkret_canonical::sha256_digest(&bytes)
 }
 
 pub(super) fn validate_audit_accessed_payload(

@@ -239,7 +239,7 @@ fn erasure_push_payload(
     };
     serde_json::to_value(&body)
         .ok()
-        .and_then(|value| arkret_core::canonical::canonical_json_bytes(&value).ok())
+        .and_then(|value| arkret_canonical::canonical_json_bytes(&value).ok())
         .and_then(|bytes| String::from_utf8(bytes).ok())
 }
 

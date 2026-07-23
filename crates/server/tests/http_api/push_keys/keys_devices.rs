@@ -115,7 +115,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
                     "ak:device:01904100-0000-7000-8000-a11ce0000001": {
                         "kind": "ak.mls.welcome",
                         "content": "not-an-object",
-                        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+                        "expires_at": arkret_canonical::format_timestamp_canonical(
                             chrono::Utc::now() + chrono::Duration::hours(1)
                         )
                     }

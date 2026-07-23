@@ -7,7 +7,7 @@ use soland_storage::DeviceMessageRecord;
 use super::common::*;
 
 fn registration_secret_digest(value: &str) -> arkret_core::Hash {
-    arkret_core::Hash::new(arkret_core::canonical::sha256_digest(value.as_bytes())).unwrap()
+    arkret_core::Hash::new(arkret_canonical::sha256_digest(value.as_bytes())).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]

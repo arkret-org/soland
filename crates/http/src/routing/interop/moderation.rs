@@ -254,7 +254,7 @@ fn validate_moderation_evidence_package(
         .as_object()
         .ok_or_else(|| AppError::invalid_param("evidence_package must be an object"))?;
     let canonical_bytes =
-        arkret_core::canonical::canonical_json_bytes(evidence_package).map_err(|error| {
+        arkret_canonical::canonical_json_bytes(evidence_package).map_err(|error| {
             AppError::bad_json(format!(
                 "evidence_package is not canonical-json encodable: {error}"
             ))
@@ -390,7 +390,7 @@ async fn validate_moderation_franking_proof(
         ));
     }
     let received_at = required_string_field(object, "received_at", "franking_proof")?;
-    if arkret_core::canonical::validate_timestamp_canonical(received_at).is_err() {
+    if arkret_canonical::validate_timestamp_canonical(received_at).is_err() {
         return Err(AppError::invalid_param(
             "franking_proof.received_at must be a canonical Arkret timestamp",
         ));
@@ -944,7 +944,7 @@ async fn moderation_appeal_submit(
         "reason_text_ref": body.reason_text_ref,
         "evidence_refs": body.evidence_refs,
         "evidence_visibility": evidence_visibility,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(Utc::now()),
+        "created_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
         "event_kind": arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT,
         "appeal_state": "submitted",
     });

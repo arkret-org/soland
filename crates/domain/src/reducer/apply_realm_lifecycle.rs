@@ -1001,7 +1001,7 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| "sha256".to_owned());
-        if arkret_core::canonical::digest_suite(&payload_digest_algorithm).is_err() {
+        if arkret_canonical::digest_suite(&payload_digest_algorithm).is_err() {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::UNSUPPORTED_DIGEST_ALGORITHM.to_owned(),
             };
@@ -1235,7 +1235,7 @@ impl ProjectionState {
                         "encryption_profile": payload_encryption_profile,
                         "content_scheme": payload_content_scheme,
                         "digest_algorithm": payload_digest_algorithm,
-                        "created_at": arkret_core::canonical::format_timestamp_canonical(now),
+                        "created_at": arkret_canonical::format_timestamp_canonical(now),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells
@@ -1351,7 +1351,7 @@ impl ProjectionState {
                         "terminal_kind": "tombstoned",
                         "tombstoned": true,
                         "successor_realm_id": payload_successor_realm_id,
-                        "at": arkret_core::canonical::format_timestamp_canonical(now),
+                        "at": arkret_canonical::format_timestamp_canonical(now),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells.insert(cell_id, CellState::Value(value));
@@ -1369,7 +1369,7 @@ impl ProjectionState {
                     let value = serde_json::json!({
                         "terminal_kind": "destroyed",
                         "destroyed": true,
-                        "at": arkret_core::canonical::format_timestamp_canonical(now),
+                        "at": arkret_canonical::format_timestamp_canonical(now),
                         "operation_id": operation.operation_id.as_str(),
                     });
                     self.cells.insert(cell_id, CellState::Value(value));

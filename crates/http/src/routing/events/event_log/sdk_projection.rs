@@ -654,13 +654,13 @@ fn sdk_event_from_record(
         );
         unsigned.insert(
             "retention_expired_at".to_owned(),
-            json!(arkret_core::canonical::format_timestamp_canonical(
+            json!(arkret_canonical::format_timestamp_canonical(
                 tombstone.expired_at
             )),
         );
         unsigned.insert(
             "retention_tombstoned_at".to_owned(),
-            json!(arkret_core::canonical::format_timestamp_canonical(
+            json!(arkret_canonical::format_timestamp_canonical(
                 tombstone.tombstoned_at
             )),
         );
@@ -765,12 +765,12 @@ fn event_visibility_metadata(
     if let Some(tombstone) = retention_tombstone_for_event(state, &record.event_id) {
         metadata["retention_state"] = json!("tombstoned");
         metadata["retention_reason"] = json!(tombstone.reason.as_str());
-        metadata["retention_expired_at"] = json!(
-            arkret_core::canonical::format_timestamp_canonical(tombstone.expired_at)
-        );
-        metadata["retention_tombstoned_at"] = json!(
-            arkret_core::canonical::format_timestamp_canonical(tombstone.tombstoned_at)
-        );
+        metadata["retention_expired_at"] = json!(arkret_canonical::format_timestamp_canonical(
+            tombstone.expired_at
+        ));
+        metadata["retention_tombstoned_at"] = json!(arkret_canonical::format_timestamp_canonical(
+            tombstone.tombstoned_at
+        ));
         metadata["retention_seal_preserved"] = json!(tombstone.sealed);
         metadata["physical_delete"] = json!(false);
         metadata["retention_risk_ui"] = json!(retention_risk_ui_flag(&tombstone));

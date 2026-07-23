@@ -363,7 +363,7 @@ async fn peer_events_frontier(
         frontier_root,
         actor_seq_upper_bounds: typed_actor_frontier,
         witness_receipts: Vec::new(),
-        observed_at: arkret_core::canonical::format_timestamp_canonical(observed_at),
+        observed_at: arkret_canonical::format_timestamp_canonical(observed_at),
         issuer: service_id,
         signature: signature
             .as_object()

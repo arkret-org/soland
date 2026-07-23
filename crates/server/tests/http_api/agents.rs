@@ -197,7 +197,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         let event_id = event.event_id.to_string();
         let canonical_digest = event.event_digest().unwrap();
         let envelope = serde_json::to_value(&event).unwrap();
-        let canonical_bytes = arkret_core::canonical::canonical_json_bytes(&envelope).unwrap();
+        let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
         state
             .test_persistence()
             .events()
@@ -532,7 +532,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         event.validate_proof_bindings().unwrap();
         assert_eq!(event.proofs.len(), 1);
         let canonical_bytes =
-            arkret_core::canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
+            arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
         arkret_signatures::verify_eddsa_detached_jws_proof(
             &event.proofs[0],
             &canonical_bytes,

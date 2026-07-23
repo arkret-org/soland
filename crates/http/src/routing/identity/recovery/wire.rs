@@ -119,9 +119,9 @@ pub(super) struct SolandRecoveryReceiptItem {
     pub(super) trust_domain: TypedTrustDomainId,
     pub(super) new_device_id: DeviceId,
     pub(super) outcome: RecoveryReceiptOutcome,
-    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
     pub(super) completed_at: chrono::DateTime<chrono::Utc>,
-    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
     pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
     #[salvo(schema(value_type = serde_json::Value))]
     pub(super) receipt: Value,
@@ -135,7 +135,7 @@ pub(super) struct SolandRecoveryReceiptPutOutcome {
     pub(super) principal_id: Did,
     pub(super) recovery_session_id: RecoverySessionId,
     pub(super) outcome: RecoveryReceiptOutcome,
-    #[serde(serialize_with = "arkret_core::canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
     pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
 }
 

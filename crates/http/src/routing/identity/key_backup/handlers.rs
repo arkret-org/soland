@@ -183,14 +183,12 @@ pub(super) fn key_backup_idempotent_retry(
     let Some(existing) = existing else {
         return Ok(false);
     };
-    let existing_bytes =
-        arkret_core::canonical::canonical_json_bytes(existing).map_err(|error| {
-            AppError::internal(format!("stored key backup is not canonical: {error}"))
-        })?;
-    let incoming_bytes =
-        arkret_core::canonical::canonical_json_bytes(incoming).map_err(|error| {
-            AppError::internal(format!("key backup canonicalization failed: {error}"))
-        })?;
+    let existing_bytes = arkret_canonical::canonical_json_bytes(existing).map_err(|error| {
+        AppError::internal(format!("stored key backup is not canonical: {error}"))
+    })?;
+    let incoming_bytes = arkret_canonical::canonical_json_bytes(incoming).map_err(|error| {
+        AppError::internal(format!("key backup canonicalization failed: {error}"))
+    })?;
     if existing_bytes != incoming_bytes {
         return Err(AppError::new(
             ErrorCode::DuplicateConflict,

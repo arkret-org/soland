@@ -310,10 +310,8 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: verification_method.to_owned(),
-        event_digest: arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
-            proof_binding_bytes,
-        ))
-        .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
+        event_digest: arkret_core::Hash::new(arkret_canonical::sha256_digest(proof_binding_bytes))
+            .map_err(|error| author_credential_invalid(format!("binding digest: {error}")))?,
         created_at: chrono::Utc::now(),
         domain: None,
         audience: None,

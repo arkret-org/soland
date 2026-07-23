@@ -796,7 +796,7 @@ impl ProjectionState {
                 "status": status,
                 "label": label,
                 "commitment": commitment,
-                "updated_at": arkret_core::canonical::format_timestamp_canonical(now),
+                "updated_at": arkret_canonical::format_timestamp_canonical(now),
             });
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -901,7 +901,7 @@ impl ProjectionState {
                 "allowed_policies": allowed_policies,
                 "allowed_capability_bundles": allowed_capability_bundles,
                 "max_depth": max_depth,
-                "updated_at": arkret_core::canonical::format_timestamp_canonical(now),
+                "updated_at": arkret_canonical::format_timestamp_canonical(now),
             });
             self.cells.insert(cell_id, CellState::Value(value));
         }
@@ -1093,7 +1093,7 @@ impl ProjectionState {
             );
             value.insert(
                 "updated_at".to_owned(),
-                Value::String(arkret_core::canonical::format_timestamp_canonical(now)),
+                Value::String(arkret_canonical::format_timestamp_canonical(now)),
             );
             if let Some(bundle) = operation.payload.get("bundle") {
                 value.insert("bundle".to_owned(), bundle.clone());

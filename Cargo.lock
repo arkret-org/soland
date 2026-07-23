@@ -4923,6 +4923,7 @@ version = "0.3.0"
 dependencies = [
  "anyhow",
  "arkret-bootstrap",
+ "arkret-canonical",
  "arkret-core",
  "arkret-crypto",
  "arkret-http-client",
@@ -4979,6 +4980,7 @@ dependencies = [
 name = "soland-application"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
  "arkret-core",
  "arkret-identity",
  "arkret-models-collaboration",
@@ -5003,6 +5005,7 @@ dependencies = [
 name = "soland-contracts"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
  "arkret-core",
  "chrono",
  "salvo",
@@ -5014,6 +5017,7 @@ dependencies = [
 name = "soland-domain"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
  "arkret-core",
  "arkret-hlc",
  "arkret-lattice-registry",
@@ -5043,6 +5047,7 @@ dependencies = [
  "arc-swap",
  "arkret-auth",
  "arkret-bootstrap",
+ "arkret-canonical",
  "arkret-core",
  "arkret-crypto",
  "arkret-event-draft",
@@ -5103,6 +5108,7 @@ dependencies = [
 name = "soland-storage"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
  "arkret-core",
  "arkret-wire",
  "async-trait",
@@ -5135,6 +5141,7 @@ name = "soland-storage-postgres"
 version = "0.3.0"
 dependencies = [
  "anyhow",
+ "arkret-canonical",
  "arkret-core",
  "arkret-state",
  "async-trait",

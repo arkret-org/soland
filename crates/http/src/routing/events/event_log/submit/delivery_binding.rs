@@ -163,7 +163,7 @@ pub(super) async fn delivery_binding_handover_witness(
         "recipient_service_id": evidence.new_recipient_service_id.as_str(),
         "delivery_binding_frontier": frontier,
         "membership_event_ref": evidence.membership_event_ref.as_deref(),
-        "projection_updated_at": arkret_core::canonical::format_timestamp_canonical(
+        "projection_updated_at": arkret_canonical::format_timestamp_canonical(
             evidence.updated_at
         ),
     });
@@ -187,7 +187,7 @@ pub(super) async fn delivery_binding_handover_witness(
                     );
                     object.insert(
                         "event_received_at".to_owned(),
-                        Value::String(arkret_core::canonical::format_timestamp_canonical(
+                        Value::String(arkret_canonical::format_timestamp_canonical(
                             record.received_at,
                         )),
                     );

@@ -124,7 +124,7 @@ fn admin_grant_from_introspection_outcome(
         active: true,
         principal_id,
         admin_scopes: grant.scopes,
-        expires_at: Some(arkret_core::canonical::normalize_timestamp_canonical(
+        expires_at: Some(arkret_canonical::normalize_timestamp_canonical(
             grant.expires_at,
         )),
         device_id: grant
@@ -173,7 +173,7 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
         active: true,
         principal_id,
         admin_scopes: scopes,
-        expires_at: Some(arkret_core::canonical::normalize_timestamp_canonical(
+        expires_at: Some(arkret_canonical::normalize_timestamp_canonical(
             session.expires_at,
         )),
         device_id: Some(session.device_id.clone()),

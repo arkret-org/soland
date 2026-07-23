@@ -9,11 +9,11 @@ use anyhow::Result;
 ///
 /// Re-exported from the SDK canonical helper instead of carrying a third fork
 /// alongside the conformance harness.
-pub use arkret_core::canonical::sha256_digest;
+pub use arkret_canonical::sha256_digest;
 use serde_json::Value;
 
 pub fn canonical_json(value: &Value) -> Result<String> {
-    arkret_core::canonical::canonical_json_string(value).map_err(Into::into)
+    arkret_canonical::canonical_json_string(value).map_err(Into::into)
 }
 
 /// Order a slice of HLC strings lexicographically with `actor_id` tiebreak.

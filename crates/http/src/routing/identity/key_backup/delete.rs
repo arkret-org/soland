@@ -20,7 +20,7 @@ pub(super) fn key_backup_delete_proof_canonical_bytes(
         action: "DELETE /_arkret/self/keys/backups/{backup_id}",
         audience: "soland.key_backup.delete",
     };
-    arkret_core::canonical::canonical_json_bytes(&transcript).map_err(|error| {
+    arkret_canonical::canonical_json_bytes(&transcript).map_err(|error| {
         AppError::internal(format!(
             "key backup delete proof transcript failed: {error}"
         ))

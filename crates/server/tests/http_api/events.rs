@@ -33,7 +33,7 @@ impl arkret_core::MoveSigner for ControllerSealSigner {
         Ok(arkret_core::MoveSignature {
             alg: "EdDSA".to_owned(),
             verification_method: self.verification_method.clone(),
-            payload_digest: arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
+            payload_digest: arkret_core::Hash::new(arkret_canonical::sha256_digest(
                 canonical_bytes,
             ))?,
             created_at: chrono::Utc::now(),
@@ -1116,7 +1116,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
             kind: event.kind.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest: digest.to_string(),
-            canonical_bytes: arkret_core::canonical::canonical_json_bytes(&event).unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(&event).unwrap(),
             envelope,
             received_at: chrono::Utc::now(),
         })
@@ -1273,7 +1273,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .expect("created managed Agent record");
     let realm_id = agent_record.principal_control_realm_id.clone();
     let created_at = chrono::DateTime::parse_from_rfc3339(
-        &arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+        &arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
     )
     .unwrap()
     .with_timezone(&chrono::Utc);
@@ -1304,7 +1304,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
-                "created_at": arkret_core::canonical::format_timestamp_canonical(created_at),
+                "created_at": arkret_canonical::format_timestamp_canonical(created_at),
                 "fields": {"purpose": "principal_control"},
                 "content_encryption_floor": "e2ee_required",
                 "metadata_encryption_floor": "e2ee_required",
@@ -1474,7 +1474,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
             kind: pending.kind.as_str().to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest: pending_digest,
-            canonical_bytes: arkret_core::canonical::canonical_json_bytes(&pending).unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(&pending).unwrap(),
             envelope: serde_json::to_value(&pending).unwrap(),
             received_at: chrono::Utc::now(),
         })

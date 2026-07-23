@@ -62,9 +62,7 @@ fn stamp_projection_operation_received_at(
     };
     payload.insert(
         "event_received_at".to_owned(),
-        Value::String(arkret_core::canonical::format_timestamp_canonical(
-            received_at,
-        )),
+        Value::String(arkret_canonical::format_timestamp_canonical(received_at)),
     );
 }
 

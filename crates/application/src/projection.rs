@@ -724,12 +724,12 @@ impl ProjectionApplicationService {
             .filter(|value| !value.is_empty())
             .ok_or("verification_service_id_required")?;
         let invite_record = serde_json::json!({
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(invite.expires_at),
+            "expires_at": arkret_canonical::format_timestamp_canonical(invite.expires_at),
             "invite_id": invite.invite_id,
             "realm_id": invite.realm_id,
             "third_party_id": third_party_id,
         });
-        let invite_digest = arkret_core::canonical::canonical_sha256(&invite_record)
+        let invite_digest = arkret_canonical::canonical_sha256(&invite_record)
             .map_err(|_| "invite_digest_invalid")?;
         Ok(Some(InviteClaimProofContext {
             expected_verification_public_key: expected_verification_public_key.to_owned(),
@@ -788,7 +788,7 @@ impl ProjectionApplicationService {
         if !agent_action_target_matches(&approval.target, operation) {
             return Err("agent_act_on_behalf_approval_target_mismatch");
         }
-        let payload_digest = arkret_core::canonical::canonical_sha256(&operation.payload)
+        let payload_digest = arkret_canonical::canonical_sha256(&operation.payload)
             .map_err(|_| "agent_act_on_behalf_approval_payload_digest_invalid")?;
         if approval.approved_payload_digest != payload_digest {
             return Err("agent_act_on_behalf_approval_payload_digest_mismatch");

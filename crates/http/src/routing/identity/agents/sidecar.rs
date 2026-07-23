@@ -346,7 +346,7 @@ async fn ensure_backing_circle(
         "encryption_profile": "mls_rfc9420",
         "state": "active",
         "created_by": controller,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now())
+        "created_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
     });
     let operation = new_sidecar_operation(
         realm_id,
@@ -564,7 +564,7 @@ async fn create_private_context(
     let strand_id = StrandId::new(ids::generate("strand"))
         .map_err(|error| AppError::internal(format!("generated Strand id: {error}")))?;
     let tracks = private_tracks_for_context(state, context_ref);
-    let created_at = arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now());
+    let created_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
     let object = private_context_strand_object(
         &strand_id,
         &realm_id,
@@ -1193,9 +1193,8 @@ async fn ensure_sidecar_impl(
     validate_sidecar_context_projection(state, &body.context_ref)?;
     let addressed_agents = normalize_addressed_agents(controller, &body)?;
     let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
-    let normalized_context_ref_digest =
-        arkret_core::canonical::canonical_sha256(&normalized_context_ref)
-            .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
+    let normalized_context_ref_digest = arkret_canonical::canonical_sha256(&normalized_context_ref)
+        .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
     let eligible_agents =
         eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
 

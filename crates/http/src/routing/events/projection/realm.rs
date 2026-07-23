@@ -507,8 +507,8 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
         );
         return;
     };
-    let payload_digest = match arkret_core::canonical::canonical_json_bytes(identity_payload) {
-        Ok(bytes) => arkret_core::canonical::sha256_digest(bytes),
+    let payload_digest = match arkret_canonical::canonical_json_bytes(identity_payload) {
+        Ok(bytes) => arkret_canonical::sha256_digest(bytes),
         Err(err) => {
             tracing::warn!(
                 %err,

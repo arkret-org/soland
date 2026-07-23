@@ -341,7 +341,7 @@ fn account_registration_policy_snapshot(state: &AppState) -> AccountRegistration
 fn account_registration_policy_digest(
     policy: &AccountRegistrationPolicy,
 ) -> Result<Hash, AppError> {
-    let digest = arkret_core::canonical::canonical_sha256(policy)
+    let digest = arkret_canonical::canonical_sha256(policy)
         .map_err(|error| AppError::internal(format!("registration policy digest: {error}")))?;
     Hash::new(digest).map_err(|error| {
         AppError::internal(format!("registration policy digest is invalid: {error}"))
@@ -415,10 +415,8 @@ async fn reject_account_registration(
 }
 
 fn digest_registration_secret(value: &str) -> Result<Hash, AppError> {
-    Hash::new(arkret_core::canonical::sha256_digest(
-        value.trim().as_bytes(),
-    ))
-    .map_err(|error| AppError::internal(format!("registration secret digest: {error}")))
+    Hash::new(arkret_canonical::sha256_digest(value.trim().as_bytes()))
+        .map_err(|error| AppError::internal(format!("registration secret digest: {error}")))
 }
 
 fn evidence_secret_matches(

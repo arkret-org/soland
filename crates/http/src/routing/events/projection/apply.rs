@@ -510,7 +510,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
     );
     record.insert("appeal_state".to_owned(), Value::String(new_state.clone()));
     record.entry("projected_at".to_owned()).or_insert_with(|| {
-        Value::String(arkret_core::canonical::format_timestamp_canonical(
+        Value::String(arkret_canonical::format_timestamp_canonical(
             operation.created_at,
         ))
     });

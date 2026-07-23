@@ -147,9 +147,8 @@ pub(super) async fn submit_agent_runtime_key_request(
     let proposed_requested_at = agent_record
         .approval_requested_at
         .unwrap_or_else(chrono::Utc::now);
-    let expires_at = arkret_core::canonical::format_timestamp_canonical(
-        required_pairing_expires_at(&agent_record)?,
-    );
+    let expires_at =
+        arkret_canonical::format_timestamp_canonical(required_pairing_expires_at(&agent_record)?);
     let write = soland_application::identity::StoreAgentRuntimeApprovalCommand {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.to_string(),
@@ -187,7 +186,7 @@ pub(super) async fn submit_agent_runtime_key_request(
             pairing_failed_precondition("agent pairing metadata is incomplete")
                 .with_reason_detail("missing approval_notification_id")
         })?;
-    let requested_at = arkret_core::canonical::format_timestamp_canonical(
+    let requested_at = arkret_canonical::format_timestamp_canonical(
         stored.approval_requested_at.ok_or_else(|| {
             pairing_failed_precondition("agent pairing metadata is incomplete")
                 .with_reason_detail("missing approval_requested_at")
@@ -1098,10 +1097,10 @@ pub(super) fn ensure_key_authorize_event_matches_request(
 fn agent_key_pair_request_digest(body: &AgentKeyPairRequestBody) -> Result<String, AppError> {
     let value = serde_json::to_value(body)
         .map_err(|error| AppError::invalid_param(format!("pairing request invalid: {error}")))?;
-    let canonical = arkret_core::canonical::canonical_json_bytes(&value).map_err(|error| {
+    let canonical = arkret_canonical::canonical_json_bytes(&value).map_err(|error| {
         AppError::invalid_param(format!("pairing request canonicalization failed: {error}"))
     })?;
-    Ok(arkret_core::canonical::sha256_digest(&canonical))
+    Ok(arkret_canonical::sha256_digest(&canonical))
 }
 
 fn paired_request_digest_from_record_event(
@@ -1118,12 +1117,12 @@ fn paired_request_digest_from_record_event(
         })?;
     request.insert("authorize_event".to_owned(), authorize_event.clone());
     let canonical =
-        arkret_core::canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
+        arkret_canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
             AppError::internal(format!(
                 "accepted pairing request canonicalization failed: {error}"
             ))
         })?;
-    Ok(arkret_core::canonical::sha256_digest(&canonical))
+    Ok(arkret_canonical::sha256_digest(&canonical))
 }
 
 pub(super) fn ensure_pairing_request_open(
@@ -1472,9 +1471,8 @@ pub(super) fn pairing_request_binding_digest(
 ) -> Result<String, AppError> {
     let pairing_request_id = required_pairing_request_id(agent_record)?;
     let pairing_code = required_pairing_code(agent_record)?;
-    let expires_at = arkret_core::canonical::format_timestamp_canonical(
-        required_pairing_expires_at(agent_record)?,
-    );
+    let expires_at =
+        arkret_canonical::format_timestamp_canonical(required_pairing_expires_at(agent_record)?);
     let controller = Did::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
     let agent_id = Did::new(agent_id.to_owned())

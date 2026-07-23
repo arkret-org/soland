@@ -71,7 +71,7 @@ fn sign_b64(signing: &SigningKey, bytes: &[u8]) -> String {
 }
 
 fn sha256_json(value: &Value) -> String {
-    let bytes = arkret_core::canonical::canonical_json_bytes(value)
+    let bytes = arkret_canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     format!("sha256:{}", hex::encode(Sha256::digest(&bytes)))
 }
@@ -244,9 +244,8 @@ async fn mls_lifecycle_end_to_end() {
     let mismatch_keypackage_ref = "ak:mls:keypackage:test-02";
     let keypackage_bytes = b"opaque-mls-keypackage";
     let mismatch_keypackage_bytes = b"opaque-mls-keypackage-mismatch";
-    let keypackage_digest = arkret_core::canonical::sha256_digest(keypackage_bytes);
-    let mismatch_keypackage_digest =
-        arkret_core::canonical::sha256_digest(mismatch_keypackage_bytes);
+    let keypackage_digest = arkret_canonical::sha256_digest(keypackage_bytes);
+    let mismatch_keypackage_digest = arkret_canonical::sha256_digest(mismatch_keypackage_bytes);
     let capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
     let capabilities_digest = sha256_json(&capabilities);
     let mismatch_capabilities = json!(["ak.mls.rfc9420"]);
@@ -562,7 +561,7 @@ async fn mls_lifecycle_end_to_end() {
         "requester_did": alice_did,
         "ssk_generation": 3,
         "nonce": b64(b"welcome-claim-nonce-01-128-bit"),
-        "welcome_digest": arkret_core::canonical::sha256_digest(b"opaque-mls-welcome"),
+        "welcome_digest": arkret_canonical::sha256_digest(b"opaque-mls-welcome"),
         "created_at": "2026-05-25T00:00:02.000Z",
         "signature": {
             "kid": format!("{alice_did}#self-signing"),
@@ -733,7 +732,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     assert_eq!(
         device_message["content"]["claim_envelope"]["welcome_digest"],
-        json!(arkret_core::canonical::sha256_digest(b"opaque-mls-welcome"))
+        json!(arkret_canonical::sha256_digest(b"opaque-mls-welcome"))
     );
     assert_eq!(
         device_message["content"]["commit_ref"],

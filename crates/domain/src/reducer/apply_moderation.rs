@@ -282,7 +282,7 @@ impl ProjectionState {
             if terminal_lifted {
                 map.insert("lifted".to_owned(), Value::Bool(true));
                 map.entry("lifted_at".to_owned()).or_insert_with(|| {
-                    Value::String(arkret_core::canonical::format_timestamp_canonical(now))
+                    Value::String(arkret_canonical::format_timestamp_canonical(now))
                 });
             }
         }
@@ -327,7 +327,7 @@ impl ProjectionState {
         };
 
         let mut items = self.moderation_cell_items(&cell_ref);
-        let lifted_at = arkret_core::canonical::format_timestamp_canonical(now);
+        let lifted_at = arkret_canonical::format_timestamp_canonical(now);
         if items.is_empty() {
             // Lift-before-decision (or lift of a decision this server never
             // projected): write a tombstone-only item so the terminal rule

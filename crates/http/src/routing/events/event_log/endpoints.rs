@@ -186,7 +186,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
     // canonical body is a `duplicate_conflict`. Event-ID idempotency below
     // still applies independently (a write with no header relies on it).
     if let Some(key) = idempotency_key.as_deref() {
-        let request_hash = match arkret_core::canonical::canonical_sha256(&submit) {
+        let request_hash = match arkret_canonical::canonical_sha256(&submit) {
             Ok(hash) => hash,
             Err(error) => {
                 render_error(

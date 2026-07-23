@@ -271,7 +271,7 @@ fn normalize_contact_message(raw: Option<&str>) -> Result<Option<String>, AppErr
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let normalized = arkret_core::canonical::to_nfc(trimmed);
+    let normalized = arkret_canonical::to_nfc(trimmed);
     let len = normalized.chars().count();
     if len > 2000 {
         return Err(AppError::invalid_param(
@@ -339,7 +339,7 @@ async fn append_local_stubbed_contact_message_audit(
             "scope": scope,
             "contact_event_id": contact_event_id,
             "message_chars": message.chars().count(),
-            "message_digest": arkret_core::canonical::sha256_digest(message.as_bytes()),
+            "message_digest": arkret_canonical::sha256_digest(message.as_bytes()),
         }),
         "accepted",
     )
@@ -352,7 +352,7 @@ fn contact_introduction_evidence_digest(
     let value = serde_json::to_value(evidence).map_err(|error| {
         AppError::internal(format!("contact introduction evidence serialize: {error}"))
     })?;
-    arkret_core::canonical::canonical_sha256(&value).map_err(|error| {
+    arkret_canonical::canonical_sha256(&value).map_err(|error| {
         AppError::internal(format!("contact introduction evidence digest: {error}"))
     })
 }

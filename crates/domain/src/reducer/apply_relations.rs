@@ -1041,9 +1041,9 @@ fn container_cell_digest(state: Option<&CellState>) -> Option<String> {
         Some(CellState::Bottom(_)) => return None,
         None => &Value::Null,
     };
-    arkret_core::canonical::canonical_json_bytes(value)
+    arkret_canonical::canonical_json_bytes(value)
         .ok()
-        .map(arkret_core::canonical::sha256_digest)
+        .map(arkret_canonical::sha256_digest)
 }
 
 fn relation_scope_circle_id_from_payload(payload: &Value) -> Option<String> {

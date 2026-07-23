@@ -20,8 +20,9 @@
 
 pub(crate) use std::collections::{BTreeMap, BTreeSet};
 
+pub(crate) use arkret_canonical as canonical;
 pub(crate) use arkret_core::{
-    CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId, canonical,
+    CellRef, Hash, Hlc, Move, MoveId, MoveSignature, NotarySig, RealmId, Seal, SealId,
 };
 pub(crate) use arkret_signatures::sign_eddsa_detached_jws;
 pub(crate) use arkret_state::lattice::CellState;

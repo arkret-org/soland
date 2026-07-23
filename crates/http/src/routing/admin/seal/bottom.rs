@@ -452,7 +452,7 @@ pub(crate) async fn admin_repair_bottom(
                 "strategy": &strategy,
             });
             let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
-            let placeholder_id = arkret_core::canonical::sha256_digest(&bytes);
+            let placeholder_id = arkret_canonical::sha256_digest(&bytes);
             json_ok(SubmitControlMoveOutcome {
                 control_move_id: placeholder_id,
                 accepted: false,

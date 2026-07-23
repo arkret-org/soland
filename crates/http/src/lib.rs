@@ -51,7 +51,7 @@ pub use routing::{
 pub use crate::routing::events::projection::project_accepted_operations;
 
 pub(crate) fn canonical_value_digest(value: &serde_json::Value) -> Option<String> {
-    arkret_core::canonical::canonical_sha256(value).ok()
+    arkret_canonical::canonical_sha256(value).ok()
 }
 
 use salvo::catcher::Catcher;

@@ -124,13 +124,13 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
                     .and_then(|record| record.issuer_service_id.clone())
                     .or_else(|| Some(state.service_id().clone())),
                 subject_id: Some(account.did.clone()),
-                assigned_at: Some(arkret_core::canonical::format_timestamp_canonical(
+                assigned_at: Some(arkret_canonical::format_timestamp_canonical(
                     localpart.created_at,
                 )),
                 expires_at: primary_claim.and_then(|record| {
                     record
                         .expires_at
-                        .map(arkret_core::canonical::format_timestamp_canonical)
+                        .map(arkret_canonical::format_timestamp_canonical)
                 }),
                 last_reassignment_at: None,
                 status: Some(status),
@@ -457,7 +457,7 @@ async fn reassign_handle(
 
     let mut reassigned = record;
     reassigned.subject_id = Some(new_subject_id);
-    reassigned.last_reassignment_at = Some(arkret_core::canonical::format_timestamp_canonical(now));
+    reassigned.last_reassignment_at = Some(arkret_canonical::format_timestamp_canonical(now));
     reassigned.status = Some("active".to_owned());
     json_ok(reassigned)
 }

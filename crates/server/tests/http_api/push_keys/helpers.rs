@@ -26,7 +26,7 @@ pub(crate) fn device_message_target(kind: &str, content: Value) -> Value {
         "message_id": new_prefixed_uuid7("ak:device_message:"),
         "kind": kind,
         "content": content,
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(
+        "expires_at": arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::hours(1)
         ),
     })
@@ -42,7 +42,7 @@ pub(crate) fn keys_upload_signing_input(
         "one_time_keys": one_time_keys,
         "fallback_keys": fallback_keys,
     });
-    let canonical = arkret_core::canonical::canonical_json_bytes(&body).unwrap();
+    let canonical = arkret_canonical::canonical_json_bytes(&body).unwrap();
     let mut input = b"ak.keys-upload-v1\n".to_vec();
     input.extend_from_slice(&canonical);
     input

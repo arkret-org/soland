@@ -100,11 +100,11 @@ pub fn bearer_token(req: &Request) -> Option<&str> {
 
 /// Hex-encoded SHA-256 of `bytes` (lowercase, 64 chars).
 ///
-/// Thin re-export of the SDK [`arkret_core::canonical::sha256_hex`] so soland
+/// Thin re-export of the SDK [`arkret_canonical::sha256_hex`] so soland
 /// shares the single canonical hash primitive instead of a local
 /// reimplementation.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    arkret_core::canonical::sha256_hex(bytes)
+    arkret_canonical::sha256_hex(bytes)
 }
 
 // ── Token / digest validators ───────────────────────────────────────────────

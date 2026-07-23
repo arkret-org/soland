@@ -138,7 +138,7 @@ fn canonical_realm_alias(service_id: &str, input: &str) -> Option<String> {
 }
 
 fn canonical_value_digest(value: &Value) -> Option<String> {
-    arkret_core::canonical::canonical_sha256(value).ok()
+    arkret_canonical::canonical_sha256(value).ok()
 }
 
 pub fn parse_child_scope_policy(

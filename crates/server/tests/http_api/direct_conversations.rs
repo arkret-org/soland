@@ -304,7 +304,7 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
             "key_packages": [{
                 "keypackage_id": keypackage_id,
                 "keypackage_ref": keypackage_ref,
-                "keypackage_digest": arkret_core::canonical::sha256_digest(keypackage_bytes.as_bytes()),
+                "keypackage_digest": arkret_canonical::sha256_digest(keypackage_bytes.as_bytes()),
                 "key_package": URL_SAFE_NO_PAD.encode(keypackage_bytes.as_bytes()),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
                 "capabilities": capabilities,
@@ -436,7 +436,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "claim_purpose": "direct_conversation",
             "required_capabilities": ["ak.mls.rfc9420"],
             "claim_nonce": claim_nonce,
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(
+            "expires_at": arkret_canonical::format_timestamp_canonical(
                 Utc::now() + chrono::Duration::minutes(4)
             ),
             "minimal_metadata_allowed": true,
@@ -452,7 +452,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "verification_method": verification_method,
             "requester_device_id": ALICE_SIGNING_DEVICE,
             "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000bb",
-            "signed_at": arkret_core::canonical::format_timestamp_canonical(Utc::now()),
+            "signed_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
             "signature": {"kid": verification_method, "alg": "EdDSA", "sig": "AA"}
         }))
         .unwrap();
@@ -565,7 +565,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
 
     let query = serde_json::json!({
         "claim_request_id": request.claim_request_id,
-        "request_digest": arkret_core::canonical::canonical_sha256(&request_value).unwrap()
+        "request_digest": arkret_canonical::canonical_sha256(&request_value).unwrap()
     });
     let query_uri = "http://server/_arkret/peer/keys/keypackages/claims/query";
     let query_headers = signed_federation_push_headers_same_trust(

@@ -33,12 +33,12 @@ fn broadcast_ephemeral_envelope_signed_by(
         "realm_id": DEMO_REALM_ID,
         "actor_id": actor_id,
         "device_id": device_id,
-        "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+        "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "payload": payload,
     });
-    let canonical = arkret_core::canonical::canonical_json_bytes(&env).unwrap();
-    let event_digest = arkret_core::canonical::sha256_digest(&canonical);
+    let canonical = arkret_canonical::canonical_json_bytes(&env).unwrap();
+    let event_digest = arkret_canonical::sha256_digest(&canonical);
     let verification_method = format!("{actor_id}#{device_id}");
     let mut proof = arkret_core::Proof {
         kind: "detached_jws".to_owned(),
@@ -1202,8 +1202,8 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             "kind": "ak.call.signal",
             "realm_id": DEMO_REALM_ID,
             "actor_id": "did:web:alice.example",
-            "sent_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
-            "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+            "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
+            "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
             "payload": {
                 "call_id": call_id,
                 "signal_type": signal_type,
@@ -1214,14 +1214,14 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             env["device_id"] = serde_json::json!(device_id);
         }
         if with_proof {
-            let canonical = arkret_core::canonical::canonical_json_bytes(&env).unwrap();
-            let event_digest = arkret_core::canonical::sha256_digest(&canonical);
+            let canonical = arkret_canonical::canonical_json_bytes(&env).unwrap();
+            let event_digest = arkret_canonical::sha256_digest(&canonical);
             env["proof"] = serde_json::json!({
                 "kind": "detached_jws",
                 "alg": "EdDSA",
                 "verification_method": format!("did:web:alice.example#{device_id}"),
                 "event_digest": event_digest,
-                "created_at": arkret_core::canonical::format_timestamp_canonical(sent_at),
+                "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
                 "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
             });
         }

@@ -118,7 +118,7 @@ pub(crate) fn validate_invite_third_party_payload(
     }
     let expires_at = invite_field(payload, invite, "expires_at", "expires_at")
         .ok_or("ak.invite.third_party requires expires_at")?;
-    if arkret_core::canonical::validate_timestamp_canonical(&expires_at).is_err() {
+    if arkret_canonical::validate_timestamp_canonical(&expires_at).is_err() {
         return Err("ak.invite.third_party expires_at must be a canonical timestamp");
     }
     Ok(())

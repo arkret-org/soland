@@ -840,14 +840,15 @@ pub(super) fn validate_applet_package(
     })?;
     let mut unsigned = package.clone();
     unsigned.proof = None;
-    let unsigned_canonical_bytes = arkret_core::canonical::canonical_json_bytes(&unsigned)
-        .map_err(|error| {
+    let unsigned_canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
             AppError::internal(format!("package proof canonical bytes failed: {error}"))
         })?;
-    let expected_payload_digest = arkret_core::Hash::new(arkret_core::canonical::sha256_digest(
-        &unsigned_canonical_bytes,
-    ))
-    .map_err(|error| AppError::internal(format!("package proof digest invalid: {error}")))?;
+    let expected_payload_digest =
+        arkret_core::Hash::new(arkret_canonical::sha256_digest(&unsigned_canonical_bytes))
+            .map_err(|error| {
+                AppError::internal(format!("package proof digest invalid: {error}"))
+            })?;
     if proof.event_digest != expected_payload_digest {
         return Err(
             AppError::invalid_param("applet package proof payload_digest mismatch")
@@ -1223,7 +1224,7 @@ pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<String, AppErro
 }
 
 pub(super) fn canonical_digest(value: &Value) -> Result<String, AppError> {
-    arkret_core::canonical::canonical_sha256(value)
+    arkret_canonical::canonical_sha256(value)
         .map_err(|error| AppError::internal(format!("canonical digest failed: {error}")))
 }
 
@@ -1523,7 +1524,7 @@ mod tests {
 
         let mut unsigned = package.clone();
         unsigned.proof = None;
-        let bytes = arkret_core::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
         let error = validate_controller_proof(&state, &package, &bytes)
             .expect_err("wrong-key controller proof must be rejected");
         assert_eq!(error.wire_code(), "proof_invalid");
@@ -1542,7 +1543,7 @@ mod tests {
 
         let mut unsigned = package.clone();
         unsigned.proof = None;
-        let bytes = arkret_core::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
         let error = validate_controller_proof(&state, &package, &bytes)
             .expect_err("controller proof not anchored to controller_id must be rejected");
         assert_eq!(error.wire_code(), "proof_invalid");
@@ -1559,7 +1560,7 @@ mod tests {
 
         let mut unsigned = package.clone();
         unsigned.proof = None;
-        let bytes = arkret_core::canonical::canonical_json_bytes(&unsigned).unwrap();
+        let bytes = arkret_canonical::canonical_json_bytes(&unsigned).unwrap();
         validate_controller_proof(&state, &package, &bytes)
             .expect("genuine controller proof must verify");
     }

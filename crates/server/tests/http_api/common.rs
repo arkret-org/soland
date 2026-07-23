@@ -272,7 +272,7 @@ fn signed_federation_request_headers(
         source_trust_domain_override,
         idempotency_key,
     } = request;
-    let body_bytes = arkret_core::canonical::canonical_json_bytes(body).unwrap();
+    let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
     let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = source_trust_domain_override
@@ -686,7 +686,7 @@ pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value 
 }
 
 pub(crate) fn sha256_json(value: &Value) -> String {
-    let bytes = arkret_core::canonical::canonical_json_bytes(value)
+    let bytes = arkret_canonical::canonical_json_bytes(value)
         .unwrap_or_else(|_| serde_json::to_vec(value).unwrap());
     let mut hasher = Sha256::new();
     hasher.update(bytes);
@@ -1295,11 +1295,11 @@ pub(crate) fn test_embedded_webvh_proof(
         "proofPurpose": "assertionMethod",
         "verificationMethod": format!("{did}#{update_public_key_multibase}"),
     });
-    let proof_config = arkret_core::canonical::canonical_json_bytes(&proof).unwrap();
-    let document = arkret_core::canonical::canonical_json_bytes(&entry).unwrap();
+    let proof_config = arkret_canonical::canonical_json_bytes(&proof).unwrap();
+    let document = arkret_canonical::canonical_json_bytes(&entry).unwrap();
     let mut signing_input = Vec::with_capacity(64);
-    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&proof_config));
-    signing_input.extend_from_slice(&arkret_core::canonical::sha256_bytes(&document));
+    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&proof_config));
+    signing_input.extend_from_slice(&arkret_canonical::sha256_bytes(&document));
     let signature = update_signing.sign(&signing_input);
     proof["proofValue"] = Value::String(format!(
         "z{}",
@@ -1321,7 +1321,7 @@ pub(crate) fn test_webvh_method_authority(url: &str) -> String {
 }
 
 pub(crate) fn test_scid(value: &Value) -> String {
-    let canonical = arkret_core::canonical::canonical_json_bytes(value).unwrap();
+    let canonical = arkret_canonical::canonical_json_bytes(value).unwrap();
     test_sha256_multihash_base58btc(&canonical)
 }
 
@@ -1336,7 +1336,7 @@ pub(crate) fn test_webvh_entry_hash(value: &Value, prev_anchor: &str) -> String 
             Value::String(prev_anchor.to_owned()),
         );
     }
-    let canonical = arkret_core::canonical::canonical_json_bytes(&clone).unwrap();
+    let canonical = arkret_canonical::canonical_json_bytes(&clone).unwrap();
     test_sha256_multihash_base58btc(&canonical)
 }
 
@@ -1811,7 +1811,7 @@ pub(crate) async fn persist_test_message(
             kind: "ak.message.create".to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest,
-            canonical_bytes: arkret_core::canonical::canonical_json_bytes(&envelope).unwrap(),
+            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
             envelope,
             received_at: record.created_at,
         })

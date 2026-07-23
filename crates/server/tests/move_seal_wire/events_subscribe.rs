@@ -229,7 +229,7 @@ async fn events_subscribe_frames_are_sdk_typed_and_cursor_advances() {
                     "realm_id": demo_realm_id(),
                     "event_kind": "ak.message.create",
                     "sender": "did:web:admin.example",
-                    "created_at": arkret_core::canonical::format_timestamp_canonical(
+                    "created_at": arkret_canonical::format_timestamp_canonical(
                         first_received_at
                     ),
                     "payload": {"content": {"body": "live anchor"}},

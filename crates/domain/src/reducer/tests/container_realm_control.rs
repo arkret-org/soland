@@ -7,8 +7,8 @@ const ITEM_A: &str = "ak:morph:01904100-0000-7000-8000-000000000201";
 const ITEM_B: &str = "ak:morph:01904100-0000-7000-8000-000000000202";
 
 fn cell_digest(value: &Value) -> String {
-    let bytes = arkret_core::canonical::canonical_json_bytes(value).unwrap();
-    arkret_core::canonical::sha256_digest(bytes)
+    let bytes = arkret_canonical::canonical_json_bytes(value).unwrap();
+    arkret_canonical::sha256_digest(bytes)
 }
 
 fn position_cell(container_ref: &str, item_ref: &str) -> CellRef {

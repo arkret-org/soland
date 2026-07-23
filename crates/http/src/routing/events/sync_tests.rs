@@ -222,9 +222,9 @@ fn test_presence_envelope(
     // Event Envelope timestamps must be canonical millisecond wire form
     // (`YYYY-MM-DDTHH:MM:SS.sssZ`); serializing a `DateTime<Utc>` directly
     // emits sub-millisecond precision the SDK deserializer rejects.
-    let sent_at_wire = arkret_core::canonical::format_timestamp_canonical(sent_at);
+    let sent_at_wire = arkret_canonical::format_timestamp_canonical(sent_at);
     let expires_at_wire =
-        arkret_core::canonical::format_timestamp_canonical(sent_at + ChronoDuration::seconds(60));
+        arkret_canonical::format_timestamp_canonical(sent_at + ChronoDuration::seconds(60));
     serde_json::from_value(serde_json::json!({
         "kind": "ak.presence",
         "realm_id": "ak:realm:01964137-0000-7000-8000-000000000001",
@@ -595,7 +595,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
-            "event_received_at": arkret_core::canonical::format_timestamp_canonical(joined_at)
+            "event_received_at": arkret_canonical::format_timestamp_canonical(joined_at)
         }),
         created_at,
     );
@@ -692,7 +692,7 @@ async fn put_canonical_event_received_at_for_actor(
             realm_id: Some(ROSTER_REALM.to_owned()),
             kind: kind.to_owned(),
             schema_id: "ak.event.v1".to_owned(),
-            canonical_digest: arkret_core::canonical::sha256_digest(&canonical_bytes),
+            canonical_digest: arkret_canonical::sha256_digest(&canonical_bytes),
             canonical_bytes,
             envelope,
             received_at,
@@ -752,7 +752,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
-            "event_received_at": arkret_core::canonical::format_timestamp_canonical(joined_at)
+            "event_received_at": arkret_canonical::format_timestamp_canonical(joined_at)
         }),
         created_at,
     );
@@ -850,8 +850,8 @@ fn insert_member_identity_subject(state: &AppState) {
             "display_profile": { "display_name": "Alice" }
         }
     });
-    let payload_digest = arkret_core::canonical::sha256_digest(
-        arkret_core::canonical::canonical_json_bytes(&identity_payload).unwrap(),
+    let payload_digest = arkret_canonical::sha256_digest(
+        arkret_canonical::canonical_json_bytes(&identity_payload).unwrap(),
     );
     state.test_insert_member_identity(MemberIdentityEventRecord {
         event_id: "ak:event:01904100-0000-7000-8000-0000000000d1".to_owned(),
@@ -895,10 +895,10 @@ fn handle_claim(
         "claim_kind": "handle_binding",
         "visibility": "public",
         "audience": audience,
-        "created_at": arkret_core::canonical::format_timestamp_canonical(
+        "created_at": arkret_canonical::format_timestamp_canonical(
             now() - ChronoDuration::minutes(1)
         ),
-        "expires_at": arkret_core::canonical::format_timestamp_canonical(expires_at),
+        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "proofs": [{
             "kind": "detached_jws",
             "alg": "EdDSA",
@@ -943,9 +943,7 @@ fn roster_membership_for_actor<'a>(rows: &'a [Value], actor: &str) -> Option<&'a
 }
 
 fn canonical_value_digest(value: &Value) -> String {
-    arkret_core::canonical::sha256_digest(
-        arkret_core::canonical::canonical_json_bytes(value).unwrap(),
-    )
+    arkret_canonical::sha256_digest(arkret_canonical::canonical_json_bytes(value).unwrap())
 }
 
 // SPEC-CR-010 / SOL-05-008 — `project_member_identity_update` MUST store the
@@ -970,8 +968,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
             "display_profile": { "display_name": "Alice" }
         }
     });
-    let first_digest = arkret_core::canonical::sha256_digest(
-        arkret_core::canonical::canonical_json_bytes(&first_identity).unwrap(),
+    let first_digest = arkret_canonical::sha256_digest(
+        arkret_canonical::canonical_json_bytes(&first_identity).unwrap(),
     );
 
     // First update. Operation carries the canonical `ak:event:` id in
@@ -1965,7 +1963,7 @@ async fn inline_cursor_body_is_rejected_by_core_stateful_cursor_parser() {
     let token = encode_sync_cursor_value(json!({
         "v": "1",
         "purpose": "stream",
-        "t": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+        "t": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
         "x": now_ms + 60_000,
         "issuer_kid": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#notary-key",
         "positions": {
@@ -1992,7 +1990,7 @@ async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
         let mut stream_cursor = json!({
             "v": "1",
             "purpose": "stream",
-            "t": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+            "t": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
             "x": now_ms + 60_000,
             "h": handle.clone(),
         });
@@ -2006,7 +2004,7 @@ async fn inline_filter_digest_pseudo_fields_are_rejected_by_cursor_parsers() {
         let mut events_cursor = json!({
             "v": "1",
             "purpose": STREAM_CURSOR_PURPOSE,
-            "t": arkret_core::canonical::format_timestamp_canonical(chrono::Utc::now()),
+            "t": arkret_canonical::format_timestamp_canonical(chrono::Utc::now()),
             "x": now_ms + 60_000,
             "h": handle.clone(),
         });

@@ -858,7 +858,7 @@ impl RedactionCellValue {
         let mut obj = serde_json::Map::new();
         obj.insert(
             "redacted_at".to_owned(),
-            Value::String(arkret_core::canonical::format_timestamp_canonical(
+            Value::String(arkret_canonical::format_timestamp_canonical(
                 self.redacted_at,
             )),
         );

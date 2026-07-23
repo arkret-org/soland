@@ -561,13 +561,12 @@ fn validate_ephemeral_broadcast_proof_shape(
         .as_object_mut()
         .expect("EphemeralEnvelope serializes as an object")
         .remove("proof");
-    let canonical =
-        arkret_core::canonical::canonical_json_bytes(&without_proof).map_err(|error| {
-            soland_http::error::AppError::invalid_param(format!(
-                "{kind} envelope canonicalization failed: {error}"
-            ))
-        })?;
-    let expected = arkret_core::canonical::sha256_digest(&canonical);
+    let canonical = arkret_canonical::canonical_json_bytes(&without_proof).map_err(|error| {
+        soland_http::error::AppError::invalid_param(format!(
+            "{kind} envelope canonicalization failed: {error}"
+        ))
+    })?;
+    let expected = arkret_canonical::sha256_digest(&canonical);
     if proof.event_digest.as_str() != expected {
         return Err(soland_http::error::AppError::invalid_param(format!(
             "{kind} proof.event_digest does not match the envelope without proof"
