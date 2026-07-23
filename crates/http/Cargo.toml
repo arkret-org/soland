@@ -40,6 +40,8 @@ arkret-models-integration = { workspace = true, features = ["salvo-oapi"] }
 arkret-models-crypto = { workspace = true, features = ["salvo-oapi"] }
 arkret-models-identity = { workspace = true, features = ["salvo-oapi"] }
 arkret-policy = { workspace = true, features = ["salvo-oapi"] }
+arkret-push-policy.workspace = true
+arkret-rate-limit.workspace = true
 arkret-schema = { workspace = true, features = ["salvo-oapi"] }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }

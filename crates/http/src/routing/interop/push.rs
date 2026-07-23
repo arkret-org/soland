@@ -385,7 +385,7 @@ pub(super) async fn push_notify(
         .notification
         .push_target_id
         .as_deref()
-        .filter(|value| arkret_policy::blind_payload_sanitizer::is_valid_push_target_id(value))
+        .filter(|value| arkret_push_policy::blind_payload_sanitizer::is_valid_push_target_id(value))
         .ok_or_else(|| AppError::invalid_param("notification.push_target_id is required"))?;
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
         AppError::internal(format!("push notification request serialize: {error}"))
@@ -739,7 +739,7 @@ mod tests {
         assert_eq!(first, again);
         assert_ne!(first, other_route);
         assert_ne!(first, other_service);
-        assert!(arkret_policy::blind_payload_sanitizer::is_valid_push_target_id(&first));
+        assert!(arkret_push_policy::blind_payload_sanitizer::is_valid_push_target_id(&first));
         assert!(!first.contains("alice"));
         assert!(!first.contains("device"));
     }

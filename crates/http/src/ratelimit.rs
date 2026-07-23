@@ -38,7 +38,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_server::{FixedWindowConfig, MemoryFixedWindowRateLimiter};
+use arkret_rate_limit::{FixedWindowConfig, MemoryFixedWindowRateLimiter};
 use salvo::prelude::*;
 
 /// Canonical paths whose [`EndpointClass`] is pinned. Shared by

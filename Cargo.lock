@@ -432,7 +432,6 @@ dependencies = [
  "arkret-canonical",
  "arkret-models-collaboration",
  "arkret-models-crypto",
- "arkret-models-integration",
  "arkret-schema",
  "arkret-wire",
  "chrono",
@@ -442,6 +441,20 @@ dependencies = [
  "serde_json",
  "thiserror",
 ]
+
+[[package]]
+name = "arkret-push-policy"
+version = "0.3.0"
+dependencies = [
+ "arkret-models-integration",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
+name = "arkret-rate-limit"
+version = "0.3.0"
 
 [[package]]
 name = "arkret-schema"
@@ -470,6 +483,7 @@ dependencies = [
  "arkret-models-discovery",
  "arkret-models-identity",
  "arkret-models-integration",
+ "arkret-rate-limit",
  "arkret-signatures",
  "arkret-state",
  "arkret-wire",
@@ -5054,6 +5068,8 @@ dependencies = [
  "arkret-models-identity",
  "arkret-models-integration",
  "arkret-policy",
+ "arkret-push-policy",
+ "arkret-rate-limit",
  "arkret-schema",
  "arkret-server",
  "arkret-signatures",
