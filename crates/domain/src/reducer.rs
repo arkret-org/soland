@@ -64,11 +64,12 @@ mod projections;
 // the original file-scope `use`s before the 2026-06-18 structural split.
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    AgentLifecycleState, CellRef, Operation, ReadCursorPosition as ReadCursorPositionWire,
-    ReadCursorScope as ReadScopeWire,
-};
+use arkret_event_draft::Operation;
+use arkret_identifiers::CellRef;
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_models_collaboration::objects::read_receipts::ReadCursorPosition as ReadCursorPositionWire;
 use arkret_state::lattice::CellState;
+use arkret_wire::ReadCursorScope as ReadScopeWire;
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;

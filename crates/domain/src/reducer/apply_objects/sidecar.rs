@@ -64,9 +64,12 @@ mod tests {
 
     fn create(sidecar_id: &str) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01964137-0000-7000-8000-000000000040")
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01964137-0000-7000-8000-000000000040",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
                 .unwrap(),
-            arkret_core::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
             arkret_wire::events::EventKind::SIDECAR_CREATE,
             serde_json::json!({"object": {
                 "id": sidecar_id,

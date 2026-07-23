@@ -51,7 +51,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
         "signature": "test-signature"
     });
     let binding_digest = arkret_canonical::canonical_sha256(&binding_proof).unwrap();
-    let transcript_digest = arkret_core::invite_subject_proof_transcript_digest(
+    let transcript_digest = arkret_models_collaboration::governance::membership_invite::invite_subject_proof_transcript_digest(
         SUBJECT,
         INVITE,
         REALM,

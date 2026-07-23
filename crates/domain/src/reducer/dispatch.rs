@@ -13,7 +13,8 @@
 //! the `crate::reducer::*` paths and sibling `super::*` access stay
 //! unchanged.
 
-use arkret_core::{AgentLifecycleState, Operation};
+use arkret_event_draft::Operation;
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use serde_json::Value;
 
 use super::{

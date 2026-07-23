@@ -7,7 +7,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_core::CellRef;
+use arkret_identifiers::CellRef;
 use arkret_state::lattice::CellState;
 use serde_json::Value;
 

@@ -3,7 +3,8 @@
 //! re-exports them (`pub(crate) use`) so in-crate `super::*` consumers
 //! and sibling `apply_*` modules keep resolving these by name.
 
-use arkret_core::{Operation, ReadCursorScope as ReadScopeWire};
+use arkret_event_draft::Operation;
+use arkret_wire::ReadCursorScope as ReadScopeWire;
 use serde_json::Value;
 
 use super::PollOptionState;

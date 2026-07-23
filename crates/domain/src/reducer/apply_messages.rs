@@ -995,7 +995,7 @@ fn rsvp_lww_hlc(operation: &Operation) -> String {
         .payload
         .get("hlc")
         .and_then(Value::as_str)
-        .filter(|value| arkret_core::Hlc::new((*value).to_owned()).is_ok())
+        .filter(|value| arkret_identifiers::Hlc::new((*value).to_owned()).is_ok())
     {
         return hlc.to_owned();
     }

@@ -32,7 +32,7 @@
 //! admission/HTTP layer (see SOL-ORG-06 notes). `organization_did` /
 //! `threshold_quorum` statements (no `delegation_ref`) project directly.
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use arkret_models_collaboration::{
     RealmOrganizationControlScope, RealmOrganizationPayload, SignatureMaterial,
 };
@@ -180,9 +180,9 @@ impl ProjectionState {
     pub(crate) fn realm_organization_cell_id(
         organization_id: &str,
         relationship: &str,
-    ) -> Option<arkret_core::CellRef> {
-        let subject = arkret_core::composite_subject(&[organization_id, relationship]).ok()?;
-        arkret_core::CellRef::new(format!(
+    ) -> Option<arkret_identifiers::CellRef> {
+        let subject = arkret_wire::composite_subject(&[organization_id, relationship]).ok()?;
+        arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.organization.v1:{subject}"
         ))
         .ok()
@@ -334,7 +334,8 @@ fn control_scopes_str(payload: &RealmOrganizationPayload) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{Operation, OperationId, RealmId};
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
     use arkret_models_collaboration::RealmOrganizationControlScope as Scope;
     use serde_json::{Value, json};
 

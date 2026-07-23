@@ -1,7 +1,7 @@
 //! Per-cell-family `LatticeKind` registry (SDK re-export shim).
 //!
 //! The trait + registry types and the spec-normative cell-family
-//! bindings moved to `arkret_core::lattice_registry` (SDK-8) so all
+//! bindings moved to `arkret_lattice_registry` (SDK-8) so all
 //! consumers (soland Move/Seal pipeline, inkson Move pre-check,
 //! cotest fixtures) share one canonical registry. This module is a
 //! thin re-export shim — existing soland call sites such as

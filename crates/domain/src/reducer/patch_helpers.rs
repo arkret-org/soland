@@ -7,7 +7,8 @@
 
 use std::collections::BTreeMap;
 
-use arkret_core::{CellRef, Operation};
+use arkret_event_draft::Operation;
+use arkret_identifiers::CellRef;
 use serde_json::Value;
 
 use super::{DocumentVersionProjection, PushRouteCellValue, PushRouteSubject, StrandProjection};
@@ -110,7 +111,7 @@ pub(crate) fn conflict_heads_from_payload(payload: &Value) -> Vec<String> {
         .collect()
 }
 
-pub(crate) fn bottom_head_ids(bottom: &arkret_core::Bottom) -> std::collections::BTreeSet<String> {
+pub(crate) fn bottom_head_ids(bottom: &arkret_wire::Bottom) -> std::collections::BTreeSet<String> {
     bottom
         .heads
         .iter()
@@ -174,7 +175,7 @@ pub(crate) fn empty_push_route_cell() -> PushRouteCellValue {
 }
 
 pub(crate) fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
-    let cell_subject = arkret_core::composite_subject(&[
+    let cell_subject = arkret_wire::composite_subject(&[
         subject.recipient_service_id.as_str(),
         subject.principal_id.as_str(),
         subject.device_id.as_str(),

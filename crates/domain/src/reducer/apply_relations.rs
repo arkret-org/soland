@@ -624,7 +624,7 @@ impl ProjectionState {
             .filter_map(Value::as_str)
             .filter_map(|endpoint| self.resolve_object_realm(endpoint))
             .collect::<Vec<_>>();
-        arkret_core::validate_structural_relation_same_realm(
+        arkret_models_collaboration::objects::relation::validate_structural_relation_same_realm(
             relation_kind,
             relation_realm,
             endpoint_realms,
@@ -883,8 +883,8 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_container_move_item(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_core::ContainerMoveItemPayload =
-            match typed_container_payload::<arkret_core::ContainerMoveItemPayload>(
+        let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerMoveItemPayload =
+            match typed_container_payload::<arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerMoveItemPayload>(
                 &operation.payload,
                 &[
                     "item_ref",
@@ -948,8 +948,8 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_container_rebalance(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_core::ContainerRebalancePayload =
-            match typed_container_payload::<arkret_core::ContainerRebalancePayload>(
+        let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerRebalancePayload =
+            match typed_container_payload::<arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerRebalancePayload>(
                 &operation.payload,
                 &[
                     "container_ref",
@@ -1021,7 +1021,7 @@ fn typed_container_payload<T: DeserializeOwned>(
 }
 
 fn container_position_cell_id(container_ref: &str, item_ref: &str) -> Option<CellRef> {
-    let subject = arkret_core::composite_subject(&[container_ref, item_ref]).ok()?;
+    let subject = arkret_wire::composite_subject(&[container_ref, item_ref]).ok()?;
     CellRef::new(format!(
         "ak:cell:ak.component.container.position.v1:{subject}"
     ))
@@ -1129,9 +1129,11 @@ mod cross_realm_relation_tests {
 
     fn relation_op(relation_kind: &str, from: &str, to: &str) -> Operation {
         Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-57d7d85564c5")
-                .unwrap(),
-            arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-57d7d85564c5",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::events::EventKind::RELATION_CREATE,
             json!({"relation_kind": relation_kind, "from_ref": from, "to_ref": to}),
         )
@@ -1146,9 +1148,11 @@ mod cross_realm_relation_tests {
         digest: &str,
     ) -> Operation {
         let mut operation = Operation::create(
-            arkret_core::OperationId::new(format!("ak:operation:01904100-0000-7000-8000-{seed}"))
-                .unwrap(),
-            arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_identifiers::OperationId::new(format!(
+                "ak:operation:01904100-0000-7000-8000-{seed}"
+            ))
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::events::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": relation_id,
@@ -1358,9 +1362,11 @@ mod cross_realm_relation_tests {
             },
         );
         let update = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ab")
-                .unwrap(),
-            arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000000ab",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::events::EventKind::RELATION_UPDATE,
             json!({"relation_id": relation_id, "fields": {"level": "muted"}}),
         );
@@ -1370,9 +1376,11 @@ mod cross_realm_relation_tests {
         ));
 
         let delete = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-0000000000ac")
-                .unwrap(),
-            arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-0000000000ac",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::events::EventKind::RELATION_TOMBSTONE,
             json!({"relation_id": "ak:relation:01904100-0000-7000-8000-0000000000aa"}),
         );
@@ -1472,9 +1480,11 @@ mod cross_realm_relation_tests {
         );
 
         let scoped = Operation::create(
-            arkret_core::OperationId::new("ak:operation:01904100-0000-7000-8000-000000001001")
-                .unwrap(),
-            arkret_core::RealmId::new(REALM_A.to_owned()).unwrap(),
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000001001",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::events::EventKind::RELATION_CREATE,
             json!({
                 "relation_kind": "contains",

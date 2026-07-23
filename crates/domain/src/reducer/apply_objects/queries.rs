@@ -232,9 +232,10 @@ impl ProjectionState {
     /// state. The cell_subject is the actor_id per spec
     /// `ak.component.member.state.v1` cell_family declaration.
     pub fn member_fsm_state(&self, actor_id: &str) -> Option<String> {
-        let cell_id =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}"))
-                .ok()?;
+        let cell_id = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{actor_id}"
+        ))
+        .ok()?;
         self.cell_value(&cell_id)
             .and_then(Value::as_str)
             .map(ToOwned::to_owned)
@@ -247,7 +248,7 @@ impl ProjectionState {
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
         .ok()?;
@@ -276,9 +277,10 @@ impl ProjectionState {
     /// realm's genesis history. Returns `None` for realms with no create
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn realm_create_log(&self, realm_id: &str) -> Option<&[Value]> {
-        let cell_id =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm_id}"))
-                .ok()?;
+        let cell_id = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.realm.create.v1:{realm_id}"
+        ))
+        .ok()?;
         match self.cells.get(&cell_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
             _ => None,
@@ -299,14 +301,14 @@ impl ProjectionState {
                 )
                 .ok()
             })
-            .is_some_and(|realm| arkret_core::DirectConversationRealmRole::matches(&realm))
+            .is_some_and(|realm| arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::matches(&realm))
     }
 
     /// True when the `ak.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
-        let Ok(cell_id) =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.destroy.v1:{realm_id}"))
-        else {
+        let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.realm.destroy.v1:{realm_id}"
+        )) else {
             return false;
         };
         matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
@@ -314,7 +316,7 @@ impl ProjectionState {
 
     /// True when the `ak.component.realm.tombstone.v1` cell has a Value.
     pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
-        let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
         )) else {
             return false;
@@ -360,7 +362,7 @@ impl ProjectionState {
     /// for delivery_binding_policy lands, switch this from the generic
     /// cells map to the structured cache.
     pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.delivery_binding_policy.v1:{realm_id}"
         ))
         .ok()?;
@@ -368,7 +370,7 @@ impl ProjectionState {
     }
 
     pub fn realm_policy_components_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"
         ))
         .ok()?;
@@ -553,7 +555,7 @@ impl ProjectionState {
     }
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.disappearing_policy.v1:{realm_id}"
         ))
         .ok()?;
@@ -561,7 +563,7 @@ impl ProjectionState {
     }
 
     pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_core::CellRef::new(format!(
+        let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.search_policy.v1:{realm_id}"
         ))
         .ok()?;
@@ -589,10 +591,10 @@ impl ProjectionState {
     pub fn realm_links_query(
         &self,
         realm_id: &str,
-        direction: arkret_core::RealmLinkDirection,
+        direction: arkret_models_collaboration::governance::realm_governance::RealmLinkDirection,
         link_kind_allow: Option<&[String]>,
     ) -> Vec<RealmLinkState> {
-        use arkret_core::RealmLinkDirection;
+        use arkret_models_collaboration::governance::realm_governance::RealmLinkDirection;
         let filter = |row: &&RealmLinkState| {
             link_kind_allow
                 .map(|allow| allow.iter().any(|k| k == &row.link_kind))
@@ -795,9 +797,9 @@ impl ProjectionState {
             return Some(v.to_owned());
         }
         // Fallback: check the create-log cell's last entry.
-        if let Ok(create_cell) =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm_id}"))
-            && let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array)
+        if let Ok(create_cell) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.realm.create.v1:{realm_id}"
+        )) && let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array)
             && let Some(last) = arr.last()
             && let Some(s) = last.get("security_class").and_then(Value::as_str)
         {

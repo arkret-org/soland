@@ -11,9 +11,9 @@ description = "Pure deterministic domain rules and projections for Soland."
 
 [dependencies]
 arkret-canonical = {workspace = true}
-arkret-core.workspace = true
 arkret-event-draft = {workspace = true}
 arkret-hlc = {workspace = true}
+arkret-identifiers = {workspace = true}
 arkret-lattice-registry = {workspace = true}
 arkret-models-collaboration = {workspace = true}
 arkret-models-crypto = {workspace = true}

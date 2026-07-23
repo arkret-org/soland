@@ -5,7 +5,7 @@ use super::*;
 #[test]
 fn cell_value_returns_none_for_unwritten_cell() {
     let state = ProjectionState::new();
-    let cell_id = arkret_core::CellRef::new(
+    let cell_id = arkret_identifiers::CellRef::new(
         "ak:cell:ak.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();
@@ -17,19 +17,19 @@ fn cell_value_returns_none_for_unwritten_cell() {
 fn cell_value_returns_none_for_bottom_state() {
     use arkret_state::lattice::CellState;
     let mut state = ProjectionState::new();
-    let cell_id = arkret_core::CellRef::new(
+    let cell_id = arkret_identifiers::CellRef::new(
         "ak:cell:ak.component.realm.policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036"
             .to_owned(),
     )
     .unwrap();
     // Manually insert a Bottom state — represents concurrent conflict.
-    let bottom = arkret_core::Bottom {
-        kind: arkret_core::BottomKind::Conflict,
+    let bottom = arkret_wire::Bottom {
+        kind: arkret_wire::BottomKind::Conflict,
         cells: vec![cell_id.clone()],
         move_ids: vec![],
         seal_view: None,
         heads: vec![],
-        details: Some(arkret_core::bottom_details([(
+        details: Some(arkret_wire::bottom_details([(
             "reason",
             serde_json::json!("concurrent set"),
         )])),
@@ -283,7 +283,7 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
     assert!(
         state
             .cell_value(
-                &arkret_core::CellRef::new(
+                &arkret_identifiers::CellRef::new(
                     "ak:cell:ak.component.realm.organization.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
                 )
                 .unwrap(),
@@ -446,7 +446,7 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
         &hlc,
     );
 
-    let tombstone_cell = arkret_core::CellRef::new(format!(
+    let tombstone_cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
     ))
     .unwrap();
@@ -489,9 +489,10 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
         &hlc,
     );
 
-    let cell_id =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.freeze.v1:{realm_id}"))
-            .unwrap();
+    let cell_id = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.realm.freeze.v1:{realm_id}"
+    ))
+    .unwrap();
     assert!(matches!(
         state.cells.get(&cell_id),
         Some(CellState::Value(value)) if value.get("frozen").and_then(Value::as_bool) == Some(true)
@@ -594,7 +595,8 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
         Some("join")
     );
     let notary_cell =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")).unwrap();
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}"))
+            .unwrap();
     assert_eq!(
         state.cell_value(&notary_cell),
         Some(&serde_json::json!({
@@ -661,7 +663,7 @@ fn knock_state_visible_in_members_in_state_query() {
 fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
     use arkret_state::lattice::CellState;
     let mut state = ProjectionState::new();
-    let cell_id = arkret_core::CellRef::new(
+    let cell_id = arkret_identifiers::CellRef::new(
         "ak:cell:ak.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
     )
     .unwrap();

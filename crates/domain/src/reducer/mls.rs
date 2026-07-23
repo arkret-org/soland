@@ -22,7 +22,7 @@
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
 
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 use serde_json::{Map, Value};
 
 use super::{
@@ -1262,7 +1262,7 @@ fn validate_welcome_recipient_binding(
 }
 
 fn is_sha256_digest(value: &str) -> bool {
-    value.starts_with("sha256:") && arkret_core::Hash::new(value.to_owned()).is_ok()
+    value.starts_with("sha256:") && arkret_identifiers::Hash::new(value.to_owned()).is_ok()
 }
 
 fn validate_effective_scope(scope: &Value) -> Result<(), &'static str> {

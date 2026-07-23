@@ -348,7 +348,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
     let hlc = ServerHlc::new("history-scheme");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c001";
     let create_cell =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -393,7 +393,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
     let hlc = ServerHlc::new("history-scheme-ok");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c002";
     let create_cell =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,
@@ -425,7 +425,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
     let hlc = ServerHlc::new("history-scheme-create");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0c012";
     let create_cell =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.realm.create.v1:{realm}"))
             .expect("valid create cell ref");
     state.cells.insert(
         create_cell,

@@ -67,8 +67,8 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_realm_notary(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_core::RealmNotaryPayload =
-            match typed_realm_control_payload::<arkret_core::RealmNotaryPayload>(
+        let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmNotaryPayload =
+            match typed_realm_control_payload::<arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmNotaryPayload>(
                 &operation.payload,
                 &["realm_id", "notary"],
             ) {
@@ -108,8 +108,8 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
     ) -> ProjectionEffect {
-        let payload: arkret_core::RealmDigestSuiteTransitionPayload =
-            match typed_realm_control_payload::<arkret_core::RealmDigestSuiteTransitionPayload>(
+        let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmDigestSuiteTransitionPayload =
+            match typed_realm_control_payload::<arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmDigestSuiteTransitionPayload>(
                 &operation.payload,
                 &[
                     "from_digest_algorithm",
@@ -169,7 +169,7 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.delivery_binding_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
@@ -241,7 +241,7 @@ impl ProjectionState {
             let effective_history_visibility = self
                 .realm_history_visibility(&realm_id)
                 .unwrap_or_else(|| "joined".to_owned());
-            if let Err(reason) = arkret_core::validate_history_visibility_content_scheme_values(
+            if let Err(reason) = arkret_models_collaboration::governance::history_visibility::validate_history_visibility_content_scheme_values(
                 &effective_history_visibility,
                 effective_scheme,
             ) {
@@ -263,7 +263,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
@@ -276,7 +276,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.disappearing_policy.v1:{realm_id}"
         )) {
             self.cells
@@ -293,7 +293,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.search_policy.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
@@ -323,7 +323,7 @@ impl ProjectionState {
                 reason: "media_service_foci_required".to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.media_service.v1:{realm_id}"
         )) {
             self.cells.insert(cell_id, CellState::Value(value));
@@ -351,8 +351,10 @@ impl ProjectionState {
             };
         };
         let call_id = call_id.to_owned();
-        let call_state_cell_id =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).ok();
+        let call_state_cell_id = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.call.state.v1:{call_id}"
+        ))
+        .ok();
         if call_state_cell_id
             .as_ref()
             .is_some_and(|cell_id| matches!(self.cells.get(cell_id), Some(CellState::Bottom(_))))
@@ -373,16 +375,17 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .filter(|state| !state.is_empty())
         {
-            let from_state =
-                arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
-                    .ok()
-                    .and_then(|cell_id| self.cell_value(&cell_id).cloned())
-                    .and_then(|state| {
-                        state
-                            .get("state")
-                            .and_then(Value::as_str)
-                            .map(ToOwned::to_owned)
-                    });
+            let from_state = arkret_identifiers::CellRef::new(format!(
+                "ak:cell:ak.component.call.state.v1:{call_id}"
+            ))
+            .ok()
+            .and_then(|cell_id| self.cell_value(&cell_id).cloned())
+            .and_then(|state| {
+                state
+                    .get("state")
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            });
             if let Some(reason) = validate_call_state_transition(from_state.as_deref(), to_state) {
                 return ProjectionEffect::Rejected {
                     reason: reason.to_owned(),
@@ -492,9 +495,9 @@ impl ProjectionState {
         }
 
         let incoming_fsm_updates = call_state_fsm_updates(&value);
-        if let Ok(cell_id) =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
-        {
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.call.state.v1:{call_id}"
+        )) {
             if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
                 return ProjectionEffect::Rejected {
                     reason: "cell_bottom_state".to_owned(),
@@ -589,17 +592,18 @@ impl ProjectionState {
         }
 
         // §7 — the call MUST already have a terminal `ak.call.state` head.
-        let call_state_terminal =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
-                .ok()
-                .and_then(|cell_id| self.cell_value(&cell_id).cloned())
-                .and_then(|state| {
-                    state
-                        .get("state")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                })
-                .is_some_and(|state| is_terminal_call_state(&state));
+        let call_state_terminal = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.call.state.v1:{call_id}"
+        ))
+        .ok()
+        .and_then(|cell_id| self.cell_value(&cell_id).cloned())
+        .and_then(|state| {
+            state
+                .get("state")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .is_some_and(|state| is_terminal_call_state(&state));
         if !call_state_terminal {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::CALL_SUMMARY_INVALID.to_owned(),
@@ -608,9 +612,9 @@ impl ProjectionState {
 
         // §7 — write-once cas_register. A divergent rewrite is rejected; an
         // identical replay is a no-op.
-        if let Ok(cell_id) =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.call.summary.v1:{call_id}"))
-        {
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.call.summary.v1:{call_id}"
+        )) {
             if let Some(existing) = self.cell_value(&cell_id) {
                 if existing != &value {
                     return ProjectionEffect::Rejected {
@@ -652,8 +656,8 @@ impl ProjectionState {
             let Some((existing_operation_id, existing_to_value, existing_value)) = conflict else {
                 continue;
             };
-            let bottom = arkret_core::Bottom {
-                kind: arkret_core::BottomKind::Conflict,
+            let bottom = arkret_wire::Bottom {
+                kind: arkret_wire::BottomKind::Conflict,
                 cells: vec![cell_id.clone()],
                 move_ids: Vec::new(),
                 seal_view: None,
@@ -673,7 +677,7 @@ impl ProjectionState {
                         "value": candidate_value,
                     }),
                 ],
-                details: Some(arkret_core::bottom_details([
+                details: Some(arkret_wire::bottom_details([
                     ("basis", serde_json::json!(basis.as_str())),
                     ("field", serde_json::json!(*field)),
                     ("reason", serde_json::json!("call_state_sibling_conflict")),
@@ -740,7 +744,11 @@ impl ProjectionState {
                 reason: "realm_link_kind_missing".to_owned(),
             };
         };
-        if arkret_core::RealmLinkKind::parse(link_kind).is_none() {
+        if arkret_models_collaboration::governance::realm_governance::RealmLinkKind::parse(
+            link_kind,
+        )
+        .is_none()
+        {
             return ProjectionEffect::Rejected {
                 reason: "realm_link_kind_invalid".to_owned(),
             };
@@ -755,7 +763,11 @@ impl ProjectionState {
             .get("status")
             .and_then(Value::as_str)
             .unwrap_or("active");
-        let Some(next_status) = arkret_core::RealmLinkStatus::parse(status) else {
+        let Some(next_status) =
+            arkret_models_collaboration::governance::realm_governance::RealmLinkStatus::parse(
+                status,
+            )
+        else {
             return ProjectionEffect::Rejected {
                 reason: "realm_link_status_invalid".to_owned(),
             };
@@ -768,7 +780,11 @@ impl ProjectionState {
                     link.target_realm_id == target_realm_id && link.link_kind == link_kind
                 })
             })
-            .and_then(|link| arkret_core::RealmLinkStatus::parse(&link.status));
+            .and_then(|link| {
+                arkret_models_collaboration::governance::realm_governance::RealmLinkStatus::parse(
+                    &link.status,
+                )
+            });
         if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION.to_owned(),
@@ -851,7 +867,7 @@ impl ProjectionState {
                 reason: "realm_inheritance_source_missing".to_owned(),
             };
         };
-        if arkret_core::RealmId::new(source_realm_id).is_err() {
+        if arkret_identifiers::RealmId::new(source_realm_id).is_err() {
             return ProjectionEffect::Rejected {
                 reason: "realm_inheritance_source_invalid".to_owned(),
             };
@@ -876,7 +892,7 @@ impl ProjectionState {
                 reason: "realm_inheritance_max_depth_zero".to_owned(),
             };
         }
-        if max_depth > arkret_core::RealmInheritancePolicy::MAX_DEPTH_CAP {
+        if max_depth > arkret_models_collaboration::governance::realm_governance::RealmInheritancePolicy::MAX_DEPTH_CAP {
             return ProjectionEffect::Rejected {
                 reason: "realm_inheritance_max_depth_exceeded".to_owned(),
             };
@@ -892,7 +908,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.inheritance_policy.v1:{realm_id}"
         )) {
             let value = serde_json::json!({
@@ -1034,7 +1050,7 @@ impl ProjectionState {
             }
         };
 
-        if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.capability.derived.v1:{capability_id}"
         )) {
             let mut value = serde_json::Map::new();
@@ -1324,7 +1340,9 @@ fn validate_transcript_result_storage(
 
 fn validate_call_capture_failure_reason(result: &Value) -> Option<&'static str> {
     let reason = result.get("failure_reason_code")?;
-    serde_json::from_value::<arkret_core::CallCaptureFailureReasonCode>(reason.clone())
-        .err()
-        .map(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+    serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::call::CallCaptureFailureReasonCode,
+    >(reason.clone())
+    .err()
+    .map(|_| arkret_wire::ErrorCode::SCHEMA_VIOLATION)
 }

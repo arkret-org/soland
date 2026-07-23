@@ -76,13 +76,13 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
     assert!(matches!(
         projected.auth_data.trust_binding,
-        arkret_core::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
+        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
             if generation.get() == 2
     ));
 
-    let subject = arkret_core::composite_subject(&[ACTOR, "secret_storage"])
+    let subject = arkret_wire::composite_subject(&[ACTOR, "secret_storage"])
         .expect("active series composite subject");
-    let cell = arkret_core::CellRef::new(format!(
+    let cell = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.key_backup.active_series.v1:{subject}"
     ))
     .expect("active series cell ref");

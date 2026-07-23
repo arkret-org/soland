@@ -1,4 +1,4 @@
-use arkret_core::CellRef;
+use arkret_identifiers::CellRef;
 
 use super::*;
 

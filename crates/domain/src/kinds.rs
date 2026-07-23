@@ -1,4 +1,4 @@
-use arkret_core::Operation;
+use arkret_event_draft::Operation;
 // Standard protocol event kind constants intentionally live in the SDK.
 // Soland code should refer to `arkret_wire::events::kinds::*` directly instead
 // of re-exporting legacy aliases from this module.
@@ -322,7 +322,7 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
 
 /// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /
 /// `ak.realm.policy_components`) declare the minimal-metadata profile
-/// [`arkret_core::mls::MINIMAL_METADATA_REALM_PROFILE`]
+/// [`arkret_mls::MINIMAL_METADATA_REALM_PROFILE`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///
 /// The declaration is the `profiles[]` / `active_profiles[]` array the T09/T12

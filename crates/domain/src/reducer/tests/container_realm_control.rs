@@ -12,7 +12,7 @@ fn cell_digest(value: &Value) -> String {
 }
 
 fn position_cell(container_ref: &str, item_ref: &str) -> CellRef {
-    let subject = arkret_core::composite_subject(&[container_ref, item_ref]).unwrap();
+    let subject = arkret_wire::composite_subject(&[container_ref, item_ref]).unwrap();
     CellRef::new(format!(
         "ak:cell:ak.component.container.position.v1:{subject}"
     ))

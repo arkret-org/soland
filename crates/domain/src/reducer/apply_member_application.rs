@@ -519,7 +519,7 @@ fn join_authorised_by_refs(operation: &Operation) -> Vec<String> {
     join_authorised_by_refs_from_payload(&operation.payload)
 }
 
-fn join_authorised_by_refs_from_event_refs(refs: &[arkret_core::EventRef]) -> Vec<String> {
+fn join_authorised_by_refs_from_event_refs(refs: &[arkret_wire::EventRef]) -> Vec<String> {
     refs.iter()
         .filter(|reference| reference.role == "join_authorised_by")
         .filter_map(|reference| {

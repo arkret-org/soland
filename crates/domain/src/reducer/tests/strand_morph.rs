@@ -740,7 +740,7 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
     assert_eq!(
         state.strands[strand_id]
             .tracks
-            .get(arkret_core::STRAND_TRACK_NAME_DISCUSSION)
+            .get(arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION)
             .and_then(|track| track.enabled),
         Some(false)
     );

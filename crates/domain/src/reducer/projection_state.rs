@@ -9,7 +9,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{AgentLifecycleState, CellRef, Operation, RealmId};
+use arkret_event_draft::Operation;
+use arkret_identifiers::{CellRef, RealmId};
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
 use serde_json::Value;
@@ -1186,8 +1188,8 @@ impl ProjectionState {
 
         match compatibility_class {
             "additive" => {
-                let empty = arkret_core::MorphSchemaFieldSet::new();
-                arkret_core::morph_schema_refs_additive_only(
+                let empty = arkret_models_collaboration::events_payloads::moderation_morph_misc::MorphSchemaFieldSet::new();
+                arkret_models_collaboration::events_payloads::moderation_morph_misc::morph_schema_refs_additive_only(
                     &from_schema_refs,
                     &to_schema_refs,
                     &empty,

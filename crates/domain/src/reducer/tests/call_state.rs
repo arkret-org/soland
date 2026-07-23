@@ -42,7 +42,7 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
         ),
         ProjectionEffect::RealmMediaServiceProjected { .. }
     ));
-    let cell_id = arkret_core::CellRef::new(format!(
+    let cell_id = arkret_identifiers::CellRef::new(format!(
         "ak:cell:ak.component.realm.media_service.v1:{realm}"
     ))
     .unwrap();
@@ -99,7 +99,8 @@ fn call_state_projects_cell_and_commits_session_focus_write_once() {
         ProjectionEffect::CallStateProjected { .. }
     ));
     let cell_id =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
+            .unwrap();
     let value = state
         .cell_value(&cell_id)
         .expect("call.state cell projected");
@@ -150,7 +151,8 @@ fn call_state_removed_participants_ban_set_is_monotonic() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000b";
     let cell_id =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
+            .unwrap();
 
     assert!(matches!(
         state.apply(
@@ -218,7 +220,8 @@ fn call_state_participant_mute_overrides_are_current_set() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000c";
     let cell_id =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
+            .unwrap();
 
     assert!(matches!(
         state.apply(
@@ -430,12 +433,13 @@ fn call_state_same_basis_sibling_state_conflict_projects_bottom() {
     ));
 
     let cell_id =
-        arkret_core::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
+            .unwrap();
     let bottom = match state.cell(&cell_id) {
         Some(CellState::Bottom(bottom)) => bottom,
         other => panic!("expected call state bottom, got {other:?}"),
     };
-    assert_eq!(bottom.kind, arkret_core::BottomKind::Conflict);
+    assert_eq!(bottom.kind, arkret_wire::BottomKind::Conflict);
     assert_eq!(
         bottom
             .details

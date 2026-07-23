@@ -199,7 +199,7 @@ fn engine_grant_from_cell_body(
     let capability_action_registry_digest = body
         .get("capability_action_registry_digest")
         .and_then(Value::as_str)
-        .and_then(|value| arkret_core::Hash::new(value.to_owned()).ok());
+        .and_then(|value| arkret_identifiers::Hash::new(value.to_owned()).ok());
     let constraints = engine_constraints_from_body(body);
     let created_at = body
         .get("issued_at")
@@ -267,12 +267,12 @@ fn validate_capability_registry_binding(
     let digest = match body.get("capability_action_registry_digest") {
         None => None,
         Some(Value::String(value)) if value.starts_with("sha256:") => Some(
-            arkret_core::Hash::new(value.clone())
+            arkret_identifiers::Hash::new(value.clone())
                 .map_err(|_| "capability_grant_registry_digest_invalid")?,
         ),
         Some(_) => return Err("capability_grant_registry_digest_invalid"),
     };
-    arkret_core::validate_capability_action_registry_binding(actions, digest.as_ref())
+    arkret_policy::validate_capability_action_registry_binding(actions, digest.as_ref())
         .map_err(|_| "capability_registry_basis_unavailable")
 }
 
@@ -1288,8 +1288,8 @@ impl ProjectionState {
 
 #[cfg(test)]
 mod agent_key_tests {
-    use arkret_core::{OperationId, RealmId};
     use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
     use arkret_wire::OperationType;
     use serde_json::json;
 
@@ -1377,7 +1377,7 @@ mod agent_key_tests {
 
     #[test]
     fn aggregate_admin_grant_accepts_current_registry_basis() {
-        let digest = arkret_core::current_capability_action_registry_digest().unwrap();
+        let digest = arkret_policy::current_capability_action_registry_digest().unwrap();
         let body = json!({
             "actions": ["ak.realm.admin"],
             "resources": [{ "kind": "realm", "realm_id": REALM }],
@@ -1680,7 +1680,8 @@ mod agent_key_tests {
 
 #[cfg(test)]
 mod delegation_cycle_tests {
-    use arkret_core::{Operation, OperationId, RealmId};
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -1869,7 +1870,8 @@ mod delegation_cycle_tests {
 
 #[cfg(test)]
 mod federation_revoke_fanout_tests {
-    use arkret_core::{Operation, OperationId, RealmId};
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
     use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
@@ -1913,7 +1915,7 @@ mod federation_revoke_fanout_tests {
     }
 
     fn delivery_binding_grant_payload() -> serde_json::Value {
-        let registry_digest = arkret_core::current_capability_action_registry_digest()
+        let registry_digest = arkret_policy::current_capability_action_registry_digest()
             .expect("embedded capability action registry");
         json!({
             "grant_id": GRANT,

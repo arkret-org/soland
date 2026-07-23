@@ -268,9 +268,9 @@ impl ProjectionState {
         // `ak:cell:ak.component.member.state.v1:<actor_id>` — note the
         // cell_subject is `actor_id` (per-actor), not (realm_id, actor)
         // composite. The Realm scoping is implicit in the CellStore key.
-        if let Ok(cell_id) =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{member}"))
-        {
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{member}"
+        )) {
             self.cells.insert(
                 cell_id,
                 CellState::Value(Value::String(new_state.to_owned())),
@@ -361,9 +361,9 @@ impl ProjectionState {
                 reason: None,
             },
         );
-        if let Ok(cell_id) =
-            arkret_core::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{creator}"))
-        {
+        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{creator}"
+        )) {
             self.cells
                 .insert(cell_id, CellState::Value(Value::String("join".to_owned())));
         }
@@ -461,7 +461,7 @@ impl ProjectionState {
                     ..previous
                 },
             );
-            if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+            if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                 "ak:cell:ak.component.member.state.v1:{agent_id}"
             )) {
                 self.cells
@@ -690,8 +690,8 @@ impl ProjectionState {
                     security_class,
                     federation_policy,
                 );
-                let bottom = arkret_core::Bottom {
-                    kind: arkret_core::BottomKind::Conflict,
+                let bottom = arkret_wire::Bottom {
+                    kind: arkret_wire::BottomKind::Conflict,
                     cells: vec![cell_id.clone()],
                     move_ids: Vec::new(),
                     seal_view: None,
@@ -705,7 +705,7 @@ impl ProjectionState {
                             "value": incoming,
                         }),
                     ],
-                    details: Some(arkret_core::bottom_details([
+                    details: Some(arkret_wire::bottom_details([
                         ("basis", serde_json::json!(basis.as_str())),
                         ("reason", serde_json::json!("concurrent_realm_update")),
                     ])),
@@ -1023,7 +1023,7 @@ impl ProjectionState {
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `ak:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
-            if arkret_core::TypedTrustDomainId::new(new_td.clone()).is_err() {
+            if arkret_identifiers::TypedTrustDomainId::new(new_td.clone()).is_err() {
                 return ProjectionEffect::Rejected {
                     reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                 };
@@ -1097,7 +1097,7 @@ impl ProjectionState {
                     };
                 }
                 Some(id) => {
-                    if arkret_core::RealmId::new(id).is_err() {
+                    if arkret_identifiers::RealmId::new(id).is_err() {
                         return ProjectionEffect::Rejected {
                             reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
                         };
@@ -1222,7 +1222,7 @@ impl ProjectionState {
         // for this canonical kind.
         match kind {
             k if k == arkret_wire::events::EventKind::REALM_CREATE => {
-                if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                     "ak:cell:ak.component.realm.create.v1:{realm_id}"
                 )) {
                     let entry = serde_json::json!({
@@ -1242,7 +1242,7 @@ impl ProjectionState {
                         .insert(cell_id, CellState::Value(Value::Array(vec![entry])));
                 }
                 if let Some(notary) = payload_object.and_then(|object| object.get("notary"))
-                    && let Ok(cell_id) = arkret_core::CellRef::new(format!(
+                    && let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                         "ak:cell:ak.component.notary.v1:{realm_id}"
                     ))
                 {
@@ -1286,7 +1286,7 @@ impl ProjectionState {
                 }
             }
             k if k == arkret_wire::events::EventKind::REALM_ARCHIVE => {
-                if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                     "ak:cell:ak.component.realm.archive.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
@@ -1311,7 +1311,7 @@ impl ProjectionState {
                 }
             }
             k if k == arkret_wire::events::EventKind::REALM_FREEZE => {
-                if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                     "ak:cell:ak.component.realm.freeze.v1:{realm_id}"
                 )) {
                     let mut value = serde_json::Map::new();
@@ -1344,7 +1344,7 @@ impl ProjectionState {
                 // Stream-F (Wave 1B): tombstone writes its own terminal
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
-                if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                     "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({
@@ -1363,7 +1363,7 @@ impl ProjectionState {
             }
             k if k == arkret_wire::events::EventKind::REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
-                if let Ok(cell_id) = arkret_core::CellRef::new(format!(
+                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
                     "ak:cell:ak.component.realm.destroy.v1:{realm_id}"
                 )) {
                     let value = serde_json::json!({

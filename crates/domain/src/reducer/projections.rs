@@ -7,10 +7,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_core::{
-    ChildScopePolicy, Operation, ReadCursorPosition as ReadCursorPositionWire,
-    ReadCursorScope as ReadScopeWire, StrandTrackConfig,
-};
+use arkret_event_draft::Operation;
+use arkret_models_collaboration::objects::profiles::StrandTrackConfig;
+use arkret_models_collaboration::objects::read_receipts::ReadCursorPosition as ReadCursorPositionWire;
+use arkret_models_collaboration::objects::space::ChildScopePolicy;
+use arkret_wire::ReadCursorScope as ReadScopeWire;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -140,9 +141,9 @@ pub struct SolandKeyBackupActiveSeries {
     pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
     pub record_digest: String,
-    pub frontier_ref: arkret_core::KeyBackupActiveSeriesFrontierRef,
+    pub frontier_ref: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesFrontierRef,
     pub issued_at: chrono::DateTime<chrono::Utc>,
-    pub auth_data: arkret_core::KeyBackupActiveSeriesAuthData,
+    pub auth_data: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesAuthData,
     pub extra: BTreeMap<String, Value>,
     pub event_id: String,
 }
@@ -156,7 +157,7 @@ pub struct RealmLinkState {
     pub realm_id: String,
     pub target_realm_id: String,
     /// Canonical link kind string (snake_case, one of the eight values
-    /// in `arkret_core::RealmLinkKind`).
+    /// in `arkret_models_collaboration::governance::realm_governance::RealmLinkKind`).
     pub link_kind: String,
     /// `active` / `rejected` / `tombstoned`.
     pub status: String,
@@ -613,7 +614,7 @@ pub struct StrandProjection {
 
 pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
     BTreeMap::from([(
-        arkret_core::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
+        arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_SYNTHESIS.to_owned(),
         StrandTrackConfig::synthesis(),
     )])
 }
@@ -813,7 +814,7 @@ pub struct AgentActionApprovalProjection {
 }
 
 /// State enum shared by Strand and Morph projections (mirrors SDK
-/// `arkret_core::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
+/// `arkret_wire::ObjectState`). Unlike `SpaceContainerLifecycleState` which has
 /// a single `Tombstoned` terminal, Strand / Morph use `Redacted` as their terminal
 /// state per spec §5.1.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

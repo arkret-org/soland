@@ -46,10 +46,10 @@ pub fn realm_link_projection_cell_ref(
     source_realm_id: &str,
     target_realm_id: &str,
     link_kind: &str,
-) -> Option<arkret_core::CellRef> {
+) -> Option<arkret_identifiers::CellRef> {
     let subject =
-        arkret_core::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
-    arkret_core::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
+        arkret_wire::composite_subject(&[source_realm_id, target_realm_id, link_kind]).ok()?;
+    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.realm.link.v1:{subject}")).ok()
 }
 
 /// Inheritance mode emitted on the effective-policy response.
@@ -385,13 +385,17 @@ pub fn check_realm_link_admissible(
     link_kind: &str,
     status: &str,
 ) -> Result<(), &'static str> {
-    if arkret_core::RealmLinkKind::parse(link_kind).is_none() {
+    if arkret_models_collaboration::governance::realm_governance::RealmLinkKind::parse(link_kind)
+        .is_none()
+    {
         return Err("realm_link_kind_invalid");
     }
     if source_realm_id == target_realm_id {
         return Err("realm_link_self_reference");
     }
-    let Some(next_status) = arkret_core::RealmLinkStatus::parse(status) else {
+    let Some(next_status) =
+        arkret_models_collaboration::governance::realm_governance::RealmLinkStatus::parse(status)
+    else {
         return Err("realm_link_status_invalid");
     };
     let current_status = state
@@ -402,7 +406,11 @@ pub fn check_realm_link_admissible(
                 .iter()
                 .find(|link| link.target_realm_id == target_realm_id && link.link_kind == link_kind)
         })
-        .and_then(|link| arkret_core::RealmLinkStatus::parse(&link.status));
+        .and_then(|link| {
+            arkret_models_collaboration::governance::realm_governance::RealmLinkStatus::parse(
+                &link.status,
+            )
+        });
     if current_status.is_some_and(|current| !current.can_transition_to(next_status)) {
         return Err(arkret_wire::ReasonCode::REALM_LINK_INVALID_TRANSITION);
     }
@@ -411,7 +419,8 @@ pub fn check_realm_link_admissible(
 
 #[cfg(test)]
 mod tests {
-    use arkret_core::{Operation, OperationId, RealmId};
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
     use serde_json::json;
 
     use super::*;
@@ -563,7 +572,9 @@ mod tests {
     #[test]
     fn apply_link_accepts_the_sdk_fsm_matrix() {
         let hlc = ServerHlc::new("test");
-        for initial in arkret_core::REALM_LINK_INITIAL_STATES {
+        for initial in
+            arkret_models_collaboration::governance::realm_governance::REALM_LINK_INITIAL_STATES
+        {
             let mut state = ProjectionState::new();
             let effect = state.apply(
                 &link_op(REALM_A, REALM_B, "governed_by", initial.as_str()),
@@ -575,7 +586,7 @@ mod tests {
             ));
         }
 
-        for (from, to) in arkret_core::REALM_LINK_ALLOWED_TRANSITIONS {
+        for (from, to) in arkret_models_collaboration::governance::realm_governance::REALM_LINK_ALLOWED_TRANSITIONS {
             let mut state = ProjectionState::new();
             state.apply(
                 &link_op(REALM_A, REALM_B, "governed_by", from.as_str()),

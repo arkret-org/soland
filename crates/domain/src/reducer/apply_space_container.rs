@@ -109,9 +109,11 @@ impl ProjectionState {
                 };
             }
         };
-        if let Some(arkret_core::ChildScopePolicy::RequireScopeCircleId {
-            scope_circle_id: policy_scope,
-        }) = child_scope_policy.as_ref()
+        if let Some(
+            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireScopeCircleId {
+                scope_circle_id: policy_scope,
+            },
+        ) = child_scope_policy.as_ref()
             && let Err(reason) =
                 self.validate_scope_circle_id(policy_scope.as_str(), operation.realm_id.as_ref())
         {
@@ -666,22 +668,22 @@ impl ProjectionState {
             return Ok(());
         };
         match policy {
-            arkret_core::ChildScopePolicy::AllowAny {} => Ok(()),
-            arkret_core::ChildScopePolicy::RequireSameScope {} => {
+            arkret_models_collaboration::objects::space::ChildScopePolicy::AllowAny {} => Ok(()),
+            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireSameScope {} => {
                 if parent.scope_circle_id.as_deref() == child_scope_circle_id {
                     Ok(())
                 } else {
                     Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            arkret_core::ChildScopePolicy::RequireScopeCircleId { scope_circle_id } => {
+            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireScopeCircleId { scope_circle_id } => {
                 if Some(scope_circle_id.as_str()) == child_scope_circle_id {
                     Ok(())
                 } else {
                     Err(arkret_wire::ErrorCode::POLICY_VIOLATION)
                 }
             }
-            arkret_core::ChildScopePolicy::RequireE2ee {} => {
+            arkret_models_collaboration::objects::space::ChildScopePolicy::RequireE2ee {} => {
                 if self.child_scope_is_e2ee(child_scope_circle_id, child_realm_id) {
                     Ok(())
                 } else {
@@ -732,7 +734,7 @@ impl ProjectionState {
 
 fn child_scope_policy_from_object(
     object: &serde_json::Map<String, Value>,
-) -> Result<Option<arkret_core::ChildScopePolicy>, &'static str> {
+) -> Result<Option<arkret_models_collaboration::objects::space::ChildScopePolicy>, &'static str> {
     let Some(policy) = object.get("child_scope_policy") else {
         return Ok(None);
     };
