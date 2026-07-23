@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{Did, RealmId};
 use chrono::Duration;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -33,16 +32,17 @@ use super::{
     federation_destination_matches, ingest_federation_operations, now, operation_is_visible,
     redaction_targets_from_operations, sync_token, verify_federation_origin,
 };
+use crate::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::AppState;
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(in crate::routing::federation::federation) struct FederationActorEventsOutcome {
     actor: String,
     events: Vec<Value>,
     erasure_receipts: Vec<Value>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(in crate::routing::federation::federation) struct FederationBackfillOperationsRequestBody {
     realm_id: String,
@@ -58,7 +58,7 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
     after_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(in crate::routing::federation::federation) struct FederationOperationFrontierOutcome {
     pub(in crate::routing::federation::federation) realm_id: String,
     pub(in crate::routing::federation::federation) operation_count: usize,
@@ -68,7 +68,7 @@ pub(in crate::routing::federation::federation) struct FederationOperationFrontie
     pub(in crate::routing::federation::federation) frontier_digest: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(in crate::routing::federation::federation) struct FederationBackfillOperationsOutcome {
     peer_url: String,
     peer_did: String,
@@ -84,11 +84,7 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
     frontier_after: FederationOperationFrontierOutcome,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.transaction",
-    tags("federation"),
-    summary = "Idempotent inbound server-to-server federation transaction"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.transaction"))]
 pub(crate) async fn federation_transaction(
     txn_id: PathParam<String>,
@@ -386,11 +382,7 @@ fn local_peer_policy_digest_for_transaction(
     Ok(arkret_canonical::sha256_digest(&canonical))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.push_operations",
-    tags("federation"),
-    summary = "Accept a batch of operations pushed from a peer service"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.push_operations"))]
 pub(crate) async fn federation_push_operations(
     depot: &mut Depot,
@@ -438,11 +430,7 @@ pub(crate) async fn federation_push_operations(
     )
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.actor_events",
-    tags("federation"),
-    summary = "Debug/read model: list projection events for a federated actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.actor_events"))]
 pub(crate) async fn federation_actor_events(
     actor_id: PathParam<String>,
@@ -511,11 +499,7 @@ fn projection_event_matches_actor(
             == Some(actor)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.pull_operations",
-    tags("federation"),
-    summary = "Pull a page of operations for a federated Realm, with optional snapshot bootstrap"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.pull_operations"))]
 pub(crate) async fn federation_pull_operations(
     realm_id: QueryParam<String, true>,
@@ -579,11 +563,7 @@ pub(crate) async fn federation_pull_operations(
     )
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.backfill_operations",
-    tags("federation"),
-    summary = "Pull missing operations from a configured federation peer and ingest them locally"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.federation.backfill_operations")
@@ -688,11 +668,7 @@ async fn operation_history_visible_for_federation_pull(
         .unwrap_or(false)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.operation_frontier",
-    tags("federation"),
-    summary = "Return the operation frontier used by federation pull/backfill convergence checks"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.federation.operation_frontier")
@@ -710,11 +686,7 @@ pub(crate) async fn federation_operation_frontier(
     json_ok(operation_frontier_outcome(state, &realm_id).await)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.realm_members",
-    tags("federation"),
-    summary = "List Realm memberships for a federated Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.realm_members"))]
 pub(crate) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
@@ -748,11 +720,7 @@ pub(crate) async fn federation_realm_members(
     )
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.verify_actor",
-    tags("federation"),
-    summary = "Verify a federated actor's signature against the local DID resolver"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.verify_actor"))]
 pub(crate) async fn federation_verify_actor(
     body: JsonBody<
@@ -817,7 +785,7 @@ pub(crate) async fn federation_verify_actor(
 
 // ── Seal pull/push (federation/seals) ──────────────
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FederationSealsOutcome {
     pub seals: Vec<arkret_wire::Seal>,
     /// Echo of [`crate::config::FederationFanoutTopology::as_str`] so the calling
@@ -826,23 +794,19 @@ pub struct FederationSealsOutcome {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FederationSealsPushRequestBody {
     pub origin: String,
     pub seals: Vec<arkret_wire::Seal>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct FederationSealsPushOutcome {
     pub accepted: Vec<String>,
     pub rejected: Vec<serde_json::Value>,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.seals.pull",
-    tags("federation"),
-    summary = "Pull locally-held Seals for a Realm (federation peer-pull)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.seals.pull"))]
 pub(crate) async fn federation_seals_pull(
     depot: &mut Depot,
@@ -876,11 +840,7 @@ pub(crate) async fn federation_seals_pull(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.federation.seals.push",
-    tags("federation"),
-    summary = "Accept Seal envelopes from a federation peer (peer-push)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.seals.push"))]
 pub(crate) async fn federation_seals_push(
     req: &mut Request,

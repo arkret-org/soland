@@ -83,12 +83,7 @@ async fn require_agent_provision_allocation(
     Ok(allocation)
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.command.provision",
-    tags("agents"),
-    summary = "Provision a personal agent (DID + pairing request)",
-    status_codes(201, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.provision"))]
 pub(super) async fn provision_agent(
     aa: AuthArgs,
@@ -465,12 +460,7 @@ pub(super) async fn provision_agent(
 ///   (reason=`superseded_by_repairing`) in the pair transaction. The controller resumes explicitly.
 ///
 /// `active` must transition to `paused` first; `deactivated` is terminal.
-#[endpoint(
-    operation_id = "ak.self.agent.command.renew_pairing",
-    tags("agents"),
-    summary = "Re-open bootstrap pairing or replace a paused personal-agent runtime",
-    status_codes(200, 400, 401, 403, 404, 412, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing"))]
 pub(super) async fn renew_agent_pairing(
     aa: AuthArgs,
@@ -623,12 +613,7 @@ pub(super) async fn renew_agent_pairing(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.query.list",
-    tags("agents"),
-    summary = "List personal agents owned by the authenticated controller",
-    status_codes(200, 401, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.query.list"))]
 pub(super) async fn list_agents(
     aa: AuthArgs,
@@ -660,12 +645,7 @@ pub(super) async fn list_agents(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.resource.get",
-    tags("agents"),
-    summary = "Get a personal agent by id (controller or policy-authorized service)",
-    status_codes(200, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
 pub(super) async fn get_agent(
     aa: AuthArgs,
@@ -966,12 +946,7 @@ fn controller_sidecar_circles_since(
         .collect()
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.command.pause",
-    tags("agents"),
-    summary = "Pause a personal agent",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.pause"))]
 pub(super) async fn pause_agent(
     aa: AuthArgs,
@@ -998,12 +973,7 @@ pub(super) async fn pause_agent(
     )
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.command.resume",
-    tags("agents"),
-    summary = "Resume a paused personal agent",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.resume"))]
 pub(super) async fn resume_agent(
     aa: AuthArgs,
@@ -1035,12 +1005,7 @@ pub(super) async fn resume_agent(
     )
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.command.deactivate",
-    tags("agents"),
-    summary = "Deactivate a personal agent (terminal lifecycle state)",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.deactivate"))]
 pub(super) async fn deactivate_agent(
     aa: AuthArgs,
@@ -1067,12 +1032,7 @@ pub(super) async fn deactivate_agent(
     )
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.grant.command.attach",
-    tags("agents"),
-    summary = "Attach a capability grant to an agent",
-    status_codes(201, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.command.attach"))]
 pub(super) async fn attach_agent_grant(
     aa: AuthArgs,
@@ -1131,12 +1091,7 @@ pub(super) async fn attach_agent_grant(
     json_ok(AgentGrantAttachOutcome { ok: true, grant_id })
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.grant.resource.delete",
-    tags("agents"),
-    summary = "Detach (revoke) a capability grant from an agent",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.resource.delete"))]
 pub(super) async fn detach_agent_grant(
     aa: AuthArgs,

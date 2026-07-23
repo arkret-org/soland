@@ -36,7 +36,7 @@ pub(super) fn router() -> Router {
 }
 
 /// Response body for `GET /_soland/admin/cells/{cell_id}`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminCellStateOutcome {
     /// Canonical wire form of the cell id (`ak:cell:<family>:<subject>`).
     pub cell_id: String,
@@ -60,7 +60,7 @@ pub struct AdminCellStateOutcome {
 }
 
 /// Response body for `GET /_soland/admin/cells?...` (list).
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminCellListOutcome {
     pub cells: Vec<AdminCellStateOutcome>,
     /// Total number of cells matching the filter (before pagination).
@@ -123,11 +123,7 @@ fn required_realm_scope(req: &mut Request) -> Result<RealmId, AppError> {
 /// (`ak:cell:<family>:<subject>`). Salvo decodes path segments before
 /// passing them to `req.param`; receivers MUST canonicalise via
 /// `CellRef::new` to round-trip into the projection map.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.cells.get",
-    tags("soland-admin", "cells"),
-    summary = "Get one cell's resolved state"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.cells.get"))]
 async fn admin_get_cell(
     aa: AuthArgs,
@@ -220,11 +216,7 @@ async fn admin_get_cell(
 ///   `AppConfig::admin_default_page_limit` (env `SOLAND_ADMIN_PAGE_LIMIT`, default `100`) and
 ///   `admin_max_page_limit` (env `SOLAND_ADMIN_MAX_PAGE_LIMIT`, default `1000`). `offset` defaults
 ///   to `0`.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.cells.list",
-    tags("soland-admin", "cells"),
-    summary = "List cells matching a Realm + family prefix filter"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.cells.list"))]
 async fn admin_list_cells(
     aa: AuthArgs,

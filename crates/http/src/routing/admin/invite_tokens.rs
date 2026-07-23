@@ -5,7 +5,6 @@
 
 use arkret_identifiers::RealmId;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::json;
 use soland_application::events::RealmInviteState as RealmInviteRecord;
@@ -13,6 +12,7 @@ use soland_contracts::admin::invite_tokens::{AdminInviteTokenItem, CreateInviteT
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
+use crate::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
@@ -22,11 +22,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{invite_id}").delete(revoke_invite_token))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.invite_tokens.create",
-    tags("soland-admin", "invite_tokens"),
-    summary = "Create a single-use Realm invite token"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.invite_tokens.create"))]
 async fn create_invite_token(
     aa: AuthArgs,
@@ -97,11 +93,7 @@ async fn create_invite_token(
     json_ok(super::collection::admin_invite_item(&invite))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.invite_tokens.revoke",
-    tags("soland-admin", "invite_tokens"),
-    summary = "Revoke a Realm invite token"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.invite_tokens.revoke"))]
 async fn revoke_invite_token(
     aa: AuthArgs,

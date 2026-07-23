@@ -5,7 +5,7 @@
 use super::*;
 use crate::routing::spaces::space::presence_visible_to_session;
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,
@@ -94,11 +94,7 @@ pub(crate) async fn account_subscribe_session_or_render(
     }
 }
 
-#[endpoint(
-    operation_id = "ak.self.account.stream.subscribe",
-    tags("sync"),
-    summary = "Account-aggregate subscribe stream (timeline / presence / typing / to_device)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.stream.subscribe"))]
 pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot

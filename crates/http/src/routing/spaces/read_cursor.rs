@@ -11,23 +11,19 @@ use arkret_models_collaboration::objects::read_receipts::{
 };
 use arkret_wire::{ReadCursorScope, ReadScopeKind};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::json;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, accept_local_operations, now};
+use crate::extract::{JsonBody, QueryParam};
 use crate::routing::identity::device_messages::{
     READ_MARKER_UPDATE_TYPE, fanout_actor_private_update,
 };
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
-#[endpoint(
-    operation_id = "ak.self.read_cursor.command.advance",
-    tags("read_cursors"),
-    summary = "Set the authenticated actor's read marker for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.command.advance"))]
 pub(super) async fn set_read_cursor(
     aa: AuthArgs,
@@ -98,11 +94,7 @@ pub(super) async fn set_read_cursor(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.read_cursor.query.list",
-    tags("read_cursors"),
-    summary = "List the authenticated actor's read markers, optionally filtered by Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.read_cursor.query.list"))]
 pub(super) async fn get_read_cursors(
     aa: AuthArgs,

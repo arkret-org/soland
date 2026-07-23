@@ -11,7 +11,6 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signature;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -20,6 +19,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{bearer_token, is_device_revoked, now, sha256_hex};
+use crate::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -47,11 +47,7 @@ pub(super) fn product_router() -> Router {
     Router::with_path("gate/account/device-signing-keys/query").post(device_signing_keys_query)
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.upload.create",
-    tags("keys"),
-    summary = "Upload device + one-time keys for the current session device"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.upload.create"))]
 async fn keys_upload(
     aa: AuthArgs,
@@ -218,11 +214,7 @@ async fn keys_upload(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.query.lookup",
-    tags("keys"),
-    summary = "Fetch device key bundles for a peer set"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.query.lookup"))]
 async fn keys_query(
     aa: AuthArgs,
@@ -498,11 +490,7 @@ fn verify_keys_upload_device_signature(
         .map_err(|_| AppError::invalid_param("keys/upload signature verification failed"))
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.command.claim",
-    tags("keys"),
-    summary = "Claim one-time keys, draining the per-device pool"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.command.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
@@ -585,11 +573,7 @@ fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<()
     Ok(())
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.gate.account.device_signing_keys.query",
-    tags("keys"),
-    summary = "Look up authorized, non-revoked device signing keys for a principal (server-to-server)"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.gate.account.device_signing_keys.query")

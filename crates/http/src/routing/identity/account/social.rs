@@ -28,12 +28,7 @@ pub(crate) use direct::{
     validate_direct_binding_operation,
 };
 
-#[endpoint(
-    operation_id = "ak.self.contact.command.request",
-    tags("contacts"),
-    summary = "Open a pending contact relationship",
-    status_codes(200, 201, 400, 401, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.request"))]
 pub(crate) async fn contact_request(
     aa: AuthArgs,
@@ -387,11 +382,7 @@ async fn append_contact_fact_projection_event(
     .await;
 }
 
-#[endpoint(
-    operation_id = "ak.self.contact.command.respond",
-    tags("contacts"),
-    summary = "Accept or reject a pending contact request"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.respond"))]
 pub(crate) async fn contact_respond(
     aa: AuthArgs,
@@ -562,12 +553,7 @@ pub(crate) async fn contact_respond(
     json_ok(contact_respond_outcome(&contact, consent_grant_refs)?)
 }
 
-#[endpoint(
-    operation_id = "ak.self.contact.command.tombstone",
-    tags("contacts"),
-    summary = "Tombstone a contact and revoke contact-managed consent",
-    status_codes(200, 400, 401, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.tombstone"))]
 pub(crate) async fn contact_tombstone(
     aa: AuthArgs,
@@ -785,12 +771,7 @@ fn blocked_invite_policy_update(
     Some(policy)
 }
 
-#[endpoint(
-    operation_id = "ak.self.invite_receive_policy.resource.get",
-    tags("contacts"),
-    summary = "Get the authenticated subject's invite-receive policy",
-    status_codes(200, 401, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.invite_receive_policy.resource.get"))]
 pub(crate) async fn get_invite_receive_policy(
     aa: AuthArgs,
@@ -810,12 +791,7 @@ pub(crate) async fn get_invite_receive_policy(
     json_ok(policy)
 }
 
-#[endpoint(
-    operation_id = "ak.self.invite_receive_policy.resource.replace",
-    tags("contacts"),
-    summary = "Replace the authenticated subject's invite-receive policy",
-    status_codes(200, 400, 401, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.self.invite_receive_policy.resource.replace")
@@ -851,11 +827,7 @@ pub(crate) async fn set_invite_receive_policy(
     json_ok(policy)
 }
 
-#[endpoint(
-    operation_id = "ak.self.contact.query.list",
-    tags("contacts"),
-    summary = "List contacts visible to the authenticated actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.query.list"))]
 pub(crate) async fn list_contacts(
     aa: AuthArgs,

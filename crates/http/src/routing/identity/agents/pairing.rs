@@ -1,10 +1,6 @@
 use super::*;
 
-#[endpoint(
-    operation_id = "ak.open.agent_pairing.query.resolve",
-    tags("open"),
-    summary = "Resolve a short-lived agent pairing token"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.query.resolve"))]
 pub(super) async fn resolve_agent_pairing(
     depot: &mut Depot,
@@ -61,11 +57,7 @@ pub(super) async fn resolve_agent_pairing(
     json_ok(bootstrap)
 }
 
-#[endpoint(
-    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request",
-    tags("open"),
-    summary = "Submit an agent runtime key request for controller approval"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.open.agent_pairing.command.submit_runtime_key_request")
@@ -240,11 +232,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.open.agent_pairing.query.runtime_key_request_status",
-    tags("open"),
-    summary = "Poll the controller decision for a submitted runtime key request"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.open.agent_pairing.query.runtime_key_request_status")
@@ -508,12 +496,7 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.gate.account.command.pair_agent_key",
-    tags("agents"),
-    summary = "Authorize an agent runtime key pair against the agent principal",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_agent_key"))]
 pub(super) async fn agent_key_pair(
     aa: AuthArgs,

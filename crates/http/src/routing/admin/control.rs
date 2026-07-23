@@ -19,12 +19,12 @@
 //! middleware. Audit-log and replay protection remain future work.
 
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
+use crate::extract::JsonBody;
 use crate::state::{AppState, EventNotification, EventNotificationKind};
 use crate::{JsonResult, json_ok};
 
@@ -38,7 +38,7 @@ pub(super) fn router() -> Router {
 /// endpoints share a target Space and a free-form reason surfaced verbatim
 /// to subscribers in the control frame. `reconnect_after_ms` applies only to
 /// `resync_required`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminControlFrameRequestBody {
     /// The Space whose subscribers should receive the frame.
     pub realm_id: String,
@@ -54,7 +54,7 @@ pub struct AdminControlFrameRequestBody {
 /// Response body — reports how many subscribers received the frame
 /// (best-effort; broadcast::send returns the receiver count at the moment
 /// of send, not delivery confirmation).
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AdminControlFrameOutcome {
     /// `true` if the broadcast was attempted; `false` only if the channel
     /// was closed (server is shutting down).
@@ -76,11 +76,7 @@ pub struct AdminControlFrameOutcome {
 /// Clients receiving this frame MUST drop their local cache and
 /// re-subscribe with `from=null` (or whatever the subscribe path
 /// considers a fresh-from-frontier start).
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.events.resync_required",
-    tags("soland-admin", "events"),
-    summary = "Broadcast a resync_required control frame to subscribers"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.events.resync_required")
@@ -130,11 +126,7 @@ async fn admin_emit_resync_required(
 ///
 /// Clients receiving this frame MUST close the stream and re-authenticate
 /// before reconnecting; the existing session token is no longer accepted.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.events.unauthorized",
-    tags("soland-admin", "events"),
-    summary = "Broadcast an unauthorized control frame to subscribers"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.events.unauthorized"))]
 async fn admin_emit_unauthorized(
     aa: AuthArgs,

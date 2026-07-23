@@ -247,11 +247,7 @@ pub(super) async fn owned_key_backup_snapshot(
     Ok(snapshot)
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.backups.resource.replace",
-    tags("keys"),
-    summary = "Store an encrypted key backup payload by backup_id"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.replace"))]
 pub(super) async fn put_key_backup(
     aa: AuthArgs,
@@ -366,16 +362,7 @@ pub(super) async fn put_key_backup(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.backups.query.list",
-    tags("keys"),
-    summary = "List encrypted key backups owned by the authenticated actor",
-    parameters(
-        ("series_id" = Option<String>, Query, description = "Filter by ak:backup_series:<uuidv7>"),
-        ("backup_class" = Option<String>, Query, description = "Filter by backup_class (did_recovery / secret_storage / mls_history)"),
-        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor")
-    )
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.query.list"))]
 pub(crate) async fn list_key_backups(
     aa: AuthArgs,
@@ -436,11 +423,7 @@ pub(crate) async fn list_key_backups(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.backups.command.unlock",
-    tags("keys"),
-    summary = "Unlock and return the full encrypted key backup envelope by backup_id"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.command.unlock"))]
 pub(super) async fn unlock_key_backup(
     aa: AuthArgs,
@@ -520,11 +503,7 @@ pub(super) async fn unlock_key_backup(
     json_ok(backup)
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.backups.resource.delete",
-    tags("keys"),
-    summary = "Delete an encrypted key backup by backup_id"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.delete"))]
 pub(super) async fn delete_key_backup(
     aa: AuthArgs,

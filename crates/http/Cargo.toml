@@ -24,29 +24,29 @@ bs58.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 arkret-canonical.workspace = true
-arkret-event-draft = { workspace = true, features = ["salvo-oapi"] }
+arkret-event-draft.workspace = true
 arkret-auth.workspace = true
 arkret-bootstrap.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data"] }
 arkret-egress-policy.workspace = true
 arkret-hlc.workspace = true
-arkret-identifiers = { workspace = true, features = ["salvo"] }
+arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
 arkret-mls.workspace = true
-arkret-models-collaboration = { workspace = true, features = ["salvo-oapi"] }
-arkret-models-discovery = { workspace = true, features = ["salvo-oapi"] }
-arkret-models-integration = { workspace = true, features = ["salvo-oapi"] }
-arkret-models-crypto = { workspace = true, features = ["salvo-oapi"] }
-arkret-models-identity = { workspace = true, features = ["salvo-oapi"] }
-arkret-policy = { workspace = true, features = ["salvo-oapi"] }
+arkret-models-collaboration.workspace = true
+arkret-models-discovery.workspace = true
+arkret-models-integration.workspace = true
+arkret-models-crypto.workspace = true
+arkret-models-identity.workspace = true
+arkret-policy.workspace = true
 arkret-push-policy.workspace = true
 arkret-rate-limit.workspace = true
-arkret-schema = { workspace = true, features = ["embedded-artifacts", "salvo-oapi"] }
+arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }
-arkret-state = { workspace = true, features = ["salvo"] }
-arkret-wire = { workspace = true, features = ["salvo-oapi"] }
+arkret-state.workspace = true
+arkret-wire.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
 hex.workspace = true
@@ -56,13 +56,13 @@ metrics-exporter-prometheus = { workspace = true, default-features = false }
 parking_lot.workspace = true
 rand.workspace = true
 reqwest = { workspace = true, default-features = false, features = ["form", "json", "rustls"] }
-salvo = { workspace = true, default-features = false, features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "matched-path", "ring", "affix-state", "catch-panic", "cors", "oapi", "rustls"] }
+salvo = { workspace = true, default-features = false, features = ["cookie", "fix-http1-request-uri", "server", "server-handle", "http1", "http2", "matched-path", "ring", "affix-state", "catch-panic", "cors", "rustls"] }
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
 soland-application.workspace = true
-soland-contracts = { workspace = true, features = ["salvo"] }
+soland-contracts.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }

@@ -26,12 +26,12 @@ use arkret_state::lattice::SealedOp;
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use arkret_wire::{Event, Move, NotarySig, Seal, SealKind};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
+use crate::extract::JsonBody;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -1143,7 +1143,7 @@ pub(crate) async fn apply_inbound_seal(
 /// `state` is one of `pending` / `rejected` so callers can distinguish
 /// "we've stashed it for the next notary batch" from "verifier said no
 /// before we even reached the queue".
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubmitMoveOutcome {
     pub move_id: String,
     pub state: String,
@@ -1151,11 +1151,7 @@ pub struct SubmitMoveOutcome {
     pub reason: Option<String>,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.moves.submit",
-    tags("moves"),
-    summary = "Submit a Move for the next Seal batch"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.moves.submit"))]
 async fn submit_move(
     aa: AuthArgs,
@@ -1220,7 +1216,7 @@ async fn submit_move(
 }
 
 /// Response from `POST /_soland/peer/seals`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SubmitSealOutcome {
     pub seal_id: String,
     pub accepted_move_ids: Vec<String>,
@@ -1228,17 +1224,13 @@ pub struct SubmitSealOutcome {
     pub post_state_root: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RejectedMoveEntry {
     pub move_id: String,
     pub reason: String,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.seals.submit",
-    tags("seals"),
-    summary = "Submit a Seal; runs apply_seal end-to-end"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.seals.submit"))]
 async fn submit_seal(
     aa: AuthArgs,
@@ -1328,7 +1320,7 @@ async fn submit_seal(
 }
 
 /// Request body for `POST /_soland/admin/seals/sign`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SignSealRequestBody {
     /// Realm whose pending Moves should be batch-sealed.
     pub realm_id: String,
@@ -1340,7 +1332,7 @@ pub struct SignSealRequestBody {
 
 /// Response body — mirrors `SubmitSealOutcome` but reports `None` when
 /// there were no pending Moves to seal.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SignSealOutcome {
     /// `true` if a Seal was published; `false` if nothing was pending.
     pub published: bool,
@@ -1359,11 +1351,7 @@ pub struct SignSealOutcome {
 /// for ops to manually flush pending Moves into a Seal without a
 /// background ticker. Production deploys will eventually wire a
 /// periodic ticker to call the same worker function.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.seals.sign",
-    tags("soland-admin", "seals"),
-    summary = "Trigger one notary signing pass for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.seals.sign"))]
 async fn admin_sign_seal(
     aa: AuthArgs,

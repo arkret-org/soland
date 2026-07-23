@@ -32,7 +32,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::governance::PolicyDocumentRecord;
@@ -40,6 +39,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, validate_canonical_json_value, validate_did};
+use crate::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::append_audit_log;
 use crate::routing::system::extract::AuthArgs;
@@ -79,11 +79,7 @@ pub(super) fn product_router() -> Router {
         )
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.policy_document.query.list",
-    tags("policy"),
-    summary = "List policy documents owned by the authenticated actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.policy_document.query.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
@@ -119,11 +115,7 @@ async fn list_policy_documents(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.policy_document.resource.get",
-    tags("policy"),
-    summary = "Read a single policy document by id"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.policy_document.resource.get")
@@ -148,11 +140,7 @@ async fn get_policy_document(
         .unwrap_or_else(|| Err(AppError::not_found("policy not found")))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.policy_document.command.upsert",
-    tags("policy"),
-    summary = "Idempotently create or replace a policy document"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.policy_document.command.upsert")
@@ -228,11 +216,7 @@ async fn upsert_policy_document(
     json_ok(policy_document_to_response(&record))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.policy_document.resource.delete",
-    tags("policy"),
-    summary = "Delete a policy document by id"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.policy_document.resource.delete")
@@ -262,11 +246,7 @@ async fn delete_policy_document(
     json_ok(OkOutcome { ok: true })
 }
 
-#[endpoint(
-    operation_id = "ak.self.policy.query.check",
-    tags("policy"),
-    summary = "Evaluate a policy decision for an actor + action + resource tuple"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.policy.query.check"))]
 async fn policy_check(
     aa: AuthArgs,

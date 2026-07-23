@@ -50,7 +50,6 @@ use arkret_policy::history_visibility::{event_time_history_visible, matching_res
 use arkret_wire::HistoryVisibility;
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::identity::SessionIdentityState as SessionRecord;
@@ -64,6 +63,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{realm_history_visibility, realm_id_accessible};
+use crate::extract::{PathParam, QueryParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
@@ -956,11 +956,7 @@ fn document_projection_comments(
         .collect()
 }
 
-#[endpoint(
-    operation_id = "ak.self.space.query.list",
-    tags("realm"),
-    summary = "List Space lifecycle projection state for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.space.query.list"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
@@ -1041,11 +1037,7 @@ async fn list_space_container_projections(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.strand.query.list",
-    tags("realm"),
-    summary = "List Strand lifecycle projection state for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.strand.query.list"))]
 async fn list_strand_projections(
     aa: AuthArgs,
@@ -1149,7 +1141,7 @@ async fn list_strand_projections(
 /// board/list position fields. `state` / `fields` keep `serde_json` free-form
 /// types: `state` is a small projected enum already rendered as a string and
 /// `fields` is an arbitrary materialized key/value map.
-#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+#[derive(Debug, serde::Serialize)]
 struct StrandProjectionView {
     strand_id: String,
     realm_id: String,
@@ -1178,7 +1170,7 @@ struct StrandProjectionView {
 /// Mirrors the projected [`SolandRelationState`] fields surfaced by the
 /// product-private `/_soland/self/relations` read. `fields` stays a free-form
 /// `serde_json` map (arbitrary relation payload values).
-#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+#[derive(Debug, serde::Serialize)]
 struct RelationEdgeView {
     relation_id: String,
     realm_id: String,
@@ -1197,7 +1189,7 @@ struct RelationEdgeView {
 /// Strongly-typed response body for `org.arkret.soland.relations.list`
 /// (`GET /_soland/self/relations`). soland product-private projection read;
 /// the DTO lives here for the same reason as [`StrandProjectionView`].
-#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+#[derive(Debug, serde::Serialize)]
 struct RelationEdgeList {
     items: Vec<RelationEdgeView>,
     total: u64,
@@ -1210,11 +1202,7 @@ struct RelationEdgeList {
 /// product-private read backs invariant assertions (CAS read-back,
 /// patch-merge effects) that need the materialized field values. Visibility
 /// reuses the same Realm history / Circle scope gate as the list endpoint.
-#[endpoint(
-    operation_id = "org.arkret.soland.strands.get",
-    tags("soland-local"),
-    summary = "Read a single Strand projection with materialized fields"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.strands.get"))]
 async fn get_strand_projection(
     aa: AuthArgs,
@@ -1291,11 +1279,7 @@ async fn get_strand_projection(
 /// `has_default_view` edge per `from_ref`). Filters are AND-combined; `state`
 /// defaults to `active`. Only edges whose `realm_id` is accessible to the
 /// caller are returned, so non-members can't enumerate another Realm's graph.
-#[endpoint(
-    operation_id = "org.arkret.soland.relations.list",
-    tags("soland-local"),
-    summary = "List relation edge projections with from/to/kind/state filters"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.relations.list"))]
 async fn list_relation_projections(
     aa: AuthArgs,
@@ -1369,11 +1353,7 @@ async fn list_relation_projections(
     json_ok(RelationEdgeList { items, total })
 }
 
-#[endpoint(
-    operation_id = "ak.self.morph.resource.get",
-    tags("realm"),
-    summary = "Get a derived document Morph projection"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.morph.resource.get"))]
 async fn get_document_projection(
     aa: AuthArgs,
@@ -1457,11 +1437,7 @@ async fn get_document_projection(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.morph.query.list",
-    tags("realm"),
-    summary = "List Morph lifecycle projection state for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.morph.query.list"))]
 async fn list_morph_projections(
     aa: AuthArgs,

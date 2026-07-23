@@ -13,7 +13,6 @@ use arkret_models_integration::{
 };
 use arkret_wire::AppletRevokeMode;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -46,6 +45,7 @@ use super::types::{
     AppletProtocolDescribeOutcome, AppletRecord, AppletRevokeRecordOutcome, AppletView,
     GhostActorRecord, SOLAND_EDGE_APPLET_ID,
 };
+use crate::extract::JsonBody;
 use crate::routing::identity::auth::revoke_delegated_sessions_for_applet;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -108,11 +108,7 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
         )
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.query.ping",
-    tags("applet"),
-    summary = "Applet service liveness probe"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -127,11 +123,7 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
     })
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.query.describe",
-    tags("applet"),
-    summary = "Describe soland's applet protocol support"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.describe"))]
 async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcome> {
     json_ok(AppletProtocolDescribeOutcome {
@@ -170,12 +162,7 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.applet.install.command.preview",
-    tags("applet"),
-    summary = "Preview a canonical applet install plan",
-    status_codes(200, 400, 401, 403, 409)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
@@ -202,12 +189,7 @@ async fn install_preview_endpoint(
     json_ok(plan)
 }
 
-#[endpoint(
-    operation_id = "ak.self.applet.command.install",
-    tags("applet"),
-    summary = "Commit a canonical applet install",
-    status_codes(200, 201, 400, 401, 403, 409)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
@@ -263,12 +245,7 @@ async fn install_endpoint(
     json_ok(response)
 }
 
-#[endpoint(
-    operation_id = "ak.self.applet.command.revoke",
-    tags("applet"),
-    summary = "Revoke a canonical applet install",
-    status_codes(200, 400, 401, 403, 404, 409)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
@@ -500,12 +477,7 @@ fn session_revoke_body_for_applet(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.applet.ghost.command.provision",
-    tags("applet"),
-    summary = "Provision an applet-managed Ghost Actor profile and accountability grant",
-    status_codes(200, 201, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.ghost.command.provision"))]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
@@ -622,12 +594,7 @@ async fn persist_formal_ghost_record(
     persist_applet_record(state, &record).await
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.command.transaction",
-    tags("applet"),
-    summary = "Receive an applet transaction",
-    status_codes(200, 400, 401, 403, 409)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.command.transaction"))]
 async fn transaction_endpoint(
     body: JsonBody<AppletTransactionRequestBody>,
@@ -662,11 +629,7 @@ async fn transaction_endpoint(
     json_ok(outcome)
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.actor.query.resolve",
-    tags("applet"),
-    summary = "Resolve an applet actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.actor.query.resolve"))]
 async fn resolve_actor_endpoint(
     req: &mut Request,
@@ -697,11 +660,7 @@ async fn resolve_actor_endpoint(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.realm.query.resolve",
-    tags("applet"),
-    summary = "Resolve an applet realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.realm.query.resolve"))]
 async fn resolve_realm_endpoint(
     req: &mut Request,
@@ -745,11 +704,7 @@ async fn resolve_realm_endpoint(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.query.protocol_metadata",
-    tags("applet"),
-    summary = "Read applet protocol metadata"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.protocol_metadata"))]
 async fn protocol_metadata_endpoint(
     req: &mut Request,
@@ -808,11 +763,7 @@ async fn protocol_metadata_endpoint(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.third_party_users.query.list",
-    tags("applet"),
-    summary = "Resolve a third-party applet user"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.third_party_users.query.list"))]
 async fn third_party_users_endpoint(
     req: &mut Request,
@@ -859,11 +810,7 @@ async fn third_party_users_endpoint(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.edge.applet.third_party_locations.query.list",
-    tags("applet"),
-    summary = "Resolve a third-party applet location"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.edge.applet.third_party_locations.query.list")
@@ -910,12 +857,7 @@ async fn third_party_locations_endpoint(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.applets.register",
-    tags("extensions"),
-    summary = "Register a verified applet manifest and issue a bot actor DID",
-    status_codes(200, 201, 400, 401, 403, 409)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
@@ -950,11 +892,7 @@ async fn register_endpoint(
     json_ok(response)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.applets.get",
-    tags("extensions"),
-    summary = "Read applet bridge registration state"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.get"))]
 async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<AppletView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -965,11 +903,7 @@ async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<Applet
     json_ok(applet_response(&record))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.applets.ghosts.provision",
-    tags("extensions"),
-    summary = "Provision or reuse a ghost actor and optionally route a portal message"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.ghosts.provision"))]
 async fn ghost_endpoint(
     aa: AuthArgs,
@@ -1017,11 +951,7 @@ async fn ghost_endpoint(
     json_ok(response)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.applets.bot.message",
-    tags("extensions"),
-    summary = "Write a portal message as the applet bot actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.bot.message"))]
 async fn bot_message_endpoint(
     aa: AuthArgs,
@@ -1056,11 +986,7 @@ async fn bot_message_endpoint(
     json_ok(message_result)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.applets.revoke",
-    tags("extensions"),
-    summary = "Revoke an applet's bot and ghost capabilities"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.revoke"))]
 async fn revoke_endpoint(
     aa: AuthArgs,

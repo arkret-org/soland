@@ -18,7 +18,6 @@
 
 use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 // Shared wire DTOs live in `soland-contracts` so producer (this server) and
@@ -30,6 +29,7 @@ use soland_contracts::admin::covered_seals::{
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
+use crate::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
@@ -61,12 +61,7 @@ fn covered_state_for_realm(state: &AppState, realm_id: &str) -> Option<(u64, Vec
         .map(|row| (row.epoch, row.covered_seals.clone(), row.committed_at))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.covered_seals.get",
-    tags("soland-admin", "realm", "mls"),
-    summary = "Get covered-seals lag snapshot for a Realm",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.covered_seals.get")
@@ -112,12 +107,7 @@ async fn get_covered_seals(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.covered_seals.advance",
-    tags("soland-admin", "realm", "mls"),
-    summary = "Operator override: fold governance Seals into covered_seals",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.covered_seals.advance")

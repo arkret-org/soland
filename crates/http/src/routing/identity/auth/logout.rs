@@ -26,11 +26,7 @@ use super::*;
 ///    for the grant's device, remove push registrations, and drop queued to-device messages. It
 ///    does NOT write `ak.account.status`, emit `ak.device.revoke`, or mark the durable device
 ///    inventory record revoked; a later login restores a session for the same authorized device.
-#[endpoint(
-    operation_id = "ak.gate.account.command.logout",
-    tags("auth"),
-    summary = "Single hard logout: terminate the principal-side device session and trigger Auth-side grant-chain termination"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.logout"))]
 pub(super) async fn logout(
     aa: super::super::AuthArgs,
@@ -329,12 +325,7 @@ async fn revoke_sessions_for_actor_device(
 /// `ak.account.status` write happens implicitly. Cross-session selectors
 /// require a fresh lifecycle proof whose request digest and Ed25519 signature
 /// verify against the caller DID.
-#[endpoint(
-    operation_id = "ak.gate.account.command.revoke_session",
-    tags("auth"),
-    summary = "Revoke session grants / bearer sessions for the calling principal",
-    status_codes(200, 400, 401, 403, 404, 422, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.revoke_session"))]
 pub(super) async fn session_revoke(
     aa: super::super::AuthArgs,

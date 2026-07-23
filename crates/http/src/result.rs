@@ -1,27 +1,17 @@
-//! Typed result aliases used by `#[endpoint]` handlers.
-//!
-//! Mirrors palpo's `JsonResult<T>` / `EmptyResult` pattern so each endpoint
-//! has a single return type that salvo-oapi can introspect via the
-//! `EndpointOutRegister` impls on `Json<T>` and `AppError`.
-//!
-//! Migration plan: see `_oapi.md`.
+//! Typed result aliases used by HTTP handlers.
 
-use salvo::oapi::ToSchema;
 use salvo::prelude::Json;
 use serde::{Deserialize, Serialize};
 
 use crate::error::AppError;
 
-/// `Result<Json<T>, AppError>` — the canonical shape every typed endpoint
-/// returns. `T: Serialize + ToSchema` so the OK arm yields a schema-backed
-/// `responses[200]`; `AppError` registers the standard 4xx/5xx envelopes.
+/// The canonical JSON result shape returned by typed handlers.
 pub type JsonResult<T> = Result<Json<T>, AppError>;
 
-/// Plain `Result<T, AppError>` for handlers that drive the response by hand.
+/// Plain result for handlers that drive the response by hand.
 pub type AppResult<T> = Result<T, AppError>;
 
-/// `JsonResult<EmptyOutcome>` — endpoints that don't return a payload still
-/// emit `{}` so the OpenAPI doc has a non-empty schema reference.
+/// Empty-payload handlers still emit a JSON object.
 pub type EmptyResult = JsonResult<EmptyOutcome>;
 
 /// Wrap a value in `Json` for `?`-friendly handler returns.
@@ -29,13 +19,11 @@ pub fn json_ok<T>(value: T) -> JsonResult<T> {
     Ok(Json(value))
 }
 
-/// Empty `{}` body, used by side-effect-only endpoints.
+/// Return the canonical empty JSON object.
 pub fn empty_ok() -> EmptyResult {
     json_ok(EmptyOutcome {})
 }
 
-/// Marker response type used by [`empty_ok`]. Serializes to `{}` and shows
-/// up in OpenAPI as an empty object schema, matching the existing wire
-/// behaviour for endpoints that return no payload.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+/// Marker response type used by [`empty_ok`].
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct EmptyOutcome {}

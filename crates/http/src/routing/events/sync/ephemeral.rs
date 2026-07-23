@@ -18,15 +18,11 @@ use crate::routing::spaces::space::{
 };
 use crate::state::{AppState, EventNotification};
 
-#[endpoint(
-    operation_id = "ak.self.ephemeral.command.send",
-    tags("sync"),
-    summary = "Send a broadcast ephemeral signal"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.ephemeral.command.send"))]
 pub(super) async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<
+    body: crate::extract::JsonBody<
         arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
     >,
     depot: &mut Depot,

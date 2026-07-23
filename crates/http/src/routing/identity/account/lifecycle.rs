@@ -11,12 +11,7 @@ use arkret_models_collaboration::governance::erasure::{
 
 use super::*;
 
-#[endpoint(
-    operation_id = "org.arkret.soland.account.export",
-    tags("account"),
-    summary = "GDPR export: assemble the authenticated principal's data bundle",
-    status_codes(200, 401, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.export"))]
 pub(super) async fn export_account(
     aa: AuthArgs,
@@ -118,7 +113,7 @@ pub(super) async fn export_account(
     })
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Debug, Serialize)]
 struct AccountExportOutcome {
     pub did: String,
     pub exported_at: String,
@@ -133,14 +128,14 @@ struct AccountExportOutcome {
     pub key_backup_state: Option<Value>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct AccountExportProfile {
     pub display_name: Option<String>,
     pub bio: Option<String>,
     pub avatar_blob_ref: Option<BlobRef>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct AccountExportRealm {
     pub realm_id: String,
     pub discoverability: String,
@@ -148,7 +143,7 @@ struct AccountExportRealm {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct AccountExportDevice {
     pub device_id: String,
     pub display_name: Option<String>,
@@ -619,12 +614,7 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
         .collect()
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.account.deactivate",
-    tags("account"),
-    summary = "Deactivate the authenticated principal and revoke active access",
-    status_codes(200, 401, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.deactivate"))]
 pub(super) async fn deactivate_account(
     aa: AuthArgs,
@@ -658,7 +648,7 @@ pub(super) async fn deactivate_account(
     })
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct AccountDeactivateOutcome {
     pub did: String,
     pub previous_state: String,
@@ -674,12 +664,7 @@ struct AccountDeactivateOutcome {
     pub capability_cache_invalidated: usize,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.account.erase",
-    tags("account"),
-    summary = "GDPR erasure: pseudonymize the authenticated principal and revoke access",
-    status_codes(200, 401, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.erase"))]
 pub(super) async fn erase_account(
     aa: AuthArgs,
@@ -859,7 +844,7 @@ pub(super) async fn erase_account(
     })
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct AccountEraseOutcome {
     pub did: String,
     pub state: String,

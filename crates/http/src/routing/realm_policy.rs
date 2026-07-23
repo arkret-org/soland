@@ -15,7 +15,6 @@
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -23,6 +22,7 @@ use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
+use crate::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::state::AppState;
 
@@ -35,7 +35,7 @@ pub(crate) fn router() -> Router {
     )
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RealmPolicyServerOutcome {
     pub realm_id: String,
     pub policy_server_did: String,
@@ -49,7 +49,7 @@ pub struct RealmPolicyServerOutcome {
     pub from_org_fallback: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PutRealmPolicyServerRequestBody {
     pub policy_server_did: String,
     pub policy_server_url: String,
@@ -62,11 +62,7 @@ pub struct PutRealmPolicyServerRequestBody {
     pub on_timeout: Option<String>,
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.get",
-    tags("realms"),
-    summary = "Read the projected ak.realm.policy_server config (G3.S2)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
@@ -95,11 +91,7 @@ async fn get_realm_policy_server(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.replace",
-    tags("realms"),
-    summary = "Submit a ak.realm.policy_server Move (G3.S2)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.replace"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
@@ -164,11 +156,7 @@ async fn put_realm_policy_server(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm_policy_server.resource.delete",
-    tags("realms"),
-    summary = "Tombstone the ak.realm.policy_server cell (G3.S2)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,

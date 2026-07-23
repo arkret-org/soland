@@ -15,7 +15,6 @@ use serde_json::Value;
 
 /// Request body coauth POSTs to `/_soland/root/authz/capability-fanout`.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CapabilityFanoutBody {
     /// Fixed envelope kind `org.arkret.coauth.collaboration_capability.fanout.v1`.
     pub kind: String,
@@ -36,7 +35,6 @@ pub struct CapabilityFanoutBody {
 
 /// Response from the soland fanout handler.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CapabilityFanoutResponse {
     pub accepted: Vec<String>,
     pub duplicate: Vec<String>,
@@ -48,7 +46,6 @@ pub struct CapabilityFanoutResponse {
 
 /// Post-projection authorization state the fanout handler observed.
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CapabilityFanoutAuthzState {
     pub projected: bool,
     pub effective: bool,

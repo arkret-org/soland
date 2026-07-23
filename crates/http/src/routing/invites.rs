@@ -32,7 +32,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
 use salvo::http::{HeaderValue, StatusCode};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::events::{
@@ -45,6 +44,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 
+use crate::extract::JsonBody;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
@@ -128,7 +128,7 @@ fn locator_issue_outcome(
     })
 }
 
-#[endpoint(operation_id = "ak.self.invite_locator.command.issue", tags("self"))]
+#[handler]
 async fn issue_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -158,7 +158,7 @@ async fn issue_invite_locator(
     }
 }
 
-#[endpoint(operation_id = "ak.self.invite_locator.command.rotate", tags("self"))]
+#[handler]
 async fn rotate_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -192,7 +192,7 @@ async fn rotate_invite_locator(
     json_ok(locator_issue_outcome(&record, token)?)
 }
 
-#[endpoint(operation_id = "ak.self.invite_locator.command.revoke", tags("self"))]
+#[handler]
 async fn revoke_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -221,11 +221,7 @@ async fn revoke_invite_locator(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.peer.invites.command.submit",
-    tags("peer"),
-    summary = "Private Principal Server invite delivery"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.invites.command.submit"))]
 async fn peer_invites_submit(
     depot: &mut Depot,
@@ -393,11 +389,7 @@ async fn peer_invites_submit(
     json_ok(outcome)
 }
 
-#[endpoint(
-    operation_id = "ak.open.invite_locator.query.resolve",
-    tags("open"),
-    summary = "Resolve an online invite locator token"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.query.resolve"))]
 async fn resolve_invite_locator(
     depot: &mut Depot,

@@ -16,7 +16,6 @@ use arkret_models_identity::account::{
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::identity::{
@@ -25,6 +24,7 @@ use soland_application::identity::{
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, now};
+use crate::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -334,12 +334,7 @@ async fn persist_account_data_event(
     Ok(())
 }
 
-#[endpoint(
-    operation_id = "ak.self.account_data.resource.replace",
-    tags("account_data"),
-    summary = "Upsert an actor-private account_data entry",
-    status_codes(200, 201, 400, 401, 413, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.replace"))]
 async fn put_account_data(
     aa: AuthArgs,
@@ -414,11 +409,7 @@ async fn put_account_data(
     json_ok(entry_from(record))
 }
 
-#[endpoint(
-    operation_id = "ak.self.account_data.resource.get",
-    tags("account_data"),
-    summary = "Fetch a single account_data entry by data_type"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.get"))]
 async fn get_account_data(
     aa: AuthArgs,
@@ -452,11 +443,7 @@ async fn get_account_data(
     }
 }
 
-#[endpoint(
-    operation_id = "ak.self.account_data.query.list",
-    tags("account_data"),
-    summary = "List every account_data entry owned by the authenticated actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.query.list"))]
 async fn list_account_data(
     aa: AuthArgs,
@@ -482,11 +469,7 @@ async fn list_account_data(
     json_ok(AccountDataList { entries })
 }
 
-#[endpoint(
-    operation_id = "ak.self.account_data.resource.delete",
-    tags("account_data"),
-    summary = "Delete an account_data entry"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.delete"))]
 async fn delete_account_data(
     aa: AuthArgs,

@@ -12,18 +12,14 @@ use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_
 use arkret_state::state::compute_state_root;
 use arkret_wire::move_event::{LatticeOp, LatticeOpType};
 use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use super::*;
+use crate::extract::JsonBody;
 
 const SUPPORTED_REDUCER_PROFILE: &str = "ak.reducer.v1";
 
-#[endpoint(
-    operation_id = "ak.self.events.query.mls_governance_proof",
-    tags("events"),
-    summary = "Materialize a verifiable full-profile MLS governance binding"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.mls_governance_proof"))]
 pub(super) async fn mls_governance_proof(
     aa: AuthArgs,

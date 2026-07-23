@@ -1,11 +1,6 @@
 use super::*;
 
-#[endpoint(
-    operation_id = "org.arkret.soland.identity.recovery_receipts.get",
-    tags("identity", "recovery"),
-    summary = "List recovery receipt history newest-first (REC-1)",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.recovery_receipts.get")
@@ -91,12 +86,7 @@ fn recovery_receipt_outcome(value: &str) -> Result<RecoveryReceiptOutcome, AppEr
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.identity.recovery_receipt.put",
-    tags("identity", "recovery"),
-    summary = "Record a ak.schema.recovery_receipt.v1 receipt (REC-1)",
-    status_codes(200, 201, 400, 401, 403, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.recovery_receipt.put")

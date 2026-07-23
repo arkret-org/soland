@@ -43,7 +43,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -71,6 +70,7 @@ use super::consent::{
 };
 use super::did::require_embedded_webvh_registration_bearer;
 use super::{AuthArgs, append_audit_log, bearer_token, now, sha256_hex, validate_did};
+use crate::extract::{JsonBody, PathParam};
 use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
@@ -218,7 +218,7 @@ fn direct_conversation_routes() -> Router {
         .push(Router::with_path("resolve").post(direct_conversation_resolve))
 }
 
-#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct LocalAccountRegisterRequestBody {
     pub did: String,
@@ -707,12 +707,7 @@ fn managed_agent_direct_authorization_basis_from_record(
     Some(basis)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.account.register",
-    tags("account"),
-    summary = "Register a local account projection",
-    status_codes(200, 400, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.register"))]
 async fn local_account_register(
     depot: &mut Depot,
@@ -792,12 +787,7 @@ async fn local_account_register(
     json_ok(account_response(account, state))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.account.me",
-    tags("account"),
-    summary = "Get the authenticated local account projection",
-    status_codes(200, 401, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.me"))]
 async fn local_account_me(
     aa: AuthArgs,
@@ -816,12 +806,7 @@ async fn local_account_me(
     json_ok(account_response(account, state))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.accounts.localparts.list",
-    tags("account"),
-    summary = "List account localparts",
-    status_codes(200, 401, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.list"))]
 async fn list_account_localparts(
     account_did: PathParam<String>,
@@ -849,12 +834,7 @@ async fn list_account_localparts(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.accounts.localparts.add",
-    tags("account"),
-    summary = "Bind a localpart to an account",
-    status_codes(200, 400, 401, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.add"))]
 async fn add_account_localpart(
     account_did: PathParam<String>,
@@ -897,12 +877,7 @@ async fn add_account_localpart(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.accounts.localparts.update",
-    tags("account"),
-    summary = "Update an account localpart binding",
-    status_codes(200, 400, 401, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.update"))]
 async fn update_account_localpart(
     account_did: PathParam<String>,
@@ -944,12 +919,7 @@ async fn update_account_localpart(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.accounts.localparts.delete",
-    tags("account"),
-    summary = "Remove an account localpart binding",
-    status_codes(200, 400, 401, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.delete"))]
 async fn delete_account_localpart(
     account_did: PathParam<String>,
@@ -1008,12 +978,7 @@ async fn delete_account_localpart(
     json_ok(AccountLocalpartDeleteOutcome { ok: true })
 }
 
-#[endpoint(
-    operation_id = "ak.self.account.query.viewer",
-    tags("account"),
-    summary = "Get the authenticated principal's account viewer projection",
-    status_codes(200, 401, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.query.viewer"))]
 pub(crate) async fn account_viewer(
     aa: AuthArgs,
@@ -1056,12 +1021,7 @@ pub(crate) async fn account_viewer(
 /// the Account Authority after it has verified the identity-creation protocol.
 /// It requires the configured service bearer, never accepts the client-facing
 /// `identity_creation` branch, and does not create a handle as a side effect.
-#[endpoint(
-    operation_id = "ak.gate.account.command.register",
-    tags("account"),
-    summary = "Register an account (spec account_auth binding)",
-    status_codes(200, 400, 409, 429, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.register"))]
 async fn gate_account_register(
     depot: &mut Depot,
@@ -1209,12 +1169,7 @@ async fn gate_account_register(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.account.command.update_profile",
-    tags("account"),
-    summary = "Update the authenticated principal's actor profile fields",
-    status_codes(200, 400, 401, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
@@ -1364,11 +1319,7 @@ fn actor_profile_from_account(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.direct_conversation.command.resolve",
-    tags("contacts"),
-    summary = "Resolve or create the canonical 1:1 direct conversation binding"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.command.resolve"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,

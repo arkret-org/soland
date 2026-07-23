@@ -59,7 +59,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::identity::{
@@ -71,6 +70,7 @@ use soland_http::util::bearer_token;
 use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
+use crate::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;

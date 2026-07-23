@@ -4,13 +4,11 @@ use std::collections::BTreeMap;
 
 use super::*;
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(transparent)]
-pub struct RawDidDocumentJson(
-    #[salvo(schema(value_type = serde_json::Value))] pub serde_json::Value,
-);
+pub struct RawDidDocumentJson(pub serde_json::Value);
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryDescription {
     pub protocol_version: String,
     pub service_type: String,
@@ -24,7 +22,7 @@ pub struct IdentityRegistryDescription {
     pub supported_bindings: Vec<IdentityRegistryBinding>,
     pub supported_features: Vec<String>,
     pub auth_metadata: IdentityRegistryAuthMetadata,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     pub limits: Value,
     pub plaintext_visibility: IdentityRegistryPlaintextVisibility,
     pub implemented_features: Vec<String>,
@@ -37,68 +35,68 @@ pub struct IdentityRegistryDescription {
     pub supported_did_methods: Vec<String>,
     pub resolver_policy: IdentityResolverPolicy,
     pub registry_visibility: IdentityRegistryVisibility,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     pub did_webvh: Value,
     pub todos: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryBinding {
     pub kind: String,
     pub base_url: String,
     pub paths: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryAuthMetadata {
     pub mode: String,
     pub read: String,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryPlaintextVisibility {
     pub default: String,
     pub services: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryClaimedProfile {
     pub profile_id: String,
     pub claim_kind: String,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryVerifiedProfile {
     pub profile_id: String,
     pub verifier: String,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryRateLimitPolicy {
     pub kind: String,
     pub per_minute: u32,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityResolverPolicy {
     pub allow_methods: Vec<String>,
     pub freshness_receipts: IdentityFreshnessReceiptsPolicy,
     pub webvh_validation: IdentityWebvhValidationPolicy,
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+
     pub trust_roots: Vec<Value>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityFreshnessReceiptsPolicy {
     pub endpoint_template: String,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityWebvhValidationPolicy {
     pub witness_quorum: String,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct IdentityRegistryVisibility {
     pub mode: String,
     pub public_resolution: bool,
@@ -106,11 +104,7 @@ pub struct IdentityRegistryVisibility {
     pub write_policy: String,
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.registry.query.describe",
-    tags("identity"),
-    summary = "Identity registry capability description"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "identity_describe"))]
 pub(crate) async fn identity_describe(
     depot: &mut Depot,
@@ -224,7 +218,7 @@ pub(crate) async fn identity_describe(
     })
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct EmbeddedWebvhRegisterRequestBody {
     #[serde(default)]
     pub local_id: Option<String>,
@@ -257,7 +251,7 @@ pub struct EmbeddedWebvhRegisterRequestBody {
     pub governance: Option<Value>,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct EmbeddedWebvhRegisterOutcome {
     pub status: String,
     pub provider_id: String,
@@ -274,12 +268,7 @@ pub struct EmbeddedWebvhRegisterOutcome {
     pub did_log: Vec<Value>,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.identity.webvh.register",
-    tags("identity"),
-    summary = "Register through the embedded did:webvh provider",
-    status_codes(201, 400, 401, 404, 409, 500, 503)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.identity.webvh.register"))]
 pub(crate) async fn embedded_webvh_register(
     depot: &mut Depot,
@@ -533,7 +522,7 @@ pub(crate) async fn embedded_webvh_register(
     })
 }
 
-#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct EmbeddedWebvhRotateRequestBody {
     /// The DID whose `did.jsonl` history a rotation entry is appended to.
     pub did: String,
@@ -544,11 +533,10 @@ pub struct EmbeddedWebvhRotateRequestBody {
     /// signatures), and optional `witness[]` attestations. soland appends it
     /// verbatim and re-validates the whole chain (hash chain, SCID, witness
     /// quorum, rotation authorisation) before persisting.
-    #[salvo(schema(value_type = serde_json::Value))]
     pub log_entry: Value,
 }
 
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct EmbeddedWebvhRotateOutcome {
     pub status: String,
     pub did: String,
@@ -569,12 +557,7 @@ pub struct EmbeddedWebvhRotateOutcome {
 /// integrity / authorisation break, so E9.1 (tampered prev hash), E9.3
 /// (governance N-of-M) and E9.5 (recovery key) are all enforced at write time.
 /// Spec: identity-did.md §3.4 / §4.2.1 / §7 / §8 + key-management.md §3.3.
-#[endpoint(
-    operation_id = "org.arkret.soland.identity.webvh.rotate",
-    tags("identity"),
-    summary = "Append a rotation entry to an embedded did:webvh history",
-    status_codes(200, 400, 401, 404, 409, 422, 500, 503)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.identity.webvh.rotate"))]
 pub(crate) async fn embedded_webvh_rotate(
     depot: &mut Depot,
@@ -728,7 +711,7 @@ fn ensure_webvh_document_id(did: &str, document: &Value) -> Result<(), AppError>
     }
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "embedded_webvh_document"))]
 pub(crate) async fn embedded_webvh_document(
     depot: &mut Depot,
@@ -746,7 +729,7 @@ pub(crate) async fn embedded_webvh_document(
     );
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "embedded_webvh_log"))]
 pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -778,11 +761,7 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
     res.write_body(body.into_bytes()).ok();
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.query.resolve",
-    tags("identity"),
-    summary = "Resolve a DID via local webvh store + SDK resolver chain"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.query.resolve"))]
 pub(crate) async fn identity_resolve(
     body: JsonBody<IdentityResolveRequestBody>,
@@ -836,14 +815,10 @@ pub(crate) async fn identity_resolve(
     ))
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.document.resource.get",
-    tags("identity"),
-    summary = "Fetch the locally-cached DID document for a DID"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.document.resource.get"))]
 pub(crate) async fn identity_document(
-    did: salvo::oapi::extract::QueryParam<String, true>,
+    did: crate::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityDocumentViewOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -901,11 +876,7 @@ fn identity_resolve_outcome(
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.identity.get_path_did_document",
-    tags("identity"),
-    summary = "Fetch a DID document by DID path segment"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.get_path_did_document")
@@ -931,14 +902,10 @@ pub(crate) async fn identity_did_document(
     json_ok(RawDidDocumentJson(record.did_document))
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.log.query.list",
-    tags("identity"),
-    summary = "Return the local webvh key-log events for a DID"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.log.query.list"))]
 pub(crate) async fn identity_log(
-    did: salvo::oapi::extract::QueryParam<String, true>,
+    did: crate::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityLogListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -996,14 +963,10 @@ pub(crate) async fn identity_log(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.receipts.query.list",
-    tags("identity"),
-    summary = "Read issuer receipts for the local webvh key-log of a DID"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.query.list"))]
 pub(crate) async fn identity_receipts(
-    did: salvo::oapi::extract::QueryParam<String, true>,
+    did: crate::extract::QueryParam<String, true>,
     depot: &mut Depot,
 ) -> JsonResult<IdentityReceiptListOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -1018,12 +981,7 @@ pub(crate) async fn identity_receipts(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.command.submit_did_operation",
-    tags("identity"),
-    summary = "Submit a native did:webvh log operation to the local registry",
-    status_codes(200, 400, 401, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.command.submit_did_operation"))]
 pub(crate) async fn identity_submit_did_operation(
     depot: &mut Depot,

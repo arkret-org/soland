@@ -1,11 +1,6 @@
 use super::*;
 
-#[endpoint(
-    operation_id = "ak.gate.account.command.pair_device",
-    tags("auth"),
-    summary = "Pair a new device with approval from the authenticated existing device",
-    status_codes(200, 400, 401, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_device"))]
 pub(super) async fn account_device_pair(
     aa: super::super::AuthArgs,

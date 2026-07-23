@@ -11,7 +11,6 @@
 
 use std::collections::BTreeMap;
 
-use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::delivery::{
@@ -23,6 +22,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
+use crate::extract::{JsonBody, QueryParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -62,11 +62,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("device_messages/ack").post(ack_device_messages))
 }
 
-#[endpoint(
-    operation_id = "ak.self.device_messages.command.send",
-    tags("device_messages"),
-    summary = "Send to-device messages (idempotent on Idempotency-Key + sender actor)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send"))]
 async fn send_device_messages(
     aa: AuthArgs,
@@ -369,11 +365,7 @@ pub(crate) async fn fanout_actor_private_update(
     delivered
 }
 
-#[endpoint(
-    operation_id = "ak.self.device_messages.query.list",
-    tags("device_messages"),
-    summary = "Pull pending to-device messages for the bound session/device"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.query.list"))]
 async fn get_device_messages(
     aa: AuthArgs,
@@ -502,11 +494,7 @@ async fn get_device_messages(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.device_messages.command.ack",
-    tags("device_messages"),
-    summary = "Acknowledge a delivered to-device batch by bearer token"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.ack"))]
 async fn ack_device_messages(
     aa: AuthArgs,
@@ -602,6 +590,64 @@ fn note_unknown_device(
     } else {
         *entry = json!([device_id]);
     }
+}
+
+fn device_message_envelope_from_record(
+    message: &DeviceMessageState,
+) -> Option<DeviceMessageEnvelope> {
+    let kind = arkret_wire::wire_strings::ProtocolKind::new(
+        message
+            .content
+            .get("kind")
+            .or_else(|| message.content.get("type"))
+            .and_then(Value::as_str)?,
+    )
+    .ok()?;
+    let content = message
+        .content
+        .get("content")
+        .and_then(Value::as_object)?
+        .clone()
+        .into_iter()
+        .collect();
+    let expires_at = message
+        .content
+        .get("expires_at")
+        .and_then(|value| serde_json::from_value(value.clone()).ok())
+        .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
+    let device_proof = match message.content.get("device_proof") {
+        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
+        Some(_) => return None,
+        None => None,
+    };
+    let unsigned = match message.content.get("unsigned") {
+        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
+        Some(_) => return None,
+        None => None,
+    };
+    Some(DeviceMessageEnvelope {
+        message_id: arkret_identifiers::DeviceMessageId::new(
+            message.content.get("message_id")?.as_str()?.to_owned(),
+        )
+        .ok()?,
+        kind,
+        sender_principal_id: arkret_identifiers::Did::new(message.sender.clone()).ok()?,
+        sender_device_id: arkret_identifiers::DeviceId::new(
+            message
+                .content
+                .get("sender_device_id")
+                .and_then(Value::as_str)?
+                .to_owned(),
+        )
+        .ok()?,
+        recipient_principal_id: arkret_identifiers::Did::new(message.recipient.clone()).ok()?,
+        recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,
+        sent_at: message.created_at,
+        expires_at,
+        content,
+        device_proof,
+        unsigned,
+    })
 }
 
 #[cfg(test)]
@@ -705,62 +751,4 @@ mod tests {
             "the agent device id is not addressable under the controller actor"
         );
     }
-}
-
-fn device_message_envelope_from_record(
-    message: &DeviceMessageState,
-) -> Option<DeviceMessageEnvelope> {
-    let kind = arkret_wire::wire_strings::ProtocolKind::new(
-        message
-            .content
-            .get("kind")
-            .or_else(|| message.content.get("type"))
-            .and_then(Value::as_str)?,
-    )
-    .ok()?;
-    let content = message
-        .content
-        .get("content")
-        .and_then(Value::as_object)?
-        .clone()
-        .into_iter()
-        .collect();
-    let expires_at = message
-        .content
-        .get("expires_at")
-        .and_then(|value| serde_json::from_value(value.clone()).ok())
-        .unwrap_or_else(|| message.created_at + chrono::Duration::hours(1));
-    let device_proof = match message.content.get("device_proof") {
-        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
-        Some(_) => return None,
-        None => None,
-    };
-    let unsigned = match message.content.get("unsigned") {
-        Some(Value::Object(object)) => Some(object.clone().into_iter().collect()),
-        Some(_) => return None,
-        None => None,
-    };
-    Some(DeviceMessageEnvelope {
-        message_id: arkret_identifiers::DeviceMessageId::new(
-            message.content.get("message_id")?.as_str()?.to_owned(),
-        )
-        .ok()?,
-        kind,
-        sender_principal_id: arkret_identifiers::Did::new(message.sender.clone()).ok()?,
-        sender_device_id: arkret_identifiers::DeviceId::new(
-            message
-                .content
-                .get("sender_device_id")
-                .and_then(Value::as_str)?
-                .to_owned(),
-        )
-        .ok()?,
-        recipient_principal_id: arkret_identifiers::Did::new(message.recipient.clone()).ok()?,
-        recipient_device_id: arkret_identifiers::DeviceId::new(message.device_id.clone()).ok()?,
-        sent_at: message.created_at,
-        expires_at,
-        content,
-        device_proof,
-        unsigned,
-    })
 }

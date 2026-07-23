@@ -783,18 +783,11 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 /// account-subscribe resume position, wait-for barrier state, or dropped
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
-#[endpoint(
-    operation_id = "ak.self.account.command.revoke_cursor",
-    tags("sync"),
-    summary = "Revoke a previously issued cursor authority",
-    status_codes(200, 400, 401, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<
-        arkret_models_identity::account::AccountCursorRevokeRequestBody,
-    >,
+    body: crate::extract::JsonBody<arkret_models_identity::account::AccountCursorRevokeRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> soland_http::result::JsonResult<arkret_models_identity::account::AccountCursorRevokeOutcome> {

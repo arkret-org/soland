@@ -16,7 +16,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use sha2::Sha256;
@@ -30,6 +29,7 @@ use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
 use super::{authenticated_session, now, sha256_hex};
+use crate::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -94,11 +94,7 @@ fn derive_push_target_id(
     let tag = hmac_sha256(&epoch_key, &canonical);
     Ok(format!("ak:pseudonym:push:{}", URL_SAFE_NO_PAD.encode(tag)))
 }
-#[endpoint(
-    operation_id = "ak.edge.push.command.register_device",
-    tags("push"),
-    summary = "Register a device + push gateway token (bearer or session-grant bridge)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.register_device"))]
 pub(super) async fn push_register(
     body: JsonBody<PushRegisterDeviceRequestBody>,
@@ -326,11 +322,7 @@ fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     mac.finalize().into_bytes().into()
 }
 
-#[endpoint(
-    operation_id = "ak.edge.push.command.unregister_device",
-    tags("push"),
-    summary = "Unregister a push device for the authenticated actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.unregister_device"))]
 pub(super) async fn push_unregister(
     aa: AuthArgs,
@@ -369,11 +361,7 @@ pub(super) async fn push_unregister(
     json_ok(arkret_models_integration::models_push::PushUnregisterDeviceOutcome { ok: true })
 }
 
-#[endpoint(
-    operation_id = "ak.edge.push.command.notify",
-    tags("push"),
-    summary = "Fan out a push notification through the rule engine"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.push.command.notify"))]
 pub(super) async fn push_notify(
     body: JsonBody<PushNotifyRequestBody>,

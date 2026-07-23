@@ -35,7 +35,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -48,6 +47,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, append_audit_log};
+use crate::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::AppState;
 
 mod errors;

@@ -211,12 +211,7 @@ pub(super) async fn load_owned_recovery_session(
     Ok(record)
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.create",
-    tags("identity", "recovery"),
-    summary = "Open a recovery session bound to the active policy (REC-1)",
-    status_codes(200, 201, 400, 401, 403, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.command.create")
@@ -434,12 +429,7 @@ pub(super) async fn recovery_session_create(
     json_ok(typed_recovery_session_state(&record)?)
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.recovery_session.resource.get",
-    tags("identity", "recovery"),
-    summary = "Read a recovery session status (REC-1)",
-    status_codes(200, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.resource.get")
@@ -457,12 +447,7 @@ pub(super) async fn recovery_session_get(
     json_ok(typed_recovery_session_state(&record)?)
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.submit_proof",
-    tags("identity", "recovery"),
-    summary = "Submit a recovery proof for a pending session (REC-1)",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.command.submit_proof")
@@ -1094,12 +1079,7 @@ pub(super) fn generic_recovery_proof_transcript(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.recovery_session.command.complete",
-    tags("identity", "recovery"),
-    summary = "Finalize a verified recovery session (REC-1)",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.command.complete")

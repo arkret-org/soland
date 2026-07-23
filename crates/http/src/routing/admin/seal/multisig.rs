@@ -10,7 +10,6 @@
 use arkret_identifiers::{Did, RealmId, SealId};
 use arkret_wire::{PartialSignature, ThresholdAggregator};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,17 +17,18 @@ use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
+use crate::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartialSignatureBody {
     pub signer_did: String,
     pub signature_b64: String,
     pub kid: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PartialSubmitOutcome {
     pub seal_id: String,
     pub collected: u32,
@@ -46,10 +46,7 @@ pub struct PartialSubmitOutcome {
 /// aggregate via SDK `ThresholdAggregator` and publish the threshold-signed
 /// Seal; the watchdog itself is a follow-up (in the meantime an admin can
 /// trigger aggregation via a separate ops command — not exposed yet).
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.multisig.partial",
-    tags("soland-admin", "multisig")
-)]
+#[handler]
 pub(crate) async fn admin_submit_multisig_partial(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -168,10 +165,7 @@ pub(crate) async fn admin_submit_multisig_partial(
 }
 
 /// `GET /_soland/admin/realms/{realm_id}/multisig/pending`.
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.multisig.pending",
-    tags("soland-admin", "multisig")
-)]
+#[handler]
 pub(crate) async fn admin_list_multisig_pending(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -228,7 +222,7 @@ pub(crate) async fn admin_list_multisig_pending(
 /// commit as one recoverable operation. The current persistence API cannot
 /// provide that transaction, so an in-process or KeyStore-only swap would
 /// publish a signer that no longer matches the authoritative DID document.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RotateSigningKeyOutcome {
     pub kid: String,
     pub did: String,
@@ -246,11 +240,7 @@ pub struct RotateSigningKeyOutcome {
     pub keystore_warning: Option<String>,
 }
 
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.realms.notary.rotate_signing_key",
-    tags("soland-admin", "notary"),
-    summary = "Rotate the NotaryWorker signing key"
-)]
+#[handler]
 pub(crate) async fn admin_rotate_signing_key(
     aa: AuthArgs,
     depot: &mut Depot,

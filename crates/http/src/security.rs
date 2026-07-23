@@ -312,7 +312,7 @@ fn outbound_policy(allow_private_networks: bool) -> arkret_egress_policy::Outbou
 fn egress_denial_reason(error: &str) -> &'static str {
     if error.contains("localhost") {
         "localhost"
-    } else if error.contains("private_network") {
+    } else if error.contains("private_network") || error.contains("private address") {
         "private_network"
     } else if error.contains("loopback") {
         "loopback"

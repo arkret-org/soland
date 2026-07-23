@@ -97,12 +97,7 @@ pub(super) fn recovery_policy_ref_from_summary(
         })
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.recovery_policy.resource.get",
-    tags("identity", "recovery"),
-    summary = "Read the currently accepted recovery policy (REC-1)",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.recovery_policy.resource.get"))]
 pub(super) async fn recovery_policy_get(
     aa: AuthArgs,
@@ -135,12 +130,7 @@ pub(super) async fn recovery_policy_get(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.identity.recovery_policies.get",
-    tags("identity", "recovery"),
-    summary = "List recovery policy history newest-first (REC-1)",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.recovery_policies.get")
@@ -166,12 +156,7 @@ pub(super) async fn recovery_policies_get(
     json_ok(SolandRecoveryPoliciesOutcome { policies })
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.recovery_policy.command.publish",
-    tags("identity", "recovery"),
-    summary = "Submit a ak.schema.recovery_policy.v1 policy (REC-1)",
-    status_codes(200, 201, 400, 401, 403, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_policy.command.publish")

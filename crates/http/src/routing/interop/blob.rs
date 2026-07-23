@@ -22,7 +22,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer;
 use salvo::http::{Method, ParseError, StatusCode};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::delivery::BlobState as BlobRecord;
@@ -36,6 +35,7 @@ use super::{
     is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
     realm_has_member, render_error, sha256_hex,
 };
+use crate::extract::JsonBody;
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
@@ -92,7 +92,7 @@ pub(super) fn blob_upload_outcome(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_upload"))]
 async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -369,7 +369,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     res.render(Json(outcome));
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "blob_get"))]
 async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -681,11 +681,7 @@ async fn try_recover_profile_avatar_blob(
     Some(record)
 }
 
-#[endpoint(
-    operation_id = "ak.self.blob.command.presign",
-    tags("blob"),
-    summary = "Issue a short-lived presigned blob download URL"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.blob.command.presign"))]
 async fn blob_presign(
     aa: crate::routing::system::extract::AuthArgs,

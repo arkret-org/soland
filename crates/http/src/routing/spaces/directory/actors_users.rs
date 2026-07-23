@@ -1,10 +1,6 @@
 use super::*;
 
-#[endpoint(
-    operation_id = "ak.find.directory.query.search_actors",
-    tags("directory"),
-    summary = "Search actors visible to the calling session"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_actors"))]
 pub(super) async fn search_actors(
     body: JsonBody<DirectorySearchActorsRequestBody>,
@@ -48,11 +44,7 @@ pub(super) async fn search_actors(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.find.directory.query.search_users",
-    tags("directory"),
-    summary = "Search users via a POST body to avoid query-string leakage"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_users"))]
 pub(super) async fn search_users(
     body: JsonBody<DirectorySearchUsersRequestBody>,

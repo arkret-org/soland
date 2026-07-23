@@ -35,7 +35,6 @@ use arkret_models_collaboration::objects::mimi::{
 use arkret_wire::{Audience, Base64UrlString, MlsGroupId};
 use chrono::Duration;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -50,6 +49,7 @@ use super::moderation::{
     validate_moderation_report_safety,
 };
 use super::{append_audit_log, now, sha256_hex};
+use crate::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::routing::identity::consent::{
     materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,

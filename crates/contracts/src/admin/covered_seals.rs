@@ -21,7 +21,6 @@ pub const DEFAULT_LAG_WARN_THRESHOLD: u64 = 5;
 
 /// Snapshot returned by the covered-seals admin describe endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CoveredSealsSnapshot {
     pub realm_id: String,
     /// Current MLS group epoch — a monotonically-increasing integer that
@@ -46,7 +45,6 @@ pub struct CoveredSealsSnapshot {
 /// landed; the page uses this to render an immediate "now caught up"
 /// confirmation toast without waiting for a re-fetch round-trip.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CoveredSealsAdvanceOutcome {
     pub realm_id: String,
     /// New lag count after the override landed. Typically 0; non-zero

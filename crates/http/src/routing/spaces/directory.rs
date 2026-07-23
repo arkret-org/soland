@@ -65,7 +65,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signature, Verifier};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::identity::SessionIdentityState as SessionRecord;
@@ -77,6 +76,7 @@ use super::{
     invite_token_realm_id, is_realm_deleted, now, realm_discoverability, realm_has_member,
     realm_history_visibility, realm_resolvable_to, realm_search_visible_to, sha256_hex,
 };
+use crate::extract::JsonBody;
 use crate::ids;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry, RealmDirectoryQuery};
@@ -156,7 +156,7 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");

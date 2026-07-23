@@ -7,7 +7,6 @@ use arkret_state::lattice::CellState;
 use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
 use arkret_wire::{Move, MoveSigner, UnsignedMove};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_contracts::admin::seal::{
@@ -17,6 +16,7 @@ use soland_contracts::admin::seal::{
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc, pick_admin_seal_basis};
+use crate::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
@@ -124,11 +124,7 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 
 /// `GET /_soland/admin/realms/{realm_id}/bottom` — list bottom cells in
 /// this Realm.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.bottom.list",
-    tags("soland-admin", "bottom"),
-    summary = "List Bottom cells in a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.bottom.list"))]
 pub(crate) async fn admin_list_realm_bottom(
     aa: AuthArgs,
@@ -146,11 +142,7 @@ pub(crate) async fn admin_list_realm_bottom(
 }
 
 /// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.bottom.list_global",
-    tags("soland-admin", "bottom"),
-    summary = "List Bottom cells across every Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.bottom.list_global"))]
 pub(crate) async fn admin_list_bottom_global(
     aa: AuthArgs,
@@ -185,11 +177,7 @@ pub(crate) async fn admin_list_bottom_global(
 ///   request payload provides both.
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer strand.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.bottom.repair",
-    tags("soland-admin", "bottom"),
-    summary = "Submit repair Move for a Bottom cell"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.bottom.repair"))]
 pub(crate) async fn admin_repair_bottom(
     aa: AuthArgs,

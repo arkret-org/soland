@@ -96,19 +96,19 @@ pub(super) const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "completed_at",
 ];
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryPoliciesOutcome {
     pub(super) policies: Vec<RecoveryPolicySummary>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptsOutcome {
     pub(super) receipts: Vec<SolandRecoveryReceiptItem>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptItem {
     pub(super) receipt_id: ReceiptId,
@@ -123,11 +123,11 @@ pub(super) struct SolandRecoveryReceiptItem {
     pub(super) completed_at: chrono::DateTime<chrono::Utc>,
     #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     pub(super) receipt: Value,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptPutOutcome {
     pub(super) ok: bool,
@@ -139,8 +139,6 @@ pub(super) struct SolandRecoveryReceiptPutOutcome {
     pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(transparent)]
-pub(super) struct SignedRecoveryReceiptRequestBody(
-    #[salvo(schema(value_type = serde_json::Value))] pub(super) Value,
-);
+pub(super) struct SignedRecoveryReceiptRequestBody(pub(super) Value);

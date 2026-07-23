@@ -1,10 +1,6 @@
 use super::*;
 
-#[endpoint(
-    operation_id = "ak.find.directory.query.private_contact_discovery",
-    tags("directory"),
-    summary = "Privacy-preserving contact discovery over padded identifier batches"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.find.directory.query.private_contact_discovery")
@@ -23,11 +19,7 @@ pub(super) async fn private_contact_discovery(
     ))
 }
 
-#[endpoint(
-    operation_id = "ak.find.directory.command.announce",
-    tags("directory"),
-    summary = "Announce a discoverable directory resource"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.announce"))]
 pub(super) async fn directory_announce(
     body: JsonBody<DirectoryAnnounceRequestBody>,
@@ -71,11 +63,7 @@ pub(super) async fn directory_announce(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.find.directory.command.withdraw",
-    tags("directory"),
-    summary = "Withdraw a previously-announced directory resource"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.withdraw"))]
 pub(super) async fn directory_withdraw(
     body: JsonBody<DirectoryWithdrawRequestBody>,
@@ -101,11 +89,7 @@ pub(super) async fn directory_withdraw(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.find.directory.push.command.register",
-    tags("directory"),
-    summary = "Subscribe to directory update notifications"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.push.command.register"))]
 pub(super) async fn directory_subscribe(
     body: JsonBody<DirectoryPushRegisterRequestBody>,

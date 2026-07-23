@@ -56,7 +56,7 @@ impl Handler for RequireAdmin {
         ctrl: &mut FlowCtrl,
     ) {
         let result = match depot.get_typed::<AppState>() {
-            Ok(state) => match AuthArgs::default().authenticated_session(state, req).await {
+            Ok(state) => match AuthArgs.authenticated_session(state, req).await {
                 Ok(session) => require_admin_scope(state, req, &session, self.scope)
                     .await
                     .map(|_| ()),
@@ -137,7 +137,6 @@ pub fn admin_router() -> Router {
     // Registered ahead of `router()` (the `{resource}` collection
     // wildcard) at the root so the concrete `bottom` segment wins.
     Router::with_path("admin")
-        .oapi_tag("soland-admin")
         .hoop(RequireAdmin::scope(arkret_models_identity::admin_grant::admin_scopes::ADMIN_READ))
         .push(Router::with_path("realms").post(collection::admin_create_realm))
         .push(

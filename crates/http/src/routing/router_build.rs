@@ -2,7 +2,6 @@ use salvo::affix_state;
 use salvo::cors::{Cors, CorsHandler};
 use salvo::http::Method;
 use salvo::http::request::SecureMaxSize;
-use salvo::oapi::RouterExt;
 use salvo::prelude::*;
 use soland_http::ratelimit::{RateLimiter, RateLimiterConfig, RateLimiterMiddleware};
 
@@ -148,7 +147,6 @@ pub fn router_with_rate_limiter_and_request_size_config(
 /// here only supplies the shared `_arkret` root.
 fn api_v1_router(conformance_harness_enabled: bool) -> Router {
     let mut router = Router::with_path("_arkret")
-        .oapi_tag("api")
         .hoop(wait_for_sync_token)
         // `/_arkret/describe` (root meta). Integration describe is mounted
         // under `/_soland/self/integration/describe`.
@@ -237,7 +235,6 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
 
 fn soland_local_router() -> Router {
     Router::new()
-        .oapi_tag("soland-local")
         // Product-local routes still accept protocol wait tokens where they
         // expose reducer-backed read state.
         .hoop(wait_for_sync_token)

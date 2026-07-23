@@ -2,17 +2,17 @@
 
 use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
+use crate::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` response.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct GcCandidatesOutcome {
     pub realm_id: String,
     pub candidates: Vec<crate::gc::GcCandidate>,
@@ -21,11 +21,7 @@ pub struct GcCandidatesOutcome {
 
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.admin.spaces.gc_candidates",
-    tags("soland-admin", "gc"),
-    summary = "List GC-eligible Moves for a Space"
-)]
+#[handler]
 pub(crate) async fn admin_list_gc_candidates(
     aa: AuthArgs,
     depot: &mut Depot,

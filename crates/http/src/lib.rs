@@ -9,6 +9,7 @@ pub mod compactor;
 pub mod config;
 pub mod cursor;
 pub mod error;
+pub mod extract;
 pub mod gc;
 pub mod http_signature;
 pub mod ids;

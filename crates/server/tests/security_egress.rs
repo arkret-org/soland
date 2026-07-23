@@ -66,7 +66,7 @@ fn production_egress_rejects_dns_private_answers() {
         &[IpAddr::V4(Ipv4Addr::new(10, 42, 0, 12))],
     )
     .unwrap_err();
-    assert!(error.contains("private_network"));
+    assert!(error.contains("private address"));
 }
 
 #[test]

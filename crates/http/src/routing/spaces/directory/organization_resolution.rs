@@ -1,10 +1,6 @@
 use super::*;
 
-#[endpoint(
-    operation_id = "ak.find.directory.query.search_organizations",
-    tags("directory"),
-    summary = "Fuzzy-text search across known organizations (demo data for now)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_organizations"))]
 pub(super) async fn search_organizations(
     body: JsonBody<DirectorySearchOrganizationsRequestBody>,
@@ -38,11 +34,7 @@ pub(super) async fn search_organizations(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.find.directory.query.resolve_organization",
-    tags("directory"),
-    summary = "Resolve an organization by organization_id or handle"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_organization"))]
 pub(super) async fn resolve_organization(
     body: JsonBody<DirectoryResolveOrganizationRequestBody>,

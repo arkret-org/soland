@@ -133,11 +133,7 @@ pub(super) fn signed_agent_selector_claim(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.find.directory.query.resolve_agent_selector",
-    tags("directory"),
-    summary = "Resolve a controller-scoped native personal agent selector exactly"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.find.directory.query.resolve_agent_selector")

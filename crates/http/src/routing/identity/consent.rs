@@ -15,7 +15,6 @@ use arkret_models_collaboration::account_lifecycle::{
 };
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::events::ProjectedEvent as ProjectionEventRecord;
@@ -23,6 +22,7 @@ use soland_application::identity::{AccountDataState, ConsentCellRecord, FindAcco
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
+use crate::extract::{JsonBody, PathParam};
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
@@ -102,11 +102,7 @@ async fn project_consent_revoke_operation(
     Ok(())
 }
 
-#[endpoint(
-    operation_id = "ak.self.consent.query.list",
-    tags("consent"),
-    summary = "List consent cells visible to the authenticated holder"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.query.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
@@ -131,12 +127,7 @@ async fn list_consent_cells(
     json_ok(ConsentCellList { ok: true, cells })
 }
 
-#[endpoint(
-    operation_id = "ak.self.consent.resource.get",
-    tags("consent"),
-    summary = "Read one holder-private consent cell",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.resource.get"))]
 async fn get_consent_cell(
     aa: AuthArgs,
@@ -167,12 +158,7 @@ async fn get_consent_cell(
     json_ok(consent_response(&cell, now())?)
 }
 
-#[endpoint(
-    operation_id = "ak.self.consent.command.grant",
-    tags("consent"),
-    summary = "Grant scoped consent to a peer DID",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.grant"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
@@ -213,12 +199,7 @@ async fn grant_consent_cell(
     json_ok(consent_response(&updated, now())?)
 }
 
-#[endpoint(
-    operation_id = "ak.self.consent.command.revoke",
-    tags("consent"),
-    summary = "Revoke scoped consent from a peer DID",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.revoke"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
@@ -268,12 +249,7 @@ async fn revoke_consent_cell(
     json_ok(consent_response(&updated, now())?)
 }
 
-#[endpoint(
-    operation_id = "ak.self.consent.command.request",
-    tags("consent"),
-    summary = "Open a scoped consent request",
-    status_codes(200, 201, 400, 401, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.request"))]
 async fn request_consent_cell(
     aa: AuthArgs,

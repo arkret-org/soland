@@ -27,7 +27,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -38,6 +37,7 @@ use super::{
     append_audit_log, bearer_token, handle_for_did, normalize_localpart, now, render_error,
     validate_device_id, validate_did,
 };
+use crate::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{
     DevLoginRequestBody, LogoutOutcome, SessionGrantIntrospectOutcome,

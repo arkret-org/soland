@@ -50,7 +50,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signer as _;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::events::{
@@ -65,6 +64,7 @@ use soland_application::projection::{MlsProjectionEffect, ProjectionEffectView};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
+use crate::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
@@ -231,11 +231,7 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
         .enqueue_device_revoke_mls_removals(actor_id, device_id, revoke_event_id, now())
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.keypackages.upload.create",
-    tags("keys"),
-    summary = "Upload a fresh MLS KeyPackage (G3.S1)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.upload.create"))]
 async fn upload_keypackage(
     aa: AuthArgs,
@@ -498,11 +494,7 @@ async fn upload_keypackage(
 
 // ── claim ─────────────────────────────────────────────────────────────
 
-#[endpoint(
-    operation_id = "ak.peer.keys.keypackages.command.claim",
-    tags("peer", "keys"),
-    summary = "Atomically claim a remote participant KeyPackage"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.command.claim"))]
 async fn peer_claim_keypackage(
     depot: &mut Depot,
@@ -692,11 +684,7 @@ async fn peer_claim_keypackage(
     Err(peer_claim_failed())
 }
 
-#[endpoint(
-    operation_id = "ak.peer.keys.keypackages.query.claim",
-    tags("peer", "keys"),
-    summary = "Query an uncertain peer KeyPackage claim result"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.query.claim"))]
 async fn peer_query_keypackage_claim(
     depot: &mut Depot,
@@ -1246,11 +1234,7 @@ fn peer_claim_failed() -> AppError {
         .with_wire_code("claim_failed")
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.keypackages.command.claim",
-    tags("keys"),
-    summary = "Atomically claim a published KeyPackage for a Welcome (G3.S1)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.claim"))]
 async fn claim_keypackage(
     aa: AuthArgs,
@@ -1497,11 +1481,7 @@ pub(crate) async fn claim_keypackages_for_request(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.keypackages.command.consume",
-    tags("keys"),
-    summary = "Mark claimed KeyPackages consumed by an MLS epoch"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.consume"))]
 async fn consume_keypackages(
     aa: AuthArgs,
@@ -1918,11 +1898,7 @@ async fn validate_sidecar_keypackage_consume(
     Ok(())
 }
 
-#[endpoint(
-    operation_id = "ak.self.keys.keypackages.command.revoke",
-    tags("keys"),
-    summary = "Revoke unconsumed KeyPackages for a device"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.revoke"))]
 async fn revoke_keypackages(
     aa: AuthArgs,

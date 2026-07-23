@@ -16,7 +16,6 @@ pub mod reasons {
 }
 use salvo::async_trait;
 use salvo::http::StatusCode;
-use salvo::oapi::{self, Components, EndpointOutRegister, Operation, ToSchema};
 use salvo::prelude::*;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -199,13 +198,12 @@ mod tests {
 
 // ── AppError + typed-endpoint integration ────────────────────────────────
 //
-// `AppError` is the typed error returned by `#[endpoint]` handlers. It carries
+// `AppError` is the typed error returned by handlers. It carries
 // a canonical [`ErrorCode`] (registry-locked), a human-readable message, and
-// an optional HTTP status override. Both `Writer` and `EndpointOutRegister`
-// are implemented so the same value drives both runtime rendering and
-// OpenAPI doc generation.
+// an optional HTTP status override. `Writer` is implemented so the same value drives runtime
+// rendering.
 
-/// Typed error returned by `#[endpoint]` handlers.
+/// Typed error returned by handlers.
 #[derive(Debug, Clone)]
 pub struct AppError {
     pub code: ErrorCode,
@@ -229,9 +227,8 @@ pub struct AppError {
     /// `error.details.reason_detail` so on-call has something more
     /// specific than the canonical `code` to grep for. The shape is
     /// intentionally `Option<String>` (no enum, no schema) because the
-    /// string is unstable across releases — see the [`EndpointOutRegister`]
-    /// doc on the response: clients MUST NOT parse this value, only
-    /// log/display it.
+    /// string is unstable across releases — clients MUST NOT parse this value and may only log or
+    /// display it.
     pub reason_detail: Option<Box<str>>,
     /// Deployment-local diagnostic that is rendered only in development mode.
     ///
@@ -437,50 +434,5 @@ impl Writer for AppError {
         } else {
             render_error(res, status, &wire, public_message);
         }
-    }
-}
-
-impl EndpointOutRegister for AppError {
-    fn register(components: &mut Components, operation: &mut Operation) {
-        // Reuse `arkret_wire::problem_details::ErrorEnvelope` (already `ToSchema` under the
-        // SDK's `salvo` feature) as the response body schema for every error
-        // status. The wire representation is the spec-canonical
-        // `{ ok: false, error: { code, message, ... }, request_id }`.
-        //
-        // Stable protocol rejections may carry `error.details.reason_code`;
-        // opaque diagnostics may carry `error.details.reason_detail`.
-        // The SDK schema already types `details` as `serde_json::Value`,
-        // so the field is documentation-only — describe its shape and
-        // stability contract in each response's `description` rather
-        // than mutating the SDK-owned schema.
-        let envelope_schema =
-            <arkret_wire::problem_details::ErrorEnvelope as ToSchema>::to_schema(components);
-        const ERROR_DETAILS_DOC: &str = " (envelope details may contain stable \
-            `reason_code: string` and/or unstable `reason_detail: string`; do not parse \
-            `reason_detail`)";
-        let response = |description: &'static str| -> oapi::Response {
-            let combined = format!("{description}{ERROR_DETAILS_DOC}");
-            oapi::Response::new(combined).add_content(
-                "application/json",
-                oapi::Content::new(envelope_schema.clone()),
-            )
-        };
-
-        operation.responses.insert("400", response("Bad request"));
-        operation
-            .responses
-            .insert("401", response("Unauthenticated"));
-        operation
-            .responses
-            .insert("403", response("Capability denied"));
-        operation.responses.insert("404", response("Not found"));
-        operation.responses.insert("409", response("Conflict"));
-        operation.responses.insert("429", response("Rate limited"));
-        operation
-            .responses
-            .insert("500", response("Internal server error"));
-        operation
-            .responses
-            .insert("501", response("Unsupported feature or not implemented"));
     }
 }

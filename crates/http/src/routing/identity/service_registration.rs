@@ -8,7 +8,6 @@ use arkret_models_identity::service_identity::{
 use arkret_wire::ServiceType;
 use ed25519_dalek::Signer;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::identity::{
@@ -23,13 +22,10 @@ use super::webvh_validation::{
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
     verify_webvh_log_proof,
 };
+use crate::extract::{JsonBody, QueryParam};
 use crate::state::AppState;
 
-#[endpoint(
-    operation_id = "ak.root.identity.service_registration.command.ensure",
-    tags("identity"),
-    summary = "Idempotently ensure a client-controlled service DID registration"
-)]
+#[handler]
 pub(crate) async fn ensure(
     depot: &mut Depot,
     req: &mut Request,
@@ -108,11 +104,7 @@ pub(crate) async fn ensure(
     }
 }
 
-#[endpoint(
-    operation_id = "ak.root.identity.service_registration.resource.get",
-    tags("identity"),
-    summary = "Read a service DID registration without creating it"
-)]
+#[handler]
 pub(crate) async fn get(
     depot: &mut Depot,
     req: &mut Request,

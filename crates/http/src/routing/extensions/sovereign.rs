@@ -26,8 +26,6 @@
 //! they build an HTTP client.
 
 use salvo::http::StatusCode;
-use salvo::oapi::ToSchema;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -38,6 +36,7 @@ use soland_application::federation::{
 use soland_http::error::AppError;
 
 use crate::config::AppConfig;
+use crate::extract::{JsonBody, PathParam, QueryParam};
 use crate::routing::admin::{RequireAdmin, require_admin_principal};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -97,7 +96,7 @@ pub fn assert_enclave_invariants(config: &AppConfig) -> EnclaveAssertionResult {
 /// `arkret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
 pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ak.profile.sovereign_enclave.v1";
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct ConfigureDeploymentRequestBody {
     profile: Option<String>,
     upstream_main: Option<String>,
@@ -106,7 +105,7 @@ struct ConfigureDeploymentRequestBody {
     upstream_available: Option<bool>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct RegisterEnclaveRequestBody {
     server_id: String,
     base_url: String,
@@ -114,7 +113,7 @@ struct RegisterEnclaveRequestBody {
     trust_chain: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct RealmCreateRequestBody {
     realm_id: Option<String>,
     hosted_on: String,
@@ -122,14 +121,14 @@ struct RealmCreateRequestBody {
     external_invite_policy: Option<String>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct ExternalInviteRequestBody {
     target_realm: String,
     invitee: String,
     inviter: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct AcceptExternalInviteRequestBody {
     invite_token: String,
     actor_id: String,
@@ -137,32 +136,32 @@ struct AcceptExternalInviteRequestBody {
     target_host: Option<String>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct NetworkLinkRequestBody {
     upstream_available: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct StoreForwardMessageRequestBody {
     realm_id: String,
     actor: String,
     content: Value,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct IngestStoreForwardRequestBody {
     #[serde(default)]
     operations: Vec<StoreForwardOperationBody>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct EnclaveProxyRequestBody {
     target: String,
     path: String,
     actor: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct TrustedEnclaveBody {
     server_id: String,
     base_url: String,
@@ -171,14 +170,14 @@ struct TrustedEnclaveBody {
     registered_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct StoreAndForwardStatusBody {
     upstream_available: bool,
     queue_depth: usize,
     received: usize,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct DeploymentInfoResponseBody {
     profile: String,
     server_id: String,
@@ -190,7 +189,7 @@ struct DeploymentInfoResponseBody {
     store_and_forward: StoreAndForwardStatusBody,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct ConfigureDeploymentResponseBody {
     ok: bool,
     profile: String,
@@ -200,14 +199,14 @@ struct ConfigureDeploymentResponseBody {
     upstream_available: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct RegisterEnclaveResponseBody {
     ok: bool,
     server_id: String,
     trusted: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct RealmCreateResponseBody {
     ok: bool,
     realm_id: String,
@@ -215,13 +214,13 @@ struct RealmCreateResponseBody {
     hosted_on: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct RealmFrontierBody {
     enclave: i64,
     main: i64,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct RealmInfoResponseBody {
     realm_id: String,
     profile: String,
@@ -234,7 +233,7 @@ struct RealmInfoResponseBody {
     frontier: RealmFrontierBody,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct ExternalInviteResponseBody {
     ok: bool,
     invite_token: String,
@@ -243,7 +242,7 @@ struct ExternalInviteResponseBody {
     invitee: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct SessionMetadataBody {
     realm: String,
     bound_node: String,
@@ -251,13 +250,13 @@ struct SessionMetadataBody {
     actor: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct AcceptExternalInviteResponseBody {
     ok: bool,
     session_metadata: SessionMetadataBody,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct ExternalAccountStatusResponseBody {
     did: String,
     external_via_enclave: bool,
@@ -267,19 +266,19 @@ struct ExternalAccountStatusResponseBody {
     trust_chain_profile: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct GuardRealmAccessResponseBody {
     realm_id: String,
     visible: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct DirectoryRealmBody {
     realm_id: String,
     profile: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct DirectoryRealmsResponseBody {
     results: Vec<DirectoryRealmBody>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,19 +286,19 @@ struct DirectoryRealmsResponseBody {
     query: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct EnclaveProxyResponseBody {
     ok: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct NetworkLinkResponseBody {
     ok: bool,
     upstream_available: bool,
     store_and_forward: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct StoreForwardMessageResponseBody {
     ok: bool,
     operation_id: String,
@@ -309,7 +308,7 @@ struct StoreForwardMessageResponseBody {
     queue_depth: usize,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 struct StoreForwardOperationBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     id: Option<String>,
@@ -338,21 +337,21 @@ struct StoreForwardOperationBody {
     forwarded_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct DrainStoreForwardResponseBody {
     ok: bool,
     operations: Vec<StoreForwardOperationBody>,
     queue_depth: usize,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct IngestStoreForwardResponseBody {
     ok: bool,
     ingested: i64,
     converged: bool,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct EnclaveFrontierResponseBody {
     realm_id: String,
     main_frontier: i64,
@@ -361,7 +360,7 @@ struct EnclaveFrontierResponseBody {
     status: String,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct AuditEntryBody {
     subject: String,
     action: String,
@@ -372,7 +371,7 @@ struct AuditEntryBody {
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize)]
 struct DeploymentAuditResponseBody {
     entries: Vec<AuditEntryBody>,
 }
@@ -411,7 +410,7 @@ pub(super) fn self_router() -> Router {
         .push(Router::with_path("directory/realms").get(directory_realms))
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.info"))]
 async fn deployment_info(
     aa: AuthArgs,
@@ -451,7 +450,7 @@ async fn deployment_info(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.configure"))]
 async fn configure_deployment(
     aa: AuthArgs,
@@ -494,7 +493,7 @@ async fn configure_deployment(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.register_enclave"))]
 async fn register_enclave(
     aa: AuthArgs,
@@ -537,7 +536,7 @@ async fn register_enclave(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.realm_create"))]
 async fn realm_create(
     aa: AuthArgs,
@@ -590,7 +589,7 @@ async fn realm_create(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.realm_info"))]
 async fn realm_info(
     aa: AuthArgs,
@@ -620,7 +619,7 @@ async fn realm_info(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.external_invite"))]
 async fn external_invite(
     aa: AuthArgs,
@@ -681,7 +680,7 @@ async fn external_invite(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "account.accept_external_invite"))]
 async fn accept_external_invite(
     aa: AuthArgs,
@@ -746,7 +745,7 @@ async fn accept_external_invite(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.external_account_status"))]
 async fn external_account_status(
     aa: AuthArgs,
@@ -771,7 +770,7 @@ async fn external_account_status(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.guard_realm_access"))]
 async fn guard_realm_access(
     aa: AuthArgs,
@@ -804,7 +803,7 @@ async fn guard_realm_access(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.directory_realms"))]
 async fn directory_realms(
     aa: AuthArgs,
@@ -841,7 +840,7 @@ async fn directory_realms(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.enclave_proxy"))]
 async fn enclave_proxy(
     aa: AuthArgs,
@@ -875,7 +874,7 @@ async fn enclave_proxy(
     ))
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.network_link"))]
 async fn set_network_link(
     aa: AuthArgs,
@@ -896,7 +895,7 @@ async fn set_network_link(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_message"))]
 async fn store_forward_message(
     aa: AuthArgs,
@@ -956,7 +955,7 @@ async fn store_forward_message(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_drain"))]
 async fn drain_store_forward(
     aa: AuthArgs,
@@ -991,7 +990,7 @@ async fn drain_store_forward(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.store_forward_ingest"))]
 async fn ingest_store_forward(
     aa: AuthArgs,
@@ -1046,7 +1045,7 @@ async fn ingest_store_forward(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.enclave_frontier"))]
 async fn enclave_frontier(
     aa: AuthArgs,
@@ -1083,7 +1082,7 @@ async fn enclave_frontier(
     })
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "deployment.audit"))]
 async fn deployment_audit(
     aa: AuthArgs,

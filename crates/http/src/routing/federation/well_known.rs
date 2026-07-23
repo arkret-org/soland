@@ -18,7 +18,7 @@ pub fn well_known_arkret_router() -> Router {
     Router::with_path(".well-known/arkret").get(well_known_arkret)
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct WellKnownArkretEndpoints {
     openapi: String,
     peer_events: String,
@@ -26,7 +26,7 @@ struct WellKnownArkretEndpoints {
     peer_snapshot_head: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct WellKnownArkretOutcome {
     schema: String,
     service_id: String,
@@ -37,11 +37,7 @@ struct WellKnownArkretOutcome {
     version: String,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.well_known.arkret",
-    tags("federation"),
-    summary = "Server description for federation discovery"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.well_known.arkret"))]
 async fn well_known_arkret(depot: &mut Depot) -> JsonResult<WellKnownArkretOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");

@@ -28,7 +28,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::Signer as _;
 use salvo::http::HeaderValue;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::events::CanonicalEventRecord;
@@ -37,6 +36,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
+use crate::extract::JsonBody;
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -71,11 +71,7 @@ struct IceConfigRequestContext {
     pub force_turn: bool,
 }
 
-#[endpoint(
-    operation_id = "ak.self.media.query.ice_config",
-    tags("media"),
-    summary = "Issue signed ICE config"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.media.query.ice_config"))]
 async fn arkret_ice_config(
     aa: AuthArgs,
@@ -1342,12 +1338,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
         .with_wire_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
-#[endpoint(
-    operation_id = "ak.self.call.media.exchange.issue_token",
-    tags("media", "calls"),
-    summary = "Exchange a session-focus for a backend media token + participant_binding (AKP-0010)",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token"))]
 async fn arkret_rtc_token(
     aa: AuthArgs,

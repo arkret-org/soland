@@ -3,7 +3,6 @@
 use arkret_models_integration::{
     AppletInstallOutcome, AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces,
 };
-use salvo::oapi::ToSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -77,7 +76,7 @@ pub struct GhostActorRecord {
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletRevokeRecordOutcome {
     pub applet_id: String,
     pub status: String,
@@ -90,7 +89,7 @@ pub struct AppletRevokeRecordOutcome {
     pub ghost_actor_ids: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletInstallPaths {
     pub preview_path: String,
     pub commit_path: String,
@@ -98,7 +97,7 @@ pub struct AppletInstallPaths {
     pub ghost_actor_provision_path: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletProtocolDescribeOutcome {
     pub contract: String,
     pub install: AppletInstallPaths,
@@ -107,7 +106,7 @@ pub struct AppletProtocolDescribeOutcome {
     pub package_schema: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletManifestRegisterRequestBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub manifest: Option<Value>,
@@ -121,7 +120,7 @@ pub struct AppletManifestRegisterRequestBody {
     pub trusted_registry_did: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletView {
     pub applet_id: String,
     pub namespace: String,
@@ -147,7 +146,7 @@ pub struct AppletView {
     pub manifest: AppletManifest,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct AppletExternalUserInput {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -157,7 +156,7 @@ pub struct AppletExternalUserInput {
     pub display_name: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletGhostIngressRequestBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub external_user: Option<AppletExternalUserInput>,
@@ -171,14 +170,14 @@ pub struct AppletGhostIngressRequestBody {
     pub realm_id: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletPortalMessageRequestBody {
     pub realm_id: String,
     #[serde(default)]
     pub payload: Value,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletPortalMessageOutcome {
     pub message_id: String,
     pub event_id: String,
@@ -187,7 +186,7 @@ pub struct AppletPortalMessageOutcome {
     pub portal_realm_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletGhostIngressOutcome {
     pub applet_id: String,
     pub ghost_actor_id: String,

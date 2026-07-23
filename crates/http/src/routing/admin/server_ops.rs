@@ -9,7 +9,6 @@
 //! (see [`super::collection`]); salvo router fallthrough keeps the three
 //! sub-trees from colliding.
 
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -18,19 +17,20 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::audit::append_audit_log;
 use super::require_admin_principal;
+use crate::extract::{JsonBody, PathParam};
 use crate::routing::identity::account::{AccountLifecycleChange, set_account_lifecycle_state};
 use crate::routing::identity::auth::revoke_device_record;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminServerStatusCounts {
     accounts: Option<usize>,
     devices: Option<usize>,
     realms: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminServerStatusOutcome {
     status: String,
     service_id: String,
@@ -44,7 +44,7 @@ struct AdminServerStatusOutcome {
 /// `GET /_soland/admin/server/info` response. Mirrors sodmin's
 /// `ServerInfo` DTO (`sodmin/src/types/server.rs`). Node version / build /
 /// key config the operator dashboard surfaces at a glance.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminServerInfoOutcome {
     server_version: String,
     protocol_version: Option<String>,
@@ -61,7 +61,7 @@ struct AdminServerInfoOutcome {
 /// `GET /_soland/admin/server/stats` response. Mirrors sodmin's
 /// `ServerStats` DTO. Counts are best-effort snapshots off the live
 /// persistence / projection stores; unavailable counters fall back to 0.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminServerStatsOutcome {
     actor_count: u64,
     active_actor_count: u64,
@@ -75,20 +75,20 @@ struct AdminServerStatsOutcome {
     generated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct SolandAdminAccountStatusRequestBody {
     status: String,
     #[serde(default)]
     reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct AdminAccountStateActionRequestBody {
     #[serde(default)]
     reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminAccountLifecycleOutcome {
     account_id: String,
     did: String,
@@ -106,7 +106,7 @@ struct AdminAccountLifecycleOutcome {
     devices_revoked: usize,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 struct SolandAdminRevokeDeviceRequestBody {
     #[serde(default)]
     actor: Option<String>,
@@ -116,7 +116,7 @@ struct SolandAdminRevokeDeviceRequestBody {
     reason: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct SolandAdminRevokeDeviceOutcome {
     actor: String,
     device_id: String,
@@ -124,7 +124,7 @@ struct SolandAdminRevokeDeviceOutcome {
     revoked_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct AdminModerationQueueOutcome {
     items: Vec<super::moderation::ModerationQueueItemOutcome>,
     total: usize,
@@ -152,12 +152,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("moderation/queue").get(get_moderation_queue))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.get_server_status",
-    tags("soland-admin"),
-    summary = "Read operator admin status",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_status"))]
 async fn get_server_status(
     aa: AuthArgs,
@@ -199,12 +194,7 @@ async fn get_server_status(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.get_server_info",
-    tags("soland-admin"),
-    summary = "Read operator node info (version / build / key config)",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_info"))]
 async fn get_server_info(
     aa: AuthArgs,
@@ -226,12 +216,7 @@ async fn get_server_info(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.get_server_stats",
-    tags("soland-admin"),
-    summary = "Read operator node counters (accounts / realms / devices / storage)",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_server_stats"))]
 async fn get_server_stats(
     aa: AuthArgs,
@@ -296,12 +281,7 @@ async fn get_server_stats(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.update_account_status",
-    tags("soland-admin"),
-    summary = "Set an account moderation status",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.update_account_status"))]
 async fn update_account_status(
     aa: AuthArgs,
@@ -323,12 +303,7 @@ async fn update_account_status(
     admin_set_account_status(state, &session.actor, &account_id, &status, body.reason).await
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.lock_account",
-    tags("soland-admin"),
-    summary = "Lock an account and revoke active access",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.lock_account"))]
 async fn lock_account(
     aa: AuthArgs,
@@ -340,12 +315,7 @@ async fn lock_account(
     admin_account_state_action(aa, depot, req, account_id, body, "locked").await
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.unlock_account",
-    tags("soland-admin"),
-    summary = "Return a locked account to active state",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.unlock_account"))]
 async fn unlock_account(
     aa: AuthArgs,
@@ -357,12 +327,7 @@ async fn unlock_account(
     admin_account_state_action(aa, depot, req, account_id, body, "active").await
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.suspend_account",
-    tags("soland-admin"),
-    summary = "Suspend an account while leaving existing sessions to expire naturally",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.suspend_account"))]
 async fn suspend_account(
     aa: AuthArgs,
@@ -374,12 +339,7 @@ async fn suspend_account(
     admin_account_state_action(aa, depot, req, account_id, body, "suspended").await
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.unsuspend_account",
-    tags("soland-admin"),
-    summary = "Return a suspended account to active state",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.unsuspend_account"))]
 async fn unsuspend_account(
     aa: AuthArgs,
@@ -391,12 +351,7 @@ async fn unsuspend_account(
     admin_account_state_action(aa, depot, req, account_id, body, "active").await
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.deactivate_account",
-    tags("soland-admin"),
-    summary = "Deactivate an account and revoke active access",
-    status_codes(200, 400, 401, 403, 404, 409, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.deactivate_account"))]
 async fn deactivate_account(
     aa: AuthArgs,
@@ -536,12 +491,7 @@ fn account_lifecycle_change_response(
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.revoke_device",
-    tags("soland-admin"),
-    summary = "Revoke a device as an administrator",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.revoke_device"))]
 async fn revoke_device(
     aa: AuthArgs,
@@ -593,12 +543,7 @@ async fn revoke_device(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.get_moderation_queue",
-    tags("soland-admin", "moderation"),
-    summary = "List canonical moderation queue items",
-    status_codes(200, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.get_moderation_queue"))]
 async fn get_moderation_queue(
     aa: AuthArgs,

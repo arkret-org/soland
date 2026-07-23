@@ -34,7 +34,6 @@ use arkret_hlc::{Cursor, CursorPurpose};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -44,6 +43,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
 
 use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
+use crate::extract::JsonBody;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -67,28 +67,28 @@ const SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS: &[&str] = &[
     "created_at",
 ];
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct EncodeVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     input: Value,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct CanonicalJsonDigestOutcome {
     canonical_json: String,
     digest: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct SignVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     event: Value,
     signing_key_ref: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SignVectorOutcome {
     canonical_bytes: String,
     digest: String,
@@ -97,80 +97,77 @@ pub struct SignVectorOutcome {
     algorithm: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HlcClockVectorItem {
     actor: String,
     hlc: String,
     #[serde(default)]
-    #[salvo(schema(value_type = serde_json::Value))]
     payload_hint: Value,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct HlcMergeVectorRequest {
     vector_id: String,
     clocks: Vec<HlcClockVectorItem>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct HlcMergeVectorOutcome {
     ordered: Vec<HlcClockVectorItem>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct CursorVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+
     events: Vec<Value>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct CursorVectorOutcome {
     cursor: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct EnvelopeVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     envelope: Value,
     ciphertext_base64url: Option<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct CanonicalBytesDigestOutcome {
     canonical_bytes: String,
     digest: String,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct RedactVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     event: Value,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     redaction: Value,
     viewer_did: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct RedactVectorOutcome {
-    #[salvo(schema(value_type = serde_json::Value))]
     projected_event: Value,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct EraseReceiptVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     event: Value,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     receipt: Value,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct EraseReceiptVectorOutcome {
-    #[salvo(schema(value_type = serde_json::Value))]
     projected_event: Value,
     outcome: String,
     retained_stub_digest: String,
@@ -179,21 +176,20 @@ pub struct EraseReceiptVectorOutcome {
     legal_hold_blocked: bool,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 pub struct SnapshotVectorRequest {
     vector_id: String,
-    #[salvo(schema(value_type = serde_json::Value))]
+
     manifest: Value,
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+
     chunks: Vec<Value>,
     #[serde(default)]
-    #[salvo(schema(value_type = serde_json::Value))]
     signature: Option<Value>,
     #[serde(default)]
     revoked_signer_dids: Vec<String>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct SnapshotVectorOutcome {
     vector_id: String,
     manifest_digest: String,
@@ -206,43 +202,37 @@ pub struct SnapshotVectorOutcome {
     signed_transcript_fields: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct QueryVectorRequest {
     vector_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[salvo(schema(value_type = serde_json::Value))]
     query: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
     rows: Option<Vec<Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
     dataset: Option<Vec<Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     cursor: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     unauthorized_fields: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
     events: Option<Vec<Value>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
     chunks: Option<Vec<Value>>,
     #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
-    #[salvo(schema(value_type = serde_json::Value))]
     extra: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct QueryVectorFrontier {
     barrier_cursor: String,
     row_count: usize,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct QueryVectorOutcome {
     vector_id: String,
-    #[salvo(schema(value_type = Vec<serde_json::Value>))]
+
     items: Vec<Value>,
     has_more: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -250,7 +240,7 @@ pub struct QueryVectorOutcome {
     frontier: QueryVectorFrontier,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 pub struct ChaosOperationOutcome {
     operation_id: String,
     canonical_event: Option<CanonicalEventDiagnostic>,
@@ -258,7 +248,7 @@ pub struct ChaosOperationOutcome {
     consistent: bool,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct CanonicalEventDiagnostic {
     event_id: String,
     actor_id: String,
@@ -270,7 +260,7 @@ struct CanonicalEventDiagnostic {
     received_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct ProjectionEventDiagnostic {
     event_id: String,
     realm_id: String,
@@ -303,11 +293,7 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.encode",
-    tags("conformance"),
-    summary = "Run a canonical-JSON / digest conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.encode"))]
 pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<CanonicalJsonDigestOutcome> {
     super::ensure_enabled()?;
@@ -325,11 +311,7 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.sign",
-    tags("conformance"),
-    summary = "Run a signature-binding conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.sign"))]
 pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOutcome> {
     super::ensure_enabled()?;
@@ -377,11 +359,7 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.hlc_merge",
-    tags("conformance"),
-    summary = "Run an HLC ordering conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.hlc_merge"))]
 pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcMergeVectorOutcome> {
     super::ensure_enabled()?;
@@ -417,11 +395,7 @@ pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcM
     json_ok(HlcMergeVectorOutcome { ordered })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.cursor",
-    tags("conformance"),
-    summary = "Run an opaque-cursor conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.cursor"))]
 pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVectorOutcome> {
     super::ensure_enabled()?;
@@ -467,11 +441,7 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.envelope",
-    tags("conformance"),
-    summary = "Run an encrypted-envelope canonical-digest conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.envelope"))]
 pub async fn envelope(
     body: JsonBody<EnvelopeVectorRequest>,
@@ -498,11 +468,7 @@ pub async fn envelope(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.redact",
-    tags("conformance"),
-    summary = "Run a redaction visibility / projection conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.redact"))]
 pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVectorOutcome> {
     super::ensure_enabled()?;
@@ -555,11 +521,7 @@ pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVec
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.erase_receipt",
-    tags("conformance"),
-    summary = "Run a hard-erasure receipt / snapshot-pruning verification-stub conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.erase_receipt"))]
 pub async fn erase_receipt(
     body: JsonBody<EraseReceiptVectorRequest>,
@@ -668,11 +630,7 @@ fn projected_event_carries_plaintext(projected: &Value, original: &Value) -> boo
     serialized.contains(body) || serialized.contains(&body_digest)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.snapshot",
-    tags("conformance"),
-    summary = "Run a snapshot manifest / chunk integrity conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.snapshot"))]
 pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<SnapshotVectorOutcome> {
     super::ensure_enabled()?;
@@ -765,11 +723,7 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.query",
-    tags("conformance"),
-    summary = "Run a query filter / sort / pagination conformance vector"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.query"))]
 pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVectorOutcome> {
     super::ensure_enabled()?;
@@ -833,11 +787,7 @@ pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVector
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.conformance.chaos_operation",
-    tags("conformance"),
-    summary = "Inspect a committed operation during local chaos testing"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.chaos_operation"))]
 pub async fn chaos_operation(
     depot: &mut Depot,

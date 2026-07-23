@@ -77,11 +77,7 @@ pub(crate) fn account_existing_session_error(
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.auth.dev_login",
-    tags("auth"),
-    summary = "Development bearer-token login"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.auth.dev_login"))]
 pub(super) async fn dev_login(
     depot: &mut Depot,

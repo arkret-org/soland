@@ -23,7 +23,6 @@ use arkret_models_collaboration::governance::grant_constraint::{
 use arkret_models_collaboration::governance::invite_addressing::InviteDeliveryTarget;
 use arkret_models_collaboration::governance::operation_wire::Invite;
 use arkret_wire::{AuthzDecision, Facet, InviteState};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -31,6 +30,7 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
 use crate::authz::{Constraint, GrantDecisionVerdict};
+use crate::extract::JsonBody;
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -43,11 +43,7 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("authz/invites").get(invites))
 }
 
-#[endpoint(
-    operation_id = "ak.self.authz.query.check",
-    tags("authz"),
-    summary = "Evaluate one (actor, action, resource) authorization decision"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.query.check"))]
 async fn authz_check(
     aa: AuthArgs,
@@ -333,11 +329,7 @@ mod tests {
     }
 }
 
-#[endpoint(
-    operation_id = "ak.self.authz.grants.query.effective",
-    tags("authz"),
-    summary = "List effective authorization grants for a subject"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.grants.query.effective"))]
 async fn effective_grants(
     aa: AuthArgs,
@@ -637,11 +629,7 @@ fn capability_resource_selector(
         .map_err(|error| AppError::internal(format!("resource selector encode failed: {error}")))
 }
 
-#[endpoint(
-    operation_id = "ak.self.authz.invites.query.list",
-    tags("authz"),
-    summary = "List pending invites for the authenticated actor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.invites.query.list"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,

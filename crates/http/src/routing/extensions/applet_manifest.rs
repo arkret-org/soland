@@ -31,13 +31,14 @@ use std::sync::OnceLock;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+
+use crate::extract::JsonBody;
 
 /// Registered applet capabilities recognised by the verifier. Anything
 /// not in this set fails closed with `unknown_capability`. The list is
@@ -55,7 +56,7 @@ pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
 /// On-wire applet manifest envelope. The bot/ghost actor registration
 /// strand in `applet-integration.md` Section 4 takes one of these, verifies it,
 /// and (if accepted) mints a `bot_actor_id` bound to the manifest.
-#[derive(Clone, Debug, Serialize, Deserialize, ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct AppletManifest {
     pub id: String,
     pub version: String,
@@ -81,7 +82,7 @@ pub struct AppletManifest {
 
 /// Verified manifest - same fields as the input plus a recompute of the
 /// schema-hash for the audit trail.
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub struct VerifiedAppletManifest {
     pub id: String,
     pub signer_did: String,
@@ -90,19 +91,19 @@ pub struct VerifiedAppletManifest {
     pub metadata: Value,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct AppletManifestVerifyRequestBody {
     pub manifest_json: AppletManifest,
     pub trusted_registry_did: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct AppletManifestVerifyErrorView {
     pub code: String,
     pub message: String,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct AppletManifestVerifyOutcome {
     pub verified: bool,
     pub signer_did: String,
@@ -278,11 +279,7 @@ pub(super) fn router() -> Router {
     Router::with_path("applets/manifest/verify").post(verify_endpoint)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.applets.manifest.verify",
-    tags("extensions"),
-    summary = "Verify a signed applet manifest"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.manifest.verify"))]
 async fn verify_endpoint(
     body: JsonBody<AppletManifestVerifyRequestBody>,

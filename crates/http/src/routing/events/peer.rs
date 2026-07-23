@@ -30,7 +30,7 @@ const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_QUERY_LIMIT: usize = 100;
 const MAX_PEER_EVENTS_RESOLVE: usize = 100;
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct PeerEventsDescribeOutcome {
     service_id: Did,
     protocol_version: String,
@@ -41,14 +41,14 @@ struct PeerEventsDescribeOutcome {
     limits: PeerEventsDescribeLimits,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct PeerEventsDescribeLimits {
     max_batch_size: usize,
     max_query_limit: usize,
     max_resolve: usize,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Serialize)]
 struct PeerSnapshotHeadOutcome {}
 
 pub(super) fn router() -> Router {
@@ -65,11 +65,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
 }
 
-#[endpoint(
-    operation_id = "ak.peer.events.query.describe",
-    tags("peer"),
-    summary = "Describe the federation peer Events API"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.describe"))]
 async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -139,11 +135,7 @@ async fn peer_events_submit(depot: &mut Depot, req: &mut Request, res: &mut Resp
     super::event_log::submit_federation_events(state, req, body_value, res).await;
 }
 
-#[endpoint(
-    operation_id = "ak.peer.events.query.scan",
-    tags("peer"),
-    summary = "Query federation-visible Event Envelopes"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan"))]
 async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<EventsQueryOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -153,11 +145,7 @@ async fn peer_events_query(depot: &mut Depot, req: &mut Request) -> JsonResult<E
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[endpoint(
-    operation_id = "ak.peer.events.query.scan_body",
-    tags("peer"),
-    summary = "Query federation-visible Event Envelopes with a JSON body"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.scan_body"))]
 async fn peer_events_query_post(
     depot: &mut Depot,
@@ -175,11 +163,7 @@ async fn peer_events_query_post(
     peer_events_query_response(state, source_service_id, parts).await
 }
 
-#[endpoint(
-    operation_id = "ak.peer.events.query.resolve",
-    tags("peer"),
-    summary = "Resolve federation-visible Event Envelopes by id or digest"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.resolve"))]
 async fn peer_events_resolve(
     depot: &mut Depot,
@@ -263,11 +247,7 @@ async fn peer_events_resolve(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.peer.events.query.frontier",
-    tags("peer"),
-    summary = "Read a signed federation peer frontier"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.events.query.frontier"))]
 async fn peer_events_frontier(
     depot: &mut Depot,
@@ -385,11 +365,7 @@ async fn peer_events_frontier(
 /// closed with `not_implemented` until a real signing path lands. The
 /// dev snapshot bundle remains reachable on the `/_soland/` product face
 /// (`org.arkret.soland.sync.snapshot_chunk`).
-#[endpoint(
-    operation_id = "ak.peer.snapshot.query.manifest_head",
-    tags("peer"),
-    summary = "Read a federation peer snapshot head (not implemented)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.snapshot.query.manifest_head"))]
 async fn peer_snapshot_head(
     depot: &mut Depot,

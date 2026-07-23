@@ -27,7 +27,7 @@ const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 ///      - `max_duration_ms` query param elapsed (default 30_000 ms)
 ///      - client disconnects (drops the response stream)
 ///      - the broadcast channel is closed (server shutdown)
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "events_subscribe"))]
 pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot
@@ -707,11 +707,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// Range: `from?` + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
-#[endpoint(
-    operation_id = "ak.self.events.query.scan",
-    tags("events"),
-    summary = "Projection-aware events query (single- or multi-Realm merge; backward / forward direction)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan"))]
 pub(crate) async fn events_query(
     depot: &mut Depot,
@@ -736,14 +732,10 @@ pub(crate) async fn events_query(
     events_query_impl(state, req, parts).await
 }
 
-#[endpoint(
-    operation_id = "ak.self.events.query.scan_body",
-    tags("events"),
-    summary = "Body-based projection-aware events query for large selectors"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan_body"))]
 pub(crate) async fn events_query_post(
-    body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
+    body: crate::extract::JsonBody<EventsQueryPostRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> soland_http::result::JsonResult<EventsQueryOutcome> {
@@ -1479,11 +1471,7 @@ async fn durable_events_query_from_parts(
     }
 }
 
-#[endpoint(
-    operation_id = "ak.self.snapshot.query.manifest_head",
-    tags("sync"),
-    summary = "Read the signed snapshot-v1 manifest head for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.query.manifest_head"))]
 pub(super) async fn snapshot_head(
     depot: &mut Depot,

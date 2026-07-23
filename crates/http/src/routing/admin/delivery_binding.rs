@@ -16,13 +16,13 @@
 
 use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
-use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
+use crate::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
@@ -31,7 +31,7 @@ use crate::{JsonResult, app_error, json_ok};
 /// Mirrors sodmin's `RealmDeliveryBindingPolicy` DTO in
 /// `sodmin/src/types/api.rs`. `realm_id` is the security boundary id
 /// `policy_frontier` is reducer-written and read-only here.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct RealmDeliveryBindingPolicyOutcome {
     /// Realm identifier (security boundary).
     #[serde(default)]
@@ -96,11 +96,7 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
 /// Authn: any authenticated session in development_mode, otherwise the
 /// caller DID MUST appear in `admin_principal_dids` (gated via
 /// `super::require_admin_principal`).
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.delivery_binding_policy.get",
-    tags("soland-admin", "realm", "delivery_binding_policy"),
-    summary = "Get effective Realm delivery-binding-policy"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.delivery_binding_policy.get")
@@ -138,7 +134,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
 
 /// One row in the per-Realm member-routability table. Mirrors sodmin's
 /// `MemberRoutabilityRow` DTO (`sodmin/src/types/delivery_binding.rs`).
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MemberRoutabilityRowOutcome {
     pub actor_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -150,7 +146,7 @@ pub struct MemberRoutabilityRowOutcome {
     pub delivery_status: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct MemberRoutabilityListOutcome {
     pub data: Vec<MemberRoutabilityRowOutcome>,
     pub total: u64,
@@ -161,12 +157,7 @@ pub struct MemberRoutabilityListOutcome {
 /// operator view of whether each Realm member is currently routable for
 /// delivery (has a known recipient service that sits inside the Realm's
 /// `allowed_recipient_services` allow-list, with a live push route).
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.member_routability.list",
-    tags("soland-admin", "realm", "delivery_binding"),
-    summary = "List per-member delivery routability for a Realm",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.member_routability.list")
@@ -268,7 +259,7 @@ pub(super) async fn admin_list_member_routability(
 
 /// One row in the delivery-binding handover audit panel. Mirrors sodmin's
 /// `DeliveryBindingHandoverRow` DTO.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DeliveryBindingHandoverRowOutcome {
     pub realm_id: String,
     pub actor_id: String,
@@ -284,7 +275,7 @@ pub struct DeliveryBindingHandoverRowOutcome {
     pub observed_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct DeliveryBindingHandoverListOutcome {
     pub data: Vec<DeliveryBindingHandoverRowOutcome>,
     pub total: u64,
@@ -296,12 +287,7 @@ pub struct DeliveryBindingHandoverListOutcome {
 /// Realm. Handover events are surfaced from the shared audit table
 /// (actions carrying a `delivery_binding`/`handover` verb scoped to the
 /// Realm). Empty until a handover has been recorded.
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realms.delivery_binding.handovers",
-    tags("soland-admin", "realm", "delivery_binding"),
-    summary = "List delivery-binding handover audit rows for a Realm",
-    status_codes(200, 400, 401, 403, 500)
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.delivery_binding.handovers")

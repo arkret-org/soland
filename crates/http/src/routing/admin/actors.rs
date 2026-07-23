@@ -4,12 +4,12 @@
 //! [`super::queries`]); `GET /_soland/admin/actors/{actor_id}` — one
 //! [`AdminActor`] row with the account lifecycle linkage sodmin needs.
 
-use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::json;
 use soland_contracts::admin::AdminActor;
 
 use super::{AuthArgs, append_audit_log, queries, require_admin_principal};
+use crate::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -19,12 +19,7 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{actor_id}").get(get_actor))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.actors.get",
-    tags("soland-admin", "actors"),
-    summary = "Read one production admin actor row",
-    status_codes(200, 400, 401, 403, 404, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.get"))]
 async fn get_actor(
     aa: AuthArgs,

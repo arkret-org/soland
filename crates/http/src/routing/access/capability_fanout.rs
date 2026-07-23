@@ -1,7 +1,6 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CellRef, Did, EventId, GrantId, OperationId, RealmId};
 use arkret_state::lattice::CellState;
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 // SOL-DRY-03 — the coauth↔soland fanout wire contract is shared via
@@ -14,6 +13,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::{bearer_token, sha256_hex};
 
+use crate::extract::JsonBody;
 use crate::state::AppState;
 
 const FANOUT_KIND: &str = "org.arkret.coauth.collaboration_capability.fanout.v1";
@@ -49,11 +49,7 @@ pub(super) fn router() -> Router {
 // (`org.arkret.soland.gate.account.device_signing_keys.query`): both are
 // deployment-internal S2S contracts, not spec operations. Trust boundary is
 // registered in coauth `docs/{zh,en}/setup/principal-server.md`.
-#[endpoint(
-    operation_id = "org.arkret.soland.root.authz.capability_fanout.submit",
-    tags("soland-local"),
-    summary = "Materialize coauth-issued collaboration capability fanout (deployment-internal S2S)"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.root.authz.capability_fanout.submit")

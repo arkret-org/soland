@@ -29,7 +29,6 @@ use arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
 use arkret_policy::history_visibility::matching_restricted_rules;
 use arkret_wire::{HistoryVisibility, PlaintextDataClassKind};
 use chrono::{DateTime, Utc};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
@@ -38,6 +37,7 @@ use soland_application::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, accept_local_operations};
+use crate::extract::{JsonBody, PathParam};
 use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry};
@@ -72,7 +72,7 @@ pub(super) fn local_router() -> Router {
         .push(Router::with_path("spaces/{space_id}/cells/{cell_family}").get(get_space_cell))
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct SpaceCellOutcome {
     cell_id: String,
     cell_family: String,
@@ -83,7 +83,7 @@ struct SpaceCellOutcome {
     total: usize,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct RealmExportEvent {
     event_id: String,
     realm_id: String,
@@ -98,7 +98,7 @@ struct RealmExportEvent {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct RealmExportOperation {
     operation_id: String,
     realm_id: String,
@@ -109,7 +109,7 @@ struct RealmExportOperation {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct RealmExportOutcome {
     schema: String,
     realm_id: String,
@@ -119,11 +119,7 @@ struct RealmExportOutcome {
     events: Vec<RealmExportEvent>,
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.resource.get",
-    tags("realms"),
-    summary = "Get a Realm lifecycle response (owner + members)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.resource.get"))]
 async fn get_realm(
     aa: AuthArgs,
@@ -171,11 +167,7 @@ async fn submit_realm_lifecycle_command(
     realm_lifecycle_response(state, &realm_id).await
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.command.archive",
-    tags("realms"),
-    summary = "Set or clear the Realm archived facet"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.archive"))]
 async fn archive_realm(
     aa: AuthArgs,
@@ -201,11 +193,7 @@ async fn archive_realm(
     .map(salvo::prelude::Json)
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.command.freeze",
-    tags("realms"),
-    summary = "Set or clear the Realm frozen read-only facet"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.freeze"))]
 async fn freeze_realm(
     aa: AuthArgs,
@@ -231,11 +219,7 @@ async fn freeze_realm(
     .map(salvo::prelude::Json)
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.command.tombstone",
-    tags("realms"),
-    summary = "Terminally tombstone a Realm in favor of a successor Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.tombstone"))]
 async fn tombstone_realm(
     aa: AuthArgs,
@@ -261,11 +245,7 @@ async fn tombstone_realm(
     .map(salvo::prelude::Json)
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.command.destroy",
-    tags("realms"),
-    summary = "Terminally destroy a Realm without a successor"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.destroy"))]
 async fn destroy_realm(
     aa: AuthArgs,
@@ -291,11 +271,7 @@ async fn destroy_realm(
     .map(salvo::prelude::Json)
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.moderation_policy.query.effective",
-    tags("realms", "policy"),
-    summary = "Get organization-inherited effective moderation policy"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.self.realm.moderation_policy.query.effective")
@@ -319,11 +295,7 @@ async fn get_realm_effective_moderation_policy(
     json_ok(organizations::effective_policy_for_realm(state, &realm_id))
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.moderation_policy.resource.replace",
-    tags("realms", "policy"),
-    summary = "Set a Realm moderation-policy override"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.self.realm.moderation_policy.resource.replace")
@@ -363,11 +335,7 @@ async fn upsert_realm_moderation_policy(
     json_ok(organizations::realm_policy_record_outcome(&policy))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.spaces.cells.get",
-    tags("spaces", "cells"),
-    summary = "Get a projected Space-container child-order cell"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.spaces.cells.get"))]
 async fn get_space_cell(
     aa: AuthArgs,
@@ -419,11 +387,7 @@ async fn get_space_cell(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm.query.export",
-    tags("realms"),
-    summary = "Full event log + projection dump for a Realm"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.query.export"))]
 async fn export_realm(
     aa: AuthArgs,

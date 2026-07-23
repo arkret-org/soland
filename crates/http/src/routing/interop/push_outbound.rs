@@ -32,7 +32,6 @@
 
 use std::time::Duration;
 
-use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_application::delivery::OutboundPushBridgeCacheState as OutboundPushBridgeCacheRecord;
@@ -40,6 +39,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, sha256_hex};
+use crate::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{
     OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportOutcome,
@@ -75,7 +75,7 @@ pub(super) fn router() -> Router {
         )
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_describe"))]
 async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -167,11 +167,7 @@ async fn outbound_push_bridge_describe(depot: &mut Depot, res: &mut Response) {
     }));
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.push.outbound_bridge_resolve",
-    tags("push"),
-    summary = "Resolve a push gateway URL to a cached contract snapshot"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.push.outbound_bridge_resolve")
@@ -236,11 +232,7 @@ async fn outbound_push_bridge_resolve(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.push.outbound_bridge_fetch",
-    tags("push"),
-    summary = "Live-fetch the upstream push bridge contract + populate the durable cache"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.push.outbound_bridge_fetch"))]
 async fn outbound_push_bridge_fetch(
     body: JsonBody<OutboundPushBridgeFetchRequestBody>,
@@ -383,7 +375,7 @@ async fn outbound_push_bridge_fetch(
     }
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_status"))]
 async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -398,7 +390,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
     res.render(Json(OutboundPushBridgeCacheStatusOutcome { entries }));
 }
 
-#[endpoint]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "outbound_push_bridge_cache_export"))]
 async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -417,11 +409,7 @@ async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response
     }));
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.push.outbound_bridge_cache_import",
-    tags("push"),
-    summary = "Import push bridge cache snapshots (replace_existing toggle)"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.push.outbound_bridge_cache_import")
@@ -484,11 +472,7 @@ async fn outbound_push_bridge_cache_import(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.push.outbound_bridge_cache_invalidate",
-    tags("push"),
-    summary = "Invalidate one or all push bridge cache entries"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.push.outbound_bridge_cache_invalidate")

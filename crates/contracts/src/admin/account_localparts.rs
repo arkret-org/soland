@@ -7,7 +7,6 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct AccountLocalpartView {
     pub id: String,
     pub localpart: String,
@@ -17,7 +16,6 @@ pub struct AccountLocalpartView {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct AccountLocalpartListOutcome {
     pub account_did: String,
     pub primary_localpart: Option<String>,
@@ -25,7 +23,6 @@ pub struct AccountLocalpartListOutcome {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AccountLocalpartAddRequestBody {
     pub localpart: String,
@@ -34,7 +31,6 @@ pub struct AccountLocalpartAddRequestBody {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AccountLocalpartUpdateRequestBody {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -42,13 +38,11 @@ pub struct AccountLocalpartUpdateRequestBody {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct AccountLocalpartMutationOutcome {
     pub localpart: AccountLocalpartView,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct AccountLocalpartDeleteOutcome {
     pub ok: bool,
 }

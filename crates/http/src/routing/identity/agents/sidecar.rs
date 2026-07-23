@@ -8,12 +8,12 @@ use arkret_models_collaboration::agent_operations::{
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
 use arkret_wire::{MlsGroupId, NonEmptyString};
-use salvo::oapi::extract::QueryParam;
 use soland_application::identity::{
     AgentSidecarContextState as AgentSidecarContextRecord, AgentSidecarState as AgentSidecarRecord,
 };
 
 use super::*;
+use crate::extract::QueryParam;
 
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
 pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
@@ -1291,12 +1291,7 @@ async fn ensure_sidecar_impl(
     })
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.sidecar.command.ensure",
-    tags("agents"),
-    summary = "Idempotently ensure a controller-owned Agent Sidecar",
-    status_codes(200, 201, 400, 401, 403, 412, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure"))]
 pub(super) async fn ensure_sidecar(
     aa: AuthArgs,
@@ -1307,12 +1302,7 @@ pub(super) async fn ensure_sidecar(
     ensure_sidecar_impl(aa, body.into_inner(), depot, req).await
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.sidecar.resource.get",
-    tags("agents"),
-    summary = "Read one controller-owned Agent Sidecar",
-    status_codes(200, 401, 404, 500)
-)]
+#[handler]
 pub(super) async fn get_sidecar(
     aa: AuthArgs,
     sidecar_id: PathParam<SidecarId>,
@@ -1331,12 +1321,7 @@ pub(super) async fn get_sidecar(
     json_ok(sidecar_view(state, &record, &session.device_id).await?)
 }
 
-#[endpoint(
-    operation_id = "ak.self.agent.sidecar.query.list",
-    tags("agents"),
-    summary = "List controller-owned Agent Sidecars",
-    status_codes(200, 400, 401, 500)
-)]
+#[handler]
 pub(super) async fn list_sidecars(
     aa: AuthArgs,
     realm_id: QueryParam<RealmId, false>,

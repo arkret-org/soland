@@ -30,7 +30,6 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::Did;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
-use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_contracts::admin::{
@@ -41,6 +40,7 @@ use soland_http::error::{AppError, ErrorCode};
 use util::query_param;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal, util};
+use crate::extract::QueryParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -188,12 +188,7 @@ pub(super) async fn actor_count_maps(
     (device_counts, realm_counts)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.actors.query",
-    tags("soland-admin", "actors"),
-    summary = "Production admin actors query (typed, cursor-paginated)",
-    status_codes(200, 400, 401, 403, 410, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.query"))]
 pub(super) async fn admin_list_actors(
     aa: AuthArgs,
@@ -320,12 +315,7 @@ fn parse_time_bound(raw: &str, name: &str) -> Result<chrono::DateTime<chrono::Ut
         .map_err(|_| AppError::invalid_param(format!("{name} must be an RFC3339 timestamp")))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.audit.query",
-    tags("soland-admin", "audit"),
-    summary = "Production admin audit query (typed, newest first, cursor-paginated)",
-    status_codes(200, 400, 401, 403, 410, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.audit.query"))]
 pub(super) async fn admin_query_audit(
     aa: AuthArgs,
@@ -463,12 +453,7 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.capabilities.query",
-    tags("soland-admin", "capabilities"),
-    summary = "Production admin capability-grant query (typed, cursor-paginated)",
-    status_codes(200, 400, 401, 403, 410, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.capabilities.query"))]
 pub(super) async fn admin_list_capabilities(
     aa: AuthArgs,
@@ -574,12 +559,7 @@ fn admin_device_row(device: &soland_application::identity::DeviceIdentity) -> Ad
     }
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.devices.query",
-    tags("soland-admin", "devices"),
-    summary = "Production admin devices query (typed, cursor-paginated)",
-    status_codes(200, 400, 401, 403, 410, 500)
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.devices.query"))]
 pub(super) async fn admin_list_devices(
     aa: AuthArgs,

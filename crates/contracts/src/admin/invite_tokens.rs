@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CreateInviteTokenRequest {
     #[serde(default)]
     pub realm_id: Option<String>,
@@ -20,7 +19,6 @@ pub struct CreateInviteTokenRequest {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct AdminInviteTokenItem {
     pub kind: String,
     pub id: String,

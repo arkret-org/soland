@@ -13,8 +13,6 @@ use arkret_models_collaboration::governance::realm_governance::{
 };
 use chrono::Utc;
 use salvo::http::StatusCode;
-use salvo::oapi::ToSchema;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -24,11 +22,12 @@ use soland_application::governance::{
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::validate_did;
 
+use crate::extract::{JsonBody, PathParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct UpsertOrganizationRequestBody {
     #[serde(default)]
     organization_id: Option<String>,
@@ -45,12 +44,12 @@ struct UpsertOrganizationRequestBody {
     member_count: Option<usize>,
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Deserialize)]
 struct LinkOrganizationRealmRequestBody {
     realm_id: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct OrganizationView {
     organization_id: String,
     organization_did: String,
@@ -73,13 +72,13 @@ pub(crate) struct OrganizationView {
     updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct OrganizationListOutcome {
     organizations: Vec<OrganizationView>,
     total: usize,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct OrganizationPolicyView {
     kind: String,
     organization_id: String,
@@ -92,7 +91,7 @@ pub(crate) struct OrganizationPolicyView {
     updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct RealmModerationPolicyOutcome {
     kind: String,
     realm_id: String,
@@ -101,14 +100,14 @@ pub(crate) struct RealmModerationPolicyOutcome {
     updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct OrganizationRealmLinkOutcome {
     organization_id: String,
     realm_id: String,
     linked: bool,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct OrganizationPolicyLayer {
     source: String,
     organization_id: String,
@@ -119,13 +118,13 @@ struct OrganizationPolicyLayer {
     applies_to_realms: Vec<String>,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 struct RealmModerationPolicyFanout {
     source: String,
     rewrites_realm_policy: bool,
 }
 
-#[derive(Clone, Debug, Serialize, ToSchema)]
+#[derive(Clone, Debug, Serialize)]
 pub(crate) struct RealmEffectiveModerationPolicyOutcome {
     realm_id: String,
     inheritance_mode: String,
@@ -156,14 +155,6 @@ impl<'de> Deserialize<'de> for OrganizationModerationPolicyReplaceRequestBody {
                 "organization moderation policy must be a JSON object",
             )),
         }
-    }
-}
-
-impl ToSchema for OrganizationModerationPolicyReplaceRequestBody {
-    fn to_schema(
-        components: &mut salvo::oapi::Components,
-    ) -> salvo::oapi::RefOr<salvo::oapi::schema::Schema> {
-        serde_json::Map::<String, Value>::to_schema(components)
     }
 }
 
@@ -218,11 +209,7 @@ pub(crate) async fn refresh_organization_projection(
     Ok(())
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.query.list",
-    tags("organizations"),
-    summary = "List locally known organizations"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.query.list"))]
 async fn list_organizations(
     aa: AuthArgs,
@@ -248,11 +235,7 @@ async fn list_organizations(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.command.upsert",
-    tags("organizations"),
-    summary = "Create or update a local organization registry row"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.command.upsert"))]
 async fn upsert_organization(
     aa: AuthArgs,
@@ -307,11 +290,7 @@ async fn upsert_organization(
     json_ok(organization_record_view(state, &record))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.resource.get",
-    tags("organizations"),
-    summary = "Read a local organization registry row"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.organization.resource.get"))]
 async fn get_organization(
     aa: AuthArgs,
@@ -332,11 +311,7 @@ async fn get_organization(
     json_ok(organization_record_view(state, &record))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.policy.resource.get",
-    tags("organizations", "policy"),
-    summary = "Read the current organization moderation policy"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.organization.policy.resource.get")
@@ -360,11 +335,7 @@ async fn get_organization_policy(
     json_ok(organization_policy_record_view(state, &policy))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.policy.resource.replace",
-    tags("organizations", "policy"),
-    summary = "Publish an organization moderation policy"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.organization.policy.resource.replace")
@@ -440,11 +411,7 @@ async fn upsert_organization_policy(
     json_ok(organization_policy_record_view(state, &record))
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.organization.realm.command.link",
-    tags("organizations", "realms"),
-    summary = "Link a Realm to an organization policy source"
-)]
+#[handler]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.organization.realm.command.link")

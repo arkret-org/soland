@@ -3,7 +3,6 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 #[serde(rename_all = "snake_case")]
 pub enum NotaryKind {
     SingleDid,
@@ -24,7 +23,6 @@ impl NotaryKind {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct AdminNotaryValue {
     pub kind_raw: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -99,7 +97,6 @@ pub enum SelfSignViolation {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct NotaryReconfigRequestBody {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub realm_id: String,
@@ -213,7 +210,6 @@ impl NotaryReconfigRequestBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct SubmitControlMoveOutcome {
     pub control_move_id: String,
     #[serde(default)]
@@ -229,7 +225,6 @@ pub struct SubmitControlMoveOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct BottomCandidateHead {
     pub event_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -241,7 +236,6 @@ pub struct BottomCandidateHead {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct BottomEntry {
     pub realm_id: String,
     pub cell_id: String,
@@ -257,7 +251,6 @@ pub struct BottomEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 #[serde(tag = "strategy", rename_all = "snake_case")]
 pub enum BottomRepairStrategy {
     HeadInWinner {
@@ -285,14 +278,12 @@ impl BottomRepairStrategy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct BottomRepairRequestBody {
     #[serde(flatten)]
     pub strategy: BottomRepairStrategy,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct SealLeaf {
     pub seal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -308,7 +299,6 @@ pub struct SealLeaf {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct SealDagSnapshot {
     pub realm_id: String,
     pub leaves: Vec<SealLeaf>,
@@ -321,7 +311,6 @@ pub struct SealDagSnapshot {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CompactionOutcome {
     pub seal_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -331,7 +320,6 @@ pub struct CompactionOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct CompactionRequestBody {
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub realm_id: String,
@@ -340,13 +328,11 @@ pub struct CompactionRequestBody {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct SealPruneRequestBody {
     pub seal_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct SealPruneOutcome {
     pub seal_id: String,
     pub pruned: bool,
@@ -358,7 +344,6 @@ pub struct SealPruneOutcome {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct SealPruneDiagnostics {
     pub age_seconds: u64,
     pub compaction_witnesses: u32,
@@ -368,7 +353,6 @@ pub struct SealPruneDiagnostics {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct MultisigPendingEntry {
     pub seal_id: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -402,7 +386,6 @@ impl MultisigPendingEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[cfg_attr(feature = "salvo", derive(salvo::oapi::ToSchema))]
 pub struct MultisigPendingOutcome {
     pub entries: Vec<MultisigPendingEntry>,
 }

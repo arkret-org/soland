@@ -22,7 +22,6 @@ use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationRelationshipRow,
 };
 use arkret_wire::{Did, Hash};
-use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -30,6 +29,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
+use crate::extract::PathParam;
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -45,11 +45,7 @@ fn de_str<T: DeserializeOwned>(field: &str, value: &str) -> Result<T, AppError> 
         .map_err(|e| AppError::internal(format!("invalid projected {field} '{value}': {e}")))
 }
 
-#[endpoint(
-    operation_id = "ak.self.realm_organization.query.list",
-    tags("realms"),
-    summary = "List projected ak.realm.organization relationships for a Realm (SOL-ORG-06)"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_organization.query.list"))]
 pub(crate) async fn list_realm_organizations(
     aa: AuthArgs,

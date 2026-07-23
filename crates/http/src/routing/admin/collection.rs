@@ -21,7 +21,6 @@ use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
 use arkret_models_collaboration::governance::realm_lifecycle::RealmDestroyPayload;
 use arkret_wire::JoinRule;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -37,24 +36,24 @@ use super::{
     policy_document_to_response, projection_event_from_operation, strand_id_for_projection_event,
     strand_id_from_realm_id, strand_projection_for_realm,
 };
+use crate::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct AdminCollectionOutcome {
     resource: String,
     data: Vec<Value>,
     items: Vec<Value>,
     #[serde(flatten)]
-    #[salvo(schema(value_type = serde_json::Value))]
     resource_items: BTreeMap<String, Value>,
     total: usize,
     next_cursor: Option<String>,
     production_gap: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct AdminRealmItem {
     kind: String,
     id: String,
@@ -81,13 +80,13 @@ pub(super) struct AdminRealmItem {
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct AdminRealmDeleteOutcome {
     realm_id: String,
     deleted: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct AdminRealmMemberItem {
     actor_id: String,
     membership: String,
@@ -95,11 +94,7 @@ pub(super) struct AdminRealmMemberItem {
     joined_at: Option<String>,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.collection",
-    tags("soland-admin"),
-    summary = "Dev-only paginated admin snapshot of a named collection"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.collection"))]
 pub(super) async fn admin_collection(
     aa: AuthArgs,
@@ -214,7 +209,7 @@ pub(super) async fn admin_collection(
     })
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(super) struct AdminCreateRealmRequestBody {
     #[serde(default)]
     title: String,
@@ -229,11 +224,7 @@ pub(super) struct AdminCreateRealmRequestBody {
     realm_class: String,
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realm.create",
-    tags("soland-admin"),
-    summary = "Create a Realm through the canonical operation pipeline"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.create"))]
 pub(super) async fn admin_create_realm(
     aa: AuthArgs,
@@ -298,11 +289,7 @@ pub(super) async fn admin_create_realm(
     json_ok(admin_get_realm_item(state, &realm_id).await?)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realm.get",
-    tags("soland-admin"),
-    summary = "Read a Realm security-boundary admin row"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.get"))]
 pub(super) async fn admin_get_realm(
     realm_id: PathParam<String>,
@@ -313,11 +300,7 @@ pub(super) async fn admin_get_realm(
     json_ok(admin_get_realm_item(state, &realm_id).await?)
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realm.delete",
-    tags("soland-admin"),
-    summary = "Destroy a Realm through the canonical operation pipeline"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.delete"))]
 pub(super) async fn admin_delete_realm(
     aa: AuthArgs,
@@ -351,11 +334,7 @@ pub(super) async fn admin_delete_realm(
     })
 }
 
-#[endpoint(
-    operation_id = "org.arkret.soland.admin.realm.members",
-    tags("soland-admin"),
-    summary = "List Realm members for the admin surface"
-)]
+#[handler]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.members"))]
 pub(super) async fn admin_list_realm_members(
     realm_id: PathParam<String>,
