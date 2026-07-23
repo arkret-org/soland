@@ -11,10 +11,15 @@ async fn soland_admin_openapi_uses_product_namespace() {
     let removed_admin_operation_prefix = format!("{}.{}.", "ak", "admin");
     let rendered = serde_json::to_string(&spec).unwrap();
     assert!(!rendered.contains(&removed_admin_operation_prefix));
+    assert_component_refs_resolve(&spec, &spec);
     assert_eq!(spec["info"]["title"], "Arkret Service API");
     assert_eq!(
         spec["x-arkret-artifacts"]["protocol_path_policy"],
         "implemented_intersection"
+    );
+    assert_eq!(
+        spec["x-arkret-artifacts"]["registered_route_source"],
+        "salvo::routing::FilterInfo"
     );
     assert!(
         spec["paths"]["/_arkret/gate/account/session-grants"]["post"].is_null(),
@@ -27,6 +32,14 @@ async fn soland_admin_openapi_uses_product_namespace() {
         "org.arkret.soland.admin.get_server_status"
     );
     assert_product_admin_tags(server_status);
+    assert_eq!(
+        spec["paths"]["/_soland/admin/settings"]["put"]["operationId"],
+        "org.arkret.soland.admin.settings.update"
+    );
+    assert_eq!(
+        spec["paths"]["/_arkret/self/blob/resumable"]["post"]["x-arkret-binding"],
+        "tus-1.0.0"
+    );
 
     let circle_restore = &spec["paths"]["/_arkret/self/circles/{circle_id}/restore"]["post"];
     assert_eq!(
@@ -56,6 +69,31 @@ async fn soland_admin_openapi_uses_product_namespace() {
         }
     }
     assert!(checked_admin_operations > 0);
+}
+
+fn assert_component_refs_resolve(root: &Value, value: &Value) {
+    match value {
+        Value::Object(object) => {
+            if let Some(reference) = object.get("$ref").and_then(Value::as_str)
+                && let Some(pointer) = reference.strip_prefix('#')
+                && pointer.starts_with("/components/")
+            {
+                assert!(
+                    root.pointer(pointer).is_some(),
+                    "unresolved OpenAPI component reference: {reference}"
+                );
+            }
+            for child in object.values() {
+                assert_component_refs_resolve(root, child);
+            }
+        }
+        Value::Array(array) => {
+            for child in array {
+                assert_component_refs_resolve(root, child);
+            }
+        }
+        _ => {}
+    }
 }
 
 #[tokio::test]

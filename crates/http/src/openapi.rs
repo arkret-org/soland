@@ -1,13 +1,16 @@
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::{Context, bail};
-use salvo::oapi::{OpenApi, Operation, PathItemType, Response as OapiResponse};
+use salvo::oapi::PathItemType;
 use salvo::prelude::*;
+use salvo::routing::FilterInfo;
 use serde_json::{Map, Value, json};
 
-use crate::openapi_routes::{ArkretOpenApiDoc, pattern_matches_path, populate_known_routes};
+use crate::openapi_routes::{ArkretOpenApiDoc, populate_known_routes};
 
 static ARKRET_OPENAPI_DOC: OnceLock<Value> = OnceLock::new();
+static PRODUCT_OPENAPI_APPENDIX: OnceLock<std::result::Result<Value, String>> = OnceLock::new();
 
 pub fn cached_arkret_openapi_doc(
     router: &Router,
@@ -29,16 +32,14 @@ fn arkret_openapi_doc(
     router: &Router,
     artifact_registry_summary: serde_json::Value,
 ) -> anyhow::Result<Value> {
-    let mut generated = OpenApi::new("soland", "0.1.0").merge_router(router);
-    register_soland_extension_operations(&mut generated);
-    let generated = serde_json::to_value(generated)
-        .context("failed to serialize the registered Soland route document")?;
+    let registered_routes = collect_registered_routes(router)?;
+    let appendix = product_openapi_appendix()?;
 
     let mut artifact: Value = serde_saphyr::from_str(arkret_schema::embedded_openapi_yaml()?)
         .context("failed to parse the embedded canonical OpenAPI artifact")?;
-    select_implemented_protocol_paths(&mut artifact, &generated)?;
-    append_product_paths(&mut artifact, &generated)?;
-    merge_missing_components(&mut artifact, &generated)?;
+    select_implemented_protocol_paths(&mut artifact, &registered_routes)?;
+    append_product_paths(&mut artifact, appendix, &registered_routes)?;
+    merge_missing_components(&mut artifact, appendix)?;
 
     let root = artifact
         .as_object_mut()
@@ -59,6 +60,8 @@ fn arkret_openapi_doc(
             "openapi_source": "arkret-schema::embedded_openapi_yaml",
             "canonical_source": "arkret-spec/spec/v1/artifacts/openapi/arkret-service-api.openapi.yaml",
             "protocol_path_policy": "implemented_intersection",
+            "registered_route_source": "salvo::routing::FilterInfo",
+            "product_appendix_source": "soland-http/product_openapi_appendix.json",
             // The historical entity/view scaffold was removed alongside the
             // entity abstraction. View facets are declared by individual spec
             // event kinds and bound through cell-family registry mappings.
@@ -72,14 +75,86 @@ const OPENAPI_METHODS: &[&str] = &[
     "get", "head", "post", "put", "patch", "delete", "options", "trace",
 ];
 
+type RegisteredRoutes = BTreeMap<String, BTreeSet<String>>;
+
+fn product_openapi_appendix() -> anyhow::Result<&'static Value> {
+    match PRODUCT_OPENAPI_APPENDIX.get_or_init(|| {
+        serde_json::from_str(include_str!("product_openapi_appendix.json"))
+            .map_err(|error| format!("failed to parse product OpenAPI appendix: {error}"))
+    }) {
+        Ok(appendix) => Ok(appendix),
+        Err(error) => bail!("{error}"),
+    }
+}
+
+fn collect_registered_routes(router: &Router) -> anyhow::Result<RegisteredRoutes> {
+    fn walk(
+        router: &Router,
+        parent_path: &str,
+        parent_method: Option<&str>,
+        routes: &mut RegisteredRoutes,
+    ) -> anyhow::Result<()> {
+        let mut path = parent_path.to_owned();
+        let mut method = parent_method.map(str::to_owned);
+        for filter in router.filters() {
+            match filter.info() {
+                FilterInfo::Path(fragment) => path = join_route_path(&path, &fragment),
+                FilterInfo::Method(candidate) => {
+                    let candidate = candidate.as_str().to_ascii_lowercase();
+                    if candidate == "options" {
+                        return Ok(());
+                    }
+                    if let Some(existing) = &method
+                        && existing != &candidate
+                    {
+                        bail!(
+                            "route `{path}` has conflicting method filters `{existing}` and `{candidate}`"
+                        );
+                    }
+                    method = Some(candidate);
+                }
+                FilterInfo::Scheme(_)
+                | FilterInfo::Host(_)
+                | FilterInfo::Port(_)
+                | FilterInfo::Other(_) => {}
+            }
+        }
+
+        if router.goal.is_some()
+            && let Some(method) = &method
+            && !path.contains("{**")
+        {
+            routes
+                .entry(path.clone())
+                .or_default()
+                .insert(method.clone());
+        }
+        for child in router.routers() {
+            walk(child, &path, method.as_deref(), routes)?;
+        }
+        Ok(())
+    }
+
+    let mut routes = RegisteredRoutes::new();
+    walk(router, "", None, &mut routes)?;
+    Ok(routes)
+}
+
+fn join_route_path(parent: &str, fragment: &str) -> String {
+    let parent = parent.trim_matches('/');
+    let fragment = fragment.trim_matches('/');
+    match (parent.is_empty(), fragment.is_empty()) {
+        (true, true) => "/".to_owned(),
+        (true, false) => format!("/{fragment}"),
+        (false, true) => format!("/{parent}"),
+        (false, false) => format!("/{parent}/{fragment}"),
+    }
+}
+
 fn select_implemented_protocol_paths(
     artifact: &mut Value,
-    generated: &Value,
+    registered_routes: &RegisteredRoutes,
 ) -> anyhow::Result<()> {
-    let generated_paths = generated
-        .get("paths")
-        .and_then(Value::as_object)
-        .context("registered Soland route document must contain a paths object")?;
     let artifact_paths = artifact
         .get_mut("paths")
         .and_then(Value::as_object_mut)
@@ -88,7 +163,7 @@ fn select_implemented_protocol_paths(
     let mut selected = Map::new();
 
     for (path, mut canonical_item) in canonical_paths {
-        let Some(generated_item) = generated_paths.get(&path).and_then(Value::as_object) else {
+        let Some(registered_methods) = registered_routes.get(&path) else {
             continue;
         };
         let canonical_item_object = canonical_item
@@ -96,7 +171,7 @@ fn select_implemented_protocol_paths(
             .with_context(|| format!("canonical OpenAPI path `{path}` must be an object"))?;
         let mut implemented = false;
         for method in OPENAPI_METHODS {
-            if !generated_item.contains_key(*method) {
+            if !registered_methods.contains(*method) {
                 canonical_item_object.remove(*method);
                 continue;
             }
@@ -105,19 +180,12 @@ fn select_implemented_protocol_paths(
                     "Soland registers {method} {path}, but the canonical OpenAPI artifact does not"
                 );
             };
-            let generated_operation = generated_item
-                .get(*method)
-                .expect("generated operation presence checked above");
-            let canonical_id = canonical_operation
+            if canonical_operation
                 .get("operationId")
-                .and_then(Value::as_str);
-            let generated_id = generated_operation
-                .get("operationId")
-                .and_then(Value::as_str);
-            if canonical_id != generated_id {
-                bail!(
-                    "operationId drift for {method} {path}: artifact={canonical_id:?}, registered={generated_id:?}"
-                );
+                .and_then(Value::as_str)
+                .is_none()
+            {
+                bail!("canonical OpenAPI operation {method} {path} has no operationId");
             }
             implemented = true;
         }
@@ -126,19 +194,15 @@ fn select_implemented_protocol_paths(
         }
     }
 
-    for (path, generated_item) in generated_paths {
-        if !path.starts_with("/_arkret/") || is_test_only_protocol_path(path) {
+    for (path, registered_methods) in registered_routes {
+        if !is_protocol_contract_path(path) {
             continue;
         }
-        let Some(generated_item) = generated_item.as_object() else {
-            continue;
-        };
-        for method in OPENAPI_METHODS {
-            if generated_item.contains_key(*method)
-                && !selected
-                    .get(path)
-                    .and_then(Value::as_object)
-                    .is_some_and(|item| item.contains_key(*method))
+        for method in registered_methods {
+            if !selected
+                .get(path)
+                .and_then(Value::as_object)
+                .is_some_and(|item| item.contains_key(method))
             {
                 bail!(
                     "registered protocol operation {method} {path} is absent from the canonical OpenAPI artifact"
@@ -151,19 +215,56 @@ fn select_implemented_protocol_paths(
     Ok(())
 }
 
-fn append_product_paths(artifact: &mut Value, generated: &Value) -> anyhow::Result<()> {
-    let generated_paths = generated
+fn append_product_paths(
+    artifact: &mut Value,
+    appendix: &Value,
+    registered_routes: &RegisteredRoutes,
+) -> anyhow::Result<()> {
+    let appendix_paths = appendix
         .get("paths")
         .and_then(Value::as_object)
-        .context("registered Soland route document must contain a paths object")?;
+        .context("product OpenAPI appendix must contain a paths object")?;
     let artifact_paths = artifact
         .get_mut("paths")
         .and_then(Value::as_object_mut)
         .context("canonical OpenAPI artifact must contain a paths object")?;
-    for (path, item) in generated_paths {
-        if !path.starts_with("/_arkret/") || is_test_only_protocol_path(path) {
-            artifact_paths.insert(path.clone(), item.clone());
+    let mut missing = Vec::new();
+    for (path, registered_methods) in registered_routes {
+        if is_protocol_contract_path(path) {
+            continue;
         }
+        let Some(mut item) = appendix_paths.get(path).cloned() else {
+            missing.push(format!(
+                "{path} [{}]",
+                registered_methods
+                    .iter()
+                    .cloned()
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ));
+            continue;
+        };
+        let item_object = item
+            .as_object_mut()
+            .with_context(|| format!("product OpenAPI path `{path}` must be an object"))?;
+        for method in OPENAPI_METHODS {
+            if registered_methods.contains(*method) {
+                if !item_object.contains_key(*method) {
+                    bail!(
+                        "registered product operation {method} {path} is absent from the product OpenAPI appendix"
+                    );
+                }
+            } else {
+                item_object.remove(*method);
+            }
+        }
+        artifact_paths.insert(path.clone(), item);
+    }
+    if !missing.is_empty() {
+        bail!(
+            "registered product routes are absent from appendix: {}",
+            missing.join("; ")
+        );
     }
     Ok(())
 }
@@ -172,8 +273,18 @@ fn is_test_only_protocol_path(path: &str) -> bool {
     path.starts_with("/_arkret/_conformance/")
 }
 
-fn merge_missing_components(artifact: &mut Value, generated: &Value) -> anyhow::Result<()> {
-    let Some(generated_components) = generated.get("components").and_then(Value::as_object) else {
+fn is_transport_binding_path(path: &str) -> bool {
+    path == "/_arkret/self/blob/resumable" || path.starts_with("/_arkret/self/blob/resumable/")
+}
+
+fn is_protocol_contract_path(path: &str) -> bool {
+    path.starts_with("/_arkret/")
+        && !is_test_only_protocol_path(path)
+        && !is_transport_binding_path(path)
+}
+
+fn merge_missing_components(artifact: &mut Value, appendix: &Value) -> anyhow::Result<()> {
+    let Some(appendix_components) = appendix.get("components").and_then(Value::as_object) else {
         return Ok(());
     };
     let artifact_root = artifact
@@ -185,8 +296,8 @@ fn merge_missing_components(artifact: &mut Value, generated: &Value) -> anyhow::
         .as_object_mut()
         .context("canonical OpenAPI components must be an object")?;
 
-    for (section, generated_entries) in generated_components {
-        let Some(generated_entries) = generated_entries.as_object() else {
+    for (section, appendix_entries) in appendix_components {
+        let Some(appendix_entries) = appendix_entries.as_object() else {
             continue;
         };
         let artifact_entries = artifact_components
@@ -196,23 +307,13 @@ fn merge_missing_components(artifact: &mut Value, generated: &Value) -> anyhow::
             .with_context(|| {
                 format!("canonical OpenAPI component section `{section}` is invalid")
             })?;
-        for (name, entry) in generated_entries {
+        for (name, entry) in appendix_entries {
             artifact_entries
                 .entry(name.clone())
                 .or_insert_with(|| entry.clone());
         }
     }
     Ok(())
-}
-
-fn register_soland_extension_operations(doc: &mut OpenApi) {
-    // Stable, namespaced operation IDs for the soland-specific surface. The
-    // table covers operations that soland exposes on top of the canonical
-    // protocol - auth/account/admin/policy/etc. - until each `#[endpoint]`
-    // grows its own typed extractors and operation_id annotation.
-    for (path, method, tag, operation_id, summary) in SOLAND_EXTENSION_OPERATIONS {
-        add_contract_operation(doc, path, *method, tag, operation_id, summary);
-    }
 }
 
 pub fn soland_extension_operation_ids() -> Vec<String> {
@@ -224,49 +325,6 @@ pub fn soland_extension_operation_ids() -> Vec<String> {
         .filter(|operation_id| seen.insert((*operation_id).to_owned()))
         .map(ToOwned::to_owned)
         .collect()
-}
-
-fn add_contract_operation(
-    doc: &mut OpenApi,
-    path: &str,
-    method: PathItemType,
-    tag: &str,
-    operation_id: &str,
-    summary: &str,
-) {
-    let operation = Operation::new()
-        .tags([tag])
-        .summary(summary)
-        .operation_id(operation_id)
-        .add_response("200", OapiResponse::new("ok"));
-    // A table entry whose path is absent from the merged router doc would
-    // silently no-op, leaving SOLAND_EXTENSION_OPERATIONS documenting a
-    // mount point that does not exist. Fail loudly in debug builds so the
-    // table cannot drift away from the actual routes again. Concrete
-    // collection entries such as `/_soland/admin/actors` are valid when the
-    // merged router exposes the parameterized `/_soland/admin/{resource}`
-    // pattern that serves them.
-    debug_assert!(
-        doc.path_is_served(path),
-        "SOLAND_EXTENSION_OPERATIONS path `{path}` (operation `{operation_id}`) is not served by any router"
-    );
-    if let Some(path_item) = doc.paths.get_mut(path) {
-        path_item.operations.insert(method, operation);
-    }
-}
-
-trait OpenApiRouteExt {
-    fn path_is_served(&self, path: &str) -> bool;
-}
-
-impl OpenApiRouteExt for OpenApi {
-    fn path_is_served(&self, path: &str) -> bool {
-        self.paths.contains_key(path)
-            || self
-                .paths
-                .keys()
-                .any(|pattern| pattern_matches_path(pattern, path))
-    }
 }
 
 const SOLAND_EXTENSION_OPERATIONS: &[(&str, PathItemType, &str, &str, &str)] = &[
