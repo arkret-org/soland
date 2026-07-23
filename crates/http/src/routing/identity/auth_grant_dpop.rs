@@ -441,10 +441,28 @@ fn validate_agent_session_scope_details(
     if Did::new(grant.subject.clone()).is_err() {
         return Err(agent_scope_metadata_error());
     }
-    if details.realm_ids.is_empty() && details.strand_ids.is_empty() {
+    if agent_scope_requires_resource_selector(&grant.scopes)
+        && details.realm_ids.is_empty()
+        && details.strand_ids.is_empty()
+    {
         return Err(agent_scope_metadata_error());
     }
     Ok(())
+}
+
+fn agent_scope_requires_resource_selector(scopes: &[String]) -> bool {
+    scopes.iter().any(|scope| {
+        scope.starts_with("ak.self.events.")
+            || scope.starts_with("ak.event.")
+            || scope.starts_with("ak.message.")
+            || scope.starts_with("ak.reaction.")
+            || scope.starts_with("ak.strand.")
+            || scope.starts_with("ak.space.")
+            || scope.starts_with("ak.blob.")
+            || scope.starts_with("ak.call.")
+            || scope.starts_with("ak.morph.")
+            || scope.starts_with("ak.relation.")
+    })
 }
 
 fn agent_scope_metadata_error() -> AuthError {
@@ -761,6 +779,7 @@ mod tests {
     fn agent_session_binding_rejects_empty_scope_details() {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
+        grant.scopes = vec!["ak.self.events.query.scan".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
         grant.freshness_state = Some(FreshnessState::Fresh);
@@ -770,6 +789,23 @@ mod tests {
         assert_eq!(err.0, StatusCode::UNAUTHORIZED);
         assert_eq!(err.1, "unauthenticated");
         assert_eq!(err.2, "agent session grant omitted resource scope metadata");
+    }
+
+    #[test]
+    fn agent_account_service_scope_allows_empty_resource_details() {
+        let mut grant = test_introspection_grant();
+        grant.subject = "did:web:agent.example".to_owned();
+        grant.scopes = vec!["ak.self.keys.keypackages.upload.create".to_owned()];
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
+        grant.freshness_state = Some(FreshnessState::Fresh);
+
+        let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
+
+        assert_eq!(
+            agent_session.unwrap().granted_scope,
+            vec!["ak.self.keys.keypackages.upload.create"]
+        );
     }
 
     #[test]

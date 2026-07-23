@@ -163,7 +163,7 @@ pub(crate) struct AccountLifecycleChange {
     pub state: String,
     pub changed_by: String,
     pub reason: Option<String>,
-    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     pub changed_at: chrono::DateTime<chrono::Utc>,
     pub sessions_revoked: usize,
     pub devices_revoked: usize,

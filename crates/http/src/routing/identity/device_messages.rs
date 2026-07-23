@@ -183,8 +183,15 @@ async fn send_device_messages(
                 })
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?;
-            let target_active = device_is_active(target_record.as_ref());
-            let target_verified = device_is_active_verified(target_record.as_ref());
+            let target_agent_endpoint = if !device_is_active_verified(target_record.as_ref()) {
+                active_agent_keypackage_endpoint(state, &prepared.recipient, &prepared.device_id)
+                    .await?
+            } else {
+                false
+            };
+            let target_active = device_is_active(target_record.as_ref()) || target_agent_endpoint;
+            let target_verified =
+                device_is_active_verified(target_record.as_ref()) || target_agent_endpoint;
             if !(sender_verified || same_principal && target_verified && verification_bootstrap) {
                 return Err(AppError::capability_denied(
                     "fresh device sessions may only send verification bootstrap to authorized same-principal devices",
@@ -527,6 +534,41 @@ fn device_is_active_verified(record: Option<&DeviceIdentity>) -> bool {
     record.is_some_and(|record| {
         record.revoked_at.is_none() && record.verification_state == "verified"
     })
+}
+
+async fn active_agent_keypackage_endpoint(
+    state: &AppState,
+    principal_id: &str,
+    device_id: &str,
+) -> Result<bool, AppError> {
+    let now_unix = now().timestamp();
+    let rows = state
+        .mls_key_package_application()
+        .key_packages()
+        .await
+        .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
+    let Some(authorize_event_id) = rows.iter().find_map(|row| {
+        (row.actor_id == principal_id
+            && row.device_id == device_id
+            && row.agent_key_authorize_event_id.is_some()
+            && row.consumed_at.is_none()
+            && row.claimed_by_mls_group_id.as_deref() != Some("revoked")
+            && row.lifetime_not_after > now_unix)
+            .then(|| row.agent_key_authorize_event_id.clone())
+            .flatten()
+    }) else {
+        return Ok(false);
+    };
+    let principal = arkret_core::Did::new(principal_id.to_owned())
+        .map_err(|error| AppError::internal(format!("invalid Agent principal: {error}")))?;
+    Ok(
+        crate::routing::mls::current_agent_key_authorization_matches(
+            state,
+            &principal,
+            &authorize_event_id,
+        )
+        .await,
+    )
 }
 
 fn note_unknown_device(

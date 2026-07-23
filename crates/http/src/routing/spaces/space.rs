@@ -85,7 +85,7 @@ struct RealmExportEvent {
     #[serde(skip_serializing_if = "Option::is_none")]
     sender: Option<String>,
     payload: Value,
-    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
 }
 
@@ -96,7 +96,7 @@ struct RealmExportOperation {
     object_type: String,
     operation_type: String,
     payload: Value,
-    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
 }
 
@@ -104,7 +104,7 @@ struct RealmExportOperation {
 struct RealmExportOutcome {
     schema: String,
     realm_id: String,
-    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     generated_at: DateTime<Utc>,
     operations: Vec<RealmExportOperation>,
     events: Vec<RealmExportEvent>,

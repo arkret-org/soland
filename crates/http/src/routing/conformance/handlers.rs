@@ -266,7 +266,7 @@ struct CanonicalEventDiagnostic {
     realm_id: Option<String>,
     kind: String,
     canonical_digest: String,
-    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     received_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -278,7 +278,7 @@ struct ProjectionEventDiagnostic {
     operation_type: String,
     operation_id: Option<String>,
     sender: Option<String>,
-    #[serde(serialize_with = "arkret_canonical::serialize_canonical_timestamp")]
+    #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     created_at: chrono::DateTime<chrono::Utc>,
 }
 
