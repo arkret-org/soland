@@ -53,6 +53,10 @@ use soland_application::identity::{
     AccountProfileState as AccountRecord, AgentPairingState, ContactRecord, DeviceIdentity,
     DirectConversationBindingRecord,
 };
+use soland_contracts::admin::{
+    AccountLocalpartAddRequestBody, AccountLocalpartDeleteOutcome, AccountLocalpartListOutcome,
+    AccountLocalpartMutationOutcome, AccountLocalpartUpdateRequestBody, AccountLocalpartView,
+};
 use soland_http::error::AppError;
 
 use super::auth::{
@@ -223,47 +227,6 @@ struct LocalAccountRegisterRequestBody {
     pub display_name: Option<String>,
     #[serde(default)]
     pub device_id: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountLocalpartView {
-    pub id: String,
-    pub localpart: String,
-    pub is_primary: bool,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountLocalpartListOutcome {
-    pub account_did: String,
-    pub primary_localpart: Option<String>,
-    pub localparts: Vec<AccountLocalpartView>,
-}
-
-#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
-#[serde(deny_unknown_fields)]
-struct AccountLocalpartAddRequestBody {
-    pub localpart: String,
-    #[serde(default)]
-    pub is_primary: Option<bool>,
-}
-
-#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
-#[serde(deny_unknown_fields)]
-struct AccountLocalpartUpdateRequestBody {
-    #[serde(default)]
-    pub is_primary: Option<bool>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountLocalpartMutationOutcome {
-    pub localpart: AccountLocalpartView,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountLocalpartDeleteOutcome {
-    pub ok: bool,
 }
 
 fn require_account_localparts_bearer(state: &AppState, req: &Request) -> Result<(), AppError> {

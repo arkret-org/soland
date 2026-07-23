@@ -8,13 +8,21 @@ pub(super) struct HandleLookup {
 }
 
 pub(super) fn service_handle_domain(state: &AppState) -> String {
-    handle_domain_from_public_base_url(&state.config().public_base_url)
+    // Local account names are delegated by the configured Account Authority.
+    // Its public host therefore owns the canonical handle namespace even when
+    // the Principal Server itself is served from a different host.
+    state
+        .config()
+        .account_authority_url
+        .as_deref()
+        .and_then(handle_domain_from_url)
+        .or_else(|| handle_domain_from_url(&state.config().public_base_url))
         .or_else(|| service_id_handle_domain(state.service_id()))
         .unwrap_or_else(|| "soland.local".to_owned())
 }
 
-fn handle_domain_from_public_base_url(public_base_url: &str) -> Option<String> {
-    let url = reqwest::Url::parse(public_base_url).ok()?;
+fn handle_domain_from_url(base_url: &str) -> Option<String> {
+    let url = reqwest::Url::parse(base_url).ok()?;
     valid_handle_domain_candidate(url.host_str()?)
 }
 
@@ -1134,6 +1142,14 @@ mod tests {
         assert_eq!(lookup.canonical, "alice:local.example");
         assert_eq!(lookup.localpart, "alice");
         assert_eq!(lookup.authority, "local.example");
+    }
+
+    #[test]
+    fn handle_domain_uses_configured_account_authority_host() {
+        assert_eq!(
+            handle_domain_from_url("https://Auth.Example.test/base").as_deref(),
+            Some("auth.example.test")
+        );
     }
 
     #[test]
