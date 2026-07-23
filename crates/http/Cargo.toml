@@ -42,7 +42,7 @@ arkret-models-identity = { workspace = true, features = ["salvo-oapi"] }
 arkret-policy = { workspace = true, features = ["salvo-oapi"] }
 arkret-schema = { workspace = true, features = ["salvo-oapi"] }
 arkret-server.workspace = true
-arkret-signatures = { workspace = true, features = ["protocol", "signer"] }
+arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }
 arkret-state = { workspace = true, features = ["salvo"] }
 arkret-wire = { workspace = true, features = ["salvo-oapi"] }
 dotenvy.workspace = true

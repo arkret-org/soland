@@ -39,7 +39,7 @@ arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-keystore.workspace = true
 arkret-models-identity.workspace = true
-arkret-signatures = {workspace = true,features = ["protocol", "signer"]}
+arkret-signatures = {workspace = true,features = ["keypackages", "signer", "webvh"]}
 arkret-state = {workspace = true,features = ["salvo"]}
 arkret-wire.workspace = true
 dotenvy = {workspace = true}
