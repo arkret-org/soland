@@ -452,17 +452,35 @@ fn validate_agent_session_scope_details(
 
 fn agent_scope_requires_resource_selector(scopes: &[String]) -> bool {
     scopes.iter().any(|scope| {
-        scope.starts_with("ak.self.events.")
-            || scope.starts_with("ak.event.")
-            || scope.starts_with("ak.message.")
-            || scope.starts_with("ak.reaction.")
-            || scope.starts_with("ak.strand.")
-            || scope.starts_with("ak.space.")
-            || scope.starts_with("ak.blob.")
-            || scope.starts_with("ak.call.")
-            || scope.starts_with("ak.morph.")
-            || scope.starts_with("ak.relation.")
+        !agent_account_service_scope(scope)
+            && (scope.starts_with("ak.event.")
+                || scope.starts_with("ak.message.")
+                || scope.starts_with("ak.reaction.")
+                || scope.starts_with("ak.strand.")
+                || scope.starts_with("ak.space.")
+                || scope.starts_with("ak.blob.")
+                || scope.starts_with("ak.call.")
+                || scope.starts_with("ak.morph.")
+                || scope.starts_with("ak.relation."))
     })
+}
+
+fn agent_account_service_scope(scope: &str) -> bool {
+    matches!(
+        scope,
+        "ak.self.events.query.describe"
+            | "ak.self.events.command.submit"
+            | "ak.self.events.resource.get"
+            | "ak.self.events.query.resolve"
+            | "ak.self.events.query.scan"
+            | "ak.self.events.stream.subscribe"
+            | "ak.self.events.query.frontier"
+            | "ak.self.keys.keypackages.upload.create"
+            | "ak.self.keys.keypackages.command.consume"
+            | "ak.self.keys.keypackages.command.revoke"
+            | "ak.self.device_messages.query.list"
+            | "ak.self.device_messages.command.ack"
+    )
 }
 
 fn agent_scope_metadata_error() -> AuthError {
@@ -776,10 +794,27 @@ mod tests {
     }
 
     #[test]
-    fn agent_session_binding_rejects_empty_scope_details() {
+    fn agent_account_event_service_scope_allows_empty_resource_details() {
         let mut grant = test_introspection_grant();
         grant.subject = "did:web:agent.example".to_owned();
         grant.scopes = vec!["ak.self.events.query.scan".to_owned()];
+        grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
+        grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
+        grant.freshness_state = Some(FreshnessState::Fresh);
+
+        let (_, agent_session) = session_binding_from_introspection(&grant).unwrap();
+
+        assert_eq!(
+            agent_session.unwrap().granted_scope,
+            vec!["ak.self.events.query.scan"]
+        );
+    }
+
+    #[test]
+    fn agent_content_scope_rejects_empty_resource_details() {
+        let mut grant = test_introspection_grant();
+        grant.subject = "did:web:agent.example".to_owned();
+        grant.scopes = vec!["ak.message.create".to_owned()];
         grant.proof_kind = Some(SessionGrantProofKind::AgentKeyProof);
         grant.scope_details = Some(arkret_core::SessionGrantScopeDetails::default());
         grant.freshness_state = Some(FreshnessState::Fresh);
