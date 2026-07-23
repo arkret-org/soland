@@ -23,4 +23,4 @@ sha2.workspace = true
 soland-application = { version = "0.3.0", path = "../application" }
 soland-http = { version = "0.3.0", path = "../http", features = ["test-support"] }
 soland-storage = { version = "0.3.0", path = "../storage" }
-soland-storage-memory = { version = "0.3.0", path = "../storage-memory" }
+soland-storage-memory = { version = "0.3.0", path = "../storage-memory", features = ["fault-injection"] }

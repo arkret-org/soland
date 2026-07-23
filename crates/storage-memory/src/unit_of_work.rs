@@ -5,6 +5,8 @@ use soland_storage::{
 };
 
 use crate::SolandMemoryPersistenceStore;
+#[cfg(feature = "fault-injection")]
+use crate::{FaultPoint, FaultTiming};
 
 #[async_trait]
 impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
@@ -12,6 +14,9 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         &self,
         request: EventCommitRequest,
     ) -> PersistenceResult<EventCommitOutcome> {
+        #[cfg(feature = "fault-injection")]
+        self.fault_injector
+            .check(FaultPoint::EventCommit, FaultTiming::Before)?;
         let mut events = self.events.data.lock();
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
@@ -78,10 +83,14 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         *idempotency = staged_idempotency;
         *outbox = staged_outbox;
 
-        Ok(EventCommitOutcome {
+        let outcome = EventCommitOutcome {
             event_inserted: true,
             projections_inserted,
             outbox_inserted,
-        })
+        };
+        #[cfg(feature = "fault-injection")]
+        self.fault_injector
+            .check(FaultPoint::EventCommit, FaultTiming::After)?;
+        Ok(outcome)
     }
 }

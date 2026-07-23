@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature, Verifier as _};
 use serde_json::{Value, json};
 use soland_application::events::ActiveAgentAccountabilityQuery;
 use soland_application::identity::{
-    AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogEvent,
+    AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogCommitResult, DidLogEvent,
 };
 use soland_http::error::{AppError, ErrorCode};
 
@@ -45,8 +45,8 @@ pub(crate) async fn persist_managed_agent_did_binding(
     authorization_ref: &str,
     requested_scope: &Value,
     requested_scope_digest: &Hash,
+    provisioned_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
-    let now = Utc::now();
     let document = json!({
         "id": agent_id,
         "capabilityDelegation": [{
@@ -77,7 +77,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
     )?;
     let operation = json!({
         "versionId": "1",
-        "versionTime": arkret_canonical::format_timestamp_canonical(now),
+        "versionTime": arkret_canonical::format_timestamp_canonical(provisioned_at),
         "state": document,
     });
     let digest = arkret_canonical::canonical_sha256(&operation).map_err(|error| {
@@ -85,44 +85,46 @@ pub(crate) async fn persist_managed_agent_did_binding(
             "managed Agent DID inception digest failed: {error}"
         ))
     })?;
-    state
+    let commit = state
         .did_application()
-        .store_document(DidDocumentState {
-            did: agent_id.to_owned(),
-            did_document: document,
-            key_log_head: Some(digest.clone()),
-            seq: 1,
-            method_evidence: json!({
-                "mode": "managed_agent_provisioning",
-                "controller_id": controller_id,
-                "principal_control_realm_id": principal_control_realm_id,
-                "authorization_ref": authorization_ref,
-                "requested_scope_digest": requested_scope_digest,
-            }),
-            fetched_at: now,
-            expires_at: now,
-            updated_at: now,
-        })
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("managed Agent DID persist failed: {error}"))
-        })?;
-    state
-        .did_application()
-        .append_log_event(DidLogEvent {
-            event_digest: digest,
-            did: agent_id.to_owned(),
-            seq: 1,
-            operation,
-            created_at: now,
-        })
+        .commit_log_operation(
+            None,
+            DidDocumentState {
+                did: agent_id.to_owned(),
+                did_document: document,
+                key_log_head: Some(digest.clone()),
+                seq: 1,
+                method_evidence: json!({
+                    "mode": "managed_agent_provisioning",
+                    "controller_id": controller_id,
+                    "principal_control_realm_id": principal_control_realm_id,
+                    "authorization_ref": authorization_ref,
+                    "requested_scope_digest": requested_scope_digest,
+                }),
+                fetched_at: provisioned_at,
+                expires_at: provisioned_at,
+                updated_at: provisioned_at,
+            },
+            DidLogEvent {
+                event_digest: digest,
+                did: agent_id.to_owned(),
+                seq: 1,
+                operation,
+                created_at: provisioned_at,
+            },
+        )
         .await
         .map_err(|error| {
             AppError::internal(format!(
-                "managed Agent DID inception log persist failed: {error}"
+                "managed Agent DID inception commit failed: {error}"
             ))
         })?;
-    Ok(())
+    match commit {
+        DidLogCommitResult::Accepted | DidLogCommitResult::Duplicate => Ok(()),
+        DidLogCommitResult::Conflict => Err(AppError::conflict(
+            "managed Agent DID inception conflicts with existing accepted history",
+        )),
+    }
 }
 
 pub(crate) async fn validate_managed_agent_key_backup(

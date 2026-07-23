@@ -44,7 +44,7 @@ async fn require_agent_provision_allocation(
     requested_scope: &Value,
     pairing_ttl_ms: Option<u64>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), AppError> {
+) -> Result<soland_application::jobs::IdempotencyState, AppError> {
     let key = agent_provision_allocation_key(agent_id);
     let allocation = state
         .jobs_application()
@@ -80,7 +80,7 @@ async fn require_agent_provision_allocation(
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_reason_code("agent_provision_allocation_mismatch"));
     }
-    Ok(())
+    Ok(allocation)
 }
 
 #[endpoint(
@@ -239,7 +239,7 @@ pub(super) async fn provision_agent(
             },
         });
     }
-    if let Some((prepared_agent_id, prepared_realm_id)) = &prepared_ids {
+    let provisioned_at = if let Some((prepared_agent_id, prepared_realm_id)) = &prepared_ids {
         require_agent_provision_allocation(
             state,
             &controller_id,
@@ -252,8 +252,11 @@ pub(super) async fn provision_agent(
             pairing_ttl_ms,
             now_utc,
         )
-        .await?;
-    }
+        .await?
+        .created_at
+    } else {
+        now_utc
+    };
     if existing.iter().any(|record| {
         record.agent_slug.as_deref() == Some(agent_slug.as_str())
             && agent_record_reserves_selector_slug(record, &now_utc)
@@ -379,6 +382,7 @@ pub(super) async fn provision_agent(
         &controller_authorization_ref,
         &requested_scope,
         &requested_scope_digest,
+        provisioned_at,
     )
     .await?;
     let controller_account = state
@@ -395,7 +399,7 @@ pub(super) async fn provision_agent(
         principal_control_realm_id.as_str().to_owned(),
         controller_authorization_ref.clone(),
         "pending_runtime_key".to_owned(),
-        now_utc,
+        provisioned_at,
     );
     principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
         &controller_account.account_id,

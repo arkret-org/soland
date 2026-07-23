@@ -317,6 +317,41 @@ pub(super) async fn provision_agent_with_sdk_events(
     slug: &str,
     requested_scope: Value,
 ) -> (StatusCode, Value) {
+    let (status, body, commit_body) = provision_agent_sdk_commit_attempt(
+        state,
+        token,
+        controller,
+        display_name,
+        slug,
+        requested_scope,
+        None,
+    )
+    .await;
+    if status == StatusCode::CREATED {
+        let app = app_from_state(state.clone());
+        let mut retried = TestClient::post("http://server/_arkret/self/agents")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&commit_body)
+            .send(&app)
+            .await;
+        assert_eq!(retried.status_code, Some(StatusCode::CREATED));
+        assert_eq!(retried.take_json::<Value>().await.unwrap(), body);
+    }
+    (status, body)
+}
+
+async fn provision_agent_sdk_commit_attempt(
+    state: &AppState,
+    token: &str,
+    controller: &str,
+    display_name: &str,
+    slug: &str,
+    requested_scope: Value,
+    fault: Option<(
+        &soland_storage_memory::FaultInjector,
+        soland_storage_memory::FaultPlan,
+    )>,
+) -> (StatusCode, Value, Value) {
     let app = app_from_state(state.clone());
     let mut prepared = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -331,7 +366,7 @@ pub(super) async fn provision_agent_with_sdk_events(
     let prepare_status = prepared.status_code.expect("prepare status");
     let preparation: Value = prepared.take_json().await.expect("prepare body");
     if prepare_status != StatusCode::OK {
-        return (prepare_status, preparation);
+        return (prepare_status, preparation, Value::Null);
     }
     assert_eq!(preparation["status"], "awaiting_controller_events");
 
@@ -432,6 +467,9 @@ pub(super) async fn provision_agent_with_sdk_events(
         "requested_scope": requested_scope,
         "provision_events": events,
     });
+    if let Some((injector, plan)) = fault {
+        injector.arm(plan);
+    }
     let mut committed = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&commit_body)
@@ -439,16 +477,7 @@ pub(super) async fn provision_agent_with_sdk_events(
         .await;
     let status = committed.status_code.expect("commit status");
     let body = committed.take_json().await.expect("commit body");
-    if status == StatusCode::CREATED {
-        let mut retried = TestClient::post("http://server/_arkret/self/agents")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&commit_body)
-            .send(&app)
-            .await;
-        assert_eq!(retried.status_code, Some(StatusCode::CREATED));
-        assert_eq!(retried.take_json::<Value>().await.unwrap(), body);
-    }
-    (status, body)
+    (status, body, commit_body)
 }
 
 #[tokio::test]
@@ -540,6 +569,136 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
             &public_key,
         )
         .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn agent_provision_recovers_from_each_durable_commit_boundary() {
+    use soland_storage::{
+        DeliveryPolicyStoreRegistry, EventProjectionStoreRegistry, MlsAgentStoreRegistry,
+    };
+    use soland_storage_memory::{FaultPlan, FaultPoint, FaultTiming, SolandMemoryPersistenceStore};
+
+    let plans = [
+        FaultPlan::new(FaultPoint::EventCommit, FaultTiming::Before, 1),
+        FaultPlan::new(FaultPoint::EventCommit, FaultTiming::After, 1),
+        FaultPlan::new(FaultPoint::EventCommit, FaultTiming::Before, 2),
+        FaultPlan::new(FaultPoint::EventCommit, FaultTiming::After, 2),
+        FaultPlan::new(FaultPoint::WebvhLogCommit, FaultTiming::Before, 1),
+        FaultPlan::new(FaultPoint::WebvhLogCommit, FaultTiming::After, 1),
+        FaultPlan::new(FaultPoint::AgentPut, FaultTiming::Before, 1),
+        FaultPlan::new(FaultPoint::AgentPut, FaultTiming::After, 1),
+    ];
+
+    for (index, plan) in plans.into_iter().enumerate() {
+        let persistence = std::sync::Arc::new(SolandMemoryPersistenceStore::new_with_demo_data());
+        let injector = persistence.fault_injector();
+        let state =
+            soland_test_support::app_state_with_persistence(test_config(), persistence.clone());
+        let controller = "did:web:alice.example";
+        let token = format!("agent-provision-fault-{index}");
+        seed_controller_session(&state, &token, controller).await;
+        seed_agent_provision_prerequisites(&state, controller).await;
+        seed_active_controller_device_generation(&state, controller).await;
+
+        let requested_scope = serde_json::json!({
+            "actions": [
+                "ak.self.events.stream.subscribe",
+                "ak.self.events.query.scan",
+                "ak.self.events.command.submit",
+                "ak.event.read",
+                "ak.message.create"
+            ],
+            "resources": [{
+                "kind": "service",
+                "service_id": state.service_id()
+            }]
+        });
+        let slug = format!("fault-agent-{index}");
+        let (failed_status, failed_body, commit_body) = provision_agent_sdk_commit_attempt(
+            &state,
+            &token,
+            controller,
+            "Fault Recovery Agent",
+            &slug,
+            requested_scope,
+            Some((&injector, plan)),
+        )
+        .await;
+        assert_eq!(
+            failed_status,
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "fault plan {plan:?} did not interrupt the commit: {failed_body}"
+        );
+
+        let app = app_from_state(state.clone());
+        let mut recovered = TestClient::post("http://server/_arkret/self/agents")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&commit_body)
+            .send(&app)
+            .await;
+        assert_eq!(
+            recovered.status_code,
+            Some(StatusCode::CREATED),
+            "fault plan {plan:?} did not recover"
+        );
+        let recovered_body: Value = recovered.take_json().await.unwrap();
+        assert_eq!(recovered_body["status"], "complete");
+
+        let mut replayed = TestClient::post("http://server/_arkret/self/agents")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&commit_body)
+            .send(&app)
+            .await;
+        assert_eq!(replayed.status_code, Some(StatusCode::CREATED));
+        assert_eq!(replayed.take_json::<Value>().await.unwrap(), recovered_body);
+
+        let agent_id = commit_body["agent_id"].as_str().unwrap();
+        let event_ids = [
+            commit_body["provision_events"]["accountability_grant"]["event_id"]
+                .as_str()
+                .unwrap(),
+            commit_body["provision_events"]["selector_claim"]["event_id"]
+                .as_str()
+                .unwrap(),
+        ];
+        let stored_events = persistence.events().snapshot_all().await.unwrap();
+        for event_id in event_ids {
+            assert_eq!(
+                stored_events
+                    .iter()
+                    .filter(|event| event.event_id == event_id)
+                    .count(),
+                1,
+                "fault plan {plan:?} duplicated provision event {event_id}"
+            );
+        }
+        let did_history = persistence.webvh().list_log_events(agent_id).await.unwrap();
+        assert_eq!(
+            did_history.len(),
+            1,
+            "fault plan {plan:?} duplicated Agent DID inception"
+        );
+        let did_document = persistence
+            .webvh()
+            .get_document(agent_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            did_document.key_log_head.as_deref(),
+            Some(did_history[0].event_digest.as_str())
+        );
+        assert_eq!(
+            persistence
+                .agents()
+                .list_for_controller(controller)
+                .await
+                .unwrap()
+                .len(),
+            1,
+            "fault plan {plan:?} duplicated the Agent principal"
+        );
     }
 }
 

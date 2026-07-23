@@ -1,3 +1,5 @@
+#[cfg(feature = "fault-injection")]
+use super::Arc;
 use super::{
     AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
     AgentRuntimeApprovalWrite, AgentStore, Mutex, PersistenceError, PersistenceResult, Utc, Value,
@@ -70,16 +72,30 @@ impl AgentParticipationStore for MemoryAgentParticipationStore {
 }
 #[derive(Default)]
 pub(crate) struct MemoryAgentStore {
+    #[cfg(feature = "fault-injection")]
+    fault_injector: Arc<crate::FaultInjector>,
     data: Mutex<std::collections::BTreeMap<String, AgentPrincipalRecord>>,
 }
 impl MemoryAgentStore {
+    #[cfg(not(feature = "fault-injection"))]
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(feature = "fault-injection")]
+    pub(crate) fn with_fault_injector(fault_injector: Arc<crate::FaultInjector>) -> Self {
+        Self {
+            fault_injector,
+            ..Self::default()
+        }
     }
 }
 #[async_trait]
 impl AgentStore for MemoryAgentStore {
     async fn put(&self, record: AgentPrincipalRecord) -> PersistenceResult<()> {
+        #[cfg(feature = "fault-injection")]
+        self.fault_injector
+            .check(crate::FaultPoint::AgentPut, crate::FaultTiming::Before)?;
         let id = record.id.clone();
         let mut data = self.data.lock();
         if let Some(existing) = data.get(&id)
@@ -92,6 +108,9 @@ impl AgentStore for MemoryAgentStore {
             )));
         }
         data.insert(id, record);
+        #[cfg(feature = "fault-injection")]
+        self.fault_injector
+            .check(crate::FaultPoint::AgentPut, crate::FaultTiming::After)?;
         Ok(())
     }
 

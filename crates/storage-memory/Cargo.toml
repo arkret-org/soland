@@ -9,6 +9,10 @@ homepage.workspace = true
 authors.workspace = true
 description = "In-memory Soland storage adapter."
 
+[features]
+default = []
+fault-injection = []
+
 [dependencies]
 arkret-core.workspace = true
 arkret-wire.workspace = true

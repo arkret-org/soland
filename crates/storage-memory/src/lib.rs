@@ -66,6 +66,8 @@ mod blobs;
 mod contacts;
 mod devices;
 mod events;
+#[cfg(feature = "fault-injection")]
+mod fault_injection;
 mod federation;
 mod governance;
 mod idempotency;
@@ -107,6 +109,8 @@ pub(crate) use devices::{
     MemoryOneTimeKeyStore,
 };
 pub(crate) use events::{MemoryEventStore, MemoryMessageStore};
+#[cfg(feature = "fault-injection")]
+pub use fault_injection::{FaultInjector, FaultPlan, FaultPoint, FaultTiming};
 pub(crate) use federation::{
     MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
     MemoryFederationOutboxStore, MemoryFederationTransactionStore,

@@ -1,11 +1,17 @@
+#[cfg(feature = "fault-injection")]
+use super::Arc;
 use super::{
     BTreeMap, Mutex, PersistenceResult, ServiceRegistrationCommitOutcome, Value,
     WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore, async_trait,
     document_declares_registration_key, registration_as_existing, registrations_match,
     valid_new_service_registration_records, webvh_freshness_on_put,
 };
+#[cfg(feature = "fault-injection")]
+use crate::{FaultPoint, FaultTiming};
 #[derive(Default)]
 pub(crate) struct MemoryWebvhStore {
+    #[cfg(feature = "fault-injection")]
+    fault_injector: Arc<crate::FaultInjector>,
     documents: Mutex<BTreeMap<String, WebvhDocumentRecord>>,
     log: Mutex<BTreeMap<String, Vec<WebvhLogRecord>>>,
     service_registrations: Mutex<
@@ -14,8 +20,17 @@ pub(crate) struct MemoryWebvhStore {
     submission_lock: Mutex<()>,
 }
 impl MemoryWebvhStore {
+    #[cfg(not(feature = "fault-injection"))]
     pub(crate) fn new() -> Self {
         Self::default()
+    }
+
+    #[cfg(feature = "fault-injection")]
+    pub(crate) fn with_fault_injector(fault_injector: Arc<crate::FaultInjector>) -> Self {
+        Self {
+            fault_injector,
+            ..Self::default()
+        }
     }
 }
 #[async_trait]
@@ -84,6 +99,9 @@ impl WebvhStore for MemoryWebvhStore {
         mut document: WebvhDocumentRecord,
         event: WebvhLogRecord,
     ) -> PersistenceResult<WebvhLogCommitOutcome> {
+        #[cfg(feature = "fault-injection")]
+        self.fault_injector
+            .check(FaultPoint::WebvhLogCommit, FaultTiming::Before)?;
         let _submission = self.submission_lock.lock();
         if document.did != event.did
             || document.seq != event.seq
@@ -135,6 +153,9 @@ impl WebvhStore for MemoryWebvhStore {
         document.expires_at = expires_at;
         did_log.push(event);
         documents.insert(document.did.clone(), document);
+        #[cfg(feature = "fault-injection")]
+        self.fault_injector
+            .check(FaultPoint::WebvhLogCommit, FaultTiming::After)?;
         Ok(WebvhLogCommitOutcome::Accepted)
     }
 

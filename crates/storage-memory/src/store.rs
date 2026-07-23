@@ -37,9 +37,13 @@ use super::{
     SidecarStore, SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore,
     TypingStore, WebvhStore,
 };
+#[cfg(feature = "fault-injection")]
+use crate::{Arc, FaultInjector};
 
 /// In-memory implementation of persistence store.
 pub struct SolandMemoryPersistenceStore {
+    #[cfg(feature = "fault-injection")]
+    pub(crate) fault_injector: Arc<FaultInjector>,
     accounts: MemoryAccountStore,
     account_localparts: MemoryAccountLocalpartStore,
     account_lifecycle: MemoryAccountLifecycleStore,
@@ -106,11 +110,15 @@ pub struct SolandMemoryPersistenceStore {
 
 impl SolandMemoryPersistenceStore {
     pub fn new() -> Self {
+        #[cfg(feature = "fault-injection")]
+        let fault_injector = Arc::new(FaultInjector::default());
         let account_localparts = MemoryAccountLocalpartStore::new();
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
         let devices = MemoryDeviceInventoryStore::new();
         let events = MemoryEventStore::with_devices(devices.shared_data());
         Self {
+            #[cfg(feature = "fault-injection")]
+            fault_injector: fault_injector.clone(),
             accounts,
             account_localparts,
             account_lifecycle: MemoryAccountLifecycleStore::new(),
@@ -149,7 +157,16 @@ impl SolandMemoryPersistenceStore {
             recovery_policies: MemoryRecoveryPolicyStore::new(),
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
             recovery_sessions: MemoryRecoverySessionStore::new(),
-            webvh: MemoryWebvhStore::new(),
+            webvh: {
+                #[cfg(feature = "fault-injection")]
+                {
+                    MemoryWebvhStore::with_fault_injector(fault_injector.clone())
+                }
+                #[cfg(not(feature = "fault-injection"))]
+                {
+                    MemoryWebvhStore::new()
+                }
+            },
             service_identity: MemoryServiceIdentityStore::new(),
             realm_invites: MemoryRealmInviteStore::new(),
             events,
@@ -168,11 +185,29 @@ impl SolandMemoryPersistenceStore {
             mls_welcomes: MemoryMlsWelcomeStore::new(),
             mls_commits: MemoryMlsCommitStore::new(),
             agent_participation: MemoryAgentParticipationStore::new(),
-            agents: MemoryAgentStore::new(),
+            agents: {
+                #[cfg(feature = "fault-injection")]
+                {
+                    MemoryAgentStore::with_fault_injector(fault_injector.clone())
+                }
+                #[cfg(not(feature = "fault-injection"))]
+                {
+                    MemoryAgentStore::new()
+                }
+            },
             sidecars: MemorySidecarStore::new(),
             notifications: MemoryNotificationStore::new(),
             sync_cursors: MemorySyncCursorStore::new(),
-            idempotency_keys: MemoryIdempotencyStore::new(),
+            idempotency_keys: {
+                #[cfg(feature = "fault-injection")]
+                {
+                    MemoryIdempotencyStore::with_fault_injector(fault_injector.clone())
+                }
+                #[cfg(not(feature = "fault-injection"))]
+                {
+                    MemoryIdempotencyStore::new()
+                }
+            },
         }
     }
 
@@ -210,6 +245,11 @@ impl SolandMemoryPersistenceStore {
             },
         );
         store
+    }
+
+    #[cfg(feature = "fault-injection")]
+    pub fn fault_injector(&self) -> Arc<FaultInjector> {
+        self.fault_injector.clone()
     }
 }
 
