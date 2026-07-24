@@ -37,6 +37,7 @@ DROP TABLE IF EXISTS device_message_lost_watermarks CASCADE;
 DROP TABLE IF EXISTS device_message_idempotency CASCADE;
 DROP TABLE IF EXISTS device_message_txns CASCADE;
 DROP TABLE IF EXISTS device_messages CASCADE;
+DROP TABLE IF EXISTS device_pairings CASCADE;
 DROP TABLE IF EXISTS devices CASCADE;
 DROP TABLE IF EXISTS direct_conversation_bindings CASCADE;
 DROP TABLE IF EXISTS events CASCADE;

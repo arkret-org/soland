@@ -421,6 +421,27 @@ CREATE TABLE public.devices (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
+CREATE TABLE public.device_pairings (
+    device_pairing_request_id text NOT NULL,
+    pairing_code text NOT NULL,
+    new_device_pubkey jsonb NOT NULL,
+    challenge_signature text NOT NULL,
+    display_name text,
+    device_metadata jsonb,
+    state text DEFAULT 'pending_authorization' NOT NULL,
+    device_id text,
+    authorized_by_actor_id text,
+    authorized_event_ref text,
+    created_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (device_pairing_request_id),
+    CONSTRAINT device_pairings_state_check
+        CHECK (state = ANY (ARRAY['pending_authorization', 'authorized', 'expired']))
+);
+
+CREATE INDEX device_pairings_expiry_idx
+    ON public.device_pairings (expires_at);
+
 CREATE TABLE public.device_messages (
     id uuid NOT NULL,
     idempotency_key text NOT NULL,

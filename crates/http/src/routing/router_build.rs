@@ -195,7 +195,8 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
         .push(
             Router::with_path("open")
                 .push(invites::open_router())
-                .push(identity::agents::open_router()),
+                .push(identity::agents::open_router())
+                .push(identity::device_pairing_open::open_router()),
         )
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
@@ -404,4 +405,3 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     .max_age(3600)
     .into_handler()
 }
-

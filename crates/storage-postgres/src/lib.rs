@@ -23,17 +23,18 @@ pub(crate) use soland_storage::{
     ConsentCellStore, ContactRecord, ContactStore, CursorRevocation, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    DirectConversationBindingRecord, DirectConversationBindingStore, DriftResult, EventStore,
-    FederationFrontierExchangeRecord, FederationFrontierExchangeStore, FederationOperationsStore,
-    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxStore,
-    FederationTransactionRecord, FederationTransactionStore, HandleReleaseStore, IdempotencyRecord,
-    IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
-    JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
-    JoinApplicationRecord, JoinApplicationStore, KeyBackupStore, MlsCommitEpochAdvance,
-    MlsCommitEpochRecord, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow,
-    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
+    DevicePairingRecord, DevicePairingStore, DirectConversationBindingRecord,
+    DirectConversationBindingStore, DriftResult, EventStore, FederationFrontierExchangeRecord,
+    FederationFrontierExchangeStore, FederationOperationsStore, FederationOutboxDeadLetterRecord,
+    FederationOutboxRecord, FederationOutboxStore, FederationTransactionRecord,
+    FederationTransactionStore, HandleReleaseStore, IdempotencyRecord, IdempotencyStore,
+    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
+    InviteLocatorInsertOutcome, InviteLocatorRecord, InviteLocatorRotateMutation,
+    InviteLocatorStore, InviteReceivePolicyStore, JoinApplicationCommand,
+    JoinApplicationCommandOutcome, JoinApplicationMutation, JoinApplicationRecord,
+    JoinApplicationStore, KeyBackupStore, MlsCommitEpochAdvance, MlsCommitEpochRecord,
+    MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore,
+    MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
     MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
     OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord, OrganizationStore,
     OutboundPushBridgeCacheRecord, PeerEventsPageQuery, PeerKeyPackageClaimAttempt,
@@ -80,6 +81,8 @@ mod applets;
 mod audit;
 mod blobs;
 mod contacts;
+mod device_pairing_row;
+mod device_pairings;
 mod devices;
 mod events;
 mod federation;
@@ -116,6 +119,8 @@ pub use applets::*;
 pub use audit::*;
 pub use blobs::*;
 pub use contacts::*;
+pub(crate) use device_pairing_row::DevicePairingRow;
+pub use device_pairings::*;
 pub use devices::*;
 pub use events::*;
 pub use federation::*;

@@ -4,6 +4,7 @@ use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
     AgentParticipationStore, AgentStore, AppletStore, AuditStore, BlobStore, CallSignalRelayStore,
     ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
+    DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingStore,
     DirectConversationBindingStore, EventStore, FederationFrontierExchangeStore,
     FederationOperationsStore, FederationOutboxStore, FederationTransactionStore,
     HandleReleaseStore, IdempotencyStore, InviteLocatorStore, InviteReceivePolicyStore,
@@ -12,25 +13,25 @@ use super::{
     MemoryAgentStore, MemoryAppletStore, MemoryAuditStore, MemoryBlobStore,
     MemoryCallSignalRelayStore, MemoryConsentCellStore, MemoryContactStore,
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
-    MemoryDirectConversationBindingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
-    MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryFederationTransactionStore,
-    MemoryHandleReleaseStore, MemoryIdempotencyStore, MemoryInviteLocatorStore,
-    MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore, MemoryKeyBackupStore,
-    MemoryMessageStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore,
-    MemoryModerationStore, MemoryMorphProjectionStore, MemoryMultisigPendingStore,
-    MemoryNotificationStore, MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore,
-    MemoryOrganizationStore, MemoryPolicyDocumentStore, MemoryPresenceStore,
-    MemoryProjectionEventStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
-    MemoryReadReceiptRelayStore, MemoryRealmInviteStore, MemoryRealmMetaStore,
-    MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore,
-    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
-    MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore,
-    MlsWelcomeStore, ModerationStore, MorphProjectionStore, MultisigPendingStore,
-    NotificationStore, OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore,
-    PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
+    MemoryDevicePairingStore, MemoryDirectConversationBindingStore, MemoryEventStore,
+    MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
+    MemoryFederationOutboxStore, MemoryFederationTransactionStore, MemoryHandleReleaseStore,
+    MemoryIdempotencyStore, MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore,
+    MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore,
+    MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
+    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
+    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationStore,
+    MemoryPolicyDocumentStore, MemoryPresenceStore, MemoryProjectionEventStore,
+    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryReadReceiptRelayStore,
+    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmModerationPolicyStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
+    MemoryRecoveryReceiptStore, MemoryRecoverySessionStore, MemoryRetentionPolicyStore,
+    MemoryRetentionTombstoneStore, MemoryServiceIdentityStore, MemorySessionStore,
+    MemorySidecarStore, MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
+    MemorySyncCursorStore, MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore,
+    MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MultisigPendingStore, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
+    OrganizationStore, PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
     PushBridgeCacheStore, PushDeviceStore, ReadReceiptRelayStore, RealmInviteStore,
     RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
     RealmOrganizationStore, RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore,
@@ -59,6 +60,7 @@ pub struct SolandMemoryPersistenceStore {
     messages: MemoryMessageStore,
     blobs: MemoryBlobStore,
     devices: MemoryDeviceInventoryStore,
+    device_pairings: MemoryDevicePairingStore,
     federation_transactions: MemoryFederationTransactionStore,
     pub(crate) federation_outbox: MemoryFederationOutboxStore,
     federation_frontier_exchange: MemoryFederationFrontierExchangeStore,
@@ -135,6 +137,7 @@ impl SolandMemoryPersistenceStore {
             messages: MemoryMessageStore::new(),
             blobs: MemoryBlobStore::new(),
             devices,
+            device_pairings: MemoryDevicePairingStore::new(),
             federation_transactions: MemoryFederationTransactionStore::new(),
             federation_outbox: MemoryFederationOutboxStore::new(),
             federation_frontier_exchange: MemoryFederationFrontierExchangeStore::new(),
@@ -317,6 +320,44 @@ impl soland_storage::IdentityStoreRegistry for SolandMemoryPersistenceStore {
 
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
+    }
+
+    fn device_pairings(&self) -> &dyn DevicePairingStore {
+        &self.device_pairings
+    }
+}
+
+#[async_trait::async_trait]
+impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
+    async fn commit_device_pairing_authorization(
+        &self,
+        commit: DevicePairingAuthorizationCommit,
+    ) -> soland_storage::PersistenceResult<bool> {
+        let mut pairings = self.device_pairings.data.lock();
+        let Some(pairing) = pairings.get_mut(&commit.device_pairing_request_id) else {
+            return Ok(false);
+        };
+        if pairing.state != "pending_authorization"
+            || pairing.expires_at <= commit.changed_at
+            || pairing.pairing_code != commit.pairing_code
+            || pairing.new_device_pubkey != commit.new_device_pubkey
+            || pairing.challenge_signature != commit.challenge_signature
+            || commit.device.actor != commit.authorized_by_actor_id
+        {
+            return Ok(false);
+        }
+
+        let devices = self.devices.shared_data();
+        let mut devices = devices.lock();
+        devices.insert(
+            (commit.device.actor.clone(), commit.device.device_id.clone()),
+            commit.device.clone(),
+        );
+        pairing.state = "authorized".to_owned();
+        pairing.device_id = Some(commit.device.device_id);
+        pairing.authorized_by_actor_id = Some(commit.authorized_by_actor_id);
+        pairing.authorized_event_ref = Some(commit.authorized_event_ref);
+        Ok(true)
     }
 }
 
@@ -524,3 +565,99 @@ impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
 }
 
 impl PersistenceStore for SolandMemoryPersistenceStore {}
+
+#[cfg(test)]
+mod device_pairing_commit_tests {
+    use soland_storage::{DeviceInventoryRecord, DevicePairingRecord};
+
+    use super::*;
+
+    #[tokio::test]
+    async fn staged_pairing_commit_is_atomic_and_strictly_bound() {
+        let store = SolandMemoryPersistenceStore::new();
+        let now = chrono::Utc::now();
+        let request_id = "device_pairing_request:01964137-0000-7000-8000-0000000000c1".to_owned();
+        let public_key = serde_json::json!({
+            "alg": "EdDSA",
+            "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
+            "kid": "ak:device:01964137-0000-7000-8000-0000000000b2",
+            "kty": "OKP"
+        });
+        store
+            .device_pairings
+            .put(DevicePairingRecord::new(
+                request_id.clone(),
+                "7H2K9M4Q".to_owned(),
+                public_key.clone(),
+                "Q0hBTExFTkdF".to_owned(),
+                None,
+                None,
+                "pending_authorization".to_owned(),
+                now,
+                now + chrono::Duration::minutes(10),
+            ))
+            .await
+            .unwrap();
+
+        let device = DeviceInventoryRecord {
+            actor: "did:web:example.com:alice".to_owned(),
+            device_id: "ak:device:01964137-0000-7000-8000-0000000000b2".to_owned(),
+            display_name: None,
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({"authorized": true}),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        };
+        let commit = |pairing_code: &str| DevicePairingAuthorizationCommit {
+            device_pairing_request_id: request_id.clone(),
+            pairing_code: pairing_code.to_owned(),
+            new_device_pubkey: public_key.clone(),
+            challenge_signature: "Q0hBTExFTkdF".to_owned(),
+            device: device.clone(),
+            authorized_by_actor_id: device.actor.clone(),
+            authorized_event_ref: "ak:event:01964137-0000-7000-8000-00000000d001".to_owned(),
+            changed_at: now,
+        };
+
+        assert!(
+            !store
+                .commit_device_pairing_authorization(commit("8J3L5N7P"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .devices
+                .get(&device.actor, &device.device_id)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            store
+                .commit_device_pairing_authorization(commit("7H2K9M4Q"))
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .devices
+                .get(&device.actor, &device.device_id)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        let pairing = store
+            .device_pairings
+            .get_by_request_id(&request_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pairing.state, "authorized");
+        assert_eq!(
+            pairing.device_id.as_deref(),
+            Some(device.device_id.as_str())
+        );
+    }
+}

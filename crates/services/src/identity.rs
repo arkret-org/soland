@@ -287,10 +287,7 @@ impl ContactService {
         self.contacts.contact_any(requester, target).await
     }
 
-    pub async fn contacts_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<ContactRecord>> {
+    pub async fn contacts_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<ContactRecord>> {
         self.contacts.contacts_for_actor(actor_id).await
     }
 
@@ -727,10 +724,7 @@ impl AccountDataService {
         self.account_data.entry(actor_id, data_type).await
     }
 
-    pub async fn entries_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<AccountDataState>> {
+    pub async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>> {
         self.account_data.entries_for_actor(actor_id).await
     }
 
@@ -814,11 +808,7 @@ impl KeyMaterialService {
             .await
     }
 
-    pub async fn bundle(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-    ) -> ServiceResult<Option<Value>> {
+    pub async fn bundle(&self, actor_id: &str, device_id: &str) -> ServiceResult<Option<Value>> {
         self.device_keys.bundle(actor_id, device_id).await
     }
 
@@ -862,19 +852,15 @@ pub struct AgentController {
 
 #[async_trait]
 pub trait AccountLookupPort: Send + Sync {
-    async fn find_account_by_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Option<AccountIdentity>>;
+    async fn find_account_by_actor(&self, actor_id: &str)
+    -> ServiceResult<Option<AccountIdentity>>;
     async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()>;
     async fn account(&self, actor_id: &str) -> ServiceResult<Option<AccountProfileState>>;
     async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>>;
     async fn save_account(&self, account: AccountProfileState) -> ServiceResult<()>;
     async fn delete_account(&self, actor_id: &str) -> ServiceResult<()>;
-    async fn account_localparts(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<AccountLocalpartState>>;
+    async fn account_localparts(&self, actor_id: &str)
+    -> ServiceResult<Vec<AccountLocalpartState>>;
     async fn localpart_owner(
         &self,
         localpart: &str,
@@ -924,10 +910,8 @@ pub trait DeviceDirectoryPort: Send + Sync {
 
 #[async_trait]
 pub trait AgentDirectoryPort: Send + Sync {
-    async fn find_agent_controller(
-        &self,
-        agent_id: &str,
-    ) -> ServiceResult<Option<AgentController>>;
+    async fn find_agent_controller(&self, agent_id: &str)
+    -> ServiceResult<Option<AgentController>>;
 }
 
 #[derive(Clone)]
@@ -1120,6 +1104,98 @@ impl AgentPairingState {
     }
 }
 
+/// Service-owned projection of a server-mediated device-pairing short-link
+/// request. Mirrors the storage `DevicePairingRecord`; the port maps between
+/// the two so the service layer stays storage-crate agnostic.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DevicePairingState {
+    pub device_pairing_request_id: String,
+    pub pairing_code: String,
+    pub new_device_pubkey: Value,
+    pub challenge_signature: String,
+    pub display_name: Option<String>,
+    pub device_metadata: Option<Value>,
+    pub state: String,
+    pub device_id: Option<String>,
+    pub authorized_by_actor_id: Option<String>,
+    pub authorized_event_ref: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[async_trait]
+pub trait DevicePairingPort: Send + Sync {
+    async fn stage(&self, record: DevicePairingState) -> ServiceResult<()>;
+    async fn get(
+        &self,
+        device_pairing_request_id: &str,
+    ) -> ServiceResult<Option<DevicePairingState>>;
+    async fn commit_authorization(
+        &self,
+        device_pairing_request_id: &str,
+        pairing_code: &str,
+        new_device_pubkey: Value,
+        challenge_signature: &str,
+        device: SaveDeviceCommand,
+        authorized_event_ref: &str,
+        changed_at: DateTime<Utc>,
+    ) -> ServiceResult<bool>;
+    async fn prune_expired_before(&self, cutoff: DateTime<Utc>) -> ServiceResult<u64>;
+}
+
+/// Minimal façade over the device-pairing short-link store: stage a new
+/// account-less request, look one up, flip it to authorized once a verified
+/// sibling drives `ak.gate.account.command.pair_device`, and prune expired rows.
+#[derive(Clone)]
+pub struct DevicePairingService {
+    pairing: Arc<dyn DevicePairingPort>,
+}
+
+impl DevicePairingService {
+    pub fn new(pairing: Arc<dyn DevicePairingPort>) -> Self {
+        Self { pairing }
+    }
+
+    pub async fn stage(&self, record: DevicePairingState) -> ServiceResult<()> {
+        self.pairing.stage(record).await
+    }
+
+    pub async fn get(
+        &self,
+        device_pairing_request_id: &str,
+    ) -> ServiceResult<Option<DevicePairingState>> {
+        self.pairing.get(device_pairing_request_id).await
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub async fn commit_authorization(
+        &self,
+        device_pairing_request_id: &str,
+        pairing_code: &str,
+        new_device_pubkey: Value,
+        challenge_signature: &str,
+        device: SaveDeviceCommand,
+        authorized_event_ref: &str,
+        changed_at: DateTime<Utc>,
+    ) -> ServiceResult<bool> {
+        self.pairing
+            .commit_authorization(
+                device_pairing_request_id,
+                pairing_code,
+                new_device_pubkey,
+                challenge_signature,
+                device,
+                authorized_event_ref,
+                changed_at,
+            )
+            .await
+    }
+
+    pub async fn prune_expired_before(&self, cutoff: DateTime<Utc>) -> ServiceResult<u64> {
+        self.pairing.prune_expired_before(cutoff).await
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct StoreAgentRuntimeApprovalCommand {
     pub agent_id: String,
@@ -1186,10 +1262,7 @@ pub struct AgentSidecarContextState {
 
 #[async_trait]
 pub trait SidecarPort: Send + Sync {
-    async fn ensure_sidecar(
-        &self,
-        sidecar: AgentSidecarState,
-    ) -> ServiceResult<AgentSidecarState>;
+    async fn ensure_sidecar(&self, sidecar: AgentSidecarState) -> ServiceResult<AgentSidecarState>;
     async fn sidecar(&self, sidecar_id: &str) -> ServiceResult<Option<AgentSidecarState>>;
     async fn sidecar_for_realm_controller(
         &self,
@@ -1256,14 +1329,9 @@ pub enum PublishRecoveryPolicyResult {
 
 #[async_trait]
 pub trait RecoveryPolicyPort: Send + Sync {
-    async fn active_policy(
-        &self,
-        principal_id: &str,
-    ) -> ServiceResult<Option<RecoveryPolicyState>>;
-    async fn policy_history(
-        &self,
-        principal_id: &str,
-    ) -> ServiceResult<Vec<RecoveryPolicyState>>;
+    async fn active_policy(&self, principal_id: &str)
+    -> ServiceResult<Option<RecoveryPolicyState>>;
+    async fn policy_history(&self, principal_id: &str) -> ServiceResult<Vec<RecoveryPolicyState>>;
     async fn insert_policy(&self, policy: RecoveryPolicyState) -> ServiceResult<()>;
 }
 
@@ -1340,10 +1408,8 @@ pub struct RecoveryReceiptState {
 
 #[async_trait]
 pub trait RecoveryReceiptPort: Send + Sync {
-    async fn receipt_history(
-        &self,
-        principal_id: &str,
-    ) -> ServiceResult<Vec<RecoveryReceiptState>>;
+    async fn receipt_history(&self, principal_id: &str)
+    -> ServiceResult<Vec<RecoveryReceiptState>>;
     async fn insert_receipt(&self, receipt: RecoveryReceiptState) -> ServiceResult<()>;
 }
 
@@ -1529,10 +1595,7 @@ impl SessionService {
         Self { sessions }
     }
 
-    pub async fn session(
-        &self,
-        token_hash: &str,
-    ) -> ServiceResult<Option<SessionIdentityState>> {
+    pub async fn session(&self, token_hash: &str) -> ServiceResult<Option<SessionIdentityState>> {
         self.sessions.session(token_hash).await
     }
 
@@ -2050,10 +2113,7 @@ impl IdentityService {
         self.devices.save_device_if_absent(device).await
     }
 
-    pub async fn devices_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<DeviceIdentity>> {
+    pub async fn devices_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<DeviceIdentity>> {
         self.devices.devices_for_actor(actor_id).await
     }
 
@@ -2123,10 +2183,7 @@ pub enum ServiceRegistrationCommitResult {
 #[async_trait]
 pub trait DidDocumentPort: Send + Sync {
     async fn document(&self, did: &str) -> ServiceResult<Option<DidDocumentState>>;
-    async fn embedded_document(
-        &self,
-        local_id: &str,
-    ) -> ServiceResult<Option<DidDocumentState>>;
+    async fn embedded_document(&self, local_id: &str) -> ServiceResult<Option<DidDocumentState>>;
     async fn log_events(&self, did: &str) -> ServiceResult<Vec<DidLogEvent>>;
     async fn store_document(&self, document: DidDocumentState) -> ServiceResult<()>;
     async fn append_log_event(&self, event: DidLogEvent) -> ServiceResult<()>;
@@ -2355,10 +2412,7 @@ mod tests {
             )
         }
 
-        async fn register_account(
-            &self,
-            _command: RegisterAccountCommand,
-        ) -> ServiceResult<()> {
+        async fn register_account(&self, _command: RegisterAccountCommand) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -2409,11 +2463,7 @@ mod tests {
             unreachable!()
         }
 
-        async fn remove_localpart(
-            &self,
-            _actor_id: &str,
-            _localpart: &str,
-        ) -> ServiceResult<()> {
+        async fn remove_localpart(&self, _actor_id: &str, _localpart: &str) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -2468,10 +2518,7 @@ mod tests {
             Ok(true)
         }
 
-        async fn devices_for_actor(
-            &self,
-            _actor_id: &str,
-        ) -> ServiceResult<Vec<DeviceIdentity>> {
+        async fn devices_for_actor(&self, _actor_id: &str) -> ServiceResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
     }
@@ -2647,8 +2694,7 @@ mod tests {
 
     #[tokio::test]
     async fn did_lookup_is_independent_from_http_and_app_state() {
-        let service =
-            DidService::new(Arc::new(StaticDidDocuments), Arc::new(NoDidResolver));
+        let service = DidService::new(Arc::new(StaticDidDocuments), Arc::new(NoDidResolver));
         let document = service
             .document("did:web:alice.example")
             .await
@@ -2662,8 +2708,7 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_activation_is_one_atomic_port_call() {
-        let service =
-            AgentPairingService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
+        let service = AgentPairingService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
         let command = ActivateAgentRuntimeCommand {
             agent_id: "did:web:agent.example".to_owned(),
             approval_request_id: "approval-1".to_owned(),
@@ -2713,4 +2758,3 @@ mod tests {
         ));
     }
 }
-

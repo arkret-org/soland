@@ -19,7 +19,7 @@ async fn authorize_account_device_pair(
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
     ensure_authorizing_device_verified(state, session).await?;
-    let pairing_code = body.pairing_code.trim();
+    let pairing_code = body.pairing_code.as_str().trim();
     if pairing_code.is_empty() {
         return Err(AppError::missing_param("pairing_code is required"));
     }
@@ -55,6 +55,9 @@ async fn authorize_account_device_pair(
 
     let authorized_event_ref = ids::generate_event_id();
     let authorized_at = now();
+    let staged_new_device_pubkey = serde_json::to_value(&body.new_device_pubkey)
+        .map_err(|error| AppError::invalid_param(format!("new_device_pubkey invalid: {error}")))?;
+    let staged_challenge_signature = body.challenge_signature.as_str().to_owned();
     let display_name = body
         .display_name
         .as_deref()
@@ -98,11 +101,34 @@ async fn authorize_account_device_pair(
             revoked_at: None,
         },
     };
-    state
-        .identities()
-        .save_device(device)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
+    if let Some(device_pairing_request_id) = body
+        .device_pairing_request_id
+        .as_ref()
+        .map(|request_id| request_id.as_str())
+    {
+        let committed = state
+            .device_pairings()
+            .commit_authorization(
+                device_pairing_request_id,
+                pairing_code,
+                staged_new_device_pubkey,
+                &staged_challenge_signature,
+                device,
+                &authorized_event_ref,
+                authorized_at,
+            )
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        if !committed {
+            return Err(AppError::not_found("device pairing request not found"));
+        }
+    } else {
+        state
+            .identities()
+            .save_device(device)
+            .await
+            .map_err(|error| AppError::internal(error.to_string()))?;
+    }
     append_audit_log(
         state,
         Some(&session.actor),
@@ -224,4 +250,3 @@ fn is_base64url_non_empty(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
-

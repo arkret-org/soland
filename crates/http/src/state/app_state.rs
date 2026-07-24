@@ -19,25 +19,21 @@ use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use soland_services::authorization::{
-    AuthorizationService, AuthorizationCheck, AuthorizationDecision, AuthorizationPort,
+    AuthorizationCheck, AuthorizationDecision, AuthorizationPort, AuthorizationService,
 };
 use soland_services::delivery::{DeliveryService, ObjectStoragePort};
 use soland_services::events::{
-    EventService, EventQueryService, MlsCommitQueryService,
-    MlsKeyPackageService, RealmDirectoryService, RealmDirectoryEntry,
-    RealmDirectoryIndex, RealmInviteService, RealmQueryService,
+    EventQueryService, EventService, MlsCommitQueryService, MlsKeyPackageService,
+    RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryService, RealmInviteService,
+    RealmQueryService,
 };
 use soland_services::federation::{FederationService, SovereignDeploymentState};
-use soland_services::governance::{
-    AdminSigningKeyPort, GovernanceService, RuntimeSettingsPort,
-};
+use soland_services::governance::{AdminSigningKeyPort, GovernanceService, RuntimeSettingsPort};
 use soland_services::hydration::HydrationProjectionAdapter;
 use soland_services::identity::{
-    AccountDataService, AgentPairingService,
-    AgentParticipationService, ConsentService, ContactService,
-    DidService, IdentityService, KeyBackupService,
-    KeyMaterialService, RecoveryPolicyService,
-    RecoveryReceiptService, RecoverySessionService,
+    AccountDataService, AgentPairingService, AgentParticipationService, ConsentService,
+    ContactService, DevicePairingService, DidService, IdentityService, KeyBackupService,
+    KeyMaterialService, RecoveryPolicyService, RecoveryReceiptService, RecoverySessionService,
     SessionService,
 };
 use soland_services::jobs::{JobsService, RuntimeHealthPort};
@@ -48,7 +44,7 @@ use soland_services::persistence_identity::PersistenceIdentityServices;
 use soland_services::persistence_operations::PersistenceOperationalServices;
 #[cfg(test)]
 use soland_services::projection::ProjectionSnapshot as ProjectionState;
-use soland_services::projection::{ServiceClock, ProjectionService};
+use soland_services::projection::{ProjectionService, ServiceClock};
 use soland_services::runtime_guards::{
     KeyBackupDownloadOutcome, ModerationReportRateOutcome, RuntimeGuardService,
 };
@@ -96,6 +92,7 @@ pub struct AppState {
     consents: ConsentService,
     contacts: ContactService,
     agent_pairings: AgentPairingService,
+    device_pairings: DevicePairingService,
     agent_participations: AgentParticipationService,
     key_backups: KeyBackupService,
     sessions: SessionService,
@@ -459,9 +456,7 @@ mod test_construction {
 
     #[async_trait]
     impl RuntimeSettingsPort for NoRuntimeSettings {
-        async fn load_overrides(
-            &self,
-        ) -> soland_services::ServiceResult<Vec<(String, Value)>> {
+        async fn load_overrides(&self) -> soland_services::ServiceResult<Vec<(String, Value)>> {
             Ok(Vec::new())
         }
 
@@ -711,8 +706,7 @@ impl AppState {
             crate::runtime_settings::RuntimeSettings::from_config(&config),
         ));
 
-        let authorization =
-            AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
+        let authorization = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
         let PersistenceEventServices {
             events,
             queries: event_queries,
@@ -721,8 +715,7 @@ impl AppState {
             realm_queries: realms,
             realm_invites,
         } = persistence.event_services(projected_operation_persistence);
-        let deliveries =
-            persistence.delivery_service(object_storage, push_target_hmac_key);
+        let deliveries = persistence.delivery_service(object_storage, push_target_hmac_key);
         let PersistenceIdentityServices {
             identity: identities,
             account_data,
@@ -730,6 +723,7 @@ impl AppState {
             consent: consents,
             contact: contacts,
             agent_pairing: agent_pairings,
+            device_pairing: device_pairings,
             agent_participation: agent_participations,
             key_backup: key_backups,
             session: sessions,
@@ -776,6 +770,7 @@ impl AppState {
             consents,
             contacts,
             agent_pairings,
+            device_pairings,
             agent_participations,
             key_backups,
             sessions,
@@ -879,6 +874,10 @@ impl AppState {
         &self.agent_pairings
     }
 
+    pub(crate) fn device_pairings(&self) -> &DevicePairingService {
+        &self.device_pairings
+    }
+
     pub(crate) fn agent_participations(&self) -> &AgentParticipationService {
         &self.agent_participations
     }
@@ -963,11 +962,7 @@ impl AppState {
         // boot-config seed. Only overridden keys have rows; everything else
         // keeps its env default. Per-key decode failures are logged and
         // skipped so a corrupt row can never brick startup.
-        match self
-            .governance
-            .runtime_setting_overrides()
-            .await
-        {
+        match self.governance.runtime_setting_overrides().await {
             Ok(rows) if !rows.is_empty() => {
                 let mut merged =
                     crate::runtime_settings::RuntimeSettings::from_config(&self.config);
@@ -1024,8 +1019,7 @@ impl AppState {
                 .list(realm_id.as_str(), chrono::Utc::now())
                 .await?
             {
-                self.projections
-                    .install_join_application_record(&record);
+                self.projections.install_join_application_record(&record);
             }
         }
         self.persistence
@@ -1104,9 +1098,7 @@ impl AppState {
             crate::routing::identity::project_canonical_direct_binding(self, &operation).await;
         }
 
-        self.identities
-            .hydrate_account_lifecycles()
-            .await?;
+        self.identities.hydrate_account_lifecycles().await?;
 
         self.governance.hydrate_projections().await?;
         // Hydrate the cursor-revocation cache from the durable
@@ -1116,9 +1108,7 @@ impl AppState {
         // advance to-device ack / resume / wait-for / dropped-recovery
         // state). Built off-lock first; merge under a short critical section.
         match self.sync().active_cursor_revocations(now).await {
-            Ok(revocations) => self
-                .sync()
-                .replace_cursor_revocations(revocations),
+            Ok(revocations) => self.sync().replace_cursor_revocations(revocations),
             Err(error) => {
                 tracing::warn!(%error, "failed to hydrate cursor revocations from persistence store");
             }
@@ -1423,8 +1413,7 @@ impl AppState {
         &self,
         publish: arkret_models_identity::CrossSigningPublish,
     ) -> arkret_identity::Result<()> {
-        self.identities
-            .record_cross_signing_publish(publish)
+        self.identities.record_cross_signing_publish(publish)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1439,9 +1428,7 @@ impl AppState {
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_has_current_cross_signing(&self, principal: &arkret_identifiers::Did) -> bool {
-        self.identities
-            .current_cross_signing(principal)
-            .is_some()
+        self.identities.current_cross_signing(principal).is_some()
     }
 }
 
@@ -2202,5 +2189,3 @@ mod membership_hydration_tests {
         ));
     }
 }
-
-

@@ -47,6 +47,23 @@ diesel::table! {
 }
 
 diesel::table! {
+    device_pairings (device_pairing_request_id) {
+        device_pairing_request_id -> Text,
+        pairing_code -> Text,
+        new_device_pubkey -> Jsonb,
+        challenge_signature -> Text,
+        display_name -> Nullable<Text>,
+        device_metadata -> Nullable<Jsonb>,
+        state -> Text,
+        device_id -> Nullable<Text>,
+        authorized_by_actor_id -> Nullable<Text>,
+        authorized_event_ref -> Nullable<Text>,
+        created_at -> Timestamptz,
+        expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     account_localparts (id) {
         id -> Uuid,
         account_id -> Uuid,
