@@ -19,14 +19,15 @@ pub(crate) use soland_storage::{
     DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
     DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
-    DirectConversationBindingRecord, DirectConversationBindingStore, DriftResult, EventStore,
-    FederationFrontierExchangeRecord, FederationFrontierExchangeStore, FederationOperationsStore,
-    FederationOutboxDeadLetterRecord, FederationOutboxRecord, FederationOutboxStore,
-    FederationTransactionRecord, FederationTransactionStore, HandleReleaseStore, IdempotencyRecord,
-    IdempotencyStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
-    IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome, InviteLocatorRecord,
-    InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore,
-    MessageRecord, MessageStore, MlsCommitEpochAdvance, MlsCommitEpochRecord,
+    DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingRecord,
+    DevicePairingStore, DirectConversationBindingRecord, DirectConversationBindingStore,
+    DriftResult, EventStore, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
+    FederationOperationsStore, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
+    FederationOutboxStore, FederationTransactionRecord, FederationTransactionStore,
+    HandleReleaseStore, IdempotencyRecord, IdempotencyStore, IdentityAnchorCommitOutcome,
+    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, InviteLocatorInsertOutcome,
+    InviteLocatorRecord, InviteLocatorRotateMutation, InviteLocatorStore, InviteReceivePolicyStore,
+    KeyBackupStore, MessageRecord, MessageStore, MlsCommitEpochAdvance, MlsCommitEpochRecord,
     MlsCommitEpochStoreKey, MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow,
     MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
     MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
@@ -65,6 +66,7 @@ mod applets;
 mod audit;
 mod blobs;
 mod contacts;
+mod device_pairings;
 mod devices;
 mod events;
 #[cfg(feature = "fault-injection")]
@@ -106,6 +108,7 @@ pub(crate) use contacts::{
     MemoryConsentCellStore, MemoryContactStore, MemoryDirectConversationBindingStore,
     MemoryInviteReceivePolicyStore,
 };
+pub(crate) use device_pairings::MemoryDevicePairingStore;
 pub(crate) use devices::{
     MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
     MemoryOneTimeKeyStore,

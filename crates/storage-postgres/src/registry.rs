@@ -25,6 +25,7 @@ pub struct PgPersistenceStore {
     direct_conversation_bindings: PgDirectConversationBindingStore,
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
+    device_pairings: PgDevicePairingStore,
     federation_transactions: PgFederationTransactionStore,
     federation_outbox: PgFederationOutboxStore,
     federation_frontier_exchange: PgFederationFrontierExchangeStore,
@@ -89,6 +90,7 @@ impl PgPersistenceStore {
             direct_conversation_bindings: PgDirectConversationBindingStore { pool: pool.clone() },
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
+            device_pairings: PgDevicePairingStore { pool: pool.clone() },
             federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
             federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
             federation_frontier_exchange: PgFederationFrontierExchangeStore { pool: pool.clone() },
@@ -210,6 +212,64 @@ impl IdentityStoreRegistry for PgPersistenceStore {
 
     fn devices(&self) -> &dyn DeviceInventoryStore {
         &self.devices
+    }
+
+    fn device_pairings(&self) -> &dyn DevicePairingStore {
+        &self.device_pairings
+    }
+}
+
+#[async_trait]
+impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
+    async fn commit_device_pairing_authorization(
+        &self,
+        commit: DevicePairingAuthorizationCommit,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.device_pairings.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "WITH claimed AS (\
+                UPDATE device_pairings SET \
+                    state = 'authorized', \
+                    device_id = $5, \
+                    authorized_by_actor_id = $6, \
+                    authorized_event_ref = $7 \
+                WHERE device_pairing_request_id = $1 \
+                    AND pairing_code = $2 \
+                    AND new_device_pubkey = $3 \
+                    AND challenge_signature = $4 \
+                    AND state = 'pending_authorization' \
+                    AND expires_at > $8 \
+                RETURNING 1\
+            ) \
+            INSERT INTO devices \
+                (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
+            SELECT $9, $6, $5, $10, $11, $12, $13, $14 FROM claimed \
+            ON CONFLICT (actor_id, device_id) DO UPDATE SET \
+                payload = EXCLUDED.payload, \
+                verification_state = EXCLUDED.verification_state, \
+                updated_at = EXCLUDED.updated_at, \
+                revoked_at = EXCLUDED.revoked_at",
+        )
+        .bind::<Text, _>(&commit.device_pairing_request_id)
+        .bind::<Text, _>(&commit.pairing_code)
+        .bind::<Jsonb, _>(&commit.new_device_pubkey)
+        .bind::<Text, _>(&commit.challenge_signature)
+        .bind::<Text, _>(&commit.device.device_id)
+        .bind::<Text, _>(&commit.authorized_by_actor_id)
+        .bind::<Text, _>(&commit.authorized_event_ref)
+        .bind::<Timestamptz, _>(commit.changed_at)
+        .bind::<SqlUuid, _>(uuid::Uuid::now_v7())
+        .bind::<Jsonb, _>(&commit.device.payload)
+        .bind::<Text, _>(&commit.device.verification_state)
+        .bind::<Timestamptz, _>(commit.device.created_at)
+        .bind::<Timestamptz, _>(commit.device.updated_at)
+        .bind::<Nullable<Timestamptz>, _>(commit.device.revoked_at)
+        .execute(&mut *conn)
+        .await
+        .map(|rows| rows > 0)
+        .map_err(PersistenceError::database)
     }
 }
 

@@ -15,6 +15,7 @@ pub(crate) mod contact_federation;
 pub(crate) mod cross_signing;
 pub(crate) mod device_generation;
 pub(super) mod device_messages;
+pub(crate) mod device_pairing_open;
 pub(super) mod did;
 pub(in crate::routing) mod key_backup;
 mod keys;

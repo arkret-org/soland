@@ -16,6 +16,7 @@ struct PersistenceDirectConversationBindings(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceDirectory(Arc<dyn PersistenceStore>);
 struct PersistenceAgentDirectory(Arc<dyn PersistenceStore>);
 struct PersistenceAgentPairing(Arc<dyn PersistenceStore>);
+struct PersistenceDevicePairing(Arc<dyn PersistenceStore>);
 struct PersistenceSidecars(Arc<dyn PersistenceStore>);
 struct PersistenceAgentParticipation(Arc<dyn PersistenceStore>);
 struct PersistenceKeyBackups(Arc<dyn PersistenceStore>);
@@ -73,9 +74,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
             .map(application_account_profile))
     }
 
-    async fn accounts(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::identity::AccountProfileState>> {
+    async fn accounts(&self) -> crate::ServiceResult<Vec<crate::identity::AccountProfileState>> {
         Ok(self
             .0
             .accounts()
@@ -155,11 +154,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         ))
     }
 
-    async fn remove_localpart(
-        &self,
-        actor_id: &str,
-        localpart: &str,
-    ) -> crate::ServiceResult<()> {
+    async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> crate::ServiceResult<()> {
         self.0
             .account_localparts()
             .remove(actor_id, localpart)
@@ -466,8 +461,7 @@ impl crate::identity::DirectConversationBindingPort for PersistenceDirectConvers
 
     async fn bindings(
         &self,
-    ) -> crate::ServiceResult<Vec<(String, crate::identity::DirectConversationBindingRecord)>>
-    {
+    ) -> crate::ServiceResult<Vec<(String, crate::identity::DirectConversationBindingRecord)>> {
         Ok(self
             .0
             .direct_conversation_bindings()
@@ -622,11 +616,7 @@ impl crate::identity::DeviceKeyPort for PersistenceDeviceKeys {
         Ok(())
     }
 
-    async fn bundle(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-    ) -> crate::ServiceResult<Option<Value>> {
+    async fn bundle(&self, actor_id: &str, device_id: &str) -> crate::ServiceResult<Option<Value>> {
         Ok(self.0.device_keys().get(actor_id, device_id).await?)
     }
 }
@@ -894,6 +884,112 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             .agents()
             .clear_runtime_approval_notification_if_current(agent_id, approval_request_id)
             .await?)
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity::DevicePairingPort for PersistenceDevicePairing {
+    async fn stage(&self, record: crate::identity::DevicePairingState) -> crate::ServiceResult<()> {
+        self.0
+            .device_pairings()
+            .put(persistence_device_pairing(record))
+            .await?;
+        Ok(())
+    }
+
+    async fn get(
+        &self,
+        device_pairing_request_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::DevicePairingState>> {
+        Ok(self
+            .0
+            .device_pairings()
+            .get_by_request_id(device_pairing_request_id)
+            .await?
+            .map(application_device_pairing))
+    }
+
+    async fn commit_authorization(
+        &self,
+        device_pairing_request_id: &str,
+        pairing_code: &str,
+        new_device_pubkey: serde_json::Value,
+        challenge_signature: &str,
+        device: crate::identity::SaveDeviceCommand,
+        authorized_event_ref: &str,
+        changed_at: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .commit_device_pairing_authorization(soland_storage::DevicePairingAuthorizationCommit {
+                device_pairing_request_id: device_pairing_request_id.to_owned(),
+                pairing_code: pairing_code.to_owned(),
+                new_device_pubkey,
+                challenge_signature: challenge_signature.to_owned(),
+                device: soland_storage::DeviceInventoryRecord {
+                    actor: device.actor_id.clone(),
+                    device_id: device.device_id,
+                    display_name: device.display_name,
+                    verification_state: device.device.verification_state,
+                    payload: device.device.payload,
+                    created_at: device.device.created_at,
+                    updated_at: device.device.updated_at,
+                    revoked_at: device.device.revoked_at,
+                },
+                authorized_by_actor_id: device.actor_id,
+                authorized_event_ref: authorized_event_ref.to_owned(),
+                changed_at,
+            })
+            .await?)
+    }
+
+    async fn prune_expired_before(
+        &self,
+        cutoff: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<u64> {
+        Ok(self
+            .0
+            .device_pairings()
+            .delete_expired_before(cutoff)
+            .await?)
+    }
+}
+
+fn application_device_pairing(
+    record: soland_storage::DevicePairingRecord,
+) -> crate::identity::DevicePairingState {
+    crate::identity::DevicePairingState {
+        device_pairing_request_id: record.device_pairing_request_id,
+        pairing_code: record.pairing_code,
+        new_device_pubkey: record.new_device_pubkey,
+        challenge_signature: record.challenge_signature,
+        display_name: record.display_name,
+        device_metadata: record.device_metadata,
+        state: record.state,
+        device_id: record.device_id,
+        authorized_by_actor_id: record.authorized_by_actor_id,
+        authorized_event_ref: record.authorized_event_ref,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
+    }
+}
+
+fn persistence_device_pairing(
+    record: crate::identity::DevicePairingState,
+) -> soland_storage::DevicePairingRecord {
+    soland_storage::DevicePairingRecord {
+        device_pairing_request_id: record.device_pairing_request_id,
+        pairing_code: record.pairing_code,
+        new_device_pubkey: record.new_device_pubkey,
+        challenge_signature: record.challenge_signature,
+        display_name: record.display_name,
+        device_metadata: record.device_metadata,
+        state: record.state,
+        device_id: record.device_id,
+        authorized_by_actor_id: record.authorized_by_actor_id,
+        authorized_event_ref: record.authorized_event_ref,
+        created_at: record.created_at,
+        expires_at: record.expires_at,
     }
 }
 
@@ -1177,9 +1273,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
             .map(application_session_identity))
     }
 
-    async fn sessions(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::identity::SessionIdentityState>> {
+    async fn sessions(&self) -> crate::ServiceResult<Vec<crate::identity::SessionIdentityState>> {
         Ok(self
             .0
             .sessions()
@@ -1734,6 +1828,7 @@ pub struct PersistenceIdentityServices {
     pub consent: ConsentService,
     pub contact: ContactService,
     pub agent_pairing: AgentPairingService,
+    pub device_pairing: DevicePairingService,
     pub agent_participation: AgentParticipationService,
     pub key_backup: KeyBackupService,
     pub session: SessionService,
@@ -1760,9 +1855,7 @@ pub fn build_persistence_identity_services(
             Arc::new(PersistenceDeviceKeys(persistence.clone())),
             Arc::new(PersistenceOneTimeKeys(persistence.clone())),
         ),
-        consent: ConsentService::new(Arc::new(PersistenceConsentCells(
-            persistence.clone(),
-        ))),
+        consent: ConsentService::new(Arc::new(PersistenceConsentCells(persistence.clone()))),
         contact: ContactService::new(
             Arc::new(PersistenceContacts(persistence.clone())),
             Arc::new(PersistenceInviteReceivePolicies(persistence.clone())),
@@ -1772,26 +1865,23 @@ pub fn build_persistence_identity_services(
             Arc::new(PersistenceAgentPairing(persistence.clone())),
             Arc::new(PersistenceSidecars(persistence.clone())),
         ),
+        device_pairing: DevicePairingService::new(Arc::new(PersistenceDevicePairing(
+            persistence.clone(),
+        ))),
         agent_participation: AgentParticipationService::new(Arc::new(
             PersistenceAgentParticipation(persistence.clone()),
         )),
-        key_backup: KeyBackupService::new(Arc::new(PersistenceKeyBackups(
+        key_backup: KeyBackupService::new(Arc::new(PersistenceKeyBackups(persistence.clone()))),
+        session: SessionService::new(Arc::new(PersistenceSessions(persistence.clone()))),
+        recovery_policy: RecoveryPolicyService::new(Arc::new(PersistenceRecoveryPolicies(
             persistence.clone(),
         ))),
-        session: SessionService::new(Arc::new(PersistenceSessions(persistence.clone()))),
-        recovery_policy: RecoveryPolicyService::new(Arc::new(
-            PersistenceRecoveryPolicies(persistence.clone()),
-        )),
-        recovery_receipt: RecoveryReceiptService::new(Arc::new(
-            PersistenceRecoveryReceipts(persistence.clone()),
-        )),
-        recovery_session: RecoverySessionService::new(Arc::new(
-            PersistenceRecoverySessions(persistence.clone()),
-        )),
-        did: DidService::new(
-            Arc::new(PersistenceDidDocuments(persistence)),
-            did_resolver,
-        ),
+        recovery_receipt: RecoveryReceiptService::new(Arc::new(PersistenceRecoveryReceipts(
+            persistence.clone(),
+        ))),
+        recovery_session: RecoverySessionService::new(Arc::new(PersistenceRecoverySessions(
+            persistence.clone(),
+        ))),
+        did: DidService::new(Arc::new(PersistenceDidDocuments(persistence)), did_resolver),
     }
 }
-

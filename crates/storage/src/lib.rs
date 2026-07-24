@@ -30,6 +30,7 @@ mod blobs;
 mod contacts;
 #[doc(hidden)]
 pub mod contract_tests;
+mod device_pairings;
 mod devices;
 mod events;
 mod federation;
@@ -64,6 +65,7 @@ pub use applets::*;
 pub use audit::*;
 pub use blobs::*;
 pub use contacts::*;
+pub use device_pairings::*;
 pub use devices::*;
 pub use events::*;
 pub use federation::*;
@@ -134,6 +136,7 @@ pub trait IdentityStoreRegistry: Send + Sync {
     fn messages(&self) -> &dyn MessageStore;
     fn blobs(&self) -> &dyn BlobStore;
     fn devices(&self) -> &dyn DeviceInventoryStore;
+    fn device_pairings(&self) -> &dyn DevicePairingStore;
 }
 
 /// Federation, retention, organization, and audit persistence registry.
@@ -212,6 +215,7 @@ pub trait SyncStoreRegistry: Send + Sync {
 /// Complete persistence capability assembled by an infrastructure adapter.
 pub trait PersistenceStore:
     EventCommitUnitOfWork
+    + DevicePairingCommitUnitOfWork
     + IdentityStoreRegistry
     + FederationGovernanceStoreRegistry
     + DeliveryPolicyStoreRegistry
