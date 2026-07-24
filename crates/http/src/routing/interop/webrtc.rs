@@ -36,6 +36,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
@@ -71,7 +72,7 @@ struct IceConfigRequestContext {
     pub force_turn: bool,
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.media.query.ice_config", summary = "Get media ICE configuration", tags("media"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.media.query.ice_config"))]
 async fn arkret_ice_config(
     aa: AuthArgs,
@@ -1338,7 +1339,7 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
         .with_wire_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.call.media.exchange.issue_token", summary = "Exchange a call media token", tags("media"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token"))]
 async fn arkret_rtc_token(
     aa: AuthArgs,
