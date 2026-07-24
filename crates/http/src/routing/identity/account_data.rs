@@ -24,6 +24,7 @@ use soland_services::identity::{
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, now};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
@@ -334,7 +335,7 @@ async fn persist_account_data_event(
     Ok(())
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.account_data.resource.replace", summary = "Replace an account-data entry", tags("account_data"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.replace"))]
 async fn put_account_data(
     aa: AuthArgs,
@@ -409,7 +410,7 @@ async fn put_account_data(
     json_ok(entry_from(record))
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.account_data.resource.get", summary = "Get an account-data entry", tags("account_data"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.get"))]
 async fn get_account_data(
     aa: AuthArgs,
@@ -443,7 +444,7 @@ async fn get_account_data(
     }
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.account_data.query.list", summary = "List account-data entries", tags("account_data"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.query.list"))]
 async fn list_account_data(
     aa: AuthArgs,
@@ -469,7 +470,7 @@ async fn list_account_data(
     json_ok(AccountDataList { entries })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.account_data.resource.delete", summary = "Delete an account-data entry", tags("account_data"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.delete"))]
 async fn delete_account_data(
     aa: AuthArgs,
