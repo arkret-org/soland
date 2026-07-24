@@ -16,6 +16,7 @@ use arkret_models_collaboration::governance::join_policy::{
 };
 use arkret_wire::Hash;
 use chrono::{Duration, Utc};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
@@ -188,7 +189,11 @@ fn response_from_value(
     Ok((record, response))
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm.join_application.command.submit",
+    summary = "Submit a profile-private signed join application",
+    tags("join_applications")
+)]
 async fn submit_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -322,7 +327,11 @@ async fn submit_join_application(
     json_ok(response)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm.join_application.command.review",
+    summary = "Submit a reviewer-signed join-application decision",
+    tags("join_applications")
+)]
 async fn review_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -395,7 +404,11 @@ async fn review_join_application(
     json_ok(response)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm.join_application.command.cancel",
+    summary = "Cancel a profile-private join application",
+    tags("join_applications")
+)]
 async fn cancel_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -552,7 +565,11 @@ async fn audit_body_read(
     Ok(())
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm.join_application.query.list",
+    summary = "List viewer-scoped join applications",
+    tags("join_applications")
+)]
 async fn list_join_applications(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -613,7 +630,11 @@ async fn list_join_applications(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm.join_application.resource.get",
+    summary = "Read one authorized join application",
+    tags("join_applications")
+)]
 async fn get_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
@@ -643,7 +664,11 @@ async fn get_join_application(
     json_ok(JoinApplicationGetOutcome { application })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm.join_application.audit.query.list",
+    summary = "Read one join application's audit trail",
+    tags("join_applications")
+)]
 async fn list_join_application_audit(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,

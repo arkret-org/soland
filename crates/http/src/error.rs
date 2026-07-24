@@ -436,3 +436,22 @@ impl Writer for AppError {
         }
     }
 }
+
+// `#[endpoint]` handlers return `Result<Json<T>, AppError>`; salvo-oapi already
+// registers the `Ok` arm through `Json<T>`, and calls `EndpointOutRegister` on
+// the error arm so the generated document advertises the failure shape. Every
+// handler renders the same canonical [`ErrorEnvelope`], so a single `default`
+// response carrying that schema is the accurate contract regardless of which
+// `ErrorCode` fired at runtime.
+impl salvo::oapi::EndpointOutRegister for AppError {
+    fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
+        let schema = <arkret_wire::problem_details::ErrorEnvelope as salvo::oapi::ToSchema>::to_schema(
+            components,
+        );
+        operation.responses.insert(
+            "default",
+            salvo::oapi::Response::new("Arkret error envelope")
+                .add_content("application/json", schema),
+        );
+    }
+}

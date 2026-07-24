@@ -25,6 +25,28 @@ impl<'ex> Extractible<'ex> for AuthArgs {
     }
 }
 
+/// Document the shared bearer-session requirement on every `#[endpoint]` that
+/// takes an [`AuthArgs`]. The extractor pulls the credential from the
+/// `Authorization` header (validated in [`AuthArgs::authenticated_session`]),
+/// so it contributes a security requirement rather than a request parameter or
+/// body.
+impl salvo::oapi::EndpointArgRegister for AuthArgs {
+    fn register(
+        components: &mut salvo::oapi::Components,
+        operation: &mut salvo::oapi::Operation,
+        _arg: &str,
+    ) {
+        use salvo::oapi::security::{Http, HttpAuthScheme, SecurityRequirement, SecurityScheme};
+        components.security_schemes.insert(
+            "bearer_session".to_owned(),
+            SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer).bearer_format("JWT")),
+        );
+        operation
+            .securities
+            .push(SecurityRequirement::new("bearer_session", Vec::<String>::new()));
+    }
+}
+
 impl AuthArgs {
     /// Validate the bearer session against `state` and return the matched
     /// session record.
