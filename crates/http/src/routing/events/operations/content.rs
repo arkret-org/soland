@@ -1,12 +1,7 @@
 use super::*;
 
 pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
-    let realm_meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten();
+    let realm_meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
     realm_meta.is_some_and(|record| {
         encryption_profile_requires_content_encryption(record.encryption_profile.as_deref())
     })

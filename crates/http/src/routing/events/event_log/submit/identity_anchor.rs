@@ -1784,4 +1784,3 @@ mod tests {
         assert_eq!(outcome.duplicate.len(), 2);
     }
 }
-

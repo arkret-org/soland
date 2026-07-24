@@ -8,12 +8,12 @@ use arkret_models_collaboration::agent_operations::{
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
 use arkret_wire::{MlsGroupId, NonEmptyString};
+use salvo::oapi::extract::QueryParam;
 use soland_services::identity::{
     AgentSidecarContextState as AgentSidecarContextRecord, AgentSidecarState as AgentSidecarRecord,
 };
 
 use super::*;
-use salvo::oapi::extract::QueryParam;
 
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
 pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
@@ -74,8 +74,9 @@ async fn authorize_sidecar_ensure(
         .flatten()
         .map(|meta| meta.owner);
     let members = realm_members_for_authz(state, realm_id);
-    let verdict = state.authorization().check(
-        soland_services::authorization::AuthorizationCheck {
+    let verdict = state
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor: controller,
             action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
             resource: realm_id,
@@ -83,8 +84,7 @@ async fn authorize_sidecar_ensure(
             owner: owner.as_deref(),
             members: &members,
             resource_facets: &[],
-        },
-    );
+        });
     if verdict.allowed {
         return Ok(());
     }
@@ -1608,4 +1608,3 @@ mod tests {
         ));
     }
 }
-

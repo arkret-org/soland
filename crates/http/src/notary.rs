@@ -117,11 +117,10 @@ impl NotaryWorker {
         }
 
         // Step 2: list pending Moves (oldest first).
-        let pending = state.projections().pending_moves_for_notary(
-            realm_id,
-            None,
-            max_control_moves,
-        )?;
+        let pending =
+            state
+                .projections()
+                .pending_moves_for_notary(realm_id, None, max_control_moves)?;
         if pending.is_empty() {
             return Ok(None);
         }
@@ -166,10 +165,7 @@ impl NotaryWorker {
                 rejected.push((m.id.clone(), format!("replay_window: {reject}")));
                 continue;
             }
-            match state
-                .projections()
-                .verify_move(&m, &pre_state, verifier)
-            {
+            match state.projections().verify_move(&m, &pre_state, verifier) {
                 Ok(()) => accepted.push(m),
                 Err(reject) => rejected.push((m.id.clone(), reject.to_string())),
             }
@@ -265,10 +261,7 @@ impl NotaryWorker {
         let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
             .as_ref()
             .and_then(|cell_id| state.projections().cell_value(cell_id));
-        if let Err(error) = state
-            .projections()
-            .reload_cells_from_store(realm_id)
-        {
+        if let Err(error) = state.projections().reload_cells_from_store(realm_id) {
             tracing::warn!(
                 error = %error,
                 "notary worker failed to refresh ProjectionState::cells after apply_seal"
@@ -626,10 +619,7 @@ impl NotaryWorker {
         }
 
         if let Some(genesis_id) = state.projections().genesis_seal_id(realm_id)?
-            && state
-                .projections()
-                .seal_by_id(&genesis_id)?
-                .is_some()
+            && state.projections().seal_by_id(&genesis_id)?.is_some()
         {
             return Ok(vec![genesis_id]);
         }
@@ -966,10 +956,12 @@ pub fn ensure_materialized_event_seal(
         .filter(|(_, op)| delta_set.contains(&op.move_id))
         .cloned()
         .collect::<Vec<_>>();
-    match state
-        .projections()
-        .commit_event_seal_if_frontier(&seal, &seal.predecessor_refs, &new_ops, &target)
-    {
+    match state.projections().commit_event_seal_if_frontier(
+        &seal,
+        &seal.predecessor_refs,
+        &new_ops,
+        &target,
+    ) {
         Ok(true) => {}
         Ok(false) => {
             return Err(NotaryError::Construction(

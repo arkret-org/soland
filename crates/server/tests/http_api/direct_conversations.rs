@@ -302,7 +302,9 @@ async fn upload_bob_direct_keypackage(state: AppState, bob_token: &str, suffix: 
     let keypackage_id = format!("ak:mls_keypackage:direct-{suffix}");
     let keypackage_ref = format!("ak:mls:keypackage:direct-{suffix}");
     let keypackage_bytes = format!("opaque-direct-keypackage-{suffix}");
-    let capabilities = serde_json::json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
+    // Canonical SDK KeyPackage capability set (ARKRET_MLS_KEY_PACKAGE_CAPABILITIES);
+    // the direct-conversation claim requires `ak.content.v1` from this set.
+    let capabilities = serde_json::json!(["mimi.content.v1", "ak.content.v1"]);
     let unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
         serde_json::from_value(serde_json::json!({
             "principal_id": BOB_DID,
@@ -442,7 +444,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "intended_realm_id": realm_id,
             "mls_group_id": "ak:mls_group:0196419b-0000-7000-8000-000000000296",
             "claim_purpose": "direct_conversation",
-            "required_capabilities": ["ak.mls.rfc9420"],
+            "required_capabilities": ["ak.content.v1"],
             "claim_nonce": claim_nonce,
             "expires_at": arkret_canonical::format_timestamp_canonical(
                 Utc::now() + chrono::Duration::minutes(4)
@@ -1090,4 +1092,3 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
     );
     assert_eq!(state.test_direct_conversation_binding_count(), 1);
 }
-

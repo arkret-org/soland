@@ -19,12 +19,12 @@
 //! middleware. Audit-log and replay protection remain future work.
 
 use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use salvo::oapi::extract::JsonBody;
 use crate::state::{AppState, EventNotification, EventNotificationKind};
 use crate::{JsonResult, json_ok};
 

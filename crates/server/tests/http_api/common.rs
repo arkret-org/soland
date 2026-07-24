@@ -1828,4 +1828,3 @@ pub(crate) async fn persist_test_message(
         .unwrap();
     record
 }
-

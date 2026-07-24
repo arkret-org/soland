@@ -320,4 +320,3 @@ pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee: &s
         sha256_hex(format!("{invite_id}:{realm_id}:{invitee}").as_bytes())
     )
 }
-

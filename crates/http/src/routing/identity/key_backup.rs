@@ -9,15 +9,15 @@ use arkret_models_crypto::{
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _};
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_services::runtime_guards::key_backup_daily_download_limit;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::runtime_guards::key_backup_daily_download_limit;
 
 use super::append_audit_log;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -690,9 +690,7 @@ mod tests {
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN
         );
         assert_eq!(
-            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(Some(
-                100_000
-            )),
+            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(Some(100_000)),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX
         );
     }
@@ -716,4 +714,3 @@ mod tests {
         assert!(metadata.pointer("/auth_data/signature").is_none());
     }
 }
-

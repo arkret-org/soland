@@ -372,11 +372,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
             // api-conventions.md §6 — the generic `Idempotency-Key` cache shares
             // this periodic sweep so its mapping table stays bounded by the
             // per-record TTL instead of growing with every keyed write.
-            match state
-                .jobs()
-                .prune_expired_idempotency(now)
-                .await
-            {
+            match state.jobs().prune_expired_idempotency(now).await {
                 Ok(0) => {}
                 Ok(pruned) => tracing::debug!(
                     worker = "sync_cursor_ttl_sweep",
@@ -783,11 +779,17 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 /// account-subscribe resume position, wait-for barrier state, or dropped
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
-#[salvo::oapi::endpoint(operation_id = "ak.self.account.command.revoke_cursor", summary = "Revoke an account read cursor", tags("account"))]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.account.command.revoke_cursor",
+    summary = "Revoke an account read cursor",
+    tags("account")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,
-    body: salvo::oapi::extract::JsonBody<arkret_models_identity::account::AccountCursorRevokeRequestBody>,
+    body: salvo::oapi::extract::JsonBody<
+        arkret_models_identity::account::AccountCursorRevokeRequestBody,
+    >,
     depot: &mut Depot,
     req: &mut Request,
 ) -> soland_http::result::JsonResult<arkret_models_identity::account::AccountCursorRevokeOutcome> {
@@ -842,9 +844,7 @@ pub(super) async fn account_cursor_revoke(
         .map_err(|error| {
             AppError::internal(format!("failed to persist cursor revocation: {error}"))
         })?;
-    state
-        .sync()
-        .cache_cursor_revocation(application_record);
+    state.sync().cache_cursor_revocation(application_record);
 
     crate::json_ok(
         arkret_models_identity::account::AccountCursorRevokeOutcome {
@@ -872,4 +872,3 @@ fn cursor_authority_revoked(
         chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now),
     )
 }
-

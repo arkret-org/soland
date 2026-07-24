@@ -1487,4 +1487,3 @@ pub fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
 pub fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
 }
-

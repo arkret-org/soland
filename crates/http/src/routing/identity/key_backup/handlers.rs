@@ -556,4 +556,3 @@ pub(super) async fn delete_key_backup(
         backup_id: BackupId::new(backup_id).ok(),
     })
 }
-

@@ -65,8 +65,15 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         {
             return Ok(None);
         }
-        if row.claimed_by_mls_group_id.is_some() && !(row.last_resort && group_id != "revoked") {
-            // Already claimed — CAS loser path.
+        if row
+            .claimed_by_mls_group_id
+            .as_deref()
+            .is_some_and(|claimed| claimed != group_id)
+            && !(row.last_resort && group_id != "revoked")
+        {
+            // Already claimed by a different group — CAS loser path. A repeat
+            // claim by the same group is idempotent renewal (mirrors the
+            // reducer and the postgres try_claim guard).
             return Ok(None);
         }
         if let Some(generation) = ssk_generation

@@ -438,4 +438,3 @@ async fn validate_managed_agent_grant_ceiling(
         Err("agent_grant_exceeds_requested_scope")
     }
 }
-

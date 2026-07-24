@@ -243,4 +243,3 @@ pub(super) fn actor_device_id_from_verification_method(
             }
         })
 }
-

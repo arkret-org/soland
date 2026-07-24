@@ -59,18 +59,18 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_services::identity::{
-    AgentPairingState as AgentPrincipalRecord, SessionIdentityState as SessionRecord,
-};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::bearer_token;
+use soland_services::identity::{
+    AgentPairingState as AgentPrincipalRecord, SessionIdentityState as SessionRecord,
+};
 use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::routing::accept_local_operations;
 use crate::routing::events::event_log::submit_event_value;
@@ -485,7 +485,10 @@ mod tests {
         let mut bootstrap_lapsed =
             agent_record("did:web:agent.example", "did:web:controller.example");
         bootstrap_lapsed.state = "active".to_owned();
-        assert!(!agent_record_reserves_selector_slug(&bootstrap_lapsed, &now));
+        assert!(!agent_record_reserves_selector_slug(
+            &bootstrap_lapsed,
+            &now
+        ));
 
         // Deactivation is terminal.
         let mut deactivated = active;
@@ -1165,4 +1168,3 @@ mod tests {
         assert_eq!(err.wire_code(), CONTROLLER_IN_ADDRESSED_AGENTS);
     }
 }
-

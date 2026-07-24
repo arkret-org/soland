@@ -232,8 +232,17 @@ pub fn apply_keypackage_claim(state: &mut ProjectionState, op: &Operation) -> Pr
     if row.claimed_by.as_deref() == Some("revoked") {
         return reject(REASON_KEYPACKAGE_NOT_FOUND);
     }
-    // CAS check — refuse if anyone has already claimed this row.
-    if !row.last_resort && row.claimed_by.is_some() {
+    // CAS check — refuse if a *different* group has already claimed this row.
+    // A repeat claim by the same MLS group is idempotent renewal: a resolver
+    // whose materialization was interrupted retries with the same reserved
+    // group id after the claim window lapsed. The Welcome target is unchanged,
+    // so renewal cannot create cross-group init-key reuse.
+    if !row.last_resort
+        && row
+            .claimed_by
+            .as_deref()
+            .is_some_and(|claimed| claimed != group_id)
+    {
         return reject(REASON_KEYPACKAGE_ALREADY_CLAIMED);
     }
     // Lifetime check — RFC 9420 §10. Stale KeyPackages can't be claimed.

@@ -290,9 +290,7 @@ fn presence_aggregation_all_expired_projects_offline() {
 async fn incremental_sync_includes_presence_only_for_presence_delta() {
     let state = test_state();
     let session = roster_session(&state, ROSTER_ACTOR);
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, true));
+    state.realm_directory().upsert(roster_realm(false, true));
     state
         .deliveries()
         .store_presence(PresenceRecord {
@@ -386,9 +384,7 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
 async fn typing_state_is_emitted_once_per_cursor_revision() {
     let state = test_state();
     let session = roster_session(&state, ROSTER_ACTOR);
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, true));
+    state.realm_directory().upsert(roster_realm(false, true));
     let updated_at = now();
     let mut envelope = test_presence_envelope(
         ROSTER_ACTOR,
@@ -553,9 +549,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let mut config = test_config();
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, true));
+    state.realm_directory().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
@@ -708,9 +702,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let mut config = test_config();
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, true));
+    state.realm_directory().upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
@@ -1238,9 +1230,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, true));
+    state.realm_directory().upsert(roster_realm(false, true));
 
     let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00.000Z")
         .unwrap()
@@ -1342,9 +1332,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .await
     .expect("revocation cursor parses");
 
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, false));
+    state.realm_directory().upsert(roster_realm(false, false));
     let after_scope_loss = build_sync_snapshot(
         &state,
         Some(&session),
@@ -1366,9 +1354,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, true));
+    state.realm_directory().upsert(roster_realm(false, true));
 
     let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
@@ -1523,9 +1509,7 @@ async fn membership_only_projection_advances_incremental_roster() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_ACTOR);
-    state
-        .realm_directory()
-        .upsert(roster_realm(false, false));
+    state.realm_directory().upsert(roster_realm(false, false));
 
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:30:00.000Z")
         .unwrap()
@@ -2314,8 +2298,9 @@ async fn revoked_cursor_returns_revoked_error() {
         .await
         .expect("freshly issued cursor validates");
 
-    state.sync().cache_cursor_revocation(
-        soland_services::sync::CursorRevocationState {
+    state
+        .sync()
+        .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
             device_id: None,
@@ -2323,8 +2308,7 @@ async fn revoked_cursor_returns_revoked_error() {
             reason_code: "compromised".to_owned(),
             revoked_at: now(),
             expires_at: now() + ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS),
-        },
-    );
+        });
 
     let error = parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
         .await
@@ -2349,8 +2333,9 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
     )
     .await;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    state.sync().cache_cursor_revocation(
-        soland_services::sync::CursorRevocationState {
+    state
+        .sync()
+        .cache_cursor_revocation(soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
             device_id: None,
@@ -2358,8 +2343,7 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
             reason_code: "stale".to_owned(),
             revoked_at: now() - ChronoDuration::seconds(2 * CURSOR_MAX_TTL_SECONDS),
             expires_at: now() - ChronoDuration::seconds(CURSOR_MAX_TTL_SECONDS),
-        },
-    );
+        });
 
     parse_and_validate_sync_cursor(&token, &state, None, None, now_ms)
         .await
@@ -2369,4 +2353,3 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         "expired revocation entry should have been pruned"
     );
 }
-

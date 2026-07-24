@@ -1061,10 +1061,7 @@ fn persistence_cursor_revocation(record: &crate::sync::CursorRevocationState) ->
 
 #[async_trait::async_trait]
 impl crate::sync::CursorStorePort for PersistenceCursorStore {
-    async fn get(
-        &self,
-        handle: &str,
-    ) -> crate::ServiceResult<Option<crate::sync::CursorState>> {
+    async fn get(&self, handle: &str) -> crate::ServiceResult<Option<crate::sync::CursorState>> {
         Ok(self
             .0
             .sync_cursors()
@@ -1171,4 +1168,3 @@ pub fn build_persistence_operational_services(
         ),
     }
 }
-

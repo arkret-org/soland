@@ -99,11 +99,7 @@ pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     state: &AppState,
     scope_keys: &[String],
 ) -> AgentParticipation {
-    let Ok(rows) = state
-        .agent_participations()
-        .ceilings(scope_keys)
-        .await
-    else {
+    let Ok(rows) = state.agent_participations().ceilings(scope_keys).await else {
         return AgentParticipation::NONE;
     };
     rows.iter()

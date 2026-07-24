@@ -1033,10 +1033,7 @@ fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
 /// Canonical recovery-proof transcript binding every session-defining field.
 /// Both the requesting device (when signing) and the server (when verifying)
 /// MUST construct this identically.
-pub(super) fn recovery_proof_transcript(
-    record: &RecoverySessionServiceState,
-    kind: &str,
-) -> Value {
+pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, kind: &str) -> Value {
     json!({
         "type": "ak.identity.recovery_proof.v1",
         "kind": kind,
@@ -1612,4 +1609,3 @@ pub(super) fn generate_recovery_challenge() -> String {
     rand::rng().fill(&mut buf);
     URL_SAFE_NO_PAD.encode(buf)
 }
-

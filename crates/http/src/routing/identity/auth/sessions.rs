@@ -72,17 +72,13 @@ pub async fn authenticated_session(
         ));
     }
     let token_hash = session_credential_hash(token, state.service_id());
-    let session = state
-        .sessions()
-        .session(&token_hash)
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "session store unavailable",
-            )
-        })?;
+    let session = state.sessions().session(&token_hash).await.map_err(|_| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "session store unavailable",
+        )
+    })?;
     let Some(session) = session else {
         return Err((
             StatusCode::UNAUTHORIZED,

@@ -80,12 +80,7 @@ pub async fn strand_projection_for_realm(
     title: &str,
     summary: Option<&str>,
 ) -> serde_json::Value {
-    let meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten();
+    let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
     let owner = meta
         .as_ref()
         .map(|meta| meta.owner.clone())
@@ -132,4 +127,3 @@ pub async fn strand_projection_for_realm(
         "updated_at": updated_at
     })
 }
-

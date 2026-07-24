@@ -331,9 +331,8 @@ fn pending_read_receipt_policy_source_realm(
         {
             continue;
         }
-        let policies = soland_services::operation_semantics::inheritance_allowed_policies(
-            &operation.payload,
-        );
+        let policies =
+            soland_services::operation_semantics::inheritance_allowed_policies(&operation.payload);
         if !policies
             .iter()
             .any(|policy| policy == READ_RECEIPT_POLICY_RULE)
@@ -775,8 +774,9 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .and_then(Value::as_str)
         .unwrap_or(realm_id);
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    let authz = state.authorization().check(
-        soland_services::authorization::AuthorizationCheck {
+    let authz = state
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
             resource,
@@ -784,8 +784,7 @@ pub(crate) async fn validate_audience_mention_operation_policy(
             owner: owner.as_deref(),
             members: &members,
             resource_facets: &[],
-        },
-    );
+        });
     if !authz.allowed {
         return Err("ak.message.mention.broadcast required for audience_mention");
     }
@@ -877,12 +876,7 @@ pub(crate) async fn realm_owner_and_members(
     state: &AppState,
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
-    let meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten();
+    let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
     let owner = meta.map(|meta| meta.owner);
     let members = {
         let realms = state.realm_directory().snapshot();
@@ -1091,4 +1085,3 @@ mod tests {
         );
     }
 }
-

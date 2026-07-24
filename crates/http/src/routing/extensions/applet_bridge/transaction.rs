@@ -5,9 +5,9 @@ use arkret_models_integration::{
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
+use soland_http::error::AppError;
 use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
 use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_http::error::AppError;
 
 use super::signature::VerifiedInboundTransactionSignature;
 use super::types::AppletRecord;
@@ -218,4 +218,3 @@ fn rejected_event_with_detail(
     let _detail = detail.into();
     rejected_event(event_id, reason_code)
 }
-

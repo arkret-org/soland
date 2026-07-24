@@ -635,7 +635,10 @@ pub(super) fn agent_runtime_state_from_record(
     has_active_authorization: bool,
     now: chrono::DateTime<chrono::Utc>,
 ) -> AgentRuntimeState {
-    AgentRuntimeState::derive(has_active_authorization, agent_pairing_handle_live(record, now))
+    AgentRuntimeState::derive(
+        has_active_authorization,
+        agent_pairing_handle_live(record, now),
+    )
 }
 
 /// Whether the reducer projection holds any active accepted key authorization

@@ -4,14 +4,14 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, RealmId};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_services::delivery::BlobState as BlobRecord;
 use soland_http::error::AppError;
+use soland_services::delivery::BlobState as BlobRecord;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -255,11 +255,7 @@ async fn get_media_by_actor(
 }
 
 async fn media_snapshot(state: &AppState) -> Vec<BlobRecord> {
-    state
-        .deliveries()
-        .blobs()
-        .await
-        .unwrap_or_default()
+    state.deliveries().blobs().await.unwrap_or_default()
 }
 
 async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<MediaByActorRow> {
@@ -300,4 +296,3 @@ fn add_bucket(buckets: &mut BTreeMap<String, MediaBucket>, key: &str, size: u64)
     entry.size_bytes = entry.size_bytes.saturating_add(size);
     entry.total_size = entry.size_bytes;
 }
-

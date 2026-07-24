@@ -32,14 +32,14 @@
 
 use std::time::Duration;
 
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_services::delivery::OutboundPushBridgeCacheState as OutboundPushBridgeCacheRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::delivery::OutboundPushBridgeCacheState as OutboundPushBridgeCacheRecord;
 
 use super::{now, sha256_hex};
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{
     OutboundPushBridgeCacheEntry, OutboundPushBridgeCacheExportOutcome,
@@ -790,4 +790,3 @@ fn outbound_push_bridge_fetch_fallback(
         todos: Vec::new(),
     }
 }
-

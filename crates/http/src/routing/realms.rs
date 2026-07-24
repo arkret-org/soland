@@ -33,17 +33,17 @@ use arkret_models_collaboration::governance::realm_governance::{
     RealmLinkStatus,
 };
 use salvo::http::StatusCode;
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::projection::{
     RealmLinkReadModel as RealmLinkState, check_realm_link_admissible, effective_policy_for_realm,
 };
-use soland_http::error::AppError;
-use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::organizations;
 use crate::state::AppState;
@@ -414,4 +414,3 @@ fn merge_organization_effective_policy(
         }
     }
 }
-

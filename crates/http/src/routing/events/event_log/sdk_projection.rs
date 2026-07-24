@@ -1079,11 +1079,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     // Cold-path fallback: linear scan of the durable Event store. Used at
     // boot before the projection has been rehydrated, or when a server is
     // running with persistence disabled.
-    let records = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .ok()?;
+    let records = state.event_queries().canonical_events().await.ok()?;
     let mut latest: Option<&CanonicalEventRecord> = None;
     for record in &records {
         // CanonicalEventRecord uses `kind` (not event_kind) for the
@@ -1152,4 +1148,3 @@ mod refs_limit_tests {
         assert_eq!(out, vec!["ak:event:e1".to_owned()]);
     }
 }
-

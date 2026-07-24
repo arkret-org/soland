@@ -2,11 +2,11 @@ use anyhow::Context;
 use salvo::conn::Acceptor;
 use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
-use soland_services::validate_embedded_artifacts;
 use soland_http::config::AppConfig;
 use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland_http::service;
 use soland_http::state::AppState;
+use soland_services::validate_embedded_artifacts;
 use soland_storage_postgres::Db;
 use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
@@ -940,4 +940,3 @@ async fn run_healthcheck(args: &[String]) -> anyhow::Result<()> {
         }
     }
 }
-

@@ -331,9 +331,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .collect())
     }
 
-    async fn projected_events(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
+    async fn projected_events(&self) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
         Ok(self
             .0
             .projection_events()
@@ -1025,9 +1023,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .revoke_expired_peer_claims(now_unix_ms)
             .await?)
     }
-    async fn key_packages(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::events::MlsKeyPackageState>> {
+    async fn key_packages(&self) -> crate::ServiceResult<Vec<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -1450,9 +1446,7 @@ pub fn build_persistence_event_services(
 ) -> PersistenceEventServices {
     let reader = || Arc::new(PersistenceEventReader(persistence.clone()));
     PersistenceEventServices {
-        events: EventService::new(Arc::new(PersistenceEventCommitter(
-            persistence.clone(),
-        ))),
+        events: EventService::new(Arc::new(PersistenceEventCommitter(persistence.clone()))),
         queries: EventQueryService::new(
             reader(),
             reader(),
@@ -1465,9 +1459,9 @@ pub fn build_persistence_event_services(
         mls_commits: MlsCommitQueryService::new(Arc::new(PersistenceMlsCommitReader(
             persistence.clone(),
         ))),
-        mls_key_packages: MlsKeyPackageService::new(Arc::new(
-            PersistenceMlsKeyPackageMaintenance(persistence.clone()),
-        )),
+        mls_key_packages: MlsKeyPackageService::new(Arc::new(PersistenceMlsKeyPackageMaintenance(
+            persistence.clone(),
+        ))),
         realm_queries: RealmQueryService::new(Arc::new(PersistenceRealmMetadata(
             persistence.clone(),
         ))),
@@ -1477,4 +1471,3 @@ pub fn build_persistence_event_services(
         ),
     }
 }
-

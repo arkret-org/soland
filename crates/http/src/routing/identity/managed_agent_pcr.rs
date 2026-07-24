@@ -16,11 +16,11 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier as _};
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
 use soland_services::events::ActiveAgentAccountabilityQuery;
 use soland_services::identity::{
     AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogCommitResult, DidLogEvent,
 };
-use soland_http::error::{AppError, ErrorCode};
 
 use crate::state::AppState;
 
@@ -368,9 +368,10 @@ pub(crate) async fn active_series_pointer_is_current(
     controller_id: &str,
     pointer: &arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
-    let controller_realm =
-        RealmId::new(soland_services::identity::principal_control_realm_for_did(controller_id))
-            .map_err(|error| AppError::internal(format!("controller PCR id invalid: {error}")))?;
+    let controller_realm = RealmId::new(
+        soland_services::identity::principal_control_realm_for_did(controller_id),
+    )
+    .map_err(|error| AppError::internal(format!("controller PCR id invalid: {error}")))?;
     let leaves = state
         .projections()
         .realm_seal_leaves(&controller_realm)
@@ -1061,11 +1062,10 @@ async fn agent_did_document_at(
     agent_id: &str,
     accepted_at: DateTime<Utc>,
 ) -> Result<Value, AppError> {
-    let mut history = state
-        .dids()
-        .log_events(agent_id)
-        .await
-        .map_err(|error| AppError::internal(format!("Agent DID history lookup failed: {error}")))?;
+    let mut history =
+        state.dids().log_events(agent_id).await.map_err(|error| {
+            AppError::internal(format!("Agent DID history lookup failed: {error}"))
+        })?;
     history.sort_by_key(|entry| (entry.created_at, entry.seq));
     if let Some(document) = history.into_iter().rev().find_map(|entry| {
         (entry.created_at <= accepted_at)
@@ -1516,4 +1516,3 @@ mod tests {
         ));
     }
 }
-

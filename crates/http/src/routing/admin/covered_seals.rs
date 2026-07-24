@@ -18,6 +18,7 @@
 
 use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 // Shared wire DTOs live in `soland-contracts` so producer (this server) and
@@ -29,7 +30,6 @@ use soland_contracts::admin::covered_seals::{
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 

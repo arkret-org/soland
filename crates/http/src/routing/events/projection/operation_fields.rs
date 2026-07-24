@@ -247,11 +247,7 @@ pub async fn project_retention_policy_from_operation(
         updated_by: origin.to_owned(),
         updated_at: operation.created_at,
     };
-    if let Err(error) = state
-        .governance()
-        .store_retention_policy(&record)
-        .await
-    {
+    if let Err(error) = state.governance().store_retention_policy(&record).await {
         tracing::warn!(
             %error,
             realm_id = %record.realm_id,
@@ -259,4 +255,3 @@ pub async fn project_retention_policy_from_operation(
         );
     }
 }
-

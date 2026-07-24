@@ -181,4 +181,3 @@ pub fn session_credential_hash(token: &str, audience: &str) -> String {
     hasher.update(token.as_bytes());
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
-

@@ -28,10 +28,10 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_services::events::ProjectedEvent as ProjectionEventRecord;
-use soland_services::identity::ContactRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::identity::ContactRecord;
 
 use super::consent::{
     auto_revoke_requester_side_contact_consent, consent_cell_snapshot,
@@ -1135,4 +1135,3 @@ mod tests {
         );
     }
 }
-

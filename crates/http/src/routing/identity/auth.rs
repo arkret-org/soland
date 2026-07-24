@@ -27,17 +27,17 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
+use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::{
     append_audit_log, bearer_token, handle_for_did, normalize_localpart, now, render_error,
     validate_device_id, validate_did,
 };
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{
     DevLoginRequestBody, LogoutOutcome, SessionGrantIntrospectOutcome,
@@ -118,4 +118,3 @@ pub(super) fn local_router() -> Router {
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
 }
-

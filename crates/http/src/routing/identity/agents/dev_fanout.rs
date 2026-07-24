@@ -442,9 +442,7 @@ pub(super) async fn revoke_capability_grant(
     // The durable reducer event is the source of truth; this mirrors the
     // same revoke into the in-memory authz read index before the HTTP command
     // returns so subsequent resource checks fail closed immediately.
-    state
-        .authorization()
-        .mark_projected_grant_revoked(grant_id);
+    state.authorization().mark_projected_grant_revoked(grant_id);
     Ok(event_id)
 }
 
@@ -712,4 +710,3 @@ mod tests {
         assert!(created_at.ends_with('Z'));
     }
 }
-

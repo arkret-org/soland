@@ -111,7 +111,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                  consumed_at = CASE WHEN $2 = 'revoked' THEN consumed_at ELSE NULL END \
              WHERE id = $1 \
                AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
-               AND (claimed_by_mls_group_id IS NULL OR (last_resort AND $2 <> 'revoked')) \
+               AND (claimed_by_mls_group_id IS NULL \
+                    OR claimed_by_mls_group_id = $2 \
+                    OR (last_resort AND $2 <> 'revoked')) \
                AND ($4 IS NULL OR ssk_generation = $4) \
                AND ($5 IS NULL OR device_authorize_event_id = $5) \
                AND ($6 IS NULL OR agent_key_authorize_event_id = $6) \

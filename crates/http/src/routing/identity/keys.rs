@@ -11,15 +11,15 @@ use std::collections::BTreeMap;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signature;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
 
 use super::{bearer_token, is_device_revoked, now, sha256_hex};
-use salvo::oapi::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -643,4 +643,3 @@ async fn device_signing_keys_query(
         devices,
     })
 }
-

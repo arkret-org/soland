@@ -447,11 +447,8 @@ pub fn resolve_ed25519_pubkey(
     state: &AppState,
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
-    arkret_identity::jws::resolve_ed25519_pubkey(
-        state.dids().resolver(),
-        verification_method,
-    )
-    .map_err(|error| error.to_string())
+    arkret_identity::jws::resolve_ed25519_pubkey(state.dids().resolver(), verification_method)
+        .map_err(|error| error.to_string())
 }
 
 pub async fn resolve_ed25519_pubkey_async(
@@ -733,4 +730,3 @@ async fn did_document_key_log_head(
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
 }
-

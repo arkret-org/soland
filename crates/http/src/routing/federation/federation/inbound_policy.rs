@@ -234,9 +234,7 @@ fn enforce_realm_moderation_federation_policy(
     peer_url: Option<&str>,
     direction: FederationDirection,
 ) -> Result<(), AppError> {
-    let record = state
-        .governance()
-        .cached_realm_moderation_policy(realm_id);
+    let record = state.governance().cached_realm_moderation_policy(realm_id);
     let Some(record) = record else {
         return Ok(());
     };

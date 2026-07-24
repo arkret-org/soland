@@ -10,6 +10,7 @@
 use arkret_identifiers::{Did, RealmId, SealId};
 use arkret_wire::{PartialSignature, ThresholdAggregator};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,7 +18,6 @@ use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -330,4 +330,3 @@ fn try_aggregate_partials(
 
     Ok(record.seal_id.clone())
 }
-

@@ -879,4 +879,3 @@ mod tests {
         assert_eq!(err.2, "agent session revocation freshness is unknown");
     }
 }
-

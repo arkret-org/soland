@@ -13,11 +13,11 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
     CanonicalEventRecord, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
 };
-use soland_http::error::AppError;
-use soland_http::result::{JsonResult, json_ok};
 
 use super::{
     is_realm_deleted, is_valid_hash_digest, now, query_param, query_param_all, render_error,
@@ -1469,4 +1469,3 @@ pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> App
 fn render_app_error(res: &mut Response, error: AppError) {
     render_error(res, error.http_status(), error.wire_code(), &error.message);
 }
-

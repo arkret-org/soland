@@ -442,9 +442,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
         ("ak.message.revise.own", "ak.message.revise")
     };
 
-    let grants = state
-        .authorization()
-        .grants_for_subject(actor, realm_id);
+    let grants = state.authorization().grants_for_subject(actor, realm_id);
 
     // Admin override: a broader (non-`.own`) capability is not time-boxed.
     let holds_broad = grants
@@ -580,4 +578,3 @@ pub async fn validate_content_encryption_floor(
     }
     Ok(())
 }
-

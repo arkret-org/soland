@@ -3,12 +3,13 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{Did, RealmId};
 use chrono::Duration;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_services::federation::FederationTransactionRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::federation::FederationTransactionRecord;
 
 use super::actor_signature::{
     federation_verify_actor_digest, federation_verify_actor_unsigned_digest,
@@ -32,7 +33,6 @@ use super::{
     federation_destination_matches, ingest_federation_operations, now, operation_is_visible,
     redaction_targets_from_operations, sync_token, verify_federation_origin,
 };
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::AppState;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -958,4 +958,3 @@ pub(crate) async fn federation_seals_push(
     }
     json_ok(FederationSealsPushOutcome { accepted, rejected })
 }
-

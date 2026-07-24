@@ -4,10 +4,10 @@ use arkret_models_collaboration::objects::read_receipts::ReadReceipt;
 use arkret_wire::ReadScopeKind;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use soland_http::error::AppError;
 use soland_services::delivery::ReadReceiptState;
 use soland_services::events::CanonicalEventRecord;
 use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_http::error::AppError;
 
 use crate::routing::events::event_log::{
     canonical_realm_id_for_record, effective_scope_for_envelope, event_visible_to_session,
@@ -47,14 +47,12 @@ pub(crate) async fn relay_ephemeral_read_receipt(
             "ak.receipt.read target event is not visible to the actor",
         ));
     }
-    state
-        .projections()
-        .observe_message_read_for_expiry(
-            &session.actor,
-            &normalized.event_id,
-            &arkret_canonical::format_timestamp_canonical(normalized.created_at),
-            normalized.created_at,
-        );
+    state.projections().observe_message_read_for_expiry(
+        &session.actor,
+        &normalized.event_id,
+        &arkret_canonical::format_timestamp_canonical(normalized.created_at),
+        normalized.created_at,
+    );
 
     let record = ReadReceiptState {
         realm_id: realm_id.to_owned(),
@@ -70,11 +68,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         expires_at: envelope.expires_at,
         position: 0,
     };
-    if let Err(error) = state
-        .deliveries()
-        .store_read_receipt(record)
-        .await
-    {
+    if let Err(error) = state.deliveries().store_read_receipt(record).await {
         tracing::error!(%error, "failed to relay ephemeral ak.receipt.read");
         return Err(AppError::internal(
             "failed to relay ak.receipt.read for realm sync",
@@ -374,4 +368,3 @@ fn read_scope_circle_id(state: &AppState, read_scope: &Value) -> Option<String> 
         .snapshot()
         .strand_scope_circle_id(strand_id)
 }
-

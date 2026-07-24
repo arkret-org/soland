@@ -5,14 +5,14 @@
 
 use arkret_identifiers::RealmId;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::json;
-use soland_services::events::RealmInviteState as RealmInviteRecord;
 use soland_contracts::admin::invite_tokens::{AdminInviteTokenItem, CreateInviteTokenRequest};
 use soland_http::error::AppError;
+use soland_services::events::RealmInviteState as RealmInviteRecord;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
@@ -144,11 +144,7 @@ fn default_invite_realm_id(state: &AppState) -> Option<String> {
 fn ensure_realm_exists(state: &AppState, realm_id: &str) -> Result<(), AppError> {
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
-    let exists = state
-        .realm_directory()
-        .snapshot()
-        .get(&realm_id)
-        .is_some();
+    let exists = state.realm_directory().snapshot().get(&realm_id).is_some();
     if exists {
         Ok(())
     } else {
@@ -174,4 +170,3 @@ fn parse_expires_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, AppError
         "expires_at must be RFC3339 or datetime-local format",
     ))
 }
-

@@ -31,9 +31,7 @@ pub(super) fn recovery_service_error(error: soland_services::ServiceError) -> Ap
     recovery_store_error(error)
 }
 
-pub(super) fn recovery_policy_service_error(
-    error: soland_services::ServiceError,
-) -> AppError {
+pub(super) fn recovery_policy_service_error(error: soland_services::ServiceError) -> AppError {
     recovery_policy_store_error(error)
 }
 
@@ -61,4 +59,3 @@ pub(super) fn recovery_receipt_store_error(error: PersistenceError) -> AppError 
         AppError::conflict(error.detail()).with_wire_code("recovery_receipt_conflict")
     }
 }
-

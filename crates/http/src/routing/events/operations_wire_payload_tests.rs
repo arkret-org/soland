@@ -74,4 +74,3 @@ fn principal_control_realm_binding_enforced() {
         .is_ok()
     );
 }
-

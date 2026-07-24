@@ -352,4 +352,3 @@ async fn participant_leave_retires_direct_binding() {
         "retired"
     );
 }
-

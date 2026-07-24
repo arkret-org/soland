@@ -247,10 +247,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
         Ok(())
     }
 
-    async fn store_typing(
-        &self,
-        typing: crate::delivery::TypingState,
-    ) -> crate::ServiceResult<()> {
+    async fn store_typing(&self, typing: crate::delivery::TypingState) -> crate::ServiceResult<()> {
         self.0.typing().put(persistence_typing(typing)).await?;
         Ok(())
     }
@@ -817,4 +814,3 @@ pub fn build_persistence_delivery_service(
         push_target_hmac_key,
     })
 }
-

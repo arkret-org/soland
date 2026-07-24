@@ -375,30 +375,28 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         Vec::new()
     };
 
-    let updated = state
-        .realm_directory()
-        .update_entry(&realm_id, |entry| {
-            if let Ok(member) = Did::new(member) {
-                if matches!(membership, Some("leave" | "ban")) {
-                    entry.members.remove(&member);
-                    for agent_id in &cascaded_agent_ids {
-                        if let Ok(agent_id) = Did::new(agent_id.clone()) {
-                            entry.members.remove(&agent_id);
-                        }
+    let updated = state.realm_directory().update_entry(&realm_id, |entry| {
+        if let Ok(member) = Did::new(member) {
+            if matches!(membership, Some("leave" | "ban")) {
+                entry.members.remove(&member);
+                for agent_id in &cascaded_agent_ids {
+                    if let Ok(agent_id) = Did::new(agent_id.clone()) {
+                        entry.members.remove(&agent_id);
                     }
-                } else if membership == Some("join") {
-                    entry.members.insert(member);
-                    // HDLREN-3/4 (arkret-spec @ 7157ee8) — `handle` is no longer
-                    // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
-                    // roster; clients resolve identity by following the
-                    // `ak.member.identity.update` events surfaced via
-                    // `MemberRosterEntry.identity_event_ids[]`. The earlier
-                    // `member_handle_uris` cache populated from
-                    // `payload.handle_uri` is gone with this rename.
-                    let _ = operation; // intentionally unused: payload no longer feeds roster identity
                 }
+            } else if membership == Some("join") {
+                entry.members.insert(member);
+                // HDLREN-3/4 (arkret-spec @ 7157ee8) — `handle` is no longer
+                // a roster field. The spec §8.1 MUST NOT put it on the per-Realm
+                // roster; clients resolve identity by following the
+                // `ak.member.identity.update` events surfaced via
+                // `MemberRosterEntry.identity_event_ids[]`. The earlier
+                // `member_handle_uris` cache populated from
+                // `payload.handle_uri` is gone with this rename.
+                let _ = operation; // intentionally unused: payload no longer feeds roster identity
             }
-        });
+        }
+    });
     if updated.is_none() {
         return;
     }
@@ -587,4 +585,3 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     };
     state.record_member_identity_update(record, identity_payload);
 }
-

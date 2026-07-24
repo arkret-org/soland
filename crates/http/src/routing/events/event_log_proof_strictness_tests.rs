@@ -2229,4 +2229,3 @@ async fn non_enrollment_device_authorize_passes_through_gate() {
         .await
         .expect("non-enrollment device.authorize must pass through this gate");
 }
-

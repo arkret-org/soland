@@ -144,8 +144,7 @@ pub async fn enqueue_outbound(
     endpoint: &str,
     idempotency_key: &str,
     payload_json: &str,
-) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord>
-{
+) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord> {
     let now = now_unix_secs();
     let result = state
         .federation()
@@ -545,12 +544,7 @@ impl FederationDispatcher {
         // outcome so an alert fires even if the durable ledger write
         // also failed.
         crate::metrics::record_federation_outbox_dead_letter();
-        if let Err(error) = self
-            .state
-            .federation()
-            .record_dead_letter(&record)
-            .await
-        {
+        if let Err(error) = self.state.federation().record_dead_letter(&record).await {
             tracing::warn!(
                 %error,
                 outbox_id = %row.id,
@@ -621,4 +615,3 @@ mod tests {
         assert_eq!(trimmed.len(), RESPONSE_EXCERPT_BYTES);
     }
 }
-

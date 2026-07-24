@@ -332,5 +332,3 @@ mod tests {
         assert!(spawn(state).is_none());
     }
 }
-
-

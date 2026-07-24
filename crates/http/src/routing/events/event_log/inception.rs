@@ -202,17 +202,13 @@ pub(super) async fn resolve_event_root_anchor_method(
         ));
     }
 
-    let mut records = state
-        .dids()
-        .log_events(actor_id)
-        .await
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "stale_did_document",
-                format!("DID history is unavailable for root-anchor verification: {error}"),
-            )
-        })?;
+    let mut records = state.dids().log_events(actor_id).await.map_err(|error| {
+        event_validation_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "stale_did_document",
+            format!("DID history is unavailable for root-anchor verification: {error}"),
+        )
+    })?;
     records.sort_by_key(|record| record.seq);
     let log = records
         .iter()

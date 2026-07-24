@@ -630,6 +630,64 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
 }
 
 #[test]
+fn direct_conversation_role_reads_the_genesis_object_from_the_create_log() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id =
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-cfc039892037").unwrap();
+    let creator = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+    let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
+        realm_id.clone(),
+        creator.clone(),
+        arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+        arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+        arkret_wire::notary::NotaryValue::single_did(creator),
+        chrono::Utc::now(),
+    );
+
+    state.apply(
+        &make_operation(
+            arkret_wire::events::EventKind::REALM_CREATE,
+            realm_id.as_str(),
+            serde_json::to_value(payload).unwrap(),
+        ),
+        &hlc,
+    );
+
+    let projected = state
+        .realm_create_log(realm_id.as_str())
+        .and_then(|entries| entries.last())
+        .and_then(|entry| entry.get("object"))
+        .cloned()
+        .unwrap();
+    let projected =
+        serde_json::from_value::<arkret_models_collaboration::objects::realm::Realm>(projected)
+            .unwrap();
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::validate(
+        &projected,
+    )
+    .unwrap();
+    assert!(state.realm_is_direct_conversation(realm_id.as_str()));
+
+    let mut replayed_value = serde_json::to_value(projected).unwrap();
+    replayed_value["entry_id"] = serde_json::json!("ak:event:01904100-0000-7000-8000-cfc039892037");
+    let cell_id = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.realm.create.v1:{realm_id}"
+    ))
+    .unwrap();
+    state.cells.insert(
+        cell_id,
+        arkret_state::lattice::CellState::Value(serde_json::json!([{
+            "issuer": "did:web:alice.example",
+            "issuer_seq": 1,
+            "value": replayed_value,
+        }])),
+    );
+
+    assert!(state.realm_is_direct_conversation(realm_id.as_str()));
+}
+
+#[test]
 fn realm_metadata_cell_returns_none_for_uncreated_realm() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d6d2";
     let state = ProjectionState::new();

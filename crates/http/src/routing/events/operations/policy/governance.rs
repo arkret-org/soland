@@ -745,10 +745,7 @@ pub(super) fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Option<soland_services::identity::DirectConversationBindingRecord> {
-    let binding = state
-        .contacts()
-        .active_direct_binding_for_realm(realm_id)?;
+    let binding = state.contacts().active_direct_binding_for_realm(realm_id)?;
     crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
         .then_some(binding)
 }
-

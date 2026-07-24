@@ -21,13 +21,13 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::json;
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError;
 use soland_services::join_applications::{
     JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
     JoinApplicationRecord,
 };
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
 use crate::state::AppState;
@@ -321,9 +321,7 @@ async fn submit_join_application(
             .map_err(service_error)?,
     )?;
     let (record, response) = response_from_value(record, response_body)?;
-    state
-        .projections()
-        .install_join_application_record(&record);
+    state.projections().install_join_application_record(&record);
     json_ok(response)
 }
 
@@ -398,9 +396,7 @@ async fn review_join_application(
             .map_err(service_error)?,
     )?;
     let (record, response) = response_from_value(record, response_body)?;
-    state
-        .projections()
-        .install_join_application_record(&record);
+    state.projections().install_join_application_record(&record);
     json_ok(response)
 }
 
@@ -472,9 +468,7 @@ async fn cancel_join_application(
             .map_err(service_error)?,
     )?;
     let (record, response) = response_from_value(record, response_body)?;
-    state
-        .projections()
-        .install_join_application_record(&record);
+    state.projections().install_join_application_record(&record);
     json_ok(response)
 }
 
@@ -697,4 +691,3 @@ async fn list_join_application_audit(
         entries: record.audit_entries,
     })
 }
-

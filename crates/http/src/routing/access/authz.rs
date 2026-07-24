@@ -23,6 +23,8 @@ use arkret_models_collaboration::governance::grant_constraint::{
 use arkret_models_collaboration::governance::invite_addressing::InviteDeliveryTarget;
 use arkret_models_collaboration::governance::operation_wire::Invite;
 use arkret_wire::{AuthzDecision, Facet, InviteState};
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -30,8 +32,6 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
 use crate::authz::{Constraint, GrantDecisionVerdict};
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -99,8 +99,9 @@ async fn authz_check(
         Some(projection.authz_resource_expr(&realm_id, &resource_str))
     }
     .unwrap_or_else(|| resource_str.clone());
-    let result = state.authorization().check(
-        soland_services::authorization::AuthorizationCheck {
+    let result = state
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor: body.actor_id.as_str(),
             action: &body.action,
             resource: &resource_expr,
@@ -108,8 +109,7 @@ async fn authz_check(
             owner: owner.as_deref(),
             members: &members,
             resource_facets: &resource_facets,
-        },
-    );
+        });
     let matched_grants = result
         .grants
         .iter()
@@ -361,11 +361,7 @@ async fn effective_grants(
             .await
             .unwrap_or_default()
             .into_iter()
-            .flat_map(|(sid, _)| {
-                state
-                    .authorization()
-                    .grants_for_subject(&subject, &sid)
-            })
+            .flat_map(|(sid, _)| state.authorization().grants_for_subject(&subject, &sid))
             .collect::<Vec<_>>()
             .into_iter()
             .map(capability_grant_from_authz_grant)
@@ -759,4 +755,3 @@ fn invite_state_from_record(status: &str) -> InviteState {
         _ => InviteState::Pending,
     }
 }
-

@@ -16,20 +16,20 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use hmac::{Hmac, KeyInit, Mac};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use sha2::Sha256;
-use soland_services::delivery::PushContractDrift as DriftResult;
-use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::delivery::PushContractDrift as DriftResult;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use subtle::ConstantTimeEq;
 
 use super::audit::append_audit_log;
 use super::auth::{SessionGrantValidationInput, validate_session_grant_binding};
 use super::push_outbound::{derive_push_gateway_service_base_url, join_push_gateway_url};
 use super::{authenticated_session, now, sha256_hex};
-use salvo::oapi::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -388,11 +388,7 @@ pub(super) async fn push_notify(
         .and_then(|value| value.as_array())
         .cloned()
         .unwrap_or_default();
-    let registered = state
-        .deliveries()
-        .push_devices()
-        .await
-        .unwrap_or_default();
+    let registered = state.deliveries().push_devices().await.unwrap_or_default();
     let mut rejected = Vec::new();
     let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
     for device in devices {
@@ -770,4 +766,3 @@ mod tests {
         ));
     }
 }
-

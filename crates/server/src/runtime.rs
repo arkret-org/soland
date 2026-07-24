@@ -5,15 +5,15 @@ use std::time::Duration;
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use soland_http::config::AppConfig;
+use soland_http::state::{
+    AppState, AppStateRuntime, EventBroadcast, EventNotification, EventNotificationRelay,
+};
 use soland_services::events::ProjectedOperationPersistencePort;
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
 use soland_services::projection::EventSealCommitPort;
-use soland_http::config::AppConfig;
-use soland_http::state::{
-    AppState, AppStateRuntime, EventBroadcast, EventNotification, EventNotificationRelay,
-};
 use soland_storage_postgres::{Db, PgPool};
 use tokio::sync::mpsc;
 use tokio_postgres::{AsyncMessage, NoTls};
@@ -29,8 +29,7 @@ pub fn build_app_state(
     service_identity: arkret_identity::service_identity::ServiceIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {
-    let cell_registry =
-        soland_services::projection::ProjectionService::sdk_cell_registry();
+    let cell_registry = soland_services::projection::ProjectionService::sdk_cell_registry();
     let stores =
         soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
     let service_id = service_identity
@@ -46,8 +45,7 @@ pub fn build_app_state(
         Arc::new(RuntimeEventSealCommitter(stores.event_seal_committer)),
         &service_id,
     );
-    let realm_directory =
-        soland_http::state::build_realm_directory(&config);
+    let realm_directory = soland_http::state::build_realm_directory(&config);
     let object_storage = build_object_storage(&config.object_storage)?;
     let database_url = config
         .database_url
@@ -298,5 +296,3 @@ impl PgEventNotificationWorker {
         }
     }
 }
-
-

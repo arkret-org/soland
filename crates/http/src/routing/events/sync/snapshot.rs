@@ -1160,11 +1160,9 @@ async fn notification_account_data_events(
 ) -> Vec<arkret_wire::Event> {
     let rows = state
         .deliveries()
-        .list_recipient_notifications(
-            soland_services::delivery::ListRecipientNotificationsQuery {
-                recipient_id: session.actor.clone(),
-            },
-        )
+        .list_recipient_notifications(soland_services::delivery::ListRecipientNotificationsQuery {
+            recipient_id: session.actor.clone(),
+        })
         .await
         .unwrap_or_default();
     let mut events = Vec::new();
@@ -1505,4 +1503,3 @@ fn circle_scope_visible_to_session(
     };
     projection.circle_scope_visible_to_actor_at(scope_circle_id, &session.actor, event_created_at)
 }
-

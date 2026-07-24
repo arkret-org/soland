@@ -648,4 +648,3 @@ mod tests {
         assert_eq!(error.http_status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
-

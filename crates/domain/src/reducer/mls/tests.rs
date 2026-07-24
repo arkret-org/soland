@@ -301,6 +301,74 @@ fn keypackage_claim_twice_second_fails() {
 }
 
 #[test]
+fn keypackage_claim_same_group_renews_instead_of_conflicting() {
+    let mut state = ProjectionState::default();
+    let publish = op_at(
+        100,
+        "ak.mls.keypackage",
+        publish_payload(
+            "ak:mls_keypackage:renew",
+            "did:web:alice.example",
+            "ak:device:alice-desktop",
+            1_000_000,
+        ),
+    );
+    let _ = apply_keypackage_publish(&mut state, &publish);
+
+    let claim = |at: i64| {
+        op_at(
+            at,
+            "ak.mls.keypackage",
+            json!({
+                "action": "claim",
+                "keypackage_id": "ak:mls_keypackage:renew",
+                "group_id": "ak:mls_group:same",
+                "ssk_generation": 7,
+                "claim_expires_at_unix_ms": (at + 300) * 1000
+            }),
+        )
+    };
+    let e1 = apply_keypackage_claim(&mut state, &claim(200));
+    assert!(matches!(
+        e1,
+        ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed { .. })
+    ));
+
+    // Re-claim by the SAME group (interrupted materialization retry after the
+    // claim window lapsed) is idempotent renewal, not a CAS conflict.
+    let e2 = apply_keypackage_claim(&mut state, &claim(600));
+    assert!(matches!(
+        e2,
+        ProjectionEffect::Mls(MlsEffect::KeyPackageClaimed { .. })
+    ));
+    let row = state
+        .mls_key_packages
+        .get("ak:mls_keypackage:renew")
+        .unwrap();
+    assert_eq!(row.claimed_by.as_deref(), Some("ak:mls_group:same"));
+    assert_eq!(row.claimed_at, Some(600));
+    assert_eq!(row.claim_expires_at_unix_ms, Some(900_000));
+
+    // A different group is still rejected by the CAS.
+    let other = op_at(
+        700,
+        "ak.mls.keypackage",
+        json!({
+            "action": "claim",
+            "keypackage_id": "ak:mls_keypackage:renew",
+            "group_id": "ak:mls_group:other",
+            "ssk_generation": 7
+        }),
+    );
+    match apply_keypackage_claim(&mut state, &other) {
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, REASON_KEYPACKAGE_ALREADY_CLAIMED);
+        }
+        other => panic!("expected Rejected, got {other:?}"),
+    }
+}
+
+#[test]
 fn last_resort_keypackage_reuses_within_realm_only() {
     let mut state = ProjectionState::default();
     let mut payload = publish_payload(

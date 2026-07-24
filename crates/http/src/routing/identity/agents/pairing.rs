@@ -1,5 +1,6 @@
-use super::*;
 use salvo::oapi::endpoint;
+
+use super::*;
 
 #[endpoint(
     operation_id = "ak.open.agent_pairing.query.resolve",
@@ -1657,4 +1658,3 @@ mod requested_scope_tests {
         assert!(ensure_pairing_request_open(&record).is_err());
     }
 }
-

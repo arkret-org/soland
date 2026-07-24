@@ -1029,9 +1029,7 @@ mod tests {
         seed_strand(&state, realm_id, strand_id);
 
         let operation = relation_create(realm_id, "000000009994", alice, strand_id, bob);
-        state
-            .projections()
-            .apply(&operation, state.hlc());
+        state.projections().apply(&operation, state.hlc());
         dispatch_assignment_notifications(&state, &operation).await;
 
         let notifications = notifications_for(&state, bob).await;
@@ -1059,9 +1057,7 @@ mod tests {
         seed_realm_members(&state, realm_id, &[alice, bob, carol]);
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009997", alice, strand_id, bob);
-        state
-            .projections()
-            .apply(&assignment, state.hlc());
+        state.projections().apply(&assignment, state.hlc());
         seed_strand_watch(&state, strand_id, carol, "all");
 
         let operation = schedule_update(realm_id, "000000009998", alice, strand_id);
@@ -1192,4 +1188,3 @@ mod tests {
         }));
     }
 }
-

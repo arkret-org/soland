@@ -45,14 +45,9 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
 
     match effect {
         MlsProjectionEffect::KeyPackagePublished { keypackage_id } => {
-            let record = state
-                .projections()
-                .mls_key_package_record(keypackage_id);
+            let record = state.projections().mls_key_package_record(keypackage_id);
             if let Some(record) = record
-                && let Err(error) = state
-                    .mls_key_packages()
-                    .store_key_package(&record)
-                    .await
+                && let Err(error) = state.mls_key_packages().store_key_package(&record).await
             {
                 tracing::warn!(%error, keypackage_id = %keypackage_id, "failed to mirror MLS KeyPackage publish");
             }
@@ -215,11 +210,9 @@ fn bind_circle_mls_group(
     effective_scope: &Value,
     clear_pending_removals: bool,
 ) {
-    state.projections().bind_circle_mls_group(
-        group_id,
-        effective_scope,
-        clear_pending_removals,
-    );
+    state
+        .projections()
+        .bind_circle_mls_group(group_id, effective_scope, clear_pending_removals);
 }
 
 /// After the deterministic reducer mutates the in-memory
@@ -251,16 +244,10 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
                 .await
         }
         ProjectionWriteThroughRecord::Strand(record) => {
-            state
-                .event_queries()
-                .store_strand_projection(&record)
-                .await
+            state.event_queries().store_strand_projection(&record).await
         }
         ProjectionWriteThroughRecord::Morph(record) => {
-            state
-                .event_queries()
-                .store_morph_projection(&record)
-                .await
+            state.event_queries().store_morph_projection(&record).await
         }
     };
     if let Err(error) = result {
@@ -526,10 +513,7 @@ async fn project_accepted_operations_inner(
         // participation.set / .get ceiling resolution).
         if let Some(record) =
             crate::routing::events::operations::agent_participation_ceiling_record(operation)
-            && let Err(error) = state
-                .agent_participations()
-                .store_ceiling(record)
-                .await
+            && let Err(error) = state.agent_participations().store_ceiling(record).await
         {
             tracing::warn!(%error, "failed to persist agent participation ceiling");
         }
@@ -706,42 +690,22 @@ async fn project_mls_welcome_to_device(
             "key_package_id": record.key_package_id,
         }
     });
-    let position = state.next_to_device_position();
-    let recipient = record.recipient_actor_id.clone();
-    let device = record.recipient_device_id.clone();
     let message = DeviceMessageState {
         idempotency_key: format!("mls_welcome:{welcome_id}"),
         sender: origin.to_owned(),
-        recipient: recipient.clone(),
-        device_id: device.clone(),
-        position,
+        recipient: record.recipient_actor_id.clone(),
+        device_id: record.recipient_device_id.clone(),
+        position: state.next_to_device_position(),
         content,
         created_at: operation.created_at,
     };
-    tracing::warn!(
-        target: "mls_welcome_delivery",
-        %welcome_id,
-        recipient = %recipient,
-        device = %device,
-        position,
-        sender_device_id = %sender_device_id,
-        "DIAG appending MLS Welcome to device_messages queue"
-    );
-    match state
-        .deliveries()
-        .append_device_message(message)
-        .await
-    {
-        Ok(()) => tracing::warn!(
-            target: "mls_welcome_delivery",
-            %welcome_id, recipient = %recipient, device = %device, position,
-            "DIAG MLS Welcome appended OK (ON CONFLICT DO NOTHING — if the row count is 0 a position/idempotency conflict swallowed it)"
-        ),
-        Err(error) => tracing::warn!(
-            target: "mls_welcome_delivery",
-            %error, %welcome_id, operation_id = %operation.operation_id,
-            "DIAG failed to enqueue MLS Welcome to-device message"
-        ),
+    if let Err(error) = state.deliveries().append_device_message(message).await {
+        tracing::warn!(
+            %error,
+            %welcome_id,
+            operation_id = %operation.operation_id,
+            "failed to enqueue MLS Welcome to-device message"
+        );
     }
 }
 
@@ -791,11 +755,7 @@ async fn project_realm_key_share_to_device(
         content,
         created_at: operation.created_at,
     };
-    if let Err(error) = state
-        .deliveries()
-        .append_device_message(record)
-        .await
-    {
+    if let Err(error) = state.deliveries().append_device_message(record).await {
         tracing::warn!(
             %error,
             operation_id = %operation.operation_id,
@@ -1002,17 +962,10 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
     state: &AppState,
     grant_id: &str,
 ) {
-    match state
-        .projections()
-        .effective_engine_grant(grant_id)
-    {
-        Some(grant) => state
-            .authorization()
-            .upsert_projected_grant(grant),
+    match state.projections().effective_engine_grant(grant_id) {
+        Some(grant) => state.authorization().upsert_projected_grant(grant),
         // A revoke-before-grant tombstone has no resolvable body/actions.
-        None => state
-            .authorization()
-            .mark_projected_grant_revoked(grant_id),
+        None => state.authorization().mark_projected_grant_revoked(grant_id),
     }
 }
 
@@ -1188,4 +1141,3 @@ mod tests {
         assert_eq!(contextual.payload["manage_capability_verified"], true);
     }
 }
-

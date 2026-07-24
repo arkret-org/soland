@@ -319,4 +319,3 @@ pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
         _ => None,
     }
 }
-

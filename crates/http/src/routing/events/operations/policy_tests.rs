@@ -2701,4 +2701,3 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         "a non-recovery recipient with no history-sharing policy must fail closed"
     );
 }
-

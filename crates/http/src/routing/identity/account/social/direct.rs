@@ -1,5 +1,15 @@
 use super::*;
 
+/// Capability the direct-conversation KeyPackage claim requires. MUST be a
+/// value producers actually publish: the canonical SDK KeyPackage capability
+/// set is `["mimi.content.v1", "ak.content.v1"]`
+/// (`ARKRET_MLS_KEY_PACKAGE_CAPABILITIES`; encryption-and-audit.md §2.6
+/// requires `required ⊆ claimed`). Requiring a token outside that set — the
+/// previous `ak.mls.rfc9420`, which only ever appeared in local test
+/// fixtures — made every real direct-conversation claim fail closed as
+/// `mls_keypackage_not_found`.
+pub(crate) const DIRECT_CONVERSATION_REQUIRED_CAPABILITY: &str = "ak.content.v1";
+
 pub(crate) fn direct_authorization_basis_from_contact(
     contact: &ContactRecord,
 ) -> Result<
@@ -34,11 +44,10 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
-        let managed_agent = state
-            .agent_pairings()
-            .agent(peer)
-            .await
-            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?;
+        let managed_agent =
+            state.agent_pairings().agent(peer).await.map_err(|error| {
+                AppError::internal(format!("managed Agent lookup failed: {error}"))
+            })?;
         if let Some(record) = managed_agent
             && record.state == "active"
             && record.authorized_event_ref.is_some()
@@ -717,21 +726,13 @@ pub(crate) async fn project_canonical_direct_binding(
     else {
         return;
     };
-    let Ok(Some(contact)) = state
-        .contacts()
-        .contact_any(&issuer, &peer)
-        .await
-    else {
+    let Ok(Some(contact)) = state.contacts().contact_any(&issuer, &peer).await else {
         return;
     };
     let Some(recipient_service_id) = contact.peer_service_id.as_deref() else {
         return;
     };
-    let Ok(Some(record)) = state
-        .event_queries()
-        .accepted_event(&event_ref)
-        .await
-    else {
+    let Ok(Some(record)) = state.event_queries().accepted_event(&event_ref).await else {
         return;
     };
     let Ok(event) = serde_json::from_value::<arkret_wire::Event>(record.envelope) else {
@@ -842,7 +843,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
             "intended_realm_id": reserved.realm_id,
             "mls_group_id": mls_group_id,
             "claim_purpose": "direct_conversation",
-            "required_capabilities": ["ak.mls.rfc9420"],
+            "required_capabilities": [DIRECT_CONVERSATION_REQUIRED_CAPABILITY],
             "claim_nonce": claim_nonce,
             "expires_at": arkret_canonical::format_timestamp_canonical(now() + chrono::Duration::minutes(5)),
             "target_device_ids": [],
@@ -898,15 +899,12 @@ pub(crate) async fn complete_remote_direct_binding_with_realm(
     ),
     AppError,
 > {
-    let reserved = state
-        .contacts()
-        .direct_binding(pair_key)
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::TemporarilyUnavailable,
-                "remote direct reservation is missing",
-            )
-        })?;
+    let reserved = state.contacts().direct_binding(pair_key).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::TemporarilyUnavailable,
+            "remote direct reservation is missing",
+        )
+    })?;
     let context = remote_authoring_context(&reserved).ok_or_else(|| {
         AppError::new(
             ErrorCode::FailedPrecondition,
@@ -972,6 +970,68 @@ pub(crate) fn pending_direct_materialization(
         .filter(|binding| binding.state == "authoring_required")?;
     let draft = serde_json::from_value(binding.authoring_context.clone()?).ok()?;
     Some((binding, draft))
+}
+
+/// [`pending_direct_materialization`], renewing the stored draft's KeyPackage
+/// claim when its window has lapsed.
+///
+/// An authoring client interrupted mid-materialization leaves the binding in
+/// `authoring_required` with a durable draft whose claim expires after five
+/// minutes. Returning the stale draft verbatim dead-locks the pair forever
+/// (the client fails closed on `draft expired` on every retry). Renew the
+/// claim for the SAME reserved realm/group — the reducer treats a same-group
+/// re-claim as idempotent renewal, so no cross-group init-key reuse is
+/// possible — persist the refreshed draft, and hand it back so the client
+/// resumes where it stopped. Every resolve entry point that surfaces a stored
+/// draft MUST go through this helper.
+pub(crate) async fn pending_direct_materialization_renewed(
+    state: &AppState,
+    pair_key: &str,
+    actor: &str,
+    peer: &str,
+) -> Result<
+    Option<(
+        DirectConversationBindingRecord,
+        arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
+    )>,
+    AppError,
+> {
+    let Some((binding, draft)) = pending_direct_materialization(state, pair_key) else {
+        return Ok(None);
+    };
+    if draft.expires_at > now() {
+        return Ok(Some((binding, draft)));
+    }
+    let mut draft = draft;
+    let realm_id = draft.realm_event.realm_id.to_string();
+    let mls_group_id = draft.mls_group_id.as_str().to_owned();
+    let claim = claim_direct_keypackage(
+        state,
+        actor,
+        peer,
+        &realm_id,
+        &binding.main_strand_id,
+        &mls_group_id,
+    )
+    .await?;
+    draft.expires_at = claim.expires_at;
+    draft.claimed_keypackage = claim;
+    let mut refreshed = binding;
+    refreshed.authoring_context = Some(serde_json::to_value(&draft).map_err(|error| {
+        AppError::internal(format!(
+            "renewed direct materialization draft encode failed: {error}"
+        ))
+    })?);
+    refreshed.updated_at = now();
+    state
+        .contacts()
+        .save_direct_binding(pair_key, refreshed.clone())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("save renewed direct materialization: {error}"))
+        })?;
+    publish_reserved_direct_binding(state, pair_key, &refreshed)?;
+    Ok(Some((refreshed, draft)))
 }
 
 async fn execute_remote_peer_claim(
@@ -1400,7 +1460,9 @@ pub(crate) async fn create_direct_binding_with_realm(
     ),
     AppError,
 > {
-    if let Some((binding, draft)) = pending_direct_materialization(state, pair_key) {
+    if let Some((binding, draft)) =
+        pending_direct_materialization_renewed(state, pair_key, actor, peer).await?
+    {
         return Ok((binding, false, Some(draft)));
     }
     // Reserve the canonical binding under lock so concurrent resolves for the
@@ -1589,9 +1651,14 @@ async fn prepare_reserved_direct_materialization(
         arkret_wire::events::EventKind::STRAND_CREATE,
         strand_payload,
     )?;
+    // `ak.strand.create` writes the `ak.component.strand.object.v1` cell
+    // (contract-catalog `cell_writes`); there is no `strand.create` cell
+    // family. The envelope plane validation rejects unregistered families
+    // once the submitted event carries a seal binding, so the drafted cell
+    // MUST use the registered family.
     attach_create_cell_contract(
         &mut main_strand_event,
-        "ak.component.strand.create.v1",
+        "ak.component.strand.object.v1",
         main_strand_id,
     )?;
 
@@ -1882,10 +1949,11 @@ fn reserve_direct_binding(
         created_at,
         updated_at: created_at,
     };
-    if let Err(current) = state
-        .contacts()
-        .replace_direct_binding_if_current(pair_key, expected_event_ref, binding.clone())
-    {
+    if let Err(current) = state.contacts().replace_direct_binding_if_current(
+        pair_key,
+        expected_event_ref,
+        binding.clone(),
+    ) {
         return match current {
             Some(current) if current.state == "active" => {
                 DirectBindingReservation::Existing(*current)
@@ -2013,12 +2081,7 @@ pub(super) async fn rollback_reserved_direct_binding(
     let removed = state
         .contacts()
         .remove_direct_binding_if_current(pair_key, &reserved.binding_event_ref);
-    if removed
-        && let Err(error) = state
-            .contacts()
-            .delete_direct_binding(pair_key)
-            .await
-    {
+    if removed && let Err(error) = state.contacts().delete_direct_binding(pair_key).await {
         tracing::warn!(%error, pair_key, "failed to delete rolled-back direct binding");
     }
 }
@@ -2048,7 +2111,7 @@ pub(super) async fn claim_direct_keypackage(
         intended_realm_id: RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
         requester,
-        required_capabilities: vec!["ak.mls.rfc9420".to_owned()],
+        required_capabilities: vec![DIRECT_CONVERSATION_REQUIRED_CAPABILITY.to_owned()],
         claim_nonce: URL_SAFE_NO_PAD.encode(format!("direct:{realm_id}:{mls_group_id}").as_bytes()),
         expires_at: now() + chrono::Duration::minutes(5),
         target_device_ids: Vec::new(),
@@ -2159,12 +2222,23 @@ pub(super) fn direct_realm_create_payload(
     let trust_domain =
         arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
             .map_err(|_| "invalid direct realm trust domain")?;
+    // A direct-conversation Realm is an ordinary server-hosted collaboration
+    // Realm (contact-and-direct-conversation.md §「普通 Realm 的 atomic
+    // bootstrap batch」), so its Seals are notarized by this Principal Server,
+    // not the creator. The notary worker only signs when the notary cell's
+    // `single_did` equals its own `service_id` ([notary.rs] `is_authorized_for`).
+    // Setting the notary to the creator left no one able to sign Seals for the
+    // Realm — Seal materialization failed `not authorized to sign seals`, which
+    // surfaced to the client as `frontier_unavailable` on the MLS governance
+    // proof and blocked the genesis/commit/Welcome sequence.
+    let service_notary_did = arkret_identifiers::Did::new(state.service_id().to_owned())
+        .map_err(|_| "service_id is not a valid notary DID")?;
     let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
         realm_scope,
-        creator_did.clone(),
+        creator_did,
         trust_domain,
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
-        arkret_wire::notary::NotaryValue::single_did(creator_did),
+        arkret_wire::notary::NotaryValue::single_did(service_notary_did),
         created_at,
     );
     serde_json::to_value(payload).map_err(|_| "direct realm create payload serialization failed")
@@ -2286,4 +2360,3 @@ pub(super) fn direct_strand_create_operation(
     operation.created_at = created_at;
     Ok(operation)
 }
-

@@ -3,8 +3,8 @@
 use salvo::extract::{Extractible, Metadata};
 use salvo::http::ParseError;
 use salvo::prelude::{Depot, Request};
-use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use super::auth::authenticated_session as authenticated_session_inner;
 use crate::state::AppState;
@@ -41,9 +41,10 @@ impl salvo::oapi::EndpointArgRegister for AuthArgs {
             "bearer_session".to_owned(),
             SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer).bearer_format("JWT")),
         );
-        operation
-            .securities
-            .push(SecurityRequirement::new("bearer_session", Vec::<String>::new()));
+        operation.securities.push(SecurityRequirement::new(
+            "bearer_session",
+            Vec::<String>::new(),
+        ));
     }
 }
 
@@ -72,4 +73,3 @@ impl AuthArgs {
         }
     }
 }
-

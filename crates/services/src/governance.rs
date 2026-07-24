@@ -96,12 +96,8 @@ pub trait AdminSigningKeyPort: Send + Sync {
 #[async_trait]
 pub trait RuntimeSettingsPort: Send + Sync {
     async fn load_overrides(&self) -> ServiceResult<Vec<(String, Value)>>;
-    async fn store_override(
-        &self,
-        key: &str,
-        value: &Value,
-        updated_by: &str,
-    ) -> ServiceResult<()>;
+    async fn store_override(&self, key: &str, value: &Value, updated_by: &str)
+    -> ServiceResult<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -156,13 +152,9 @@ pub trait GovernanceRecordsPort: Send + Sync {
         &self,
         record: &RealmModerationPolicyRecord,
     ) -> ServiceResult<()>;
-    async fn realm_moderation_policies(
-        &self,
-    ) -> ServiceResult<Vec<RealmModerationPolicyRecord>>;
-    async fn policy_document(
-        &self,
-        policy_id: &str,
-    ) -> ServiceResult<Option<PolicyDocumentRecord>>;
+    async fn realm_moderation_policies(&self) -> ServiceResult<Vec<RealmModerationPolicyRecord>>;
+    async fn policy_document(&self, policy_id: &str)
+    -> ServiceResult<Option<PolicyDocumentRecord>>;
     async fn store_policy_document(&self, record: PolicyDocumentRecord) -> ServiceResult<()>;
     async fn delete_policy_document(&self, policy_id: &str) -> ServiceResult<bool>;
     async fn policy_documents_for_owner(
@@ -175,8 +167,7 @@ pub trait GovernanceRecordsPort: Send + Sync {
         &self,
         realm_id: &str,
     ) -> ServiceResult<Option<RetentionPolicyRecord>>;
-    async fn store_retention_policy(&self, record: &RetentionPolicyRecord)
-    -> ServiceResult<()>;
+    async fn store_retention_policy(&self, record: &RetentionPolicyRecord) -> ServiceResult<()>;
     async fn retention_tombstone(
         &self,
         event_id: &str,
@@ -186,10 +177,8 @@ pub trait GovernanceRecordsPort: Send + Sync {
         &self,
         record: &RetentionTombstoneRecord,
     ) -> ServiceResult<()>;
-    async fn multisig_pending(
-        &self,
-        seal_id: &str,
-    ) -> ServiceResult<Option<MultisigPendingRecord>>;
+    async fn multisig_pending(&self, seal_id: &str)
+    -> ServiceResult<Option<MultisigPendingRecord>>;
     async fn store_multisig_pending(&self, record: MultisigPendingRecord) -> ServiceResult<()>;
     async fn multisig_pending_for_realm(
         &self,
@@ -314,9 +303,7 @@ impl GovernanceService {
         Ok(())
     }
 
-    pub async fn realm_organization_links(
-        &self,
-    ) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
+    pub async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
         self.records.realm_organization_links().await
     }
 
@@ -480,10 +467,7 @@ impl GovernanceService {
         self.retention_tombstones.lock().get(event_id).cloned()
     }
 
-    pub async fn append_audit_entry(
-        &self,
-        command: AppendAuditEntryCommand,
-    ) -> ServiceResult<()> {
+    pub async fn append_audit_entry(&self, command: AppendAuditEntryCommand) -> ServiceResult<()> {
         self.audit_log.append(command.entry).await
     }
 
@@ -519,10 +503,7 @@ impl GovernanceService {
     pub async fn moderation_appeals(&self) -> ServiceResult<Vec<Value>> {
         self.moderation.appeals().await
     }
-    pub async fn moderation_appeal_history(
-        &self,
-        appeal_id: &str,
-    ) -> ServiceResult<Vec<Value>> {
+    pub async fn moderation_appeal_history(&self, appeal_id: &str) -> ServiceResult<Vec<Value>> {
         self.moderation.appeal_history(appeal_id).await
     }
 
@@ -540,10 +521,7 @@ impl GovernanceService {
         self.records.policy_document(policy_id).await
     }
 
-    pub async fn store_policy_document(
-        &self,
-        record: PolicyDocumentRecord,
-    ) -> ServiceResult<()> {
+    pub async fn store_policy_document(&self, record: PolicyDocumentRecord) -> ServiceResult<()> {
         self.records.store_policy_document(record).await
     }
 
@@ -598,10 +576,7 @@ impl GovernanceService {
         self.records.multisig_pending(seal_id).await
     }
 
-    pub async fn store_multisig_pending(
-        &self,
-        record: MultisigPendingRecord,
-    ) -> ServiceResult<()> {
+    pub async fn store_multisig_pending(&self, record: MultisigPendingRecord) -> ServiceResult<()> {
         self.records.store_multisig_pending(record).await
     }
 
@@ -628,11 +603,7 @@ impl GovernanceService {
             .await
     }
 
-    pub async fn release_multisig_claim(
-        &self,
-        seal_id: &str,
-        node_id: &str,
-    ) -> ServiceResult<()> {
+    pub async fn release_multisig_claim(&self, seal_id: &str, node_id: &str) -> ServiceResult<()> {
         self.records.release_multisig_claim(seal_id, node_id).await
     }
 
@@ -733,9 +704,7 @@ mod tests {
         ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn realm_organization_links(
-            &self,
-        ) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
+        async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
             Ok(Vec::new())
         }
         async fn store_realm_moderation_policy(
@@ -755,10 +724,7 @@ mod tests {
         ) -> ServiceResult<Option<PolicyDocumentRecord>> {
             Ok(None)
         }
-        async fn store_policy_document(
-            &self,
-            _record: PolicyDocumentRecord,
-        ) -> ServiceResult<()> {
+        async fn store_policy_document(&self, _record: PolicyDocumentRecord) -> ServiceResult<()> {
             Ok(())
         }
         async fn delete_policy_document(&self, _policy_id: &str) -> ServiceResult<bool> {
@@ -933,4 +899,3 @@ mod tests {
         );
     }
 }
-

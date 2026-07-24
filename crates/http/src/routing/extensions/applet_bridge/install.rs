@@ -16,8 +16,8 @@ use arkret_wire::EffectiveScope;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_services::events::{MessageState, ProjectedEvent as ProjectionEventRecord};
 use soland_http::error::AppError;
+use soland_services::events::{MessageState, ProjectedEvent as ProjectionEventRecord};
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
 use super::record::{
@@ -1850,4 +1850,3 @@ mod tests {
         );
     }
 }
-

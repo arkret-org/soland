@@ -30,6 +30,7 @@ use std::collections::BTreeMap;
 
 use arkret_identifiers::Did;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
+use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_contracts::admin::{
@@ -40,7 +41,6 @@ use soland_http::error::{AppError, ErrorCode};
 use util::query_param;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal, util};
-use salvo::oapi::extract::QueryParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -696,4 +696,3 @@ mod tests {
             .expect("listed admin principal must be admitted");
     }
 }
-

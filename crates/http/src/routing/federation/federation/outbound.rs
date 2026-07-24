@@ -269,11 +269,7 @@ pub(super) async fn record_outbound_fanout_attempt(
         received_at: now,
         processed_at: Some(attempted_at),
     };
-    if let Err(error) = state
-        .federation()
-        .store_transaction(&record)
-        .await
-    {
+    if let Err(error) = state.federation().store_transaction(&record).await {
         tracing::warn!(
             %error,
             %peer,
@@ -369,10 +365,7 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
         } else {
             report.retried += 1;
         }
-        state
-            .federation()
-            .store_transaction(&updated)
-            .await?;
+        state.federation().store_transaction(&updated).await?;
     }
 
     Ok(report)
@@ -512,4 +505,3 @@ pub(crate) fn test_app_state_with_peers(
     };
     AppState::new(cfg, Db { pool: None })
 }
-

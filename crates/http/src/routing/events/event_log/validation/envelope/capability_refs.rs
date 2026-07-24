@@ -234,11 +234,10 @@ pub(super) fn validate_data_event_joined_capability_view(
             }
             Some(cell_state) => {
                 let joined_grants = data_event_grants_from_state_at_ref(&joined_state);
-                let current =
-                    soland_services::projection::engine_grant_from_capability_cell_state(
-                        grant_id, cell_state,
-                    )
-                    .or_else(|| joined_grants.get(grant_id).cloned());
+                let current = soland_services::projection::engine_grant_from_capability_cell_state(
+                    grant_id, cell_state,
+                )
+                .or_else(|| joined_grants.get(grant_id).cloned());
                 let Some(current) = current else {
                     return Err(event_validation_error(
                         StatusCode::PRECONDITION_FAILED,
@@ -289,16 +288,13 @@ pub(super) fn data_event_state_at_seal_ref(
     std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
     EventValidationError,
 > {
-    let seal = state
-        .projections()
-        .seal_by_id(seal_id)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                format!("DataEvent seal_ref lookup failed: {error}"),
-            )
-        })?;
+    let seal = state.projections().seal_by_id(seal_id).map_err(|error| {
+        event_validation_error(
+            StatusCode::FORBIDDEN,
+            "capability_denied",
+            format!("DataEvent seal_ref lookup failed: {error}"),
+        )
+    })?;
     let Some(seal) = seal else {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
@@ -568,4 +564,3 @@ pub(super) fn append_authz_resource_candidates(
         }
     }
 }
-

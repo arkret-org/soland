@@ -52,9 +52,7 @@ pub fn retention_tombstone_for_event(
     state: &crate::state::AppState,
     event_id: &str,
 ) -> Option<soland_services::governance::RetentionTombstoneRecord> {
-    state
-        .governance()
-        .cached_retention_tombstone(event_id)
+    state.governance().cached_retention_tombstone(event_id)
 }
 
 #[cfg(test)]
@@ -265,4 +263,3 @@ mod tests {
         assert_eq!(operation_realm_title(&operation), Some("Renamed Room"));
     }
 }
-

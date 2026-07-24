@@ -32,8 +32,7 @@ async fn submit_event_seal(
     let session = aa.authenticated_session(state, req).await?;
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
-    let expected_realm =
-        soland_services::identity::principal_control_realm_for_did(&session.actor);
+    let expected_realm = soland_services::identity::principal_control_realm_for_did(&session.actor);
     let managed_agent = if seal.realm_id.as_str() == expected_realm {
         None
     } else {
@@ -196,11 +195,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 return;
             }
         };
-        match state
-            .jobs()
-            .idempotency_record(&session.actor, key)
-            .await
-        {
+        match state.jobs().idempotency_record(&session.actor, key).await {
             Ok(Some(record)) if record.request_hash == request_hash => {
                 // Replay: re-emit the cached first response verbatim, no
                 // re-execution and no second side effect.
@@ -407,11 +402,7 @@ async fn persist_idempotency_first_response(
         created_at,
         expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
     };
-    if let Err(error) = state
-        .jobs()
-        .store_idempotency_record(record)
-        .await
-    {
+    if let Err(error) = state.jobs().store_idempotency_record(record).await {
         tracing::warn!(%error, idempotency_key, "idempotency first-response persist failed");
     }
 }
@@ -821,4 +812,3 @@ pub(super) fn build_realm_actor_frontier(
     )
     .map_err(|error| AppError::internal(format!("actor frontier is invalid: {error}")))
 }
-

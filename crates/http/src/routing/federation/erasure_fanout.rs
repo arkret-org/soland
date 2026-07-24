@@ -476,4 +476,3 @@ mod tests {
         assert_eq!(record.fanout_status, "incomplete");
     }
 }
-

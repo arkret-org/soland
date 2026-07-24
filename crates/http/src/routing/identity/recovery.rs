@@ -35,19 +35,19 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
     RecoveryPolicyState as RecoveryPolicyRecord, RecoveryReceiptState as RecoveryReceiptRecord,
     SessionIdentityState as SessionRecord, principal_control_realm_for_did,
 };
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, append_audit_log};
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::AppState;
 
 mod errors;
@@ -99,4 +99,3 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
         .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
 }
-

@@ -238,16 +238,13 @@ async fn admin_list_cells(
         .and_then(|v| v.parse::<usize>().ok())
         .unwrap_or(0);
 
-    let all_cells = state
-        .projections()
-        .realm_cells(&realm)
-        .map_err(|e| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("cell_store list_cells failed: {e}"),
-            )
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
+    let all_cells = state.projections().realm_cells(&realm).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("cell_store list_cells failed: {e}"),
+        )
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
 
     // Filter by family prefix (post-list to keep CellStore trait minimal).
     let prefix_match = |cell: &CellRef| -> bool {

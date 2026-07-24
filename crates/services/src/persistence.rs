@@ -19,9 +19,7 @@ use crate::identity::{
 use crate::jobs::RuntimeHealthPort;
 use crate::join_applications::JoinApplicationService;
 use crate::persistence_delivery::build_persistence_delivery_service;
-use crate::persistence_events::{
-    PersistenceEventServices, build_persistence_event_services,
-};
+use crate::persistence_events::{PersistenceEventServices, build_persistence_event_services};
 use crate::persistence_identity::{
     PersistenceIdentityServices, build_persistence_identity_services,
 };
@@ -269,4 +267,3 @@ impl PersistenceHandle {
         self.persistence.clone()
     }
 }
-

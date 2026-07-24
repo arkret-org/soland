@@ -22,14 +22,10 @@ pub(super) async fn run_webvh_resolution_checks(
     state: &AppState,
     did: &str,
 ) -> Result<(), AppError> {
-    let events = state
-        .dids()
-        .log_events(did)
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, %did, "failed to read webvh log during resolution checks");
-            AppError::internal("failed to read did:webvh log")
-        })?;
+    let events = state.dids().log_events(did).await.map_err(|error| {
+        tracing::error!(%error, %did, "failed to read webvh log during resolution checks");
+        AppError::internal("failed to read did:webvh log")
+    })?;
     if events.is_empty() {
         // No local log to validate — the resolver falls through to the
         // SDK / default-document path higher up. We do not fail closed

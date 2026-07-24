@@ -541,4 +541,3 @@ mod tests {
         // future closed-set widening cannot silently fail open here.
     }
 }
-

@@ -15,15 +15,15 @@ use arkret_models_collaboration::account_lifecycle::{
 };
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
-use salvo::prelude::*;
-use serde_json::{Value, json};
-use soland_services::events::ProjectedEvent as ProjectionEventRecord;
-use soland_services::identity::{AccountDataState, ConsentCellRecord, FindAccountByActorQuery};
-use soland_http::error::AppError;
-
-use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::prelude::*;
+use serde_json::{Value, json};
+use soland_http::error::AppError;
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::identity::{AccountDataState, ConsentCellRecord, FindAccountByActorQuery};
+
+use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
@@ -376,9 +376,7 @@ fn restore_consent_cell_after_persist_failure(
     record: &ConsentCellRecord,
     previous: Option<ConsentCellRecord>,
 ) -> bool {
-    state
-        .consents()
-        .restore_cell_if_current(record, previous)
+    state.consents().restore_cell_if_current(record, previous)
 }
 
 pub(super) fn record_pending_request(
@@ -479,14 +477,11 @@ pub(crate) async fn materialize_mimi_consent_update_by_id(
     granted: bool,
 ) -> Result<Option<(ConsentCellRecord, Option<String>)>, AppError> {
     validate_did(actor_id).map_err(|_| AppError::invalid_param("invalid actor DID"))?;
-    let existing = state
-        .consents()
-        .cell_by_id(consent_id)
-        .or_else(|| {
-            state
-                .consents()
-                .cell_by_id(&consent_cell_id_for_consent_id(consent_id))
-        });
+    let existing = state.consents().cell_by_id(consent_id).or_else(|| {
+        state
+            .consents()
+            .cell_by_id(&consent_cell_id_for_consent_id(consent_id))
+    });
     let Some(existing) = existing else {
         return Ok(None);
     };
@@ -1696,4 +1691,3 @@ mod tests {
         );
     }
 }
-

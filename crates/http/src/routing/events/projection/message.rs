@@ -106,4 +106,3 @@ fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>
     }
     content
 }
-

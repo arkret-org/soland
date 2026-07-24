@@ -8,13 +8,13 @@ use arkret_models_identity::service_identity::{
 use arkret_wire::ServiceType;
 use ed25519_dalek::Signer;
 use salvo::http::StatusCode;
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_services::identity::{
-    DidDocumentState, DidLogEvent, ServiceRegistrationCommitResult,
-};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::identity::{DidDocumentState, DidLogEvent, ServiceRegistrationCommitResult};
 
 use super::did::require_embedded_webvh_registration_bearer;
 use super::webvh_validation::{
@@ -22,11 +22,12 @@ use super::webvh_validation::{
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
     verify_webvh_log_proof,
 };
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::state::AppState;
 
-#[endpoint(summary = "Ensure a service registration", tags("service_registration"))]
+#[endpoint(
+    summary = "Ensure a service registration",
+    tags("service_registration")
+)]
 pub(crate) async fn ensure(
     depot: &mut Depot,
     req: &mut Request,
@@ -89,10 +90,7 @@ pub(crate) async fn ensure(
         .map_err(provider_unavailable)?
     {
         ServiceRegistrationCommitResult::Created(outcome) => {
-            if let Err(error) = state
-                .dids()
-                .cache_resolved_document_state(document)
-            {
+            if let Err(error) = state.dids().cache_resolved_document_state(document) {
                 tracing::warn!(%error, "failed to cache newly registered service DID document");
             }
             json_ok(outcome)
@@ -259,4 +257,3 @@ fn provider_unavailable(error: impl std::fmt::Display) -> AppError {
         format!("service identity provider unavailable: {error}"),
     )
 }
-

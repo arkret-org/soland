@@ -294,10 +294,19 @@ impl ProjectionState {
     pub fn realm_is_direct_conversation(&self, realm_id: &str) -> bool {
         self.realm_create_log(realm_id)
             .and_then(|entries| entries.last())
-            .and_then(|entry| entry.get("object"))
-            .and_then(|object| {
+            .and_then(|entry| {
+                // Live semantic projection stores the create-log entry as
+                // `{object: Realm, ...}`. Canonical cell-effect replay
+                // normalizes the same entry to `{issuer, issuer_seq,
+                // value: Realm + entry_id}`. Accept both deterministic
+                // representations while stripping only lattice metadata.
+                let mut object = entry
+                    .get("object")
+                    .or_else(|| entry.get("value"))?
+                    .clone();
+                object.as_object_mut()?.remove("entry_id");
                 serde_json::from_value::<arkret_models_collaboration::objects::realm::Realm>(
-                    object.clone(),
+                    object,
                 )
                 .ok()
             })

@@ -1117,10 +1117,7 @@ async fn full_event_from_projection_json(
     if projection_row_is_redacted_message_tombstone(row) {
         return projection_only_event_from_row(state, row);
     }
-    if let Ok(Some(record)) = state
-        .event_queries()
-        .canonical_event(event_id)
-        .await
+    if let Ok(Some(record)) = state.event_queries().canonical_event(event_id).await
         && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
     {
         return Some(event);
@@ -1511,4 +1508,3 @@ pub(super) async fn snapshot_head(
         })?;
     soland_http::result::json_ok(manifest)
 }
-

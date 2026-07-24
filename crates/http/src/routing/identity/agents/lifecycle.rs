@@ -1,5 +1,6 @@
-use super::*;
 use salvo::oapi::endpoint;
+
+use super::*;
 
 const AGENT_PROVISION_ALLOCATION_TTL_HOURS: i64 = 24;
 
@@ -461,15 +462,13 @@ pub(super) async fn provision_agent(
 /// `pairing_code` replace the old tuple, which becomes permanently unresolvable
 /// through the same anti-enumeration lookup; the PRINCIPAL is not one-time):
 ///
-/// - Bootstrap re-open (never-keyed agent): the derived runtime_state returns
-///   to `pending_runtime_key` without changing the lifecycle intent or Realm
-///   grants.
-/// - Runtime replacement (agent already holds an active key, lifecycle `active`
-///   or `paused`): the lifecycle intent, existing keys, sessions, and grants
-///   all stay untouched and runtime_state projects `replacing`; completing the
-///   new pairing supersedes every old active key (reason=`superseded_by_repairing`)
-///   in the pair transaction, preserving the lifecycle intent — an `active`
-///   agent needs no resume.
+/// - Bootstrap re-open (never-keyed agent): the derived runtime_state returns to
+///   `pending_runtime_key` without changing the lifecycle intent or Realm grants.
+/// - Runtime replacement (agent already holds an active key, lifecycle `active` or `paused`): the
+///   lifecycle intent, existing keys, sessions, and grants all stay untouched and runtime_state
+///   projects `replacing`; completing the new pairing supersedes every old active key
+///   (reason=`superseded_by_repairing`) in the pair transaction, preserving the lifecycle intent —
+///   an `active` agent needs no resume.
 ///
 /// Re-opening is never a lifecycle transition and never requires a forced
 /// pause; `deactivated` is terminal.
@@ -501,10 +500,10 @@ pub(super) async fn renew_agent_pairing(
     )
     .await?;
     if record.state == "deactivated" {
-        return Err(pairing_failed_precondition(
-            "agent is deactivated; deactivation is terminal",
-        )
-        .with_reason_detail("agent_deactivated"));
+        return Err(
+            pairing_failed_precondition("agent is deactivated; deactivation is terminal")
+                .with_reason_detail("agent_deactivated"),
+        );
     }
     // Bootstrap re-open for a never-keyed agent; runtime replacement for one
     // that already holds an active authorized key (key-management.md §3.6.1).
@@ -1174,4 +1173,3 @@ pub(super) async fn detach_agent_grant(
         revoked_at,
     })
 }
-

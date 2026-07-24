@@ -32,12 +32,12 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Serialize;
 use serde_json::Value;
-use soland_services::authorization::{AuthorizationService, RealmPolicyServerConfig};
 use soland_http::authz::obligation_executor::RequestContext;
 use soland_http::authz::policy_client::{
     PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot,
 };
 use soland_http::authz::{MergedAuthzDecision, SolandAuthzEngine, check_with_policy_server};
+use soland_services::authorization::{AuthorizationService, RealmPolicyServerConfig};
 
 const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const POLICY_SERVER_DID: &str = "did:web:policy.example.com";
@@ -339,5 +339,3 @@ async fn policy_server_integration_timeout_fails_closed() {
         other => panic!("expected RemoteDeny on timeout, got {other:?}"),
     }
 }
-
-

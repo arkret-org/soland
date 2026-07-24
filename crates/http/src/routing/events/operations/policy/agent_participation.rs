@@ -339,16 +339,14 @@ pub(super) fn validate_agent_act_on_behalf_approval(
         .ok_or("agent_act_on_behalf_approval_nonce_missing")?;
     let action = agent_participation_action(operation)
         .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
-    let approval = state
-        .projections()
-        .validate_agent_action_approval(
-            operation,
-            agent_id,
-            request_id,
-            approval_nonce,
-            action,
-            chrono::Utc::now(),
-        )?;
+    let approval = state.projections().validate_agent_action_approval(
+        operation,
+        agent_id,
+        request_id,
+        approval_nonce,
+        action,
+        chrono::Utc::now(),
+    )?;
     if !state.remember_agent_approval_nonce(
         agent_id,
         authorization_ref,
@@ -522,6 +520,34 @@ pub(super) fn validate_agent_context_authorization_ref(
     agent_id: &str,
     authorization_ref: &str,
 ) -> Result<(), &'static str> {
+    // A two-principal Direct Conversation is itself an explicit invitation to
+    // exchange messages. Bind reply authority to that canonical Realm/binding
+    // instead of requiring a second capability grant that the materialization
+    // protocol does not emit for the peer.
+    if authorization_ref == operation.realm_id.as_str()
+        && agent_participation_action(operation)
+            == Some(arkret_wire::events::EventKind::MESSAGE_CREATE)
+    {
+        let binding = super::governance::active_direct_conversation_binding_for_realm(
+            state,
+            operation.realm_id.as_str(),
+        )
+        .ok_or("agent_context_authorization_ref_inactive")?;
+        let strand_id = operation
+            .payload
+            .get("strand_id")
+            .and_then(Value::as_str)
+            .ok_or("agent_context_authorization_ref_scope")?;
+        if binding
+            .participants_unordered
+            .iter()
+            .any(|participant| participant == agent_id)
+            && binding.main_strand_id == strand_id
+        {
+            return Ok(());
+        }
+        return Err("agent_context_authorization_ref_scope");
+    }
     if !authorization_ref.starts_with("ak:grant:") {
         return Err("agent_context_authorization_ref_invalid");
     }

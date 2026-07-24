@@ -870,11 +870,10 @@ async fn list_handles_cursor_start(
         return Ok(0);
     };
     let cursor = CursorAuthority::decode_stream(cursor.trim()).map_err(cursor_app_error)?;
-    let stored = state
-        .sync()
-        .cursor(&cursor.h)
-        .await
-        .map_err(|error| AppError::internal(format!("cursor binding lookup failed: {error}")))?;
+    let stored =
+        state.sync().cursor(&cursor.h).await.map_err(|error| {
+            AppError::internal(format!("cursor binding lookup failed: {error}"))
+        })?;
     let record = stored
         .map(cursor_binding_record)
         .transpose()
@@ -1174,4 +1173,3 @@ mod tests {
         ));
     }
 }
-

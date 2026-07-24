@@ -74,11 +74,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "presence": {"status": "online", "updated_at": now()},
     })];
 
-    let accounts = state
-        .identities()
-        .accounts()
-        .await
-        .unwrap_or_default();
+    let accounts = state.identities().accounts().await.unwrap_or_default();
     for account in accounts {
         if actors
             .iter()

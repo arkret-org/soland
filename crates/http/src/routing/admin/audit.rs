@@ -15,6 +15,7 @@
 
 use std::collections::BTreeMap;
 
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -23,7 +24,6 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::query_param;
 
 use super::{now, realm_has_member};
-use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -430,5 +430,3 @@ pub async fn append_audit_log(
         crate::metrics::record_audit_append_failure();
     }
 }
-
-

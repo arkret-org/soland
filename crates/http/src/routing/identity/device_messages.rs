@@ -11,19 +11,19 @@
 
 use std::collections::BTreeMap;
 
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::delivery::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageState,
 };
 use soland_services::identity::DeviceIdentity;
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::{
@@ -765,4 +765,3 @@ mod tests {
         );
     }
 }
-

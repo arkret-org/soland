@@ -22,12 +22,13 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer;
 use salvo::http::{Method, ParseError, StatusCode};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_services::delivery::BlobState as BlobRecord;
-use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::delivery::BlobState as BlobRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use subtle::ConstantTimeEq as _;
 
 use super::{
@@ -35,7 +36,6 @@ use super::{
     is_valid_sha256_hex, now, query_param, realm_allows_plaintext_service_for_data_class,
     realm_has_member, render_error, sha256_hex,
 };
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 
 pub(super) fn router() -> Router {
@@ -293,11 +293,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     }
     let blob_ref = format!("ak:blob:sha256:{sha256}");
     let storage_key = state.deliveries().object_key_for_sha256(&sha256);
-    if let Err(error) = state
-        .deliveries()
-        .put_object(&storage_key, bytes)
-        .await
-    {
+    if let Err(error) = state.deliveries().put_object(&storage_key, bytes).await {
         render_error(
             res,
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -326,17 +322,9 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         uploaded_by: session.actor,
         created_at: received_at,
     };
-    if let Err(error) = state
-        .deliveries()
-        .store_blob(&blob_ref, record)
-        .await
-    {
+    if let Err(error) = state.deliveries().store_blob(&blob_ref, record).await {
         tracing::error!(%error, "failed to persist blob");
-        if let Err(delete_error) = state
-            .deliveries()
-            .delete_object(&storage_key)
-            .await
-        {
+        if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
             tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
         }
         render_error(
@@ -441,12 +429,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
             }
         }
     };
-    let mut blob = state
-        .deliveries()
-        .blob(&blob_ref)
-        .await
-        .ok()
-        .flatten();
+    let mut blob = state.deliveries().blob(&blob_ref).await.ok().flatten();
     if blob.is_none()
         && purpose == "profile_avatar"
         && let Some(session) = session.as_ref()
@@ -1492,11 +1475,7 @@ async fn realm_presign_policy_block(
     realm_id: Option<&str>,
 ) -> Option<&'static str> {
     let realm_id = realm_id?;
-    let meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()??;
+    let meta = state.realms().realm_metadata(realm_id).await.ok()??;
     if meta.minimal_metadata_realm {
         return Some("minimal_metadata_presign_forbidden");
     }
@@ -1854,4 +1833,3 @@ mod tests {
         assert_eq!(infer_profile_avatar_media_type(b"<svg></svg>"), None);
     }
 }
-

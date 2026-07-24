@@ -43,20 +43,21 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_contracts::admin::{
+    AccountLocalpartAddRequestBody, AccountLocalpartDeleteOutcome, AccountLocalpartListOutcome,
+    AccountLocalpartMutationOutcome, AccountLocalpartUpdateRequestBody, AccountLocalpartView,
+};
+use soland_http::error::AppError;
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::{
     AccountLifecycleState, AccountLocalpartState as AccountLocalpartRecord,
     AccountProfileState as AccountRecord, AgentPairingState, ContactRecord, DeviceIdentity,
     DirectConversationBindingRecord,
 };
-use soland_contracts::admin::{
-    AccountLocalpartAddRequestBody, AccountLocalpartDeleteOutcome, AccountLocalpartListOutcome,
-    AccountLocalpartMutationOutcome, AccountLocalpartUpdateRequestBody, AccountLocalpartView,
-};
-use soland_http::error::AppError;
 
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
@@ -70,7 +71,6 @@ use super::consent::{
 };
 use super::did::require_embedded_webvh_registration_bearer;
 use super::{AuthArgs, append_audit_log, bearer_token, now, sha256_hex, validate_did};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::validate_device_id;
 use crate::state::AppState;
 use crate::wire::SolandAccountRegisterOutcome;
@@ -132,12 +132,7 @@ pub(crate) async fn local_account_primary_handle_claim(
     subject: &str,
     audience: &str,
 ) -> Option<Value> {
-    let account = state
-        .identities()
-        .account(subject)
-        .await
-        .ok()
-        .flatten()?;
+    let account = state.identities().account(subject).await.ok().flatten()?;
     account_primary_handle_claim_for(state, &account, audience).await
 }
 use crate::{JsonResult, json_ok};
@@ -469,14 +464,12 @@ fn account_registration_retry_after_ms(
     if rate_limit.max_attempts == 0 || rate_limit.window_seconds == 0 {
         return Some(0);
     }
-    state
-        .identities()
-        .account_registration_retry_after_ms(
-            did,
-            rate_limit.max_attempts,
-            rate_limit.window_seconds,
-            now(),
-        )
+    state.identities().account_registration_retry_after_ms(
+        did,
+        rate_limit.max_attempts,
+        rate_limit.window_seconds,
+        now(),
+    )
 }
 
 async fn enforce_account_registration_policy(
@@ -1389,7 +1382,8 @@ async fn direct_conversation_resolve(
             materialization_draft: None,
         });
     }
-    if let Some((binding, materialization_draft)) = pending_direct_materialization(state, &pair_key)
+    if let Some((binding, materialization_draft)) =
+        pending_direct_materialization_renewed(state, &pair_key, &session.actor, &peer).await?
     {
         return json_ok(direct_resolve_response(
             binding,
@@ -1656,26 +1650,21 @@ mod tests {
 
     #[test]
     fn principal_realm_for_did_is_deterministic() {
-        let a =
-            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        let b =
-            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
+        let a = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
+        let b = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
         assert_eq!(a, b);
     }
 
     #[test]
     fn principal_realm_for_did_diverges_per_did() {
-        let a =
-            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
-        let c =
-            soland_services::identity::principal_control_realm_for_did("did:web:bob.example");
+        let a = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
+        let c = soland_services::identity::principal_control_realm_for_did("did:web:bob.example");
         assert_ne!(a, c);
     }
 
     #[test]
     fn principal_realm_for_did_is_realm_uuid7() {
-        let s =
-            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
+        let s = soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
         assert!(s.starts_with("ak:realm:"), "got {s}");
         let uuid_segment = s.strip_prefix("ak:realm:").unwrap();
         // Sections separated by '-'.
@@ -1692,4 +1681,3 @@ mod tests {
         );
     }
 }
-

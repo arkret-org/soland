@@ -285,10 +285,7 @@ pub trait EphemeralDeliveryPort: Send + Sync {
     async fn typing_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<TypingState>>;
     async fn prune_expired_typing(&self) -> ServiceResult<usize>;
     async fn store_call_signal(&self, signal: CallSignalState) -> ServiceResult<()>;
-    async fn call_signals_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Vec<CallSignalState>>;
+    async fn call_signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<CallSignalState>>;
     async fn call_signal_watermark(
         &self,
         actor_id: &str,
@@ -303,14 +300,10 @@ pub trait EphemeralDeliveryPort: Send + Sync {
         position: u64,
     ) -> ServiceResult<()>;
     async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ServiceResult<()>;
-    async fn read_receipts_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Vec<ReadReceiptState>>;
-    async fn read_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Vec<ReadReceiptState>>;
+    async fn read_receipts_for_realm(&self, realm_id: &str)
+    -> ServiceResult<Vec<ReadReceiptState>>;
+    async fn read_receipts_for_event(&self, event_id: &str)
+    -> ServiceResult<Vec<ReadReceiptState>>;
     async fn read_receipt_watermark(
         &self,
         actor_id: &str,
@@ -358,11 +351,7 @@ pub trait DeviceMessagePort: Send + Sync {
         queue_position: i64,
     ) -> ServiceResult<Vec<DeviceMessageState>>;
     async fn prune(&self, per_device_capacity: usize, now: DateTime<Utc>) -> ServiceResult<()>;
-    async fn lost_watermark(
-        &self,
-        recipient: &str,
-        device_id: &str,
-    ) -> ServiceResult<Option<i64>>;
+    async fn lost_watermark(&self, recipient: &str, device_id: &str) -> ServiceResult<Option<i64>>;
 }
 
 #[derive(Clone)]
@@ -452,10 +441,7 @@ impl DeliveryService {
         &self.push_target_hmac_key
     }
 
-    pub async fn store_notification(
-        &self,
-        command: StoreNotificationCommand,
-    ) -> ServiceResult<()> {
+    pub async fn store_notification(&self, command: StoreNotificationCommand) -> ServiceResult<()> {
         self.notifications.store_notification(command.record).await
     }
 
@@ -528,10 +514,7 @@ impl DeliveryService {
         self.device_delivery.push_devices().await
     }
 
-    pub async fn append_device_message(
-        &self,
-        message: DeviceMessageState,
-    ) -> ServiceResult<()> {
+    pub async fn append_device_message(&self, message: DeviceMessageState) -> ServiceResult<()> {
         self.device_messages.append(message).await
     }
 
@@ -608,10 +591,7 @@ impl DeliveryService {
         self.ephemeral.store_presence(presence).await
     }
 
-    pub async fn presence_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<PresenceState>> {
+    pub async fn presence_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<PresenceState>> {
         self.ephemeral.presence_for_actor(actor_id).await
     }
 
@@ -879,10 +859,7 @@ mod tests {
         async fn store_presence(&self, _presence: PresenceState) -> ServiceResult<()> {
             Ok(())
         }
-        async fn presence_for_actor(
-            &self,
-            _actor_id: &str,
-        ) -> ServiceResult<Vec<PresenceState>> {
+        async fn presence_for_actor(&self, _actor_id: &str) -> ServiceResult<Vec<PresenceState>> {
             Ok(Vec::new())
         }
         async fn delete_presence(&self, _actor_id: &str) -> ServiceResult<()> {
@@ -1103,4 +1080,3 @@ mod tests {
         assert_eq!(port.0.lock().expect("notification lock").len(), 1);
     }
 }
-

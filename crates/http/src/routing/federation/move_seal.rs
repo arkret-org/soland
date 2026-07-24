@@ -26,12 +26,12 @@ use arkret_state::lattice::SealedOp;
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use arkret_wire::{Event, Move, NotarySig, Seal, SealKind};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -156,8 +156,7 @@ async fn device_generation_event_seal_context(
     }
     let bootstrap = bootstrap[0];
     let principal_id = bootstrap.actor_id.clone();
-    let expected_realm =
-        soland_services::identity::principal_control_realm_for_did(&principal_id);
+    let expected_realm = soland_services::identity::principal_control_realm_for_did(&principal_id);
     if expected_realm != realm_id.as_str() {
         return Err(seal_admission_error(
             "principal-control bootstrap is stored under a non-deterministic Realm",
@@ -400,16 +399,12 @@ async fn try_apply_device_generation_event_seal(
             &initial_context.principal_id,
         );
     let _guard = generation_lock.lock().await;
-    if let Some(existing) = state
-        .projections()
-        .seal_by_id(&seal.id)
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("Seal lookup failed: {error}"),
-            )
-        })?
-    {
+    if let Some(existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("Seal lookup failed: {error}"),
+        )
+    })? {
         if existing != *seal {
             return Err(seal_admission_error(
                 "Seal id already exists with different signature material",
@@ -791,10 +786,12 @@ async fn try_apply_device_generation_event_seal(
         ));
     }
 
-    match state
-        .projections()
-        .commit_event_seal_if_frontier(seal, &context.cas_frontier_refs, &new_ops, &target)
-    {
+    match state.projections().commit_event_seal_if_frontier(
+        seal,
+        &context.cas_frontier_refs,
+        &new_ops,
+        &target,
+    ) {
         Ok(true) => {}
         Ok(false) => {
             return Err(device_generation_fenced(
@@ -857,16 +854,12 @@ pub(crate) async fn apply_managed_agent_event_seal(
             seal.realm_id.as_str(),
         );
     let _guard = admission_lock.lock().await;
-    if let Some(mut existing) = state
-        .projections()
-        .seal_by_id(&seal.id)
-        .map_err(|error| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("managed Agent PCR Seal lookup failed: {error}"),
-            )
-        })?
-    {
+    if let Some(mut existing) = state.projections().seal_by_id(&seal.id).map_err(|error| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("managed Agent PCR Seal lookup failed: {error}"),
+        )
+    })? {
         existing.kind = SealKind::Compaction;
         if existing != *seal {
             return Err(seal_admission_error(
@@ -1274,10 +1267,7 @@ async fn submit_seal(
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
         .as_ref()
         .and_then(|cell_id| state.projections().cell_value(cell_id));
-    if let Err(error) = state
-        .projections()
-        .reload_cells_from_store(&seal.realm_id)
-    {
+    if let Err(error) = state.projections().reload_cells_from_store(&seal.realm_id) {
         tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
     }
     // Post-apply_seal mid-stream control frames.
@@ -1640,4 +1630,3 @@ mod tests {
         assert_eq!(v["reason"], json!("payload_digest mismatch"));
     }
 }
-

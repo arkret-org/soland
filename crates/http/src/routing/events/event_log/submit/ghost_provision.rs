@@ -345,15 +345,10 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     });
     state
         .events()
-        .commit_accepted_event_batch(
-            soland_services::events::CommitAcceptedEventBatchCommand {
-                events: prepared.iter().map(|event| event.command.clone()).collect(),
-                applet_ghosts: Some(soland_services::events::CommitAppletGhosts {
-                    applet_id,
-                    ghost,
-                }),
-            },
-        )
+        .commit_accepted_event_batch(soland_services::events::CommitAcceptedEventBatchCommand {
+            events: prepared.iter().map(|event| event.command.clone()).collect(),
+            applet_ghosts: Some(soland_services::events::CommitAppletGhosts { applet_id, ghost }),
+        })
         .await
         .map_err(|error| {
             let detail = error.detail();
@@ -401,4 +396,3 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     drop(guards);
     Ok(())
 }
-

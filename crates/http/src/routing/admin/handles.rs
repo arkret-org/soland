@@ -25,6 +25,7 @@
 
 use std::collections::BTreeMap;
 
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_contracts::admin::handles::{
@@ -34,7 +35,6 @@ use soland_contracts::admin::handles::{
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::state::{AppState, HandleClaimEvidenceRecord};
 
 const DESTRUCTIVE_REASON_MAX_CHARS: usize = 512;
@@ -94,11 +94,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     let claims = state.handle_claims_snapshot();
     let claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>> = claims;
 
-    let accounts = state
-        .identities()
-        .accounts()
-        .await
-        .unwrap_or_default();
+    let accounts = state.identities().accounts().await.unwrap_or_default();
 
     let mut rows = Vec::new();
     for account in accounts {
@@ -236,11 +232,7 @@ async fn get_handle_audit(
     let record = handle_record_by_id(state, &handle_id).await?;
     let handle_at = record.aliases.first().cloned().unwrap_or_default();
 
-    let entries = state
-        .governance()
-        .audit_entries()
-        .await
-        .unwrap_or_default();
+    let entries = state.governance().audit_entries().await.unwrap_or_default();
     let mut data: Vec<AdminHandleAuditEvent> = entries
         .into_iter()
         .filter(|entry| audit_entry_mentions_handle(entry, &handle_id, &handle_at))

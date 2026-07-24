@@ -2,12 +2,12 @@
 
 use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
-use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 

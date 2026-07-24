@@ -348,9 +348,8 @@ pub(super) async fn bootstrap_realm_member_index(
     // service-DID set must be derived from the typed map, not only from
     // (legacy) string array entries.
     plaintext_visible_services.extend(plaintext_visible_service_classes.keys().cloned());
-    let minimal_metadata_realm = payload_object.is_some_and(
-        soland_services::operation_semantics::payload_declares_minimal_metadata_realm,
-    );
+    let minimal_metadata_realm = payload_object
+        .is_some_and(soland_services::operation_semantics::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
     entry.description = summary.clone();
     entry.realm_class = payload_object
@@ -382,12 +381,7 @@ pub(super) async fn bootstrap_realm_member_index(
         created_at: super::now(),
         updated_at: super::now(),
     };
-    if let Err(error) = state
-        .realms()
-        .store_realm_metadata(realm_id, meta)
-        .await
-    {
+    if let Err(error) = state.realms().store_realm_metadata(realm_id, meta).await {
         tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
 }
-

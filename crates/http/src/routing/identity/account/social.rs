@@ -1,7 +1,7 @@
 use base64::Engine as _;
+use salvo::oapi::endpoint;
 
 use super::*;
-use salvo::oapi::endpoint;
 
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
@@ -24,7 +24,7 @@ pub(crate) use direct::{
     active_direct_binding, complete_remote_direct_binding_with_realm,
     create_direct_binding_with_realm, direct_authorization_basis_from_contact,
     direct_binding_matches_projection, direct_pair_key, ensure_direct_peer_resolvable,
-    pending_direct_materialization, prepare_remote_direct_keypackage_claim,
+    pending_direct_materialization_renewed, prepare_remote_direct_keypackage_claim,
     project_canonical_direct_binding, retire_direct_bindings_for_operation,
     validate_direct_binding_operation,
 };
@@ -1334,4 +1334,3 @@ pub(crate) fn direct_resolve_response(
 
 #[cfg(test)]
 mod tests;
-

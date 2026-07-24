@@ -567,4 +567,3 @@ pub(super) fn mimi_plaintext_detected(value: &Value) -> bool {
         _ => false,
     }
 }
-

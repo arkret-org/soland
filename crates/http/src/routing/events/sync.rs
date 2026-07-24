@@ -120,4 +120,3 @@ pub(crate) fn normalize_scope_selectors(
 #[cfg(test)]
 #[path = "sync_tests.rs"]
 mod tests;
-

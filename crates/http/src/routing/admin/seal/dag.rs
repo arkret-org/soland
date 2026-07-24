@@ -2,6 +2,7 @@
 
 use arkret_identifiers::{RealmId, SealId};
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use soland_contracts::admin::seal::{
     CompactionOutcome, CompactionRequestBody, SealDagSnapshot, SealLeaf, SealPruneDiagnostics,
@@ -10,7 +11,6 @@ use soland_contracts::admin::seal::{
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, admin_signer_for, fresh_hlc};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -31,16 +31,13 @@ pub(crate) async fn admin_get_seal_dag(
         AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
             .with_status(StatusCode::BAD_REQUEST)
     })?;
-    let leaf_ids = state
-        .projections()
-        .realm_seal_leaves(&realm)
-        .map_err(|e| {
-            AppError::new(
-                ErrorCode::InternalError,
-                format!("seal_store.list_leaves failed: {e}"),
-            )
-            .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
+    let leaf_ids = state.projections().realm_seal_leaves(&realm).map_err(|e| {
+        AppError::new(
+            ErrorCode::InternalError,
+            format!("seal_store.list_leaves failed: {e}"),
+        )
+        .with_status(StatusCode::INTERNAL_SERVER_ERROR)
+    })?;
 
     // Materialise each leaf into the wire `SealLeaf`.
     // Normal Seals carry only delta; compaction Seals may materialize
@@ -321,10 +318,7 @@ pub(crate) async fn admin_prune_seal_dag(
             if succ_seal.kind.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
-            if let Ok(next_succs) = state
-                .projections()
-                .seal_successors(&realm, &next_id)
-            {
+            if let Ok(next_succs) = state.projections().seal_successors(&realm, &next_id) {
                 stack.extend(next_succs);
             }
         }

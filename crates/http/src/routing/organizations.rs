@@ -13,16 +13,16 @@ use arkret_models_collaboration::governance::realm_governance::{
 };
 use chrono::Utc;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::util::validate_did;
 use soland_services::governance::{
     OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord,
 };
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::util::validate_did;
 
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
@@ -190,21 +190,15 @@ pub(crate) async fn refresh_organization_projection(
     state: &AppState,
 ) -> soland_services::ServiceResult<()> {
     let organizations = state.governance().organizations().await?;
-    let policies = state
-        .governance()
-        .organization_policies()
-        .await?;
-    let links = state
-        .governance()
-        .realm_organization_links()
-        .await?;
-    let realm_policies = state
-        .governance()
-        .realm_moderation_policies()
-        .await?;
-    state
-        .governance()
-        .replace_organization_projection(organizations, policies, links, realm_policies);
+    let policies = state.governance().organization_policies().await?;
+    let links = state.governance().realm_organization_links().await?;
+    let realm_policies = state.governance().realm_moderation_policies().await?;
+    state.governance().replace_organization_projection(
+        organizations,
+        policies,
+        links,
+        realm_policies,
+    );
 
     Ok(())
 }
@@ -495,9 +489,7 @@ pub(crate) async fn link_realm_to_organization(
 /// SOL-ORG-05 — declared `owning_organizations` hint ids for a Realm. Display /
 /// discovery surface ONLY; never use this to drive policy inheritance.
 pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<String> {
-    state
-        .governance()
-        .cached_realm_organizations(realm_id)
+    state.governance().cached_realm_organizations(realm_id)
 }
 
 /// SOL-ORG-05 — the organization DIDs whose active, in-window
@@ -541,9 +533,7 @@ pub(crate) fn effective_policy_for_realm(
             policy_id: policy.policy_id.clone(),
             version: policy.version,
             policy: policy.payload.clone(),
-            applies_to_realms: state
-                .governance()
-                .cached_organization_realms(&org_id),
+            applies_to_realms: state.governance().cached_organization_realms(&org_id),
         })
         .collect::<Vec<_>>();
 
@@ -761,10 +751,7 @@ async fn ensure_organization_placeholder(
         created_at: now,
         updated_at: now,
     };
-    state
-        .governance()
-        .store_organization(&record)
-        .await?;
+    state.governance().store_organization(&record).await?;
     Ok(())
 }
 
@@ -833,17 +820,11 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     let org_ids = verified_moderation_organization_ids(state, realm_id);
     let mut rules = Vec::new();
     for org_id in org_ids {
-        if let Some(policy) = state
-            .governance()
-            .cached_organization_policy(&org_id)
-        {
+        if let Some(policy) = state.governance().cached_organization_policy(&org_id) {
             rules.extend(policy_rules(&policy.payload));
         }
     }
-    if let Some(realm_policy) = state
-        .governance()
-        .cached_realm_moderation_policy(realm_id)
-    {
+    if let Some(realm_policy) = state.governance().cached_realm_moderation_policy(realm_id) {
         rules.extend(
             allow_join_override_targets(&realm_policy.payload)
                 .into_iter()
@@ -1036,4 +1017,3 @@ mod tests {
         );
     }
 }
-

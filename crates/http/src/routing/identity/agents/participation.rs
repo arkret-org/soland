@@ -1,5 +1,6 @@
-use super::*;
 use salvo::oapi::endpoint;
+
+use super::*;
 
 pub(super) fn participation_scope_kind(scope: &AgentParticipationScope) -> &'static str {
     match scope {

@@ -515,4 +515,3 @@ pub(super) fn typed_frontier_or_fallback(
     }
     Some(typed)
 }
-

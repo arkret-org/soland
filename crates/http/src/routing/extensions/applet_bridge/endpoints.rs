@@ -13,6 +13,7 @@ use arkret_models_integration::{
 };
 use arkret_wire::AppletRevokeMode;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
@@ -44,7 +45,6 @@ use super::types::{
     AppletProtocolDescribeOutcome, AppletRecord, AppletRevokeRecordOutcome, AppletView,
     GhostActorRecord, SOLAND_EDGE_APPLET_ID,
 };
-use salvo::oapi::extract::JsonBody;
 use crate::routing::identity::auth::revoke_delegated_sessions_for_applet;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;

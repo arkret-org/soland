@@ -221,10 +221,7 @@ mod tests {
             Ok(0)
         }
 
-        async fn record_revocation(
-            &self,
-            _record: &CursorRevocationState,
-        ) -> ServiceResult<()> {
+        async fn record_revocation(&self, _record: &CursorRevocationState) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -273,4 +270,3 @@ mod tests {
         );
     }
 }
-

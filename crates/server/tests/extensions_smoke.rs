@@ -1400,4 +1400,3 @@ async fn sovereign_deployment_audit_rejects_unauthenticated() {
         "deployment.audit must reject an unauthenticated caller"
     );
 }
-

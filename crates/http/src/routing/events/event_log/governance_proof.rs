@@ -12,10 +12,10 @@ use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_
 use arkret_state::state::compute_state_root;
 use arkret_wire::move_event::{LatticeOp, LatticeOpType};
 use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 
 use super::*;
-use salvo::oapi::extract::JsonBody;
 
 const SUPPORTED_REDUCER_PROFILE: &str = "ak.reducer.v1";
 
@@ -1140,4 +1140,3 @@ mod tests {
         assert!(canonical_event_ops(&event, &move_id).is_err());
     }
 }
-

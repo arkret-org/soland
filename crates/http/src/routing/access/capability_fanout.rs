@@ -1,6 +1,7 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CellRef, Did, EventId, GrantId, OperationId, RealmId};
 use arkret_state::lattice::CellState;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 // SOL-DRY-03 — the coauth↔soland fanout wire contract is shared via
@@ -13,7 +14,6 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::{bearer_token, sha256_hex};
 
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 
 const FANOUT_KIND: &str = "org.arkret.coauth.collaboration_capability.fanout.v1";
@@ -407,9 +407,7 @@ fn authz_state_for_draft(
     state: &AppState,
     draft: &CapabilityFanoutDraft,
 ) -> CapabilityFanoutAuthzState {
-    let grant = state
-        .authorization()
-        .get_grant(&draft.capability_grant_id);
+    let grant = state.authorization().get_grant(&draft.capability_grant_id);
     let effective = match draft.subject.as_deref() {
         Some(subject) => state
             .authorization()

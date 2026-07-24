@@ -27,8 +27,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
-use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 use soland_http::error::{AppError, ErrorCode};
+use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 
 use crate::state::AppState;
 
@@ -133,10 +133,7 @@ pub fn project_cross_signing_publish(state: &AppState, payload: &Value) {
             return;
         }
     };
-    if let Err(error) = state
-        .identities()
-        .record_cross_signing_publish(content)
-    {
+    if let Err(error) = state.identities().record_cross_signing_publish(content) {
         tracing::warn!(%error, "cross_signing.publish projector: record rejected");
     }
 }
@@ -339,9 +336,7 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
             return;
         }
     };
-    let recorded = state
-        .identities()
-        .record_cross_signing_reset(&content);
+    let recorded = state.identities().record_cross_signing_reset(&content);
     if let Err(error) = recorded {
         tracing::warn!(%error, "cross_signing.reset projector: record rejected");
         return;
@@ -397,26 +392,22 @@ async fn active_reset_recovery_policy(
 
 fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetPayload) -> bool {
     let now = chrono::Utc::now();
-    state
-        .identities()
-        .cross_signing_reset_replay_seen(
-            content.principal_id().as_str(),
-            content.previous_generation(),
-            now,
-            CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS,
-        )
+    state.identities().cross_signing_reset_replay_seen(
+        content.principal_id().as_str(),
+        content.previous_generation(),
+        now,
+        CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS,
+    )
 }
 
 fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetPayload) {
     let now = chrono::Utc::now();
-    state
-        .identities()
-        .remember_cross_signing_reset_replay(
-            content.principal_id().as_str().to_owned(),
-            content.previous_generation(),
-            now,
-            CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS,
-        );
+    state.identities().remember_cross_signing_reset_replay(
+        content.principal_id().as_str().to_owned(),
+        content.previous_generation(),
+        now,
+        CROSS_SIGNING_RESET_REPLAY_RETENTION_SECONDS,
+    );
 }
 
 async fn verify_device_quorum_reset(
@@ -1193,9 +1184,7 @@ pub(crate) fn resolve_current_cross_signing_publish(
     principal_id: &str,
 ) -> Option<arkret_models_identity::CrossSigningPublish> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
-    let publish = state
-        .identities()
-        .current_cross_signing(&principal)?;
+    let publish = state.identities().current_cross_signing(&principal)?;
     // Re-serialize the SDK content type into the schema-counterpart publish
     // payload so both crates agree on the wire shape (fields are 1:1).
     serde_json::to_value(&publish).ok().and_then(|value| {
@@ -1235,4 +1224,3 @@ pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: 
     };
     key.verify(message, &signature).is_ok()
 }
-

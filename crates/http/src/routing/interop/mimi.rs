@@ -35,21 +35,21 @@ use arkret_models_collaboration::objects::mimi::{
 use arkret_wire::{Audience, Base64UrlString, MlsGroupId};
 use chrono::Duration;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_services::events::ProjectedEvent as ProjectionEventRecord;
-use soland_services::jobs::IdempotencyState as IdempotencyRecord;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::jobs::IdempotencyState as IdempotencyRecord;
 
 use super::moderation::{
     moderation_request_source_ip_hash, moderation_request_source_service,
     validate_moderation_report_safety,
 };
 use super::{append_audit_log, now, sha256_hex};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::routing::identity::consent::{
     materialize_mimi_consent_request, materialize_mimi_consent_update_by_id,
@@ -91,4 +91,3 @@ pub(super) fn router() -> Router {
 pub(super) fn well_known_router() -> Router {
     Router::with_path(".well-known/mimi-protocol-directory").get(mimi_protocol_directory)
 }
-

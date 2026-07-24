@@ -11,11 +11,7 @@ pub(super) async fn latest_mimi_room_binding(
     state: &AppState,
     room_id: &str,
 ) -> Option<MimiRoomBindingProjection> {
-    let entries = state
-        .event_queries()
-        .projected_events()
-        .await
-        .ok()?;
+    let entries = state.event_queries().projected_events().await.ok()?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
         if entry.event_kind != "ak.mimi.room_binding" {
@@ -535,4 +531,3 @@ pub(super) fn valid_mimi_content_type(value: &str) -> bool {
             | "application/vnd.arkret.content+json"
     )
 }
-

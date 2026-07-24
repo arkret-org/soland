@@ -89,17 +89,18 @@ pub(super) async fn validate_circle_create_policy(
         }
         let realm_id = operation.realm_id.as_str();
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
-        let verdict = state.authorization().check(
-            soland_services::authorization::AuthorizationCheck {
-                actor,
-                action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
-                resource: realm_id,
-                realm_id,
-                owner: owner.as_deref(),
-                members: &members,
-                resource_facets: &[],
-            },
-        );
+        let verdict =
+            state
+                .authorization()
+                .check(soland_services::authorization::AuthorizationCheck {
+                    actor,
+                    action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
+                    resource: realm_id,
+                    realm_id,
+                    owner: owner.as_deref(),
+                    members: &members,
+                    resource_facets: &[],
+                });
         if verdict.allowed
             || members.iter().any(|member| member == actor)
             || policy_realm_member_joined(state, realm_id, actor)
@@ -422,4 +423,3 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
             .and_then(Value::as_str)
             == Some("lock")
 }
-

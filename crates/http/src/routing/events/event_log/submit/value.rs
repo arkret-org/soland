@@ -704,20 +704,14 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            if let Some(reason) = state
-                .projections()
-                .preflight_calendar_rejection(operation)
-            {
+            if let Some(reason) = state.projections().preflight_calendar_rejection(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason.clone(),
                     reason,
                 ));
             }
-            if let Some(reason) = state
-                .projections()
-                .preflight_mls_rejection(operation)
-            {
+            if let Some(reason) = state.projections().preflight_mls_rejection(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason.clone(),
@@ -739,17 +733,11 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            let invite_preflight_reject = state
-                .projections()
-                .preflight_invite_rejection(operation);
+            let invite_preflight_reject = state.projections().preflight_invite_rejection(operation);
             let invite_proof_context = if invite_preflight_reject.is_none() {
-                invite_claim_proof_context_from_projection(
-                    state.projections(),
-                    operation,
-                )
-                .map_err(|reason| {
-                    SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
-                })?
+                invite_claim_proof_context_from_projection(state.projections(), operation).map_err(
+                    |reason| SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason),
+                )?
             } else {
                 None
             };
@@ -1081,11 +1069,7 @@ pub(super) async fn submit_event_value_with_context(
             })
             .collect(),
     };
-    if let Err(error) = state
-        .events()
-        .commit_accepted_event(command)
-        .await
-    {
+    if let Err(error) = state.events().commit_accepted_event(command).await {
         if parsed.kind == arkret_wire::events::EventKind::REALM_CREATE
             && error.is_realm_already_exists()
         {
@@ -1250,4 +1234,3 @@ pub(super) async fn submit_event_value_with_context(
     .await;
     Ok(accepted_response)
 }
-

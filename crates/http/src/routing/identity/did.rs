@@ -21,15 +21,16 @@ use arkret_models_identity::identity::{
     IdentityResolveOutcome,
 };
 use salvo::http::{StatusCode, header};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::identity::{
     DidDocumentState as WebvhDocumentRecord, DidLogCommitResult as WebvhLogCommitOutcome,
     DidLogEvent as WebvhLogRecord,
 };
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
 
 use super::webvh_validation::{
     WebvhLogEntry, derive_webvh_scid_from_skeleton, validate_log_chain,
@@ -37,7 +38,6 @@ use super::webvh_validation::{
     verify_scid_against_did, verify_webvh_log_proof, webvh_entry_hash_multibase,
 };
 use super::{append_audit_log, bearer_token, now, render_error, sha256_hex, validate_did};
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::wire::{IdentityLogListOutcome, IdentityReceiptListOutcome, IdentityResolveRequestBody};
 
@@ -60,4 +60,3 @@ pub(super) use endpoints::{
     identity_resolve, identity_submit_did_operation,
 };
 pub(in crate::routing::identity) use webvh::*;
-

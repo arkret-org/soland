@@ -29,15 +29,15 @@ use arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
 use arkret_policy::history_visibility::matching_restricted_rules;
 use arkret_wire::{HistoryVisibility, PlaintextDataClassKind};
 use chrono::{DateTime, Utc};
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
+use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::operation_semantics::CHILD_ORDER_CELL_FAMILY;
-use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, accept_local_operations};
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::events::operations::operation_policy_reason_code;
 use crate::routing::organizations;
 use crate::state::{AppState, RealmDirectoryEntry};
@@ -972,12 +972,7 @@ pub async fn realm_member_joined_at_for_id(
             return Some(member.joined_at);
         }
     }
-    let meta = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten();
+    let meta = state.realms().realm_metadata(realm_id).await.ok().flatten();
     if meta.as_ref().is_some_and(|record| record.owner == actor) {
         return meta.map(|record| record.created_at);
     }
@@ -1236,11 +1231,7 @@ async fn accepted_contact_between(state: &AppState, left: &str, right: &str) -> 
         return true;
     }
     for (requester, target) in [(left, right), (right, left)] {
-        match state
-            .contacts()
-            .contact_any(requester, target)
-            .await
-        {
+        match state.contacts().contact_any(requester, target).await {
             Ok(Some(contact)) if contact.status == "accepted" => return true,
             Ok(_) => {}
             Err(error) => {
@@ -1414,4 +1405,3 @@ mod tests {
         assert_eq!(error.top_level_reason, None);
     }
 }
-

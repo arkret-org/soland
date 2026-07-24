@@ -33,7 +33,7 @@ pub use arkret_policy::authz::delegation::{
 };
 use parking_lot::Mutex;
 use serde::Serialize;
-use soland_services::authorization::{AuthorizationService, AuthorizationDecision};
+use soland_services::authorization::{AuthorizationDecision, AuthorizationService};
 
 use crate::ids;
 
@@ -1547,5 +1547,3 @@ mod tests {
         assert_eq!(result.reason, "capability_denied");
     }
 }
-
-

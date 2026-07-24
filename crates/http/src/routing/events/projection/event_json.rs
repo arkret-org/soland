@@ -57,9 +57,7 @@ pub fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<St
         .iter()
         .filter(|operation| kinds::operation_is_redaction(operation))
         .filter_map(|operation| {
-            soland_services::operation_semantics::message_redaction_target_ref(
-                &operation.payload,
-            )
+            soland_services::operation_semantics::message_redaction_target_ref(&operation.payload)
         })
         .collect()
 }
@@ -75,4 +73,3 @@ pub fn operation_type_string(operation: &Operation) -> String {
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "create".to_owned())
 }
-

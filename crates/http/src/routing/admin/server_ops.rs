@@ -9,6 +9,7 @@
 //! (see [`super::collection`]); salvo router fallthrough keeps the three
 //! sub-trees from colliding.
 
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -17,7 +18,6 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::audit::append_audit_log;
 use super::require_admin_principal;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::identity::account::{AccountLifecycleChange, set_account_lifecycle_state};
 use crate::routing::identity::auth::revoke_device_record;
 use crate::routing::system::extract::AuthArgs;
@@ -227,11 +227,7 @@ async fn get_server_stats(
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
 
-    let accounts = state
-        .identities()
-        .accounts()
-        .await
-        .unwrap_or_default();
+    let accounts = state.identities().accounts().await.unwrap_or_default();
     let actor_count = accounts.len() as u64;
     let active_actor_count = accounts
         .iter()
@@ -259,11 +255,7 @@ async fn get_server_stats(
         let proj = state.projections().snapshot();
         proj.applets.len() as u64
     };
-    let blobs = state
-        .deliveries()
-        .blobs()
-        .await
-        .unwrap_or_default();
+    let blobs = state.deliveries().blobs().await.unwrap_or_default();
     let blob_count = blobs.len() as u64;
     let blob_total_size = blobs.iter().map(|blob| blob.size_bytes as u64).sum();
 
@@ -507,17 +499,12 @@ async fn revoke_device(
     let body = body.into_inner();
     let mut target_actor = body.actor.or(body.account_id);
     if target_actor.is_none() {
-        target_actor = state
-            .identities()
-            .devices()
-            .await
-            .ok()
-            .and_then(|devices| {
-                devices
-                    .into_iter()
-                    .find(|record| record.device_id == device_id)
-                    .map(|record| record.actor_id)
-            });
+        target_actor = state.identities().devices().await.ok().and_then(|devices| {
+            devices
+                .into_iter()
+                .find(|record| record.device_id == device_id)
+                .map(|record| record.actor_id)
+        });
     }
     let target_actor = target_actor.ok_or_else(|| AppError::not_found("device not found"))?;
     revoke_device_record(state, &target_actor, &device_id)

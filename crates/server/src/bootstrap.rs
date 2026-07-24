@@ -24,17 +24,17 @@ use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_services::identity::{
-    DidDocumentState as WebvhDocumentRecord, DidLogEvent as WebvhLogRecord,
-    ServiceRegistrationCommitResult as ServiceRegistrationCommitOutcome,
-};
-use soland_services::persistence::PersistenceHandle;
 use soland_http::config::AppConfig;
 use soland_http::webvh_validation::{
     WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
     validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
     verify_webvh_log_proof,
 };
+use soland_services::identity::{
+    DidDocumentState as WebvhDocumentRecord, DidLogEvent as WebvhLogRecord,
+    ServiceRegistrationCommitResult as ServiceRegistrationCommitOutcome,
+};
+use soland_services::persistence::PersistenceHandle;
 use soland_storage_memory::SolandMemoryPersistenceStore;
 use soland_storage_postgres::{Db, PgPersistenceStore};
 
@@ -1693,4 +1693,3 @@ mod tests {
         );
     }
 }
-

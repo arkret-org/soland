@@ -253,4 +253,3 @@ pub(super) fn events_submit_status_label(status: EventsSubmitStatus) -> &'static
         EventsSubmitStatus::HistoricalOnly => "historical_only",
     }
 }
-

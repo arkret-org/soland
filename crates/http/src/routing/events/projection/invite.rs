@@ -582,9 +582,11 @@ fn project_invited_delivery_binding(
     else {
         return;
     };
-    state
-        .projections()
-        .project_invited_delivery_binding(operation, invitee, recipient_service_id.to_owned());
+    state.projections().project_invited_delivery_binding(
+        operation,
+        invitee,
+        recipient_service_id.to_owned(),
+    );
 }
 
 fn invite_id_for_operation(operation: &Operation) -> Option<String> {
@@ -927,4 +929,3 @@ pub(super) async fn project_plaintext_visible_services_operation(
         tracing::warn!(%error, "failed to project plaintext visible services");
     }
 }
-

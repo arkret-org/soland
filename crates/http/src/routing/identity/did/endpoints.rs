@@ -484,10 +484,7 @@ pub(crate) async fn embedded_webvh_register(
             "embedded did:webvh inception conflicts with existing history",
         ));
     }
-    if let Err(error) = state
-        .dids()
-        .cache_resolved_document_state(document_record)
-    {
+    if let Err(error) = state.dids().cache_resolved_document_state(document_record) {
         tracing::warn!(%error, "failed to cache embedded webvh DID document");
     }
     append_audit_log(
@@ -665,10 +662,7 @@ pub(crate) async fn embedded_webvh_rotate(
             "did:webvh rotation lost the current head comparison",
         ));
     }
-    if let Err(error) = state
-        .dids()
-        .cache_resolved_document_state(document_record)
-    {
+    if let Err(error) = state.dids().cache_resolved_document_state(document_record) {
         tracing::warn!(%error, "failed to cache rotated webvh DID document");
     }
     events.push(WebvhLogRecord {
@@ -913,11 +907,7 @@ pub(crate) async fn identity_log(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let records = state
-        .dids()
-        .log_events(&did)
-        .await
-        .unwrap_or_default();
+    let records = state.dids().log_events(&did).await.unwrap_or_default();
     let mut previous_digest = None;
     let mut events = Vec::with_capacity(records.len());
     for record in records {
@@ -1157,10 +1147,7 @@ pub(crate) async fn identity_submit_did_operation(
         }
         WebvhLogCommitOutcome::Accepted => {}
     }
-    if let Err(error) = state
-        .dids()
-        .cache_resolved_document_state(document_record)
-    {
+    if let Err(error) = state.dids().cache_resolved_document_state(document_record) {
         tracing::warn!(%error, "failed to cache submitted DID document");
     }
     append_audit_log(

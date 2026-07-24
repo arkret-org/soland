@@ -50,8 +50,11 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signer as _;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
 use soland_services::events::{
     MlsKeyPackageState as MlsKeyPackageRow,
     PeerKeyPackageClaimCommand as PeerKeyPackageClaimAttempt,
@@ -61,10 +64,7 @@ use soland_services::events::{
 };
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
 
-use salvo::oapi::extract::JsonBody;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::now;
@@ -226,9 +226,12 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
     device_id: &str,
     revoke_event_id: &str,
 ) -> usize {
-    state
-        .projections()
-        .enqueue_device_revoke_mls_removals(actor_id, device_id, revoke_event_id, now())
+    state.projections().enqueue_device_revoke_mls_removals(
+        actor_id,
+        device_id,
+        revoke_event_id,
+        now(),
+    )
 }
 
 #[handler]
@@ -446,9 +449,7 @@ async fn upload_keypackage(
             arkret_wire::events::EventKind::MLS_KEYPACKAGE,
             publish_payload,
         );
-        let effect = state
-            .projections()
-            .apply_mls_keypackage_publish(&op);
+        let effect = state.projections().apply_mls_keypackage_publish(&op);
         match effect {
             ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished { .. }) => {}
             ProjectionEffectView::Rejected { reason } => {
@@ -819,9 +820,7 @@ async fn verify_peer_claim_participant_authorization(
             AppError::internal(format!("peer claim authorization transcript: {error}"))
         })?;
     let key = if let Some(generation) = authorization.ssk_generation {
-        let current = state
-            .identities()
-            .current_cross_signing(&body.requester);
+        let current = state.identities().current_cross_signing(&body.requester);
         let Some(current) = current else {
             return Ok(false);
         };
@@ -1204,9 +1203,7 @@ async fn revoke_expired_peer_claims(state: &AppState) -> Result<(), AppError> {
     if revoked.is_empty() {
         return Ok(());
     }
-    state
-        .projections()
-        .mark_key_packages_revoked(&revoked);
+    state.projections().mark_key_packages_revoked(&revoked);
     Ok(())
 }
 
@@ -1299,12 +1296,23 @@ pub(crate) async fn claim_keypackages_for_request(
         Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
+    // The claim op's group ref — also used during selection: a package already
+    // claimed by this same group is eligible for idempotent claim renewal
+    // (interrupted materialization retry), mirroring the reducer's CAS rule.
+    let mls_group_ref = body
+        .mls_group_id
+        .clone()
+        .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
+        .unwrap_or_else(|| body.intended_realm_id.to_string());
     let selected_keypackage = {
         let keypackages = state.projections().mls_key_package_records();
         let ordinary = keypackages
             .iter()
             .filter(|kp| !kp.last_resort)
-            .filter(|kp| kp.claimed_by_mls_group_id.is_none())
+            .filter(|kp| {
+                kp.claimed_by_mls_group_id.is_none()
+                    || kp.claimed_by_mls_group_id.as_deref() == Some(mls_group_ref.as_str())
+            })
             .filter(|kp| {
                 keypackage_matches_claim(
                     kp,
@@ -1361,12 +1369,6 @@ pub(crate) async fn claim_keypackages_for_request(
             available_count: Some(available_before),
         });
     };
-    let mls_group_ref = body
-        .mls_group_id
-        .clone()
-        .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
-        .unwrap_or_else(|| body.intended_realm_id.to_string());
-
     // Build the canonical op so the reducer sees the same shape as a
     // federated `ak.mls.keypackage` envelope would. Canonical event
     // kind is `ak.mls.keypackage`; publish-vs-claim is conveyed via
@@ -1381,9 +1383,7 @@ pub(crate) async fn claim_keypackages_for_request(
     });
     claim_binding.insert_into(&mut payload);
     let op = build_op(arkret_wire::events::EventKind::MLS_KEYPACKAGE, payload);
-    let effect = state
-        .projections()
-        .apply_mls_keypackage_claim(&op);
+    let effect = state.projections().apply_mls_keypackage_claim(&op);
     let (claimed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackageClaimed {
             keypackage_id,
@@ -1460,9 +1460,7 @@ pub(crate) async fn claim_keypackages_for_request(
             ErrorCode::CasConflict,
             "KeyPackage already claimed in store",
         )
-        .with_wire_code(
-            soland_services::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED,
-        ));
+        .with_wire_code(soland_services::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED));
     }
     let Some(claimed_record) = updated else {
         return Err(AppError::internal("claimed KeyPackage row missing"));
@@ -1521,11 +1519,7 @@ async fn consume_keypackages(
     let mut consumed = Vec::new();
     let mut failures = Vec::new();
     for keypackage_id in refs {
-        match state
-            .mls_key_packages()
-            .key_package(&keypackage_id)
-            .await
-        {
+        match state.mls_key_packages().key_package(&keypackage_id).await {
             Ok(Some(record))
                 if record.last_resort
                     && record.claimed_by_mls_group_id.as_deref() != Some("revoked") =>
@@ -1935,11 +1929,7 @@ async fn revoke_keypackages(
     let mut revoked = Vec::new();
     let mut failures = Vec::new();
     for keypackage_id in refs {
-        match state
-            .mls_key_packages()
-            .key_package(&keypackage_id)
-            .await
-        {
+        match state.mls_key_packages().key_package(&keypackage_id).await {
             Ok(Some(record)) if record.actor_id != session.actor => {
                 failures.push(keypackage_ref_failure(keypackage_id, "not_owner"));
             }
@@ -2827,4 +2817,3 @@ mod trust_binding_tests {
         .unwrap();
     }
 }
-

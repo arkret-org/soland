@@ -15,6 +15,8 @@
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -22,8 +24,6 @@ use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::state::AppState;
 
@@ -63,7 +63,11 @@ pub struct PutRealmPolicyServerRequestBody {
     pub on_timeout: Option<String>,
 }
 
-#[endpoint(operation_id = "ak.self.realm_policy_server.resource.get", summary = "Get a realm's policy server config", tags("realm_policy_server"))]
+#[endpoint(
+    operation_id = "ak.self.realm_policy_server.resource.get",
+    summary = "Get a realm's policy server config",
+    tags("realm_policy_server")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
@@ -92,7 +96,11 @@ async fn get_realm_policy_server(
     })
 }
 
-#[endpoint(operation_id = "ak.self.realm_policy_server.resource.replace", summary = "Replace a realm's policy server config", tags("realm_policy_server"))]
+#[endpoint(
+    operation_id = "ak.self.realm_policy_server.resource.replace",
+    summary = "Replace a realm's policy server config",
+    tags("realm_policy_server")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.replace"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
@@ -157,7 +165,11 @@ async fn put_realm_policy_server(
     })
 }
 
-#[endpoint(operation_id = "ak.self.realm_policy_server.resource.delete", summary = "Delete a realm's policy server config", tags("realm_policy_server"))]
+#[endpoint(
+    operation_id = "ak.self.realm_policy_server.resource.delete",
+    summary = "Delete a realm's policy server config",
+    tags("realm_policy_server")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,
@@ -173,10 +185,7 @@ async fn delete_realm_policy_server(
     // malformed (no did/url), but the cell write below will null the
     // structured cache directly. We use the projection-side delete
     // path for the tombstone effect.
-    if !state
-        .projections()
-        .remove_realm_policy_server(&realm_id)
-    {
+    if !state.projections().remove_realm_policy_server(&realm_id) {
         return Err(AppError::not_found(
             "no ak.realm.policy_server to tombstone for this realm",
         ));

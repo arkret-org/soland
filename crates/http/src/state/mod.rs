@@ -17,7 +17,4 @@ pub(crate) use member_identity::{
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
-pub use soland_services::events::{
-    RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery,
-};
-
+pub use soland_services::events::{RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery};

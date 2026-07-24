@@ -35,11 +35,11 @@ use arkret_wire::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_services::protocol_artifacts as artifacts;
 pub use soland_contracts::admin::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
     DeviceSigningKeyDirectoryQueryRequestBody,
 };
+use soland_services::protocol_artifacts as artifacts;
 
 #[derive(Debug, Serialize)]
 pub struct HealthOutcome {
@@ -1628,4 +1628,3 @@ mod tests {
         );
     }
 }
-

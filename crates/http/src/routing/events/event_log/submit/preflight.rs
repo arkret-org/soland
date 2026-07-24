@@ -79,24 +79,61 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         let Ok(recipient) = arkret_identifiers::Did::new(recipient_actor_id.to_owned()) else {
             return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
         };
-        if !crate::routing::mls::current_agent_key_authorization_matches(
+        let authorization_matches = crate::routing::mls::current_agent_key_authorization_matches(
             state,
             &recipient,
             authorize_event_id,
         )
-        .await
-        {
-            return Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH.to_owned());
-        }
+        .await;
+        return welcome_recipient_trust_reject_reason(
+            Some(authorize_event_id),
+            authorization_matches,
+            false,
+        )
+        .map(str::to_owned);
     }
-    if crate::routing::identity::auth::is_device_revoked(
+    let device_revoked = crate::routing::identity::auth::is_device_revoked(
         state,
         recipient_actor_id,
         recipient_device_id,
     )
-    .await
-    {
-        return Some("device_revoked".to_owned());
+    .await;
+    welcome_recipient_trust_reject_reason(None, false, device_revoked).map(str::to_owned)
+}
+
+fn welcome_recipient_trust_reject_reason(
+    agent_key_authorize_event_id: Option<&str>,
+    agent_authorization_matches: bool,
+    device_revoked: bool,
+) -> Option<&'static str> {
+    if agent_key_authorize_event_id.is_some() {
+        return (!agent_authorization_matches)
+            .then_some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH);
     }
-    None
+    device_revoked.then_some("device_revoked")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::welcome_recipient_trust_reject_reason;
+
+    #[test]
+    fn native_agent_welcome_uses_agent_authorization_instead_of_device_record() {
+        assert_eq!(
+            welcome_recipient_trust_reject_reason(Some("ak:event:authorize"), true, true),
+            None
+        );
+        assert_eq!(
+            welcome_recipient_trust_reject_reason(Some("ak:event:authorize"), false, false),
+            Some(arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH)
+        );
+    }
+
+    #[test]
+    fn device_welcome_still_rejects_revoked_recipient() {
+        assert_eq!(
+            welcome_recipient_trust_reject_reason(None, false, true),
+            Some("device_revoked")
+        );
+    }
 }

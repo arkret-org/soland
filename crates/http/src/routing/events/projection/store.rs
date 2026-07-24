@@ -12,10 +12,7 @@ pub async fn append_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
 ) -> soland_services::ServiceResult<soland_services::events::ProjectedEventAppendResult> {
-    state
-        .event_queries()
-        .append_projected_event(event)
-        .await
+    state.event_queries().append_projected_event(event).await
 }
 
 pub async fn persist_and_publish_projection_event(
@@ -267,11 +264,7 @@ pub async fn ingest_federation_operations(
             ));
             continue;
         }
-        if let Err(error) = state
-            .federation()
-            .append_operation(operation.clone())
-            .await
-        {
+        if let Err(error) = state.federation().append_operation(operation.clone()).await {
             tracing::error!(%error, "failed to persist federation operation");
             rejected.push(federation_rejection(
                 &operation_id,
@@ -412,4 +405,3 @@ pub async fn persist_projected_operation(
         .await
         .map_err(Into::into)
 }
-

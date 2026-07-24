@@ -28,16 +28,16 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
 use ed25519_dalek::Signer as _;
 use salvo::http::HeaderValue;
-use salvo::prelude::*;
-use serde_json::{Value, json};
-use soland_services::events::CanonicalEventRecord;
-use soland_services::identity::SessionIdentityState as SessionRecord;
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
-
-use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
+use salvo::prelude::*;
+use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
+use soland_services::events::CanonicalEventRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
+
+use super::{now, realm_has_member, sha256_hex, validate_device_id, validate_did};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -72,7 +72,11 @@ struct IceConfigRequestContext {
     pub force_turn: bool,
 }
 
-#[endpoint(operation_id = "ak.self.media.query.ice_config", summary = "Get media ICE configuration", tags("media"))]
+#[endpoint(
+    operation_id = "ak.self.media.query.ice_config",
+    summary = "Get media ICE configuration",
+    tags("media")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.media.query.ice_config"))]
 async fn arkret_ice_config(
     aa: AuthArgs,
@@ -843,9 +847,7 @@ impl CallStateCell {
         };
         let value = match call_state_from_event_log(state, call_id, &cell_id).await? {
             Some(value) => {
-                state
-                    .projections()
-                    .cache_cell(cell_id, value.clone());
+                state.projections().cache_cell(cell_id, value.clone());
                 Some(value)
             }
             None => cached,
@@ -1339,7 +1341,11 @@ fn focus_unavailable_error(message: impl Into<String>) -> AppError {
         .with_wire_code(arkret_wire::ReasonCode::FOCUS_UNAVAILABLE_FOR_CLIENT)
 }
 
-#[endpoint(operation_id = "ak.self.call.media.exchange.issue_token", summary = "Exchange a call media token", tags("media"))]
+#[endpoint(
+    operation_id = "ak.self.call.media.exchange.issue_token",
+    summary = "Exchange a call media token",
+    tags("media")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.call.media.exchange.issue_token"))]
 async fn arkret_rtc_token(
     aa: AuthArgs,
@@ -1501,4 +1507,3 @@ fn is_valid_webrtc_session_id(value: &str) -> bool {
     };
     parsed.get_version_num() == 7
 }
-

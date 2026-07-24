@@ -290,4 +290,3 @@ pub(super) async fn verify_recovery_auth_signature(
             recovery_signature_error("recovery signature verification failed")
         })
 }
-

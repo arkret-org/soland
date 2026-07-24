@@ -236,12 +236,7 @@ async fn resolve_enrollment_authority_designation(
     state: &AppState,
     principal_did: &str,
 ) -> Option<EnrollmentAuthorityDesignation> {
-    let record = state
-        .dids()
-        .document(principal_did)
-        .await
-        .ok()
-        .flatten()?;
+    let record = state.dids().document(principal_did).await.ok().flatten()?;
     enrollment_authority_designation_from_document(&record.did_document, principal_did)
 }
 

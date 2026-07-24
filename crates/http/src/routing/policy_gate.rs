@@ -298,4 +298,3 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
         None => Vec::new(),
     }
 }
-

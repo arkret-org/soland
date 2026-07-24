@@ -22,6 +22,8 @@ use arkret_models_collaboration::governance::realm_governance::{
     RealmOrganizationRelationshipRow,
 };
 use arkret_wire::{Did, Hash};
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::de::DeserializeOwned;
 use serde_json::json;
@@ -29,8 +31,6 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {

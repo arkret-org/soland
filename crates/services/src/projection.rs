@@ -1885,4 +1885,3 @@ fn pending_device_revoke_exists(
                 .any(|event_id| event_id == revoke_event_id)
     })
 }
-

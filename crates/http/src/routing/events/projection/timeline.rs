@@ -26,4 +26,3 @@ pub fn projection_event_from_operation(
         received_at: now(),
     }
 }
-

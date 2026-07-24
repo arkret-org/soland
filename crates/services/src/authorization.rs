@@ -113,4 +113,3 @@ impl AuthorizationService {
         self.port.grants_snapshot()
     }
 }
-

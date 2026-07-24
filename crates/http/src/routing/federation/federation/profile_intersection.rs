@@ -724,4 +724,3 @@ fn schema_can_fall_back_to_event_payload(schema: &str) -> bool {
         && schema != "ak.schema.grant_constraint.v1"
         && schema != "ak.schema.resource_selector.v1"
 }
-

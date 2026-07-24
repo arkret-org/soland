@@ -22,16 +22,14 @@ use futures_util::stream::{self, BoxStream, StreamExt};
 use parking_lot::Mutex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use soland_http::config::AppConfig;
+use soland_http::state::{AppState, AppStateRuntime, EventBroadcast};
 use soland_services::delivery::ObjectStoragePort;
 use soland_services::events::{ProjectedOperationPersistencePort, RealmDirectoryIndex};
 use soland_services::governance::RuntimeSettingsPort;
 use soland_services::jobs::RuntimeHealthPort;
 use soland_services::persistence::PersistenceHandle;
-use soland_services::projection::{
-    EventSealCommitPort, ProjectionService, ProjectionSnapshot,
-};
-use soland_http::config::AppConfig;
-use soland_http::state::{AppState, AppStateRuntime, EventBroadcast};
+use soland_services::projection::{EventSealCommitPort, ProjectionService, ProjectionSnapshot};
 use soland_storage::PersistenceStore;
 use soland_storage_memory::SolandMemoryPersistenceStore;
 
@@ -103,8 +101,7 @@ pub fn app_state_with_identity(
         &service_id,
     );
     let projection = Box::leak(Box::new(projections.test_state().clone()));
-    let realm_directory =
-        soland_http::state::build_realm_directory(&config);
+    let realm_directory = soland_http::state::build_realm_directory(&config);
     let realms = Box::leak(Box::new(realm_directory.test_index().clone()));
     let state = AppState::from_runtime(
         config,
@@ -443,7 +440,5 @@ fn effective_state_with_new_ops(
     Ok(joined)
 }
 
-pub use soland_services::identity::principal_control_realm_for_did;
 pub use soland_http::project_accepted_operations;
-
-
+pub use soland_services::identity::principal_control_realm_for_did;

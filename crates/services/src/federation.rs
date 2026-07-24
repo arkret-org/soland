@@ -184,14 +184,8 @@ pub trait FederationStatePort: Send + Sync {
         origin: &str,
         txn_id: &str,
     ) -> ServiceResult<Option<FederationTransactionRecord>>;
-    async fn begin_transaction(
-        &self,
-        record: &FederationTransactionRecord,
-    ) -> ServiceResult<bool>;
-    async fn store_transaction(
-        &self,
-        record: &FederationTransactionRecord,
-    ) -> ServiceResult<()>;
+    async fn begin_transaction(&self, record: &FederationTransactionRecord) -> ServiceResult<bool>;
+    async fn store_transaction(&self, record: &FederationTransactionRecord) -> ServiceResult<()>;
     async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>>;
     async fn append_operation(&self, operation: Operation) -> ServiceResult<()>;
     async fn has_operation(&self, operation_id: &str) -> ServiceResult<bool>;
@@ -526,4 +520,3 @@ mod tests {
         assert_eq!(pending[0].delivery.id, "delivery:1");
     }
 }
-

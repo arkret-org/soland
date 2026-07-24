@@ -16,13 +16,13 @@
 
 use arkret_identifiers::RealmId;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
-use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
@@ -310,11 +310,7 @@ pub(super) async fn admin_list_delivery_binding_handovers(
         .with_status(StatusCode::BAD_REQUEST));
     }
 
-    let entries = state
-        .governance()
-        .audit_entries()
-        .await
-        .unwrap_or_default();
+    let entries = state.governance().audit_entries().await.unwrap_or_default();
     let mut data: Vec<DeliveryBindingHandoverRowOutcome> = entries
         .into_iter()
         .filter(|entry| audit_entry_is_handover_for_realm(entry, &realm_id))

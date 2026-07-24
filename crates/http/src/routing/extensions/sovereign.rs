@@ -26,17 +26,17 @@
 //! they build an HTTP client.
 
 use salvo::http::StatusCode;
+use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use soland_http::error::AppError;
 use soland_services::federation::{
     SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
     SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
 };
-use soland_http::error::AppError;
 
 use crate::config::AppConfig;
-use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::routing::admin::{RequireAdmin, require_admin_principal};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -1270,4 +1270,3 @@ mod tests {
         );
     }
 }
-

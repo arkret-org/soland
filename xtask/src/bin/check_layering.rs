@@ -189,4 +189,3 @@ fn detect_cycle(
     active.remove(node);
     visited.insert(node.to_owned());
 }
-

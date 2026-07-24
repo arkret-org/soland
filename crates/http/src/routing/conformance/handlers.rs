@@ -34,16 +34,16 @@ use arkret_hlc::{Cursor, CursorPurpose};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer, SigningKey, VerifyingKey};
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use soland_services::events::{CanonicalEventRecord, ProjectedEvent as ProjectionEventRecord};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
+use soland_services::events::{CanonicalEventRecord, ProjectedEvent as ProjectionEventRecord};
 
 use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
-use salvo::oapi::extract::JsonBody;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -1339,4 +1339,3 @@ mod tests {
         );
     }
 }
-

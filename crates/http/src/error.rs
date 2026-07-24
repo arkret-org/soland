@@ -445,9 +445,10 @@ impl Writer for AppError {
 // `ErrorCode` fired at runtime.
 impl salvo::oapi::EndpointOutRegister for AppError {
     fn register(components: &mut salvo::oapi::Components, operation: &mut salvo::oapi::Operation) {
-        let schema = <arkret_wire::problem_details::ErrorEnvelope as salvo::oapi::ToSchema>::to_schema(
-            components,
-        );
+        let schema =
+            <arkret_wire::problem_details::ErrorEnvelope as salvo::oapi::ToSchema>::to_schema(
+                components,
+            );
         operation.responses.insert(
             "default",
             salvo::oapi::Response::new("Arkret error envelope")

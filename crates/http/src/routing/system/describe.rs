@@ -20,11 +20,11 @@ use arkret_identity::service_identity::ServiceIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
 use salvo::http::StatusCode;
+use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use salvo::oapi::extract::QueryParam;
 use crate::state::AppState;
 use crate::wire::{
     AuthBridgeAuthDescriptor, AuthBridgeDescribeOutcome, AuthBridgeExamples,

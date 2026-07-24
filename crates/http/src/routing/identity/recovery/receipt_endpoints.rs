@@ -210,4 +210,3 @@ pub(super) async fn recovery_receipt_put(
     };
     json_ok(outcome)
 }
-

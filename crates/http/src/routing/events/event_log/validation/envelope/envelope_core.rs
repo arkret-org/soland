@@ -615,4 +615,3 @@ async fn enforce_device_generation_fence(
     }
     Ok(())
 }
-

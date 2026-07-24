@@ -935,17 +935,9 @@ async fn complete_resumable_upload(
         uploaded_by: actor.to_owned(),
         created_at: received_at,
     };
-    if let Err(error) = state
-        .deliveries()
-        .store_blob(&blob_ref, record)
-        .await
-    {
+    if let Err(error) = state.deliveries().store_blob(&blob_ref, record).await {
         tracing::error!(%error, "failed to persist blob");
-        if let Err(delete_error) = state
-            .deliveries()
-            .delete_object(&storage_key)
-            .await
-        {
+        if let Err(delete_error) = state.deliveries().delete_object(&storage_key).await {
             tracing::warn!(%delete_error, %storage_key, "failed to clean up blob after metadata write failure");
         }
         render_error(
@@ -1101,4 +1093,3 @@ mod tests {
         assert!(!is_safe_upload_id(&"x".repeat(65)));
     }
 }
-

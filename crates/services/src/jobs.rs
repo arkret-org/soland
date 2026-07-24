@@ -86,10 +86,7 @@ impl JobsService {
     ) -> ServiceResult<Option<IdempotencyState>> {
         self.maintenance.idempotency_record(principal_id, key).await
     }
-    pub async fn store_idempotency_record(
-        &self,
-        record: IdempotencyState,
-    ) -> ServiceResult<()> {
+    pub async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()> {
         self.maintenance.store_idempotency_record(record).await
     }
 }
@@ -137,18 +134,14 @@ mod tests {
         ) -> ServiceResult<Option<IdempotencyState>> {
             Ok(None)
         }
-        async fn store_idempotency_record(
-            &self,
-            _record: IdempotencyState,
-        ) -> ServiceResult<()> {
+        async fn store_idempotency_record(&self, _record: IdempotencyState) -> ServiceResult<()> {
             Ok(())
         }
     }
 
     #[tokio::test]
     async fn maintenance_step_is_independent_from_the_scheduler() {
-        let service =
-            JobsService::new(Arc::new(StaticMaintenance), Arc::new(StaticRuntimeHealth));
+        let service = JobsService::new(Arc::new(StaticMaintenance), Arc::new(StaticRuntimeHealth));
         assert_eq!(
             service
                 .prune_expired_idempotency(Utc::now())
@@ -158,4 +151,3 @@ mod tests {
         );
     }
 }
-

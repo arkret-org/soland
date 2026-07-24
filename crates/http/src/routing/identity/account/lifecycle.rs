@@ -869,9 +869,7 @@ fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
         Ok(did) => did,
         Err(_) => return 0,
     };
-    state
-        .realm_directory()
-        .remove_member_from_all(&actor_id)
+    state.realm_directory().remove_member_from_all(&actor_id)
 }
 
 /// Append a single audit row that marks every prior entry for `actor` as
@@ -1165,4 +1163,3 @@ mod tests {
         assert!(parse_account_lifecycle_target_state("pending_deletion").is_err());
     }
 }
-

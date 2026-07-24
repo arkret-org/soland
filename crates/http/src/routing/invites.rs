@@ -32,20 +32,20 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
 use salvo::http::{HeaderValue, StatusCode};
+use salvo::oapi::endpoint;
+use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_http::result::{JsonResult, json_ok};
+use soland_http::util::sha256_hex;
 use soland_services::events::{
     InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
     InviteLocatorState as InviteLocatorRecord,
 };
 use soland_services::identity::{AccountDataState, SessionIdentityState as SessionRecord};
-use soland_http::error::{AppError, ErrorCode};
-use soland_http::result::{JsonResult, json_ok};
-use soland_http::util::sha256_hex;
 
-use salvo::oapi::endpoint;
-use salvo::oapi::extract::JsonBody;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
 };
@@ -1583,4 +1583,3 @@ mod invite_locator_security_tests {
         );
     }
 }
-

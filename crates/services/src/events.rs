@@ -554,10 +554,7 @@ pub trait EventReadPort: Send + Sync {
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
-    async fn canonical_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Option<CanonicalEventRecord>>;
+    async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
     async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn canonical_events_for_actor(
@@ -586,16 +583,12 @@ pub trait EventReadPort: Send + Sync {
     async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn projected_events(&self) -> ServiceResult<Vec<ProjectedEvent>>;
-    async fn projected_events_capped(&self, limit: usize)
-    -> ServiceResult<Vec<ProjectedEvent>>;
+    async fn projected_events_capped(&self, limit: usize) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn append_projected_event(
         &self,
         event: ProjectedEvent,
     ) -> ServiceResult<ProjectedEventAppendResult>;
-    async fn accepted_events_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn accepted_events_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AcceptedEvent>>;
     async fn max_actor_sequence(&self, actor_id: &str) -> ServiceResult<Option<u64>>;
     async fn batch_receipts_for_event(
         &self,
@@ -626,12 +619,8 @@ pub trait ProjectionWritePort: Send + Sync {
         &self,
         record: &SpaceContainerProjectionRecord,
     ) -> ServiceResult<()>;
-    async fn store_strand_projection(
-        &self,
-        record: &StrandProjectionRecord,
-    ) -> ServiceResult<()>;
-    async fn store_morph_projection(&self, record: &MorphProjectionRecord)
-    -> ServiceResult<()>;
+    async fn store_strand_projection(&self, record: &StrandProjectionRecord) -> ServiceResult<()>;
+    async fn store_morph_projection(&self, record: &MorphProjectionRecord) -> ServiceResult<()>;
     async fn store_realm_organization_statement(
         &self,
         record: &RealmOrganizationStatementRecord,
@@ -725,10 +714,7 @@ impl EventQueryService {
             .persist_projected_operation(origin, operation)
             .await
     }
-    pub async fn store_canonical_event(
-        &self,
-        record: CanonicalEventRecord,
-    ) -> ServiceResult<()> {
+    pub async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ServiceResult<()> {
         self.events.store_canonical_event(record).await
     }
     pub async fn store_realm_bootstrap_batch(
@@ -1241,10 +1227,7 @@ impl MlsKeyPackageService {
     ) -> ServiceResult<PeerKeyPackageClaimLedgerWriteResult> {
         self.key_packages.store_peer_claim_terminal(record).await
     }
-    pub async fn revoke_expired_peer_claims(
-        &self,
-        now_unix_ms: i64,
-    ) -> ServiceResult<Vec<String>> {
+    pub async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ServiceResult<Vec<String>> {
         self.key_packages
             .revoke_expired_peer_claims(now_unix_ms)
             .await
@@ -1693,4 +1676,3 @@ mod tests {
         ));
     }
 }
-

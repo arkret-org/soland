@@ -16,16 +16,14 @@ use arkret_models_identity::account::{
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
-use salvo::prelude::*;
-use serde_json::{Value, json};
-use soland_services::identity::{
-    AccountDataState, FindAgentControllerQuery, IdentityService,
-};
-use soland_http::error::{AppError, ErrorCode};
-
-use super::{AuthArgs, now};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
+use salvo::prelude::*;
+use serde_json::{Value, json};
+use soland_http::error::{AppError, ErrorCode};
+use soland_services::identity::{AccountDataState, FindAgentControllerQuery, IdentityService};
+
+use super::{AuthArgs, now};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -232,9 +230,10 @@ async fn persist_account_data_event(
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
     let service_actor = state.service_id().as_str();
-    let realm_id =
-        RealmId::new(soland_services::identity::principal_control_realm_for_did(&session.actor))
-            .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
+    let realm_id = RealmId::new(soland_services::identity::principal_control_realm_for_did(
+        &session.actor,
+    ))
+    .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
     let records = state
         .event_queries()
         .canonical_events_for_realm_actor(realm_id.as_str(), service_actor)
@@ -335,7 +334,11 @@ async fn persist_account_data_event(
     Ok(())
 }
 
-#[endpoint(operation_id = "ak.self.account_data.resource.replace", summary = "Replace an account-data entry", tags("account_data"))]
+#[endpoint(
+    operation_id = "ak.self.account_data.resource.replace",
+    summary = "Replace an account-data entry",
+    tags("account_data")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.replace"))]
 async fn put_account_data(
     aa: AuthArgs,
@@ -410,7 +413,11 @@ async fn put_account_data(
     json_ok(entry_from(record))
 }
 
-#[endpoint(operation_id = "ak.self.account_data.resource.get", summary = "Get an account-data entry", tags("account_data"))]
+#[endpoint(
+    operation_id = "ak.self.account_data.resource.get",
+    summary = "Get an account-data entry",
+    tags("account_data")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.get"))]
 async fn get_account_data(
     aa: AuthArgs,
@@ -444,7 +451,11 @@ async fn get_account_data(
     }
 }
 
-#[endpoint(operation_id = "ak.self.account_data.query.list", summary = "List account-data entries", tags("account_data"))]
+#[endpoint(
+    operation_id = "ak.self.account_data.query.list",
+    summary = "List account-data entries",
+    tags("account_data")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.query.list"))]
 async fn list_account_data(
     aa: AuthArgs,
@@ -470,7 +481,11 @@ async fn list_account_data(
     json_ok(AccountDataList { entries })
 }
 
-#[endpoint(operation_id = "ak.self.account_data.resource.delete", summary = "Delete an account-data entry", tags("account_data"))]
+#[endpoint(
+    operation_id = "ak.self.account_data.resource.delete",
+    summary = "Delete an account-data entry",
+    tags("account_data")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account_data.resource.delete"))]
 async fn delete_account_data(
     aa: AuthArgs,
@@ -591,11 +606,7 @@ mod tests {
             unreachable!("NoAccounts mock: set_primary_localpart is not exercised by these tests")
         }
 
-        async fn remove_localpart(
-            &self,
-            _actor_id: &str,
-            _localpart: &str,
-        ) -> ServiceResult<()> {
+        async fn remove_localpart(&self, _actor_id: &str, _localpart: &str) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -650,10 +661,7 @@ mod tests {
             Ok(true)
         }
 
-        async fn devices_for_actor(
-            &self,
-            _actor_id: &str,
-        ) -> ServiceResult<Vec<DeviceIdentity>> {
+        async fn devices_for_actor(&self, _actor_id: &str) -> ServiceResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
     }
@@ -825,5 +833,3 @@ mod tests {
         );
     }
 }
-
-
