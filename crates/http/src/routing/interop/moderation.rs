@@ -20,6 +20,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{append_audit_log, now, realm_has_member, sha256_hex, validate_did};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
@@ -572,7 +573,7 @@ const FRANKING_PROOF_FORBIDDEN_KEYS: &[&str] = &[
     "epoch",
 ];
 
-#[handler]
+#[endpoint(operation_id = "ak.self.moderation.command.report", summary = "File a content moderation report", tags("moderation"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.moderation.command.report"))]
 async fn moderation_report(
     aa: AuthArgs,
