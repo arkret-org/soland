@@ -33,7 +33,7 @@ async fn get_actor(
     let actor_id = actor_id.into_inner();
 
     let account = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .map_err(|error| {

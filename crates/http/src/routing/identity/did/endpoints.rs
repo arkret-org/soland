@@ -362,7 +362,7 @@ pub(crate) async fn embedded_webvh_register(
                 .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
     if state
-        .did_application()
+        .dids()
         .embedded_document(&local_id)
         .await
         .ok()
@@ -464,7 +464,7 @@ pub(crate) async fn embedded_webvh_register(
         updated_at: now,
     };
     let commit = state
-        .did_application()
+        .dids()
         .commit_log_operation(
             None,
             document_record.clone(),
@@ -485,7 +485,7 @@ pub(crate) async fn embedded_webvh_register(
         ));
     }
     if let Err(error) = state
-        .did_application()
+        .dids()
         .cache_resolved_document_state(document_record)
     {
         tracing::warn!(%error, "failed to cache embedded webvh DID document");
@@ -597,7 +597,7 @@ pub(crate) async fn embedded_webvh_rotate(
 
     // Load the existing log; the rotation MUST extend a known history.
     let mut events = state
-        .did_application()
+        .dids()
         .log_events(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -645,7 +645,7 @@ pub(crate) async fn embedded_webvh_rotate(
         updated_at: submitted_at,
     };
     let commit = state
-        .did_application()
+        .dids()
         .commit_log_operation(
             expected_current_head,
             document_record.clone(),
@@ -666,7 +666,7 @@ pub(crate) async fn embedded_webvh_rotate(
         ));
     }
     if let Err(error) = state
-        .did_application()
+        .dids()
         .cache_resolved_document_state(document_record)
     {
         tracing::warn!(%error, "failed to cache rotated webvh DID document");
@@ -737,7 +737,7 @@ pub(crate) async fn embedded_webvh_log(depot: &mut Depot, req: &mut Request, res
         return;
     };
     let events = state
-        .did_application()
+        .dids()
         .log_events(&record.did)
         .await
         .unwrap_or_default();
@@ -770,7 +770,7 @@ pub(crate) async fn identity_resolve(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let did = body.did.as_str();
-    if let Ok(Some(record)) = state.did_application().document(did).await {
+    if let Ok(Some(record)) = state.dids().document(did).await {
         // G3.S3: every did:webvh resolution MUST first re-validate the
         // log chain, SCID derivation, configured witness quorum, and
         // rotation control authorisation. Rotation entries fail closed
@@ -791,7 +791,7 @@ pub(crate) async fn identity_resolve(
             record.method_evidence,
         ));
     }
-    let sdk_document = state.did_application().resolve_did(&body.did).await.ok();
+    let sdk_document = state.dids().resolve_did(&body.did).await.ok();
     if let Some(doc) = sdk_document {
         return json_ok(identity_resolve_outcome(
             body.did,
@@ -914,7 +914,7 @@ pub(crate) async fn identity_log(
         return Err(AppError::invalid_param("invalid did"));
     }
     let records = state
-        .did_application()
+        .dids()
         .log_events(&did)
         .await
         .unwrap_or_default();
@@ -974,7 +974,7 @@ pub(crate) async fn identity_receipts(
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = state.did_application().document(&did).await.ok().flatten();
+    let record = state.dids().document(&did).await.ok().flatten();
     json_ok(IdentityReceiptListOutcome {
         receipts: Vec::new(),
         threshold_met: Some(record.is_none()),
@@ -1041,12 +1041,12 @@ pub(crate) async fn identity_submit_did_operation(
     ensure_webvh_document_id(&did, &document)?;
     let event_digest = did_log_event_digest(&operation)?;
     let existing = state
-        .did_application()
+        .dids()
         .document(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let events = state
-        .did_application()
+        .dids()
         .log_events(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1131,7 +1131,7 @@ pub(crate) async fn identity_submit_did_operation(
         updated_at: submitted_at,
     };
     let commit = state
-        .did_application()
+        .dids()
         .commit_log_operation(
             current_head,
             document_record.clone(),
@@ -1158,7 +1158,7 @@ pub(crate) async fn identity_submit_did_operation(
         WebvhLogCommitOutcome::Accepted => {}
     }
     if let Err(error) = state
-        .did_application()
+        .dids()
         .cache_resolved_document_state(document_record)
     {
         tracing::warn!(%error, "failed to cache submitted DID document");

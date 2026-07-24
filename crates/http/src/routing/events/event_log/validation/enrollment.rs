@@ -237,7 +237,7 @@ async fn resolve_enrollment_authority_designation(
     principal_did: &str,
 ) -> Option<EnrollmentAuthorityDesignation> {
     let record = state
-        .did_application()
+        .dids()
         .document(principal_did)
         .await
         .ok()
@@ -269,7 +269,7 @@ async fn did_document_at(
             .map_err(|error| format!("did:key document encode failed: {error}"));
     }
     let mut history = state
-        .did_application()
+        .dids()
         .log_events(did)
         .await
         .map_err(|error| format!("DID history lookup failed: {error}"))?;
@@ -282,7 +282,7 @@ async fn did_document_at(
         return Ok(document);
     }
     let current = state
-        .did_application()
+        .dids()
         .document(did)
         .await
         .map_err(|error| format!("DID document lookup failed: {error}"))?

@@ -34,7 +34,7 @@ pub(super) async fn record_rejected_invite_claim_effect(
         return Ok(());
     };
 
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     let Some(mut record) = invites
         .get(&invite_id)
         .await
@@ -120,9 +120,9 @@ pub(super) async fn enqueue_peer_event_fanout(
 ) {
     for record in peer_event_fanout_records(state, parsed, envelope).await {
         if let Err(error) = state
-            .federation_application()
+            .federation()
             .enqueue_delivery(
-                soland_application::federation::EnqueueFederationDeliveryCommand {
+                soland_services::federation::EnqueueFederationDeliveryCommand {
                     delivery: record.clone(),
                 },
             )
@@ -229,7 +229,7 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to encode peer Event batch");
             continue;
         };
-        let record = soland_application::federation::FederationDeliveryRecord {
+        let record = soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id,
             peer_url: peer.url.trim_end_matches('/').to_owned(),
@@ -239,9 +239,9 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             created_at: now,
         };
         if let Err(error) = state
-            .federation_application()
+            .federation()
             .enqueue_delivery(
-                soland_application::federation::EnqueueFederationDeliveryCommand {
+                soland_services::federation::EnqueueFederationDeliveryCommand {
                     delivery: record.clone(),
                 },
             )
@@ -256,7 +256,7 @@ pub(super) async fn peer_event_fanout_records(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
-) -> Vec<soland_application::federation::FederationDeliveryRecord> {
+) -> Vec<soland_services::federation::FederationDeliveryRecord> {
     // Directed invite-create events carry their recipient service in the
     // operation payload rather than in the member projection. Pass the
     // original envelope through so the fanout target can be resolved before
@@ -345,7 +345,7 @@ pub(super) async fn peer_event_fanout_records(
         if peer.service_id == *state.service_id() {
             continue;
         }
-        records.push(soland_application::federation::FederationDeliveryRecord {
+        records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id,
             peer_url: peer.url.trim_end_matches('/').to_owned(),
@@ -371,7 +371,7 @@ fn dynamic_peer_event_targets(
     envelope: &Value,
 ) -> Vec<DynamicPeerEventTarget> {
     let service_frontiers = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         // sync/federation.md §4.4 — peers whose federation service delegation
         // for this Realm has been revoked MUST NOT receive future outbound
         // pushes. Compute the revoked-peer set once under the projection lock.
@@ -515,3 +515,4 @@ pub(super) fn typed_frontier_or_fallback(
     }
     Some(typed)
 }
+

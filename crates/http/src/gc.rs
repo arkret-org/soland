@@ -35,7 +35,7 @@ pub struct GcCandidate {
 ///   - The Move is NOT in any current leaf coverage set.
 ///   - The Move is NOT in the pending pool (`list_pending_for_notary`).
 pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandidate> {
-    let projections = state.projection_application();
+    let projections = state.projections();
 
     // 1) Pending Move IDs — never GC.
     let pending: Vec<Move> = projections
@@ -91,7 +91,7 @@ pub fn scan_gc_candidates(state: &AppState, realm_id: &RealmId) -> Vec<GcCandida
 /// `realm_id` is provided.
 pub fn scan_all_realms(state: &AppState) -> Vec<GcCandidate> {
     let realm_ids: Vec<RealmId> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()

@@ -6,7 +6,7 @@
 //! - `GET  /_arkret/self/authz/invites`           — pending invites visible to the actor
 //!
 //! The actual authorisation engine lives in `src/authz.rs` (the
-//! `state.authorization_application()` field is shared). This surface is a local preflight/read
+//! `state.authorization()` field is shared). This surface is a local preflight/read
 //! projection. Dynamic, signed, or obligation-bearing decisions are served by
 //! `/_arkret/self/policy/check`.
 
@@ -69,13 +69,13 @@ async fn authz_check(
     // Look up Realm owner and members.
     let (owner, members) = {
         let owner = state
-            .realm_query_application()
+            .realms()
             .realm_metadata(&realm_id)
             .await
             .ok()
             .flatten()
             .map(|m| m.owner);
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         let members = arkret_identifiers::RealmId::new(realm_id.clone())
             .ok()
             .and_then(|realm_id| realms.get(&realm_id))
@@ -90,12 +90,12 @@ async fn authz_check(
         (owner, members)
     };
     let resource_expr = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         Some(projection.authz_resource_expr(&realm_id, &resource_str))
     }
     .unwrap_or_else(|| resource_str.clone());
-    let result = state.authorization_application().check(
-        soland_application::authorization::AuthorizationCheck {
+    let result = state.authorization().check(
+        soland_services::authorization::AuthorizationCheck {
             actor: body.actor_id.as_str(),
             action: &body.action,
             resource: &resource_expr,
@@ -351,14 +351,14 @@ async fn effective_grants(
     let grants = if realm_id == "*" {
         // Return grants across all Realms.
         state
-            .realm_query_application()
+            .realms()
             .realm_metadata_list()
             .await
             .unwrap_or_default()
             .into_iter()
             .flat_map(|(sid, _)| {
                 state
-                    .authorization_application()
+                    .authorization()
                     .grants_for_subject(&subject, &sid)
             })
             .collect::<Vec<_>>()
@@ -367,7 +367,7 @@ async fn effective_grants(
             .collect::<Result<Vec<_>, _>>()?
     } else {
         state
-            .authorization_application()
+            .authorization()
             .grants_for_subject(&subject, &realm_id)
             .into_iter()
             .map(capability_grant_from_authz_grant)
@@ -584,7 +584,7 @@ fn insert_constraint_extension(
 
 async fn session_owns_realm(state: &AppState, actor: &str, realm_id: &str) -> bool {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -651,7 +651,7 @@ async fn invites(
     let now = now();
     let mut invite_list = Vec::new();
     for invite in state
-        .realm_invite_application()
+        .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -684,7 +684,7 @@ async fn invites(
 }
 
 fn invite_record_to_sdk(
-    invite: soland_application::events::RealmInviteState,
+    invite: soland_services::events::RealmInviteState,
 ) -> Result<Invite, AppError> {
     let invite_delivery_target = invite
         .invite_delivery_target
@@ -754,3 +754,4 @@ fn invite_state_from_record(status: &str) -> InviteState {
         _ => InviteState::Pending,
     }
 }
+

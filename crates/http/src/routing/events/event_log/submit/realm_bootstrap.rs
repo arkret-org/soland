@@ -102,7 +102,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     validate_actor_chain(&validated)?;
 
     let existing = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| {
@@ -167,7 +167,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     // is the genesis authority boundary: create establishes the staged Realm,
     // then only the exact founding grant and closed facets can be applied.
     let staged_projection = state
-        .projection_application()
+        .projections()
         .stage_realm_bootstrap(&operations)
         .map_err(|error| {
             let operation = &operations[error.operation_index];
@@ -193,7 +193,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .map(|(parsed, envelope)| canonical_record(parsed, envelope, received_at))
         .collect::<Vec<_>>();
     state
-        .event_query_application()
+        .event_queries()
         .store_realm_bootstrap_batch(records)
         .await
         .map_err(|error| {
@@ -215,7 +215,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         })?;
 
     let founding_grant_id = state
-        .projection_application()
+        .projections()
         .install_staged_realm_bootstrap(staged_projection);
     if let Some(grant_id) = founding_grant_id.as_deref() {
         crate::routing::events::projection::refresh_authz_index_from_capability_grant_id(

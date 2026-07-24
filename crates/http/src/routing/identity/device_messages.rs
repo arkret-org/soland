@@ -13,11 +13,11 @@ use std::collections::BTreeMap;
 
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::delivery::{
+use soland_services::delivery::{
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchItemRecord,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageState,
 };
-use soland_application::identity::DeviceIdentity;
+use soland_services::identity::DeviceIdentity;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -45,9 +45,9 @@ struct PreparedDeviceMessageTarget {
 
 pub(crate) async fn prune_device_messages_for_limits(
     state: &AppState,
-) -> soland_application::ApplicationResult<()> {
+) -> soland_services::ServiceResult<()> {
     state
-        .delivery_application()
+        .deliveries()
         .prune_device_messages(state.config().to_device_queue_capacity, now())
         .await
 }
@@ -128,7 +128,7 @@ async fn send_device_messages(
         })
         .collect::<Vec<_>>();
     let inspection = state
-        .delivery_application()
+        .deliveries()
         .inspect_device_message_batch(&request_key, &request_digest, &intents)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -151,8 +151,8 @@ async fn send_device_messages(
         .any(|target| !existing_message_outcomes.contains_key(&target.message_key));
     let sender_verified = if has_fresh_targets {
         let sender_device = state
-            .identity_application()
-            .find_device(soland_application::identity::FindDeviceQuery {
+            .identities()
+            .find_device(soland_services::identity::FindDeviceQuery {
                 actor_id: session.actor.clone(),
                 device_id: session.device_id.clone(),
             })
@@ -172,8 +172,8 @@ async fn send_device_messages(
             let verification_bootstrap = prepared.target.kind.starts_with("ak.key.verification.");
             let secret_message = prepared.target.kind.starts_with("ak.secret.");
             let target_record = state
-                .identity_application()
-                .find_device(soland_application::identity::FindDeviceQuery {
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
                     actor_id: prepared.recipient.clone(),
                     device_id: prepared.device_id.clone(),
                 })
@@ -230,7 +230,7 @@ async fn send_device_messages(
         });
     }
     let batch_outcome = state
-        .delivery_application()
+        .deliveries()
         .commit_device_message_batch(DeviceMessageBatchRecord {
             request_key,
             request_digest,
@@ -324,7 +324,7 @@ pub(crate) async fn fanout_actor_private_update(
     content: Value,
 ) -> usize {
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(actor)
         .await
         .unwrap_or_default();
@@ -343,7 +343,7 @@ pub(crate) async fn fanout_actor_private_update(
             "created_at": created_at,
         });
         match state
-            .delivery_application()
+            .deliveries()
             .append_device_message(DeviceMessageState {
                 idempotency_key,
                 sender: actor.to_owned(),
@@ -393,7 +393,7 @@ async fn get_device_messages(
                 // Best-effort.
                 if let Some(presented_issued_at_ms) = cursor.issued_at_ms {
                     let _ = state
-                        .sync_application()
+                        .sync()
                         .prune_superseded_cursors(
                             &session.actor,
                             &session.device_id,
@@ -437,13 +437,13 @@ async fn get_device_messages(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let lost_watermark = state
-        .delivery_application()
+        .deliveries()
         .device_message_lost_watermark(&session.actor, &session.device_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let lost = lost_watermark.is_some_and(|position| position > cursor_position);
     let queued = state
-        .delivery_application()
+        .deliveries()
         .device_messages_after(&session.actor, &session.device_id, cursor_position)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -463,7 +463,7 @@ async fn get_device_messages(
         None
     } else {
         state
-            .delivery_application()
+            .deliveries()
             .issue_device_message_ack_token(&session.actor, &session.device_id, delivered_position)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -510,7 +510,7 @@ async fn ack_device_messages(
         return Err(AppError::invalid_param("invalid_ack_token"));
     }
     let Some(pruned_count) = state
-        .delivery_application()
+        .deliveries()
         .acknowledge_device_messages(&session.actor, &session.device_id, ack_token)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -549,7 +549,7 @@ async fn active_agent_keypackage_endpoint(
 ) -> Result<bool, AppError> {
     let now_unix = now().timestamp();
     let rows = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .key_packages()
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
@@ -653,7 +653,7 @@ fn device_message_envelope_from_record(
 #[cfg(test)]
 mod tests {
     use serde_json::json;
-    use soland_application::identity::{DeviceIdentity, SaveDeviceCommand};
+    use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
 
     use super::*;
 
@@ -672,7 +672,7 @@ mod tests {
     async fn save_active_device(state: &AppState, actor: &str, device_id: &str) {
         let registered_at = now();
         state
-            .identity_application()
+            .identities()
             .save_device(SaveDeviceCommand {
                 actor_id: actor.to_owned(),
                 device_id: device_id.to_owned(),
@@ -727,13 +727,13 @@ mod tests {
             "only the controller's other device receives the fanout"
         );
         let controller_queue = state
-            .delivery_application()
+            .deliveries()
             .device_messages_after(controller, other_controller_device, 0)
             .await
             .expect("controller queue");
         assert_eq!(controller_queue.len(), 1);
         let agent_queue = state
-            .delivery_application()
+            .deliveries()
             .device_messages_after(agent, agent_device, 0)
             .await
             .expect("agent queue");
@@ -742,7 +742,7 @@ mod tests {
             "agent-actor devices must never receive controller-private fanout"
         );
         let cross_queue = state
-            .delivery_application()
+            .deliveries()
             .device_messages_after(controller, agent_device, 0)
             .await
             .expect("cross queue");
@@ -752,3 +752,4 @@ mod tests {
         );
     }
 }
+

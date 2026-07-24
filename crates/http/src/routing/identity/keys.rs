@@ -14,7 +14,7 @@ use ed25519_dalek::Signature;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_application::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
+use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -69,7 +69,7 @@ async fn keys_upload(
         ));
     }
     let current_device = state
-        .identity_application()
+        .identities()
         .find_device(FindDeviceQuery {
             actor_id: session.actor.clone(),
             device_id: device_id.clone(),
@@ -120,7 +120,7 @@ async fn keys_upload(
         "updated_at": now(),
     });
     if let Err(error) = state
-        .key_material_application()
+        .key_material()
         .save_bundle(
             session.actor.clone(),
             device_id.clone(),
@@ -178,7 +178,7 @@ async fn keys_upload(
         revoked_at: None,
     };
     state
-        .identity_application()
+        .identities()
         .save_device(SaveDeviceCommand {
             actor_id: session.actor.clone(),
             device_id: device_id.clone(),
@@ -189,7 +189,7 @@ async fn keys_upload(
         .map_err(|error| AppError::internal(error.to_string()))?;
 
     if let Err(error) = state
-        .key_material_application()
+        .key_material()
         .save_one_time_keys(
             session.actor,
             device_id,
@@ -276,7 +276,7 @@ async fn keys_query(
         let mut actor_keys = BTreeMap::new();
         for device_id in devices {
             let device_record = state
-                .identity_application()
+                .identities()
                 .find_device(FindDeviceQuery {
                     actor_id: actor.as_str().to_owned(),
                     device_id: device_id.as_str().to_owned(),
@@ -294,7 +294,7 @@ async fn keys_query(
             // single `algorithms` map (key→value) rather than per-algorithm
             // key_records; the directory facet below is the real signing-key data.
             let mut algorithms = match state
-                .key_material_application()
+                .key_material()
                 .bundle(actor.as_str(), device_id.as_str())
                 .await
             {
@@ -382,7 +382,7 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
         return false;
     };
     state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .entries_iter()
         .any(|(_, entry)| {
@@ -517,7 +517,7 @@ async fn keys_claim(
                 continue;
             }
             if let Ok(Some(key)) = state
-                .key_material_application()
+                .key_material()
                 .claim_one_time_key(actor.as_str(), device_id.as_str())
                 .await
             {
@@ -594,7 +594,7 @@ async fn device_signing_keys_query(
     // (revoked devices are dropped below by the facet predicate either way).
     let device_ids: Vec<String> = if body.device_ids.is_empty() {
         state
-            .identity_application()
+            .identities()
             .devices_for_actor(principal_id.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -643,3 +643,4 @@ async fn device_signing_keys_query(
         devices,
     })
 }
+

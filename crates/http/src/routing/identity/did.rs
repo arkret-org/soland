@@ -24,7 +24,7 @@ use salvo::http::{StatusCode, header};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::identity::{
+use soland_services::identity::{
     DidDocumentState as WebvhDocumentRecord, DidLogCommitResult as WebvhLogCommitOutcome,
     DidLogEvent as WebvhLogRecord,
 };
@@ -60,3 +60,4 @@ pub(super) use endpoints::{
     identity_resolve, identity_submit_did_operation,
 };
 pub(in crate::routing::identity) use webvh::*;
+

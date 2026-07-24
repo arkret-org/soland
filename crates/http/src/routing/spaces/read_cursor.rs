@@ -106,7 +106,7 @@ pub(super) async fn get_read_cursors(
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner().unwrap_or_default();
     let markers = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.read_cursors
             .values()
             .filter(|m| {

@@ -12,7 +12,7 @@ state, and persistence adapters can be verified independently.
 | `soland-storage` | Persistence records, narrow storage ports, and shared adapter contracts. |
 | `soland-storage-memory` | In-memory implementations used by tests and development fixtures. |
 | `soland-storage-postgres` | Diesel/PostgreSQL schema, migrations, row mapping, and production adapters. |
-| `soland-application` | Identity, event, projection, sync, federation, governance, delivery, and job use cases. |
+| `soland-services` | Identity, event, projection, sync, federation, governance, delivery, and job use cases. |
 | `soland-http` | Salvo routing, authentication, signatures, OpenAPI, wire validation, and response mapping. |
 | `soland` | Composition root, process configuration, adapter selection, runtime loops, OTel, and binaries. |
 | `soland-test-support` | Development-only state builders and integration-test fixtures. |
@@ -27,8 +27,8 @@ A successful `POST /_arkret/self/events` follows this path:
 
 1. `crates/http/src/routing/events/event_log` parses the envelope, establishes
    the authenticated context, validates the wire shape, and verifies proofs.
-2. Application services in `crates/application/src/events.rs` and
-   `crates/application/src/projection` coordinate admission, deterministic
+2. Application services in `crates/services/src/events.rs` and
+   `crates/services/src/projection` coordinate admission, deterministic
    reduction, persistence, and post-commit effects.
 3. Reducers in `crates/domain/src/reducer` calculate projection changes without
    HTTP, SQL, or runtime dependencies.
@@ -93,9 +93,10 @@ fanout layer when subscribers must observe changes accepted by every replica.
 ## Source pointers
 
 - HTTP transport: `crates/http/src/routing`
-- Application use cases: `crates/application/src`
+- Application use cases: `crates/services/src`
 - Reducers: `crates/domain/src/reducer`
 - Storage ports: `crates/storage/src`
 - PostgreSQL adapter: `crates/storage-postgres/src`
 - Composition/runtime: `crates/server/src`
 - Deployment and operations: `DEPLOYMENT.md`, `SECURITY.md`, `docs/runbook.md`
+

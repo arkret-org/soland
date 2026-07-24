@@ -10,7 +10,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, VerifyingKey};
 use serde_json::Value;
-use soland_application::projection::{InviteClaimProofContext, ProjectionApplicationService};
+use soland_services::projection::{InviteClaimProofContext, ProjectionService};
 
 use crate::state::AppState;
 
@@ -29,7 +29,7 @@ pub(crate) struct InviteClaimProofVerification<'a> {
 }
 
 pub(crate) fn invite_claim_proof_context_from_projection(
-    projection: &ProjectionApplicationService,
+    projection: &ProjectionService,
     operation: &Operation,
 ) -> Result<Option<InviteClaimProofContext>, &'static str> {
     projection.invite_claim_proof_context(operation)
@@ -657,3 +657,5 @@ mod tests {
         );
     }
 }
+
+

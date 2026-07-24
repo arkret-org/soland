@@ -38,8 +38,8 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
-use soland_application::ApplicationError as PersistenceError;
-use soland_application::identity::{
+use soland_services::ServiceError as PersistenceError;
+use soland_services::identity::{
     RecoveryPolicyState as RecoveryPolicyRecord, RecoveryReceiptState as RecoveryReceiptRecord,
     SessionIdentityState as SessionRecord, principal_control_realm_for_did,
 };
@@ -99,3 +99,4 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
         .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
 }
+

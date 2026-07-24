@@ -163,7 +163,7 @@ fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidation
     if DATA_PLANE_CELL_FAMILIES.contains(&family) {
         return Ok(CbaEffectPlane::Data);
     }
-    if soland_application::protocol_artifacts::cell_family_is_registered(family) {
+    if soland_services::protocol_artifacts::cell_family_is_registered(family) {
         return Ok(CbaEffectPlane::Control);
     }
     Err(event_validation_error(
@@ -201,8 +201,8 @@ pub(super) async fn reject_revoked_actor_device_signature(
 
     for device_id in candidate_devices {
         let revoked = state
-            .identity_application()
-            .find_device(soland_application::identity::FindDeviceQuery {
+            .identities()
+            .find_device(soland_services::identity::FindDeviceQuery {
                 actor_id: actor_id.to_owned(),
                 device_id: device_id.clone(),
             })
@@ -243,3 +243,4 @@ pub(super) fn actor_device_id_from_verification_method(
             }
         })
 }
+

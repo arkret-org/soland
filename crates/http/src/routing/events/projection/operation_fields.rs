@@ -1,7 +1,7 @@
 use arkret_event_draft::Operation;
 use serde_json::Value;
-use soland_application::governance::RetentionPolicyRecord;
-use soland_application::operation_semantics as kinds;
+use soland_services::governance::RetentionPolicyRecord;
+use soland_services::operation_semantics as kinds;
 
 use crate::state::AppState;
 
@@ -248,7 +248,7 @@ pub async fn project_retention_policy_from_operation(
         updated_at: operation.created_at,
     };
     if let Err(error) = state
-        .governance_application()
+        .governance()
         .store_retention_policy(&record)
         .await
     {
@@ -259,3 +259,4 @@ pub async fn project_retention_policy_from_operation(
         );
     }
 }
+

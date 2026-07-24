@@ -34,7 +34,7 @@ use std::time::Duration;
 
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::delivery::OutboundPushBridgeCacheState as OutboundPushBridgeCacheRecord;
+use soland_services::delivery::OutboundPushBridgeCacheState as OutboundPushBridgeCacheRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -191,7 +191,7 @@ async fn outbound_push_bridge_resolve(
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
     let cached = state
-        .delivery_application()
+        .deliveries()
         .push_bridge_cache_entry(&bridge_describe_url)
         .await
         .ok()
@@ -260,7 +260,7 @@ async fn outbound_push_bridge_fetch(
         )
         .map_err(AppError::capability_denied)?;
     let existing_cache = state
-        .delivery_application()
+        .deliveries()
         .push_bridge_cache_entry(&bridge_describe_url)
         .await
         .ok()
@@ -325,7 +325,7 @@ async fn outbound_push_bridge_fetch(
                         etag: etag.clone(),
                     };
                     if let Err(error) = state
-                        .delivery_application()
+                        .deliveries()
                         .store_push_bridge_cache_entry(&bridge_describe_url, record.clone())
                         .await
                     {
@@ -380,7 +380,7 @@ async fn outbound_push_bridge_fetch(
 async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let entries = state
-        .delivery_application()
+        .deliveries()
         .push_bridge_cache_entries()
         .await
         .unwrap_or_default()
@@ -395,7 +395,7 @@ async fn outbound_push_bridge_cache_status(depot: &mut Depot, res: &mut Response
 async fn outbound_push_bridge_cache_export(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let entries = state
-        .delivery_application()
+        .deliveries()
         .push_bridge_cache_entries()
         .await
         .unwrap_or_default()
@@ -421,7 +421,7 @@ async fn outbound_push_bridge_cache_import(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
     let replace_existing = body.replace_existing;
-    let service = state.delivery_application();
+    let service = state.deliveries();
     let mut imported_count = 0usize;
     let mut skipped_count = 0usize;
     for snapshot in body.entries {
@@ -483,7 +483,7 @@ async fn outbound_push_bridge_cache_invalidate(
 ) -> JsonResult<OutboundPushBridgeCacheInvalidateOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let service = state.delivery_application();
+    let service = state.deliveries();
     let removed_count = if let Some(push_gateway_url) = body
         .push_gateway_url
         .as_deref()
@@ -790,3 +790,4 @@ fn outbound_push_bridge_fetch_fallback(
         todos: Vec::new(),
     }
 }
+

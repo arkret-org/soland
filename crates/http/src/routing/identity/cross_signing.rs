@@ -27,7 +27,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
-use soland_application::identity::{FindDeviceQuery, RecoveryPolicyState};
+use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 use soland_http::error::{AppError, ErrorCode};
 
 use crate::state::AppState;
@@ -108,7 +108,7 @@ pub async fn validate_cross_signing_publish(
     let principal =
         Did::new(content.principal_id.as_str().to_owned()).map_err(|_| "cross_signing_bad_did")?;
     let current = state
-        .identity_application()
+        .identities()
         .current_cross_signing(&principal)
         .map(|publish| publish.generation.get())
         .unwrap_or(0);
@@ -134,7 +134,7 @@ pub fn project_cross_signing_publish(state: &AppState, payload: &Value) {
         }
     };
     if let Err(error) = state
-        .identity_application()
+        .identities()
         .record_cross_signing_publish(content)
     {
         tracing::warn!(%error, "cross_signing.publish projector: record rejected");
@@ -171,7 +171,7 @@ pub async fn validate_cross_signing_reset(
 
     // CAS precondition against the currently accepted generation.
     let current = state
-        .identity_application()
+        .identities()
         .current_cross_signing(&principal)
         .map(|publish| publish.generation.get())
         .unwrap_or(0);
@@ -311,7 +311,7 @@ async fn require_verified_reset_recovery_session(
     recovery_session_id: &str,
 ) -> Result<(), &'static str> {
     let record = state
-        .recovery_session_application()
+        .recovery_sessions()
         .session(recovery_session_id)
         .await
         .map_err(|_| "cross_signing_reset_recovery_session_unavailable")?
@@ -340,7 +340,7 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
         }
     };
     let recorded = state
-        .identity_application()
+        .identities()
         .record_cross_signing_reset(&content);
     if let Err(error) = recorded {
         tracing::warn!(%error, "cross_signing.reset projector: record rejected");
@@ -348,7 +348,7 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
     }
     remember_cross_signing_reset_replay(state, &content);
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .purge_stale_cross_signing_messages(
             content.principal_id().as_str(),
             content.new_generation(),
@@ -372,7 +372,7 @@ async fn active_reset_recovery_policy(
     proof_kind: &str,
 ) -> Result<RecoveryPolicyState, &'static str> {
     let policy = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(content.principal_id().as_str())
         .await
         .map_err(|_| "cross_signing_reset_proof_authority_invalid")?
@@ -398,7 +398,7 @@ async fn active_reset_recovery_policy(
 fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningResetPayload) -> bool {
     let now = chrono::Utc::now();
     state
-        .identity_application()
+        .identities()
         .cross_signing_reset_replay_seen(
             content.principal_id().as_str(),
             content.previous_generation(),
@@ -410,7 +410,7 @@ fn cross_signing_reset_replay_seen(state: &AppState, content: &CrossSigningReset
 fn remember_cross_signing_reset_replay(state: &AppState, content: &CrossSigningResetPayload) {
     let now = chrono::Utc::now();
     state
-        .identity_application()
+        .identities()
         .remember_cross_signing_reset_replay(
             content.principal_id().as_str().to_owned(),
             content.previous_generation(),
@@ -427,7 +427,7 @@ async fn verify_device_quorum_reset(
     input: &[u8],
 ) -> Result<(), &'static str> {
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(principal_id)
         .await
         .map_err(|_| "cross_signing_reset_quorum_insufficient")?;
@@ -596,7 +596,7 @@ pub fn verify_device_cross_signing_binding(
 pub(crate) fn current_accepted_ssk_generation(state: &AppState, principal_id: &str) -> Option<u64> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
     state
-        .identity_application()
+        .identities()
         .current_cross_signing(&principal)
         .map(|publish| publish.generation.get())
 }
@@ -694,7 +694,7 @@ pub(crate) fn check_device_cross_signing_binding(
         .ok_or("cross_signing_binding_missing_signature")?;
 
     let publish = state
-        .identity_application()
+        .identities()
         .current_cross_signing(&principal)
         .ok_or("cross_signing_state_missing")?;
     // Live generation gate (device-lifecycle.md §15 step 3 / §5.2.1).
@@ -856,7 +856,7 @@ fn verify_mls_welcome_claim_envelope_ssk_signature(
     envelope_generation: u64,
 ) -> Result<(), &'static str> {
     let publish = state
-        .identity_application()
+        .identities()
         .current_cross_signing(&envelope.requester_did)
         .ok_or(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH)?;
     let (accepted_generation, ssk_kid, ssk_public_key, ssk_key_format) = (
@@ -917,7 +917,7 @@ async fn verify_mls_welcome_claim_envelope_device_signature(
         return Ok(());
     }
     let record = state
-        .identity_application()
+        .identities()
         .find_device(FindDeviceQuery {
             actor_id: envelope.requester_did.as_str().to_owned(),
             device_id: requester_device_id.to_owned(),
@@ -1094,9 +1094,9 @@ pub(crate) async fn try_resolve_device_signing_directory_facet(
     state: &AppState,
     principal_id: &str,
     device_id: &str,
-) -> Result<DeviceSigningDirectoryFacet, soland_application::ApplicationError> {
+) -> Result<DeviceSigningDirectoryFacet, soland_services::ServiceError> {
     let record = match state
-        .identity_application()
+        .identities()
         .find_device(FindDeviceQuery {
             actor_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
@@ -1194,7 +1194,7 @@ pub(crate) fn resolve_current_cross_signing_publish(
 ) -> Option<arkret_models_identity::CrossSigningPublish> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
     let publish = state
-        .identity_application()
+        .identities()
         .current_cross_signing(&principal)?;
     // Re-serialize the SDK content type into the schema-counterpart publish
     // payload so both crates agree on the wire shape (fields are 1:1).
@@ -1235,3 +1235,4 @@ pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: 
     };
     key.verify(message, &signature).is_ok()
 }
+

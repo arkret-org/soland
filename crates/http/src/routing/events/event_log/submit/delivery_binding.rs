@@ -13,7 +13,7 @@ pub(super) async fn federation_service_binding_current_for_destination(
         return FederationServiceBindingCheck::Current;
     }
     let members = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .members_of_realm(binding.realm_id.as_str())
             .into_iter()
@@ -53,7 +53,7 @@ pub(super) async fn federation_service_binding_current_for_destination(
 }
 
 pub(super) fn delivery_binding_member_view(
-    member: &soland_application::projection::MembershipReadModel,
+    member: &soland_services::projection::MembershipReadModel,
 ) -> Option<DeliveryBindingMemberView> {
     if member.delivery_status.as_deref() != Some("routable") {
         return None;
@@ -170,7 +170,7 @@ pub(super) async fn delivery_binding_handover_witness(
 
     if let Some(frontier_event_id) = evidence.handover_frontier.first() {
         match state
-            .event_query_application()
+            .event_queries()
             .canonical_event(frontier_event_id.as_str())
             .await
         {
@@ -220,7 +220,7 @@ pub(super) async fn delivery_binding_handover_witness(
         )),
     ) {
         match state
-            .projection_application()
+            .projections()
             .sealed_ops_for_cell(&realm_id, &cell_ref)
         {
             Ok(ops) => {
@@ -253,3 +253,4 @@ pub(super) fn events_submit_status_label(status: EventsSubmitStatus) -> &'static
         EventsSubmitStatus::HistoricalOnly => "historical_only",
     }
 }
+

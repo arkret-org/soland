@@ -15,10 +15,10 @@ pub(super) async fn recovery_receipts_get(
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let receipts = state
-        .recovery_receipt_application()
+        .recovery_receipts()
         .receipt_history(&principal)
         .await
-        .map_err(recovery_application_error)?;
+        .map_err(recovery_service_error)?;
     let receipts = receipts
         .iter()
         .map(recovery_receipt_item)
@@ -27,7 +27,7 @@ pub(super) async fn recovery_receipts_get(
 }
 
 pub(super) fn recovery_receipt_item(
-    record: &soland_application::identity::RecoveryReceiptState,
+    record: &soland_services::identity::RecoveryReceiptState,
 ) -> Result<SolandRecoveryReceiptItem, AppError> {
     Ok(SolandRecoveryReceiptItem {
         receipt_id: ReceiptId::new(record.receipt_id.clone())
@@ -52,8 +52,8 @@ pub(super) fn recovery_receipt_item(
 
 fn application_recovery_receipt(
     record: RecoveryReceiptRecord,
-) -> soland_application::identity::RecoveryReceiptState {
-    soland_application::identity::RecoveryReceiptState {
+) -> soland_services::identity::RecoveryReceiptState {
+    soland_services::identity::RecoveryReceiptState {
         receipt_id: record.receipt_id,
         principal_id: record.principal_id,
         recovery_session_id: record.recovery_session_id,
@@ -130,10 +130,10 @@ pub(super) async fn recovery_receipt_put(
     // Cross-check against the active policy when one is recorded —
     // policy_id + policy_version MUST match the accepted snapshot.
     let active = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(&record.principal_id)
         .await
-        .map_err(recovery_application_error)?
+        .map_err(recovery_service_error)?
         .ok_or_else(|| {
             AppError::conflict(format!(
                 "no accepted recovery policy for principal `{}`",
@@ -176,7 +176,7 @@ pub(super) async fn recovery_receipt_put(
     let accepted_at = chrono::Utc::now();
     record.accepted_at = accepted_at;
     state
-        .recovery_receipt_application()
+        .recovery_receipts()
         .record_receipt(application_recovery_receipt(record.clone()))
         .await
         .map_err(recovery_receipt_store_error)?;
@@ -210,3 +210,4 @@ pub(super) async fn recovery_receipt_put(
     };
     json_ok(outcome)
 }
+

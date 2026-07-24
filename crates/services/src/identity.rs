@@ -69,7 +69,7 @@ pub struct DirectConversationBindingRecord {
     pub updated_at: DateTime<Utc>,
 }
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 /// Resolve the private control Realm used by identity-scoped application
 /// workflows without exposing the domain crate to transport or composition
@@ -160,25 +160,25 @@ pub trait AccountDataPort: Send + Sync {
         &self,
         actor_id: &str,
         data_type: &str,
-    ) -> ApplicationResult<Option<AccountDataState>>;
-    async fn entries_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<AccountDataState>>;
-    async fn save_entry(&self, entry: AccountDataState) -> ApplicationResult<()>;
-    async fn delete_entry(&self, actor_id: &str, data_type: &str) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<AccountDataState>>;
+    async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>>;
+    async fn save_entry(&self, entry: AccountDataState) -> ServiceResult<()>;
+    async fn delete_entry(&self, actor_id: &str, data_type: &str) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct AccountDataApplicationService {
+pub struct AccountDataService {
     account_data: Arc<dyn AccountDataPort>,
 }
 
 #[async_trait]
 pub trait ConsentCellPort: Send + Sync {
-    async fn save_cell(&self, cell: ConsentCellRecord) -> ApplicationResult<()>;
-    async fn cells(&self) -> ApplicationResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
+    async fn save_cell(&self, cell: ConsentCellRecord) -> ServiceResult<()>;
+    async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>>;
 }
 
 #[derive(Clone)]
-pub struct ConsentApplicationService {
+pub struct ConsentService {
     consent_cells: Arc<dyn ConsentCellPort>,
     runtime_cells: Arc<Mutex<BTreeMap<ConsentCellKey, ConsentCellRecord>>>,
 }
@@ -189,15 +189,15 @@ pub trait ContactPort: Send + Sync {
         &self,
         requester: &str,
         target: &str,
-    ) -> ApplicationResult<Option<ContactRecord>>;
+    ) -> ServiceResult<Option<ContactRecord>>;
     async fn contact(
         &self,
         requester: &str,
         target: &str,
         scope: &str,
-    ) -> ApplicationResult<Option<ContactRecord>>;
-    async fn contacts_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<ContactRecord>>;
-    async fn save_contact(&self, contact: ContactRecord) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<ContactRecord>>;
+    async fn contacts_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<ContactRecord>>;
+    async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()>;
 }
 
 #[async_trait]
@@ -205,10 +205,10 @@ pub trait InviteReceivePolicyPort: Send + Sync {
     async fn save_policy(
         &self,
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn policies(
         &self,
-    ) -> ApplicationResult<
+    ) -> ServiceResult<
         Vec<(
             String,
             arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
@@ -222,13 +222,13 @@ pub trait DirectConversationBindingPort: Send + Sync {
         &self,
         pair_key: &str,
         binding: DirectConversationBindingRecord,
-    ) -> ApplicationResult<()>;
-    async fn delete_binding(&self, pair_key: &str) -> ApplicationResult<()>;
-    async fn bindings(&self) -> ApplicationResult<Vec<(String, DirectConversationBindingRecord)>>;
+    ) -> ServiceResult<()>;
+    async fn delete_binding(&self, pair_key: &str) -> ServiceResult<()>;
+    async fn bindings(&self) -> ServiceResult<Vec<(String, DirectConversationBindingRecord)>>;
 }
 
 #[derive(Clone)]
-pub struct ContactApplicationService {
+pub struct ContactService {
     contacts: Arc<dyn ContactPort>,
     invite_policies: Arc<dyn InviteReceivePolicyPort>,
     direct_bindings: Arc<dyn DirectConversationBindingPort>,
@@ -243,8 +243,8 @@ pub struct ContactApplicationService {
     runtime_direct_bindings: Arc<Mutex<BTreeMap<String, DirectConversationBindingRecord>>>,
 }
 
-impl ContactApplicationService {
-    pub async fn hydrate_runtime(&self) -> ApplicationResult<()> {
+impl ContactService {
+    pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
         self.replace_runtime_invite_policies(self.invite_policies.policies().await?);
         self.replace_runtime_direct_bindings(
             self.direct_bindings
@@ -275,7 +275,7 @@ impl ContactApplicationService {
         requester: &str,
         target: &str,
         scope: &str,
-    ) -> ApplicationResult<Option<ContactRecord>> {
+    ) -> ServiceResult<Option<ContactRecord>> {
         self.contacts.contact(requester, target, scope).await
     }
 
@@ -283,25 +283,25 @@ impl ContactApplicationService {
         &self,
         requester: &str,
         target: &str,
-    ) -> ApplicationResult<Option<ContactRecord>> {
+    ) -> ServiceResult<Option<ContactRecord>> {
         self.contacts.contact_any(requester, target).await
     }
 
     pub async fn contacts_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<ContactRecord>> {
+    ) -> ServiceResult<Vec<ContactRecord>> {
         self.contacts.contacts_for_actor(actor_id).await
     }
 
-    pub async fn save_contact(&self, contact: ContactRecord) -> ApplicationResult<()> {
+    pub async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()> {
         self.contacts.save_contact(contact).await
     }
 
     pub async fn save_invite_policy(
         &self,
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.invite_policies.save_policy(policy.clone()).await?;
         self.runtime_invite_policies
             .lock()
@@ -333,7 +333,7 @@ impl ContactApplicationService {
         &self,
         pair_key: &str,
         binding: DirectConversationBindingRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.direct_bindings
             .save_binding(pair_key, binding.clone())
             .await?;
@@ -343,7 +343,7 @@ impl ContactApplicationService {
         Ok(())
     }
 
-    pub async fn delete_direct_binding(&self, pair_key: &str) -> ApplicationResult<()> {
+    pub async fn delete_direct_binding(&self, pair_key: &str) -> ServiceResult<()> {
         self.direct_bindings.delete_binding(pair_key).await?;
         self.runtime_direct_bindings.lock().remove(pair_key);
         Ok(())
@@ -487,7 +487,7 @@ impl ContactApplicationService {
     }
 }
 
-impl ConsentApplicationService {
+impl ConsentService {
     pub fn new(consent_cells: Arc<dyn ConsentCellPort>) -> Self {
         Self {
             consent_cells,
@@ -495,15 +495,15 @@ impl ConsentApplicationService {
         }
     }
 
-    pub async fn save_cell(&self, cell: ConsentCellRecord) -> ApplicationResult<()> {
+    pub async fn save_cell(&self, cell: ConsentCellRecord) -> ServiceResult<()> {
         self.consent_cells.save_cell(cell).await
     }
 
-    pub async fn cells(&self) -> ApplicationResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
+    pub async fn cells(&self) -> ServiceResult<Vec<(ConsentCellKey, ConsentCellRecord)>> {
         self.consent_cells.cells().await
     }
 
-    pub async fn hydrate_runtime(&self) -> ApplicationResult<()> {
+    pub async fn hydrate_runtime(&self) -> ServiceResult<()> {
         self.replace_runtime_cells(self.consent_cells.cells().await?);
         Ok(())
     }
@@ -714,7 +714,7 @@ fn empty_consent_cell(
     }
 }
 
-impl AccountDataApplicationService {
+impl AccountDataService {
     pub fn new(account_data: Arc<dyn AccountDataPort>) -> Self {
         Self { account_data }
     }
@@ -723,22 +723,22 @@ impl AccountDataApplicationService {
         &self,
         actor_id: &str,
         data_type: &str,
-    ) -> ApplicationResult<Option<AccountDataState>> {
+    ) -> ServiceResult<Option<AccountDataState>> {
         self.account_data.entry(actor_id, data_type).await
     }
 
     pub async fn entries_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<AccountDataState>> {
+    ) -> ServiceResult<Vec<AccountDataState>> {
         self.account_data.entries_for_actor(actor_id).await
     }
 
-    pub async fn save_entry(&self, entry: AccountDataState) -> ApplicationResult<()> {
+    pub async fn save_entry(&self, entry: AccountDataState) -> ServiceResult<()> {
         self.account_data.save_entry(entry).await
     }
 
-    pub async fn delete_entry(&self, actor_id: &str, data_type: &str) -> ApplicationResult<()> {
+    pub async fn delete_entry(&self, actor_id: &str, data_type: &str) -> ServiceResult<()> {
         self.account_data.delete_entry(actor_id, data_type).await
     }
 }
@@ -771,8 +771,8 @@ pub trait DeviceKeyPort: Send + Sync {
         actor_id: String,
         device_id: String,
         payload: Value,
-    ) -> ApplicationResult<()>;
-    async fn bundle(&self, actor_id: &str, device_id: &str) -> ApplicationResult<Option<Value>>;
+    ) -> ServiceResult<()>;
+    async fn bundle(&self, actor_id: &str, device_id: &str) -> ServiceResult<Option<Value>>;
 }
 
 #[async_trait]
@@ -782,17 +782,17 @@ pub trait OneTimeKeyPort: Send + Sync {
         actor_id: String,
         device_id: String,
         keys: Vec<Value>,
-    ) -> ApplicationResult<()>;
-    async fn claim_key(&self, actor_id: &str, device_id: &str) -> ApplicationResult<Option<Value>>;
+    ) -> ServiceResult<()>;
+    async fn claim_key(&self, actor_id: &str, device_id: &str) -> ServiceResult<Option<Value>>;
 }
 
 #[derive(Clone)]
-pub struct KeyMaterialApplicationService {
+pub struct KeyMaterialService {
     device_keys: Arc<dyn DeviceKeyPort>,
     one_time_keys: Arc<dyn OneTimeKeyPort>,
 }
 
-impl KeyMaterialApplicationService {
+impl KeyMaterialService {
     pub fn new(
         device_keys: Arc<dyn DeviceKeyPort>,
         one_time_keys: Arc<dyn OneTimeKeyPort>,
@@ -808,7 +808,7 @@ impl KeyMaterialApplicationService {
         actor_id: String,
         device_id: String,
         payload: Value,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.device_keys
             .save_bundle(actor_id, device_id, payload)
             .await
@@ -818,7 +818,7 @@ impl KeyMaterialApplicationService {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> ApplicationResult<Option<Value>> {
+    ) -> ServiceResult<Option<Value>> {
         self.device_keys.bundle(actor_id, device_id).await
     }
 
@@ -827,7 +827,7 @@ impl KeyMaterialApplicationService {
         actor_id: String,
         device_id: String,
         keys: Vec<Value>,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.one_time_keys
             .save_keys(actor_id, device_id, keys)
             .await
@@ -837,7 +837,7 @@ impl KeyMaterialApplicationService {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> ApplicationResult<Option<Value>> {
+    ) -> ServiceResult<Option<Value>> {
         self.one_time_keys.claim_key(actor_id, device_id).await
     }
 }
@@ -865,61 +865,61 @@ pub trait AccountLookupPort: Send + Sync {
     async fn find_account_by_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Option<AccountIdentity>>;
-    async fn register_account(&self, command: RegisterAccountCommand) -> ApplicationResult<()>;
-    async fn account(&self, actor_id: &str) -> ApplicationResult<Option<AccountProfileState>>;
-    async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>>;
-    async fn save_account(&self, account: AccountProfileState) -> ApplicationResult<()>;
-    async fn delete_account(&self, actor_id: &str) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<AccountIdentity>>;
+    async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()>;
+    async fn account(&self, actor_id: &str) -> ServiceResult<Option<AccountProfileState>>;
+    async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>>;
+    async fn save_account(&self, account: AccountProfileState) -> ServiceResult<()>;
+    async fn delete_account(&self, actor_id: &str) -> ServiceResult<()>;
     async fn account_localparts(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<AccountLocalpartState>>;
+    ) -> ServiceResult<Vec<AccountLocalpartState>>;
     async fn localpart_owner(
         &self,
         localpart: &str,
-    ) -> ApplicationResult<Option<AccountLocalpartState>>;
+    ) -> ServiceResult<Option<AccountLocalpartState>>;
     async fn add_localpart(
         &self,
         actor_id: &str,
         localpart: &str,
         primary: bool,
-    ) -> ApplicationResult<AccountLocalpartState>;
+    ) -> ServiceResult<AccountLocalpartState>;
     async fn set_primary_localpart(
         &self,
         actor_id: &str,
         localpart: &str,
-    ) -> ApplicationResult<AccountLocalpartState>;
-    async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> ApplicationResult<()>;
-    async fn clear_localparts(&self, actor_id: &str) -> ApplicationResult<()>;
+    ) -> ServiceResult<AccountLocalpartState>;
+    async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> ServiceResult<()>;
+    async fn clear_localparts(&self, actor_id: &str) -> ServiceResult<()>;
     async fn record_handle_release(
         &self,
         localpart: &str,
         released_at: DateTime<Utc>,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn save_account_lifecycle(
         &self,
         actor_id: &str,
         lifecycle: AccountLifecycleState,
-    ) -> ApplicationResult<()>;
-    async fn delete_account_lifecycle(&self, actor_id: &str) -> ApplicationResult<()>;
-    async fn account_lifecycles(&self) -> ApplicationResult<Vec<(String, AccountLifecycleState)>> {
+    ) -> ServiceResult<()>;
+    async fn delete_account_lifecycle(&self, actor_id: &str) -> ServiceResult<()>;
+    async fn account_lifecycles(&self) -> ServiceResult<Vec<(String, AccountLifecycleState)>> {
         Ok(Vec::new())
     }
 }
 
 #[async_trait]
 pub trait DeviceDirectoryPort: Send + Sync {
-    async fn list_active_device_actors(&self) -> ApplicationResult<Vec<String>>;
-    async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>>;
+    async fn list_active_device_actors(&self) -> ServiceResult<Vec<String>>;
+    async fn devices(&self) -> ServiceResult<Vec<DeviceIdentity>>;
     async fn find_device(
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> ApplicationResult<Option<DeviceIdentity>>;
-    async fn save_device(&self, command: SaveDeviceCommand) -> ApplicationResult<()>;
-    async fn save_device_if_absent(&self, device: DeviceIdentity) -> ApplicationResult<bool>;
-    async fn devices_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<DeviceIdentity>>;
+    ) -> ServiceResult<Option<DeviceIdentity>>;
+    async fn save_device(&self, command: SaveDeviceCommand) -> ServiceResult<()>;
+    async fn save_device_if_absent(&self, device: DeviceIdentity) -> ServiceResult<bool>;
+    async fn devices_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<DeviceIdentity>>;
 }
 
 #[async_trait]
@@ -927,11 +927,11 @@ pub trait AgentDirectoryPort: Send + Sync {
     async fn find_agent_controller(
         &self,
         agent_id: &str,
-    ) -> ApplicationResult<Option<AgentController>>;
+    ) -> ServiceResult<Option<AgentController>>;
 }
 
 #[derive(Clone)]
-pub struct IdentityApplicationService {
+pub struct IdentityService {
     accounts: Arc<dyn AccountLookupPort>,
     devices: Arc<dyn DeviceDirectoryPort>,
     agents: Arc<dyn AgentDirectoryPort>,
@@ -1140,26 +1140,26 @@ pub trait AgentPairingPort: Send + Sync {
     async fn pairing_record(
         &self,
         pairing_request_id: &str,
-    ) -> ApplicationResult<Option<AgentPairingState>>;
-    async fn agent(&self, agent_id: &str) -> ApplicationResult<Option<AgentPairingState>>;
+    ) -> ServiceResult<Option<AgentPairingState>>;
+    async fn agent(&self, agent_id: &str) -> ServiceResult<Option<AgentPairingState>>;
     async fn agents_for_controller(
         &self,
         controller_id: &str,
-    ) -> ApplicationResult<Vec<AgentPairingState>>;
-    async fn save_agent(&self, agent: AgentPairingState) -> ApplicationResult<()>;
+    ) -> ServiceResult<Vec<AgentPairingState>>;
+    async fn save_agent(&self, agent: AgentPairingState) -> ServiceResult<()>;
     async fn store_runtime_approval(
         &self,
         command: &StoreAgentRuntimeApprovalCommand,
-    ) -> ApplicationResult<Option<AgentPairingState>>;
+    ) -> ServiceResult<Option<AgentPairingState>>;
     async fn activate_runtime_if_current(
         &self,
         command: &ActivateAgentRuntimeCommand,
-    ) -> ApplicationResult<bool>;
+    ) -> ServiceResult<bool>;
     async fn clear_approval_notification_if_current(
         &self,
         agent_id: &str,
         approval_request_id: &str,
-    ) -> ApplicationResult<bool>;
+    ) -> ServiceResult<bool>;
 }
 
 #[derive(Clone, Debug)]
@@ -1189,31 +1189,31 @@ pub trait SidecarPort: Send + Sync {
     async fn ensure_sidecar(
         &self,
         sidecar: AgentSidecarState,
-    ) -> ApplicationResult<AgentSidecarState>;
-    async fn sidecar(&self, sidecar_id: &str) -> ApplicationResult<Option<AgentSidecarState>>;
+    ) -> ServiceResult<AgentSidecarState>;
+    async fn sidecar(&self, sidecar_id: &str) -> ServiceResult<Option<AgentSidecarState>>;
     async fn sidecar_for_realm_controller(
         &self,
         realm_id: &str,
         controller_id: &str,
-    ) -> ApplicationResult<Option<AgentSidecarState>>;
+    ) -> ServiceResult<Option<AgentSidecarState>>;
     async fn sidecars_for_controller(
         &self,
         controller_id: &str,
         realm_id: Option<&str>,
-    ) -> ApplicationResult<Vec<AgentSidecarState>>;
+    ) -> ServiceResult<Vec<AgentSidecarState>>;
     async fn ensure_context(
         &self,
         context: AgentSidecarContextState,
-    ) -> ApplicationResult<AgentSidecarContextState>;
+    ) -> ServiceResult<AgentSidecarContextState>;
     async fn context(
         &self,
         sidecar_id: &str,
         digest: &str,
-    ) -> ApplicationResult<Option<AgentSidecarContextState>>;
+    ) -> ServiceResult<Option<AgentSidecarContextState>>;
 }
 
 #[derive(Clone)]
-pub struct AgentPairingApplicationService {
+pub struct AgentPairingService {
     pairing: Arc<dyn AgentPairingPort>,
     sidecars: Arc<dyn SidecarPort>,
 }
@@ -1259,20 +1259,20 @@ pub trait RecoveryPolicyPort: Send + Sync {
     async fn active_policy(
         &self,
         principal_id: &str,
-    ) -> ApplicationResult<Option<RecoveryPolicyState>>;
+    ) -> ServiceResult<Option<RecoveryPolicyState>>;
     async fn policy_history(
         &self,
         principal_id: &str,
-    ) -> ApplicationResult<Vec<RecoveryPolicyState>>;
-    async fn insert_policy(&self, policy: RecoveryPolicyState) -> ApplicationResult<()>;
+    ) -> ServiceResult<Vec<RecoveryPolicyState>>;
+    async fn insert_policy(&self, policy: RecoveryPolicyState) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct RecoveryPolicyApplicationService {
+pub struct RecoveryPolicyService {
     policies: Arc<dyn RecoveryPolicyPort>,
 }
 
-impl RecoveryPolicyApplicationService {
+impl RecoveryPolicyService {
     pub fn new(policies: Arc<dyn RecoveryPolicyPort>) -> Self {
         Self { policies }
     }
@@ -1280,21 +1280,21 @@ impl RecoveryPolicyApplicationService {
     pub async fn active_policy(
         &self,
         principal_id: &str,
-    ) -> ApplicationResult<Option<RecoveryPolicyState>> {
+    ) -> ServiceResult<Option<RecoveryPolicyState>> {
         self.policies.active_policy(principal_id).await
     }
 
     pub async fn policy_history(
         &self,
         principal_id: &str,
-    ) -> ApplicationResult<Vec<RecoveryPolicyState>> {
+    ) -> ServiceResult<Vec<RecoveryPolicyState>> {
         self.policies.policy_history(principal_id).await
     }
 
     pub async fn publish_policy(
         &self,
         command: PublishRecoveryPolicyCommand,
-    ) -> ApplicationResult<PublishRecoveryPolicyResult> {
+    ) -> ServiceResult<PublishRecoveryPolicyResult> {
         let policy = command.policy;
         let existing = self.policies.active_policy(&policy.principal_id).await?;
         if let Some(existing) = existing {
@@ -1343,16 +1343,16 @@ pub trait RecoveryReceiptPort: Send + Sync {
     async fn receipt_history(
         &self,
         principal_id: &str,
-    ) -> ApplicationResult<Vec<RecoveryReceiptState>>;
-    async fn insert_receipt(&self, receipt: RecoveryReceiptState) -> ApplicationResult<()>;
+    ) -> ServiceResult<Vec<RecoveryReceiptState>>;
+    async fn insert_receipt(&self, receipt: RecoveryReceiptState) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct RecoveryReceiptApplicationService {
+pub struct RecoveryReceiptService {
     receipts: Arc<dyn RecoveryReceiptPort>,
 }
 
-impl RecoveryReceiptApplicationService {
+impl RecoveryReceiptService {
     pub fn new(receipts: Arc<dyn RecoveryReceiptPort>) -> Self {
         Self { receipts }
     }
@@ -1360,11 +1360,11 @@ impl RecoveryReceiptApplicationService {
     pub async fn receipt_history(
         &self,
         principal_id: &str,
-    ) -> ApplicationResult<Vec<RecoveryReceiptState>> {
+    ) -> ServiceResult<Vec<RecoveryReceiptState>> {
         self.receipts.receipt_history(principal_id).await
     }
 
-    pub async fn record_receipt(&self, receipt: RecoveryReceiptState) -> ApplicationResult<()> {
+    pub async fn record_receipt(&self, receipt: RecoveryReceiptState) -> ServiceResult<()> {
         self.receipts.insert_receipt(receipt).await
     }
 }
@@ -1397,17 +1397,17 @@ pub trait RecoverySessionPort: Send + Sync {
     async fn session(
         &self,
         recovery_session_id: &str,
-    ) -> ApplicationResult<Option<RecoverySessionState>>;
-    async fn insert_session(&self, session: RecoverySessionState) -> ApplicationResult<()>;
-    async fn update_session(&self, session: RecoverySessionState) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<RecoverySessionState>>;
+    async fn insert_session(&self, session: RecoverySessionState) -> ServiceResult<()>;
+    async fn update_session(&self, session: RecoverySessionState) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct RecoverySessionApplicationService {
+pub struct RecoverySessionService {
     sessions: Arc<dyn RecoverySessionPort>,
 }
 
-impl RecoverySessionApplicationService {
+impl RecoverySessionService {
     pub fn new(sessions: Arc<dyn RecoverySessionPort>) -> Self {
         Self { sessions }
     }
@@ -1415,64 +1415,64 @@ impl RecoverySessionApplicationService {
     pub async fn session(
         &self,
         recovery_session_id: &str,
-    ) -> ApplicationResult<Option<RecoverySessionState>> {
+    ) -> ServiceResult<Option<RecoverySessionState>> {
         self.sessions.session(recovery_session_id).await
     }
 
-    pub async fn create_session(&self, session: RecoverySessionState) -> ApplicationResult<()> {
+    pub async fn create_session(&self, session: RecoverySessionState) -> ServiceResult<()> {
         self.sessions.insert_session(session).await
     }
 
-    pub async fn save_session(&self, session: RecoverySessionState) -> ApplicationResult<()> {
+    pub async fn save_session(&self, session: RecoverySessionState) -> ServiceResult<()> {
         self.sessions.update_session(session).await
     }
 }
 
 #[async_trait]
 pub trait AgentParticipationPort: Send + Sync {
-    async fn store_selection(&self, selection: Value) -> ApplicationResult<()>;
-    async fn selections(&self, agent_id: &str) -> ApplicationResult<Vec<Value>>;
-    async fn ceilings(&self, scope_keys: &[String]) -> ApplicationResult<Vec<Value>>;
-    async fn store_ceiling(&self, ceiling: Value) -> ApplicationResult<()>;
+    async fn store_selection(&self, selection: Value) -> ServiceResult<()>;
+    async fn selections(&self, agent_id: &str) -> ServiceResult<Vec<Value>>;
+    async fn ceilings(&self, scope_keys: &[String]) -> ServiceResult<Vec<Value>>;
+    async fn store_ceiling(&self, ceiling: Value) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct AgentParticipationApplicationService {
+pub struct AgentParticipationService {
     participation: Arc<dyn AgentParticipationPort>,
 }
 
-impl AgentParticipationApplicationService {
+impl AgentParticipationService {
     pub fn new(participation: Arc<dyn AgentParticipationPort>) -> Self {
         Self { participation }
     }
 
-    pub async fn store_selection(&self, selection: Value) -> ApplicationResult<()> {
+    pub async fn store_selection(&self, selection: Value) -> ServiceResult<()> {
         self.participation.store_selection(selection).await
     }
 
-    pub async fn selections(&self, agent_id: &str) -> ApplicationResult<Vec<Value>> {
+    pub async fn selections(&self, agent_id: &str) -> ServiceResult<Vec<Value>> {
         self.participation.selections(agent_id).await
     }
 
-    pub async fn ceilings(&self, scope_keys: &[String]) -> ApplicationResult<Vec<Value>> {
+    pub async fn ceilings(&self, scope_keys: &[String]) -> ServiceResult<Vec<Value>> {
         self.participation.ceilings(scope_keys).await
     }
 
-    pub async fn store_ceiling(&self, ceiling: Value) -> ApplicationResult<()> {
+    pub async fn store_ceiling(&self, ceiling: Value) -> ServiceResult<()> {
         self.participation.store_ceiling(ceiling).await
     }
 }
 
 #[async_trait]
 pub trait KeyBackupPort: Send + Sync {
-    async fn backup(&self, backup_id: &str) -> ApplicationResult<Option<Value>>;
-    async fn backups_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<Value>>;
-    async fn store_backup(&self, backup_id: String, payload: Value) -> ApplicationResult<()>;
-    async fn delete_backup(&self, backup_id: &str) -> ApplicationResult<bool>;
+    async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>>;
+    async fn backups_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>>;
+    async fn store_backup(&self, backup_id: String, payload: Value) -> ServiceResult<()>;
+    async fn delete_backup(&self, backup_id: &str) -> ServiceResult<bool>;
 }
 
 #[derive(Clone)]
-pub struct KeyBackupApplicationService {
+pub struct KeyBackupService {
     backups: Arc<dyn KeyBackupPort>,
 }
 
@@ -1498,33 +1498,33 @@ pub struct SessionIdentityState {
 
 #[async_trait]
 pub trait SessionIdentityPort: Send + Sync {
-    async fn session(&self, token_hash: &str) -> ApplicationResult<Option<SessionIdentityState>>;
-    async fn sessions(&self) -> ApplicationResult<Vec<SessionIdentityState>>;
-    async fn save_session(&self, session: SessionIdentityState) -> ApplicationResult<()>;
+    async fn session(&self, token_hash: &str) -> ServiceResult<Option<SessionIdentityState>>;
+    async fn sessions(&self) -> ServiceResult<Vec<SessionIdentityState>>;
+    async fn save_session(&self, session: SessionIdentityState) -> ServiceResult<()>;
     async fn revoke_session(
         &self,
         token_hash: &str,
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<Option<SessionIdentityState>>;
+    ) -> ServiceResult<Option<SessionIdentityState>>;
     async fn revoke_actor_sessions(
         &self,
         actor_id: &str,
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<usize>;
+    ) -> ServiceResult<usize>;
     async fn revoke_actor_device_sessions(
         &self,
         actor_id: &str,
         device_id: &str,
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<usize>;
+    ) -> ServiceResult<usize>;
 }
 
 #[derive(Clone)]
-pub struct SessionApplicationService {
+pub struct SessionService {
     sessions: Arc<dyn SessionIdentityPort>,
 }
 
-impl SessionApplicationService {
+impl SessionService {
     pub fn new(sessions: Arc<dyn SessionIdentityPort>) -> Self {
         Self { sessions }
     }
@@ -1532,11 +1532,11 @@ impl SessionApplicationService {
     pub async fn session(
         &self,
         token_hash: &str,
-    ) -> ApplicationResult<Option<SessionIdentityState>> {
+    ) -> ServiceResult<Option<SessionIdentityState>> {
         self.sessions.session(token_hash).await
     }
 
-    pub async fn create_session(&self, session: SessionIdentityState) -> ApplicationResult<()> {
+    pub async fn create_session(&self, session: SessionIdentityState) -> ServiceResult<()> {
         self.sessions.save_session(session).await
     }
 
@@ -1544,7 +1544,7 @@ impl SessionApplicationService {
         &self,
         token_hash: &str,
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<Option<SessionIdentityState>> {
+    ) -> ServiceResult<Option<SessionIdentityState>> {
         self.sessions.revoke_session(token_hash, revoked_at).await
     }
 
@@ -1552,7 +1552,7 @@ impl SessionApplicationService {
         &self,
         actor_id: &str,
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         self.sessions
             .revoke_actor_sessions(actor_id, revoked_at)
             .await
@@ -1563,7 +1563,7 @@ impl SessionApplicationService {
         actor_id: &str,
         device_id: &str,
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         self.sessions
             .revoke_actor_device_sessions(actor_id, device_id, revoked_at)
             .await
@@ -1572,7 +1572,7 @@ impl SessionApplicationService {
     pub async fn active_delegated_sessions_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         Ok(self
             .sessions
             .sessions()
@@ -1592,7 +1592,7 @@ impl SessionApplicationService {
         service_id: Option<&str>,
         grant_refs: &[String],
         revoked_at: DateTime<Utc>,
-    ) -> ApplicationResult<Vec<String>> {
+    ) -> ServiceResult<Vec<String>> {
         let sessions = self.sessions.sessions().await?;
         let mut revoked_refs = Vec::new();
         for mut session in sessions.into_iter().filter(|session| {
@@ -1677,29 +1677,29 @@ fn json_contains_string(value: &Value, needle: &str) -> bool {
     }
 }
 
-impl KeyBackupApplicationService {
+impl KeyBackupService {
     pub fn new(backups: Arc<dyn KeyBackupPort>) -> Self {
         Self { backups }
     }
 
-    pub async fn backup(&self, backup_id: &str) -> ApplicationResult<Option<Value>> {
+    pub async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>> {
         self.backups.backup(backup_id).await
     }
 
-    pub async fn backups_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<Value>> {
+    pub async fn backups_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>> {
         self.backups.backups_for_actor(actor_id).await
     }
 
-    pub async fn store_backup(&self, backup_id: String, payload: Value) -> ApplicationResult<()> {
+    pub async fn store_backup(&self, backup_id: String, payload: Value) -> ServiceResult<()> {
         self.backups.store_backup(backup_id, payload).await
     }
 
-    pub async fn delete_backup(&self, backup_id: &str) -> ApplicationResult<bool> {
+    pub async fn delete_backup(&self, backup_id: &str) -> ServiceResult<bool> {
         self.backups.delete_backup(backup_id).await
     }
 }
 
-impl AgentPairingApplicationService {
+impl AgentPairingService {
     pub fn new(pairing: Arc<dyn AgentPairingPort>, sidecars: Arc<dyn SidecarPort>) -> Self {
         Self { pairing, sidecars }
     }
@@ -1707,36 +1707,36 @@ impl AgentPairingApplicationService {
     pub async fn pairing_record(
         &self,
         pairing_request_id: &str,
-    ) -> ApplicationResult<Option<AgentPairingState>> {
+    ) -> ServiceResult<Option<AgentPairingState>> {
         self.pairing.pairing_record(pairing_request_id).await
     }
 
-    pub async fn agent(&self, agent_id: &str) -> ApplicationResult<Option<AgentPairingState>> {
+    pub async fn agent(&self, agent_id: &str) -> ServiceResult<Option<AgentPairingState>> {
         self.pairing.agent(agent_id).await
     }
 
     pub async fn agents_for_controller(
         &self,
         controller_id: &str,
-    ) -> ApplicationResult<Vec<AgentPairingState>> {
+    ) -> ServiceResult<Vec<AgentPairingState>> {
         self.pairing.agents_for_controller(controller_id).await
     }
 
-    pub async fn save_agent(&self, agent: AgentPairingState) -> ApplicationResult<()> {
+    pub async fn save_agent(&self, agent: AgentPairingState) -> ServiceResult<()> {
         self.pairing.save_agent(agent).await
     }
 
     pub async fn store_runtime_approval(
         &self,
         command: &StoreAgentRuntimeApprovalCommand,
-    ) -> ApplicationResult<Option<AgentPairingState>> {
+    ) -> ServiceResult<Option<AgentPairingState>> {
         self.pairing.store_runtime_approval(command).await
     }
 
     pub async fn activate_runtime(
         &self,
         command: &ActivateAgentRuntimeCommand,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         self.pairing.activate_runtime_if_current(command).await
     }
 
@@ -1744,7 +1744,7 @@ impl AgentPairingApplicationService {
         &self,
         agent_id: &str,
         approval_request_id: &str,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         self.pairing
             .clear_approval_notification_if_current(agent_id, approval_request_id)
             .await
@@ -1753,17 +1753,17 @@ impl AgentPairingApplicationService {
     pub async fn ensure_sidecar(
         &self,
         sidecar: AgentSidecarState,
-    ) -> ApplicationResult<AgentSidecarState> {
+    ) -> ServiceResult<AgentSidecarState> {
         self.sidecars.ensure_sidecar(sidecar).await
     }
-    pub async fn sidecar(&self, sidecar_id: &str) -> ApplicationResult<Option<AgentSidecarState>> {
+    pub async fn sidecar(&self, sidecar_id: &str) -> ServiceResult<Option<AgentSidecarState>> {
         self.sidecars.sidecar(sidecar_id).await
     }
     pub async fn sidecar_for_realm_controller(
         &self,
         realm_id: &str,
         controller_id: &str,
-    ) -> ApplicationResult<Option<AgentSidecarState>> {
+    ) -> ServiceResult<Option<AgentSidecarState>> {
         self.sidecars
             .sidecar_for_realm_controller(realm_id, controller_id)
             .await
@@ -1772,7 +1772,7 @@ impl AgentPairingApplicationService {
         &self,
         controller_id: &str,
         realm_id: Option<&str>,
-    ) -> ApplicationResult<Vec<AgentSidecarState>> {
+    ) -> ServiceResult<Vec<AgentSidecarState>> {
         self.sidecars
             .sidecars_for_controller(controller_id, realm_id)
             .await
@@ -1780,19 +1780,19 @@ impl AgentPairingApplicationService {
     pub async fn ensure_sidecar_context(
         &self,
         context: AgentSidecarContextState,
-    ) -> ApplicationResult<AgentSidecarContextState> {
+    ) -> ServiceResult<AgentSidecarContextState> {
         self.sidecars.ensure_context(context).await
     }
     pub async fn sidecar_context(
         &self,
         sidecar_id: &str,
         digest: &str,
-    ) -> ApplicationResult<Option<AgentSidecarContextState>> {
+    ) -> ServiceResult<Option<AgentSidecarContextState>> {
         self.sidecars.context(sidecar_id, digest).await
     }
 }
 
-impl IdentityApplicationService {
+impl IdentityService {
     pub fn new(
         accounts: Arc<dyn AccountLookupPort>,
         devices: Arc<dyn DeviceDirectoryPort>,
@@ -1900,41 +1900,41 @@ impl IdentityApplicationService {
     pub async fn find_account_by_actor(
         &self,
         query: FindAccountByActorQuery,
-    ) -> ApplicationResult<Option<AccountIdentity>> {
+    ) -> ServiceResult<Option<AccountIdentity>> {
         self.accounts.find_account_by_actor(&query.actor_id).await
     }
 
-    pub async fn register_account(&self, command: RegisterAccountCommand) -> ApplicationResult<()> {
+    pub async fn register_account(&self, command: RegisterAccountCommand) -> ServiceResult<()> {
         self.accounts.register_account(command).await
     }
 
-    pub async fn account(&self, actor_id: &str) -> ApplicationResult<Option<AccountProfileState>> {
+    pub async fn account(&self, actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
         self.accounts.account(actor_id).await
     }
 
-    pub async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>> {
+    pub async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>> {
         self.accounts.accounts().await
     }
 
-    pub async fn save_account(&self, account: AccountProfileState) -> ApplicationResult<()> {
+    pub async fn save_account(&self, account: AccountProfileState) -> ServiceResult<()> {
         self.accounts.save_account(account).await
     }
 
-    pub async fn delete_account(&self, actor_id: &str) -> ApplicationResult<()> {
+    pub async fn delete_account(&self, actor_id: &str) -> ServiceResult<()> {
         self.accounts.delete_account(actor_id).await
     }
 
     pub async fn account_localparts(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<AccountLocalpartState>> {
+    ) -> ServiceResult<Vec<AccountLocalpartState>> {
         self.accounts.account_localparts(actor_id).await
     }
 
     pub async fn localpart_owner(
         &self,
         localpart: &str,
-    ) -> ApplicationResult<Option<AccountLocalpartState>> {
+    ) -> ServiceResult<Option<AccountLocalpartState>> {
         self.accounts.localpart_owner(localpart).await
     }
 
@@ -1943,7 +1943,7 @@ impl IdentityApplicationService {
         actor_id: &str,
         localpart: &str,
         primary: bool,
-    ) -> ApplicationResult<AccountLocalpartState> {
+    ) -> ServiceResult<AccountLocalpartState> {
         self.accounts
             .add_localpart(actor_id, localpart, primary)
             .await
@@ -1953,17 +1953,17 @@ impl IdentityApplicationService {
         &self,
         actor_id: &str,
         localpart: &str,
-    ) -> ApplicationResult<AccountLocalpartState> {
+    ) -> ServiceResult<AccountLocalpartState> {
         self.accounts
             .set_primary_localpart(actor_id, localpart)
             .await
     }
 
-    pub async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> ApplicationResult<()> {
+    pub async fn remove_localpart(&self, actor_id: &str, localpart: &str) -> ServiceResult<()> {
         self.accounts.remove_localpart(actor_id, localpart).await
     }
 
-    pub async fn clear_localparts(&self, actor_id: &str) -> ApplicationResult<()> {
+    pub async fn clear_localparts(&self, actor_id: &str) -> ServiceResult<()> {
         self.accounts.clear_localparts(actor_id).await
     }
 
@@ -1971,7 +1971,7 @@ impl IdentityApplicationService {
         &self,
         localpart: &str,
         released_at: DateTime<Utc>,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.accounts
             .record_handle_release(localpart, released_at)
             .await
@@ -1981,7 +1981,7 @@ impl IdentityApplicationService {
         &self,
         actor_id: &str,
         lifecycle: AccountLifecycleState,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.accounts
             .save_account_lifecycle(actor_id, lifecycle.clone())
             .await?;
@@ -1995,13 +1995,13 @@ impl IdentityApplicationService {
         Ok(())
     }
 
-    pub async fn delete_account_lifecycle(&self, actor_id: &str) -> ApplicationResult<()> {
+    pub async fn delete_account_lifecycle(&self, actor_id: &str) -> ServiceResult<()> {
         self.accounts.delete_account_lifecycle(actor_id).await?;
         self.account_lifecycles.lock().remove(actor_id);
         Ok(())
     }
 
-    pub async fn hydrate_account_lifecycles(&self) -> ApplicationResult<()> {
+    pub async fn hydrate_account_lifecycles(&self) -> ServiceResult<()> {
         let lifecycles = self.accounts.account_lifecycles().await?;
         *self.account_lifecycles.lock() = lifecycles
             .into_iter()
@@ -2025,42 +2025,42 @@ impl IdentityApplicationService {
     pub async fn list_active_device_actors(
         &self,
         _query: ListActiveDeviceActorsQuery,
-    ) -> ApplicationResult<Vec<String>> {
+    ) -> ServiceResult<Vec<String>> {
         self.devices.list_active_device_actors().await
     }
 
-    pub async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>> {
+    pub async fn devices(&self) -> ServiceResult<Vec<DeviceIdentity>> {
         self.devices.devices().await
     }
 
     pub async fn find_device(
         &self,
         query: FindDeviceQuery,
-    ) -> ApplicationResult<Option<DeviceIdentity>> {
+    ) -> ServiceResult<Option<DeviceIdentity>> {
         self.devices
             .find_device(&query.actor_id, &query.device_id)
             .await
     }
 
-    pub async fn save_device(&self, command: SaveDeviceCommand) -> ApplicationResult<()> {
+    pub async fn save_device(&self, command: SaveDeviceCommand) -> ServiceResult<()> {
         self.devices.save_device(command).await
     }
 
-    pub async fn save_device_if_absent(&self, device: DeviceIdentity) -> ApplicationResult<bool> {
+    pub async fn save_device_if_absent(&self, device: DeviceIdentity) -> ServiceResult<bool> {
         self.devices.save_device_if_absent(device).await
     }
 
     pub async fn devices_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<DeviceIdentity>> {
+    ) -> ServiceResult<Vec<DeviceIdentity>> {
         self.devices.devices_for_actor(actor_id).await
     }
 
     pub async fn find_agent_controller(
         &self,
         query: FindAgentControllerQuery,
-    ) -> ApplicationResult<Option<AgentController>> {
+    ) -> ServiceResult<Option<AgentController>> {
         self.agents.find_agent_controller(&query.agent_id).await
     }
 }
@@ -2122,31 +2122,31 @@ pub enum ServiceRegistrationCommitResult {
 
 #[async_trait]
 pub trait DidDocumentPort: Send + Sync {
-    async fn document(&self, did: &str) -> ApplicationResult<Option<DidDocumentState>>;
+    async fn document(&self, did: &str) -> ServiceResult<Option<DidDocumentState>>;
     async fn embedded_document(
         &self,
         local_id: &str,
-    ) -> ApplicationResult<Option<DidDocumentState>>;
-    async fn log_events(&self, did: &str) -> ApplicationResult<Vec<DidLogEvent>>;
-    async fn store_document(&self, document: DidDocumentState) -> ApplicationResult<()>;
-    async fn append_log_event(&self, event: DidLogEvent) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<DidDocumentState>>;
+    async fn log_events(&self, did: &str) -> ServiceResult<Vec<DidLogEvent>>;
+    async fn store_document(&self, document: DidDocumentState) -> ServiceResult<()>;
+    async fn append_log_event(&self, event: DidLogEvent) -> ServiceResult<()>;
     async fn service_registration(
         &self,
         key: &ServiceRegistrationKey,
-    ) -> ApplicationResult<Option<ServiceRegistrationOutcome>>;
+    ) -> ServiceResult<Option<ServiceRegistrationOutcome>>;
     async fn commit_service_registration(
         &self,
         key: ServiceRegistrationKey,
         outcome: ServiceRegistrationOutcome,
         document: DidDocumentState,
         event: DidLogEvent,
-    ) -> ApplicationResult<ServiceRegistrationCommitResult>;
+    ) -> ServiceResult<ServiceRegistrationCommitResult>;
     async fn commit_log_operation(
         &self,
         expected_current_head: Option<String>,
         document: DidDocumentState,
         event: DidLogEvent,
-    ) -> ApplicationResult<DidLogCommitResult>;
+    ) -> ServiceResult<DidLogCommitResult>;
 }
 
 #[async_trait]
@@ -2159,12 +2159,12 @@ pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct DidApplicationService {
+pub struct DidService {
     documents: Arc<dyn DidDocumentPort>,
     resolver: Arc<dyn DidResolverPort>,
 }
 
-impl DidApplicationService {
+impl DidService {
     pub fn new(documents: Arc<dyn DidDocumentPort>, resolver: Arc<dyn DidResolverPort>) -> Self {
         Self {
             documents,
@@ -2199,33 +2199,33 @@ impl DidApplicationService {
         self.resolver.cache_document_state(document)
     }
 
-    pub async fn document(&self, did: &str) -> ApplicationResult<Option<DidDocumentState>> {
+    pub async fn document(&self, did: &str) -> ServiceResult<Option<DidDocumentState>> {
         self.documents.document(did).await
     }
 
     pub async fn embedded_document(
         &self,
         local_id: &str,
-    ) -> ApplicationResult<Option<DidDocumentState>> {
+    ) -> ServiceResult<Option<DidDocumentState>> {
         self.documents.embedded_document(local_id).await
     }
 
-    pub async fn log_events(&self, did: &str) -> ApplicationResult<Vec<DidLogEvent>> {
+    pub async fn log_events(&self, did: &str) -> ServiceResult<Vec<DidLogEvent>> {
         self.documents.log_events(did).await
     }
 
-    pub async fn store_document(&self, document: DidDocumentState) -> ApplicationResult<()> {
+    pub async fn store_document(&self, document: DidDocumentState) -> ServiceResult<()> {
         self.documents.store_document(document).await
     }
 
-    pub async fn append_log_event(&self, event: DidLogEvent) -> ApplicationResult<()> {
+    pub async fn append_log_event(&self, event: DidLogEvent) -> ServiceResult<()> {
         self.documents.append_log_event(event).await
     }
 
     pub async fn service_registration(
         &self,
         key: &ServiceRegistrationKey,
-    ) -> ApplicationResult<Option<ServiceRegistrationOutcome>> {
+    ) -> ServiceResult<Option<ServiceRegistrationOutcome>> {
         self.documents.service_registration(key).await
     }
 
@@ -2235,7 +2235,7 @@ impl DidApplicationService {
         outcome: ServiceRegistrationOutcome,
         document: DidDocumentState,
         event: DidLogEvent,
-    ) -> ApplicationResult<ServiceRegistrationCommitResult> {
+    ) -> ServiceResult<ServiceRegistrationCommitResult> {
         self.documents
             .commit_service_registration(key, outcome, document, event)
             .await
@@ -2246,7 +2246,7 @@ impl DidApplicationService {
         expected_current_head: Option<String>,
         document: DidDocumentState,
         event: DidLogEvent,
-    ) -> ApplicationResult<DidLogCommitResult> {
+    ) -> ServiceResult<DidLogCommitResult> {
         self.documents
             .commit_log_operation(expected_current_head, document, event)
             .await
@@ -2307,37 +2307,37 @@ mod tests {
         async fn ensure_sidecar(
             &self,
             _sidecar: AgentSidecarState,
-        ) -> ApplicationResult<AgentSidecarState> {
+        ) -> ServiceResult<AgentSidecarState> {
             panic!("unused test port")
         }
-        async fn sidecar(&self, _sidecar_id: &str) -> ApplicationResult<Option<AgentSidecarState>> {
+        async fn sidecar(&self, _sidecar_id: &str) -> ServiceResult<Option<AgentSidecarState>> {
             Ok(None)
         }
         async fn sidecar_for_realm_controller(
             &self,
             _realm_id: &str,
             _controller_id: &str,
-        ) -> ApplicationResult<Option<AgentSidecarState>> {
+        ) -> ServiceResult<Option<AgentSidecarState>> {
             Ok(None)
         }
         async fn sidecars_for_controller(
             &self,
             _controller_id: &str,
             _realm_id: Option<&str>,
-        ) -> ApplicationResult<Vec<AgentSidecarState>> {
+        ) -> ServiceResult<Vec<AgentSidecarState>> {
             Ok(Vec::new())
         }
         async fn ensure_context(
             &self,
             _context: AgentSidecarContextState,
-        ) -> ApplicationResult<AgentSidecarContextState> {
+        ) -> ServiceResult<AgentSidecarContextState> {
             panic!("unused test port")
         }
         async fn context(
             &self,
             _sidecar_id: &str,
             _digest: &str,
-        ) -> ApplicationResult<Option<AgentSidecarContextState>> {
+        ) -> ServiceResult<Option<AgentSidecarContextState>> {
             Ok(None)
         }
     }
@@ -2347,7 +2347,7 @@ mod tests {
         async fn find_account_by_actor(
             &self,
             actor_id: &str,
-        ) -> ApplicationResult<Option<AccountIdentity>> {
+        ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(
                 (actor_id == "did:web:alice.example").then(|| AccountIdentity {
                     account_id: "ak:account:alice".to_owned(),
@@ -2358,37 +2358,37 @@ mod tests {
         async fn register_account(
             &self,
             _command: RegisterAccountCommand,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn account(&self, _actor_id: &str) -> ApplicationResult<Option<AccountProfileState>> {
+        async fn account(&self, _actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
 
-        async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>> {
+        async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>> {
             Ok(Vec::new())
         }
 
-        async fn save_account(&self, _account: AccountProfileState) -> ApplicationResult<()> {
+        async fn save_account(&self, _account: AccountProfileState) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn delete_account(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn delete_account(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn account_localparts(
             &self,
             _actor_id: &str,
-        ) -> ApplicationResult<Vec<AccountLocalpartState>> {
+        ) -> ServiceResult<Vec<AccountLocalpartState>> {
             Ok(Vec::new())
         }
 
         async fn localpart_owner(
             &self,
             _localpart: &str,
-        ) -> ApplicationResult<Option<AccountLocalpartState>> {
+        ) -> ServiceResult<Option<AccountLocalpartState>> {
             Ok(None)
         }
 
@@ -2397,7 +2397,7 @@ mod tests {
             _actor_id: &str,
             _localpart: &str,
             _primary: bool,
-        ) -> ApplicationResult<AccountLocalpartState> {
+        ) -> ServiceResult<AccountLocalpartState> {
             unreachable!()
         }
 
@@ -2405,7 +2405,7 @@ mod tests {
             &self,
             _actor_id: &str,
             _localpart: &str,
-        ) -> ApplicationResult<AccountLocalpartState> {
+        ) -> ServiceResult<AccountLocalpartState> {
             unreachable!()
         }
 
@@ -2413,11 +2413,11 @@ mod tests {
             &self,
             _actor_id: &str,
             _localpart: &str,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn clear_localparts(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn clear_localparts(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -2425,7 +2425,7 @@ mod tests {
             &self,
             _localpart: &str,
             _released_at: DateTime<Utc>,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -2433,22 +2433,22 @@ mod tests {
             &self,
             _actor_id: &str,
             _lifecycle: AccountLifecycleState,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
     }
 
     #[async_trait]
     impl DeviceDirectoryPort for NoDevices {
-        async fn list_active_device_actors(&self) -> ApplicationResult<Vec<String>> {
+        async fn list_active_device_actors(&self) -> ServiceResult<Vec<String>> {
             Ok(Vec::new())
         }
 
-        async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>> {
+        async fn devices(&self) -> ServiceResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
 
@@ -2456,22 +2456,22 @@ mod tests {
             &self,
             _actor_id: &str,
             _device_id: &str,
-        ) -> ApplicationResult<Option<DeviceIdentity>> {
+        ) -> ServiceResult<Option<DeviceIdentity>> {
             Ok(None)
         }
 
-        async fn save_device(&self, _command: SaveDeviceCommand) -> ApplicationResult<()> {
+        async fn save_device(&self, _command: SaveDeviceCommand) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn save_device_if_absent(&self, _device: DeviceIdentity) -> ApplicationResult<bool> {
+        async fn save_device_if_absent(&self, _device: DeviceIdentity) -> ServiceResult<bool> {
             Ok(true)
         }
 
         async fn devices_for_actor(
             &self,
             _actor_id: &str,
-        ) -> ApplicationResult<Vec<DeviceIdentity>> {
+        ) -> ServiceResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
     }
@@ -2481,14 +2481,14 @@ mod tests {
         async fn find_agent_controller(
             &self,
             _agent_id: &str,
-        ) -> ApplicationResult<Option<AgentController>> {
+        ) -> ServiceResult<Option<AgentController>> {
             Ok(None)
         }
     }
 
     #[async_trait]
     impl DidDocumentPort for StaticDidDocuments {
-        async fn document(&self, did: &str) -> ApplicationResult<Option<DidDocumentState>> {
+        async fn document(&self, did: &str) -> ServiceResult<Option<DidDocumentState>> {
             let now = Utc::now();
             Ok((did == "did:web:alice.example").then(|| DidDocumentState {
                 did: did.to_owned(),
@@ -2505,26 +2505,26 @@ mod tests {
         async fn embedded_document(
             &self,
             _local_id: &str,
-        ) -> ApplicationResult<Option<DidDocumentState>> {
+        ) -> ServiceResult<Option<DidDocumentState>> {
             Ok(None)
         }
 
-        async fn log_events(&self, _did: &str) -> ApplicationResult<Vec<DidLogEvent>> {
+        async fn log_events(&self, _did: &str) -> ServiceResult<Vec<DidLogEvent>> {
             Ok(Vec::new())
         }
 
-        async fn store_document(&self, _document: DidDocumentState) -> ApplicationResult<()> {
+        async fn store_document(&self, _document: DidDocumentState) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn append_log_event(&self, _event: DidLogEvent) -> ApplicationResult<()> {
+        async fn append_log_event(&self, _event: DidLogEvent) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn service_registration(
             &self,
             _key: &ServiceRegistrationKey,
-        ) -> ApplicationResult<Option<ServiceRegistrationOutcome>> {
+        ) -> ServiceResult<Option<ServiceRegistrationOutcome>> {
             Ok(None)
         }
 
@@ -2534,7 +2534,7 @@ mod tests {
             _outcome: ServiceRegistrationOutcome,
             _document: DidDocumentState,
             _event: DidLogEvent,
-        ) -> ApplicationResult<ServiceRegistrationCommitResult> {
+        ) -> ServiceResult<ServiceRegistrationCommitResult> {
             Ok(ServiceRegistrationCommitResult::Conflict)
         }
 
@@ -2543,7 +2543,7 @@ mod tests {
             _expected_current_head: Option<String>,
             _document: DidDocumentState,
             _event: DidLogEvent,
-        ) -> ApplicationResult<DidLogCommitResult> {
+        ) -> ServiceResult<DidLogCommitResult> {
             Ok(DidLogCommitResult::Conflict)
         }
     }
@@ -2553,36 +2553,36 @@ mod tests {
         async fn pairing_record(
             &self,
             _pairing_request_id: &str,
-        ) -> ApplicationResult<Option<AgentPairingState>> {
+        ) -> ServiceResult<Option<AgentPairingState>> {
             Ok(None)
         }
 
-        async fn agent(&self, _agent_id: &str) -> ApplicationResult<Option<AgentPairingState>> {
+        async fn agent(&self, _agent_id: &str) -> ServiceResult<Option<AgentPairingState>> {
             Ok(None)
         }
 
         async fn agents_for_controller(
             &self,
             _controller_id: &str,
-        ) -> ApplicationResult<Vec<AgentPairingState>> {
+        ) -> ServiceResult<Vec<AgentPairingState>> {
             Ok(Vec::new())
         }
 
-        async fn save_agent(&self, _agent: AgentPairingState) -> ApplicationResult<()> {
+        async fn save_agent(&self, _agent: AgentPairingState) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn store_runtime_approval(
             &self,
             _command: &StoreAgentRuntimeApprovalCommand,
-        ) -> ApplicationResult<Option<AgentPairingState>> {
+        ) -> ServiceResult<Option<AgentPairingState>> {
             Ok(None)
         }
 
         async fn activate_runtime_if_current(
             &self,
             command: &ActivateAgentRuntimeCommand,
-        ) -> ApplicationResult<bool> {
+        ) -> ServiceResult<bool> {
             Ok(command.pairing_request_id == "pairing-1")
         }
 
@@ -2590,7 +2590,7 @@ mod tests {
             &self,
             _agent_id: &str,
             _approval_request_id: &str,
-        ) -> ApplicationResult<bool> {
+        ) -> ServiceResult<bool> {
             Ok(true)
         }
     }
@@ -2600,7 +2600,7 @@ mod tests {
         async fn active_policy(
             &self,
             principal_id: &str,
-        ) -> ApplicationResult<Option<RecoveryPolicyState>> {
+        ) -> ServiceResult<Option<RecoveryPolicyState>> {
             Ok(Some(RecoveryPolicyState {
                 policy_id: "ak:policy:current".to_owned(),
                 principal_id: principal_id.to_owned(),
@@ -2619,18 +2619,18 @@ mod tests {
         async fn policy_history(
             &self,
             _principal_id: &str,
-        ) -> ApplicationResult<Vec<RecoveryPolicyState>> {
+        ) -> ServiceResult<Vec<RecoveryPolicyState>> {
             Ok(Vec::new())
         }
 
-        async fn insert_policy(&self, _policy: RecoveryPolicyState) -> ApplicationResult<()> {
+        async fn insert_policy(&self, _policy: RecoveryPolicyState) -> ServiceResult<()> {
             panic!("a non-monotonic policy must not reach persistence")
         }
     }
 
     #[tokio::test]
     async fn account_lookup_returns_application_owned_result() {
-        let service = IdentityApplicationService::new(
+        let service = IdentityService::new(
             Arc::new(StaticAccount),
             Arc::new(NoDevices),
             Arc::new(NoAgents),
@@ -2648,7 +2648,7 @@ mod tests {
     #[tokio::test]
     async fn did_lookup_is_independent_from_http_and_app_state() {
         let service =
-            DidApplicationService::new(Arc::new(StaticDidDocuments), Arc::new(NoDidResolver));
+            DidService::new(Arc::new(StaticDidDocuments), Arc::new(NoDidResolver));
         let document = service
             .document("did:web:alice.example")
             .await
@@ -2663,7 +2663,7 @@ mod tests {
     #[tokio::test]
     async fn pairing_activation_is_one_atomic_port_call() {
         let service =
-            AgentPairingApplicationService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
+            AgentPairingService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
         let command = ActivateAgentRuntimeCommand {
             agent_id: "did:web:agent.example".to_owned(),
             approval_request_id: "approval-1".to_owned(),
@@ -2685,7 +2685,7 @@ mod tests {
 
     #[tokio::test]
     async fn recovery_policy_monotonicity_is_enforced_in_application() {
-        let service = RecoveryPolicyApplicationService::new(Arc::new(CurrentRecoveryPolicy));
+        let service = RecoveryPolicyService::new(Arc::new(CurrentRecoveryPolicy));
         let result = service
             .publish_policy(PublishRecoveryPolicyCommand {
                 policy: RecoveryPolicyState {
@@ -2713,3 +2713,4 @@ mod tests {
         ));
     }
 }
+

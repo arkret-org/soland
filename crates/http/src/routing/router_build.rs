@@ -117,7 +117,7 @@ pub fn router_with_rate_limiter_and_request_size_config(
         .push(api_v1_router(conformance_harness_enabled));
     let doc = cached_arkret_openapi_doc(
         &router,
-        serde_json::json!(soland_application::protocol_artifacts::registry_summary()),
+        serde_json::json!(soland_services::protocol_artifacts::registry_summary()),
     );
     router
         .unshift(
@@ -404,3 +404,4 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
     .max_age(3600)
     .into_handler()
 }
+

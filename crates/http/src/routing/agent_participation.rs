@@ -42,7 +42,7 @@ pub(crate) fn participation_from_value(row: &Value) -> AgentParticipation {
 
 fn projected_strand_circle_id(state: &AppState, strand_id: &str) -> Option<Option<String>> {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         {
             projection.strands.get(strand_id).map(|strand| {
                 strand
@@ -100,7 +100,7 @@ pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     scope_keys: &[String],
 ) -> AgentParticipation {
     let Ok(rows) = state
-        .agent_participation_application()
+        .agent_participations()
         .ceilings(scope_keys)
         .await
     else {
@@ -138,7 +138,7 @@ pub(crate) async fn resolve_agent_participation_for_scope_keys(
     scope_keys: &[String],
 ) -> Option<ResolvedAgentParticipation> {
     let selections = state
-        .agent_participation_application()
+        .agent_participations()
         .selections(agent_id)
         .await
         .unwrap_or_default();

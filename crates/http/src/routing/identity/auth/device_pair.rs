@@ -37,7 +37,7 @@ async fn authorize_account_device_pair(
         .with_wire_code("cannot_pair_current_device"));
     }
     if let Some(existing) = state
-        .identity_application()
+        .identities()
         .devices_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -67,11 +67,11 @@ async fn authorize_account_device_pair(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let device = soland_application::identity::SaveDeviceCommand {
+    let device = soland_services::identity::SaveDeviceCommand {
         actor_id: session.actor.clone(),
         device_id: device_id.clone(),
         display_name: display_name.clone(),
-        device: soland_application::identity::DeviceIdentity {
+        device: soland_services::identity::DeviceIdentity {
             actor_id: session.actor.clone(),
             device_id: device_id.clone(),
             display_name: display_name.clone(),
@@ -99,7 +99,7 @@ async fn authorize_account_device_pair(
         },
     };
     state
-        .identity_application()
+        .identities()
         .save_device(device)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -129,7 +129,7 @@ async fn authorize_account_device_pair(
 }
 
 pub(crate) fn initial_session_device_verification_state<'a>(
-    existing_devices: &'a [soland_application::identity::DeviceIdentity],
+    existing_devices: &'a [soland_services::identity::DeviceIdentity],
     device_id: &str,
 ) -> &'a str {
     if existing_devices.is_empty()
@@ -148,8 +148,8 @@ async fn ensure_authorizing_device_verified(
     session: &SessionRecord,
 ) -> Result<(), AppError> {
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: session.actor.clone(),
             device_id: session.device_id.clone(),
         })
@@ -224,3 +224,4 @@ fn is_base64url_non_empty(value: &str) -> bool {
             .bytes()
             .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
+

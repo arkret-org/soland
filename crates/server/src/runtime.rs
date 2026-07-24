@@ -5,11 +5,11 @@ use std::time::Duration;
 use futures_util::future::poll_fn;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use soland_application::events::ProjectedOperationPersistencePort;
-use soland_application::governance::RuntimeSettingsPort;
-use soland_application::jobs::RuntimeHealthPort;
-use soland_application::persistence::PersistenceHandle;
-use soland_application::projection::EventSealCommitPort;
+use soland_services::events::ProjectedOperationPersistencePort;
+use soland_services::governance::RuntimeSettingsPort;
+use soland_services::jobs::RuntimeHealthPort;
+use soland_services::persistence::PersistenceHandle;
+use soland_services::projection::EventSealCommitPort;
 use soland_http::config::AppConfig;
 use soland_http::state::{
     AppState, AppStateRuntime, EventBroadcast, EventNotification, EventNotificationRelay,
@@ -30,7 +30,7 @@ pub fn build_app_state(
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {
     let cell_registry =
-        soland_application::projection::ProjectionApplicationService::sdk_cell_registry();
+        soland_services::projection::ProjectionService::sdk_cell_registry();
     let stores =
         soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
     let service_id = service_identity
@@ -38,7 +38,7 @@ pub fn build_app_state(
         .ok_or_else(|| anyhow::anyhow!("runtime requires a serving service identity"))?
         .service_id
         .to_string();
-    let projection_application = soland_application::projection::ProjectionApplicationService::new(
+    let projections = soland_services::projection::ProjectionService::new(
         stores.move_store,
         stores.seal_store,
         stores.cell_store,
@@ -46,8 +46,8 @@ pub fn build_app_state(
         Arc::new(RuntimeEventSealCommitter(stores.event_seal_committer)),
         &service_id,
     );
-    let realm_directory_application =
-        soland_http::state::build_realm_directory_application(&config);
+    let realm_directory =
+        soland_http::state::build_realm_directory(&config);
     let object_storage = build_object_storage(&config.object_storage)?;
     let database_url = config
         .database_url
@@ -61,8 +61,8 @@ pub fn build_app_state(
         config,
         AppStateRuntime {
             persistence,
-            projection_application,
-            realm_directory_application,
+            projections,
+            realm_directory,
             projected_operation_persistence: Arc::new(RuntimeProjectedOperationPersistence(
                 pool.clone(),
             )),
@@ -100,7 +100,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
 
 #[async_trait::async_trait]
 impl RuntimeSettingsPort for RuntimeSettingsPersistence {
-    async fn load_overrides(&self) -> soland_application::ApplicationResult<Vec<(String, Value)>> {
+    async fn load_overrides(&self) -> soland_services::ServiceResult<Vec<(String, Value)>> {
         let Some(pool) = self.pool.as_ref() else {
             return Ok(Vec::new());
         };
@@ -114,7 +114,7 @@ impl RuntimeSettingsPort for RuntimeSettingsPersistence {
         key: &str,
         value: &Value,
         updated_by: &str,
-    ) -> soland_application::ApplicationResult<()> {
+    ) -> soland_services::ServiceResult<()> {
         let Some(pool) = self.pool.as_ref() else {
             return Ok(());
         };
@@ -298,3 +298,5 @@ impl PgEventNotificationWorker {
         }
     }
 }
+
+

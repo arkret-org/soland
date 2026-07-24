@@ -77,8 +77,8 @@ pub(super) async fn resolve_authorized_device_key_with_wire_code(
         .with_wire_code(wire_code)
     };
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
         })
@@ -214,8 +214,8 @@ pub(super) async fn resolve_session_device_key_for_genesis_policy(
         .with_wire_code("recovery_policy_device_not_authorized")
     };
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: principal_id.to_owned(),
             device_id: session.device_id.clone(),
         })
@@ -290,3 +290,4 @@ pub(super) async fn verify_recovery_auth_signature(
             recovery_signature_error("recovery signature verification failed")
         })
 }
+

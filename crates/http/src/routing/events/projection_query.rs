@@ -52,8 +52,8 @@ use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::identity::SessionIdentityState as SessionRecord;
-use soland_application::projection::{
+use soland_services::identity::SessionIdentityState as SessionRecord;
+use soland_services::projection::{
     MessageReadModel as MessageState, MorphReadModel as MorphProjection,
     ObjectLifecycle as ObjectLifecycleState, ProjectionSnapshot as ProjectionState,
     RelationReadModel as SolandRelationState,
@@ -111,7 +111,7 @@ async fn realm_history_sharing_policy(
     realm_id: &str,
 ) -> Option<HistorySharingPolicyPayloadValue> {
     let policy_value = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -273,7 +273,7 @@ fn member_state_at_history_basis(
     }
     let cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor}")).ok()?;
     let state_at_basis = state
-        .projection_application()
+        .projections()
         .effective_state_at(&seals, &realm)
         .ok()?;
     match state_at_basis.get(&cell) {
@@ -687,7 +687,7 @@ async fn document_relation_target_row_visible(
     };
     let history_visibility = realm_history_visibility(state, target_realm_id).await;
     let history_policy = realm_history_sharing_policy(state, target_realm_id).await;
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     projection_row_visible_to_session(
         state,
         &projection,
@@ -785,7 +785,7 @@ async fn document_projection_relations(
     session: &SessionRecord,
 ) -> Result<Vec<BTreeMap<String, Value>>, AppError> {
     let snapshots = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .relations
             .values()
@@ -980,7 +980,7 @@ async fn list_space_container_projections(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     let spaces: Vec<ProjectionSpaceRow> = proj
         .space_containers
         .values()
@@ -1061,7 +1061,7 @@ async fn list_strand_projections(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     // COT-06-004 — the Realm's default-Strand pointer drives each row's
     // derived `is_default` flag (no per-Strand stored column).
     let default_strand_id = proj
@@ -1216,7 +1216,7 @@ async fn get_strand_projection(
     StrandId::new(strand_id.clone())
         .map_err(|_| AppError::invalid_param("invalid strand_id format"))?;
     let realm_id = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let Some(strand) = proj.strands.get(&strand_id) else {
             return Err(AppError::not_found("strand not found"));
         };
@@ -1231,7 +1231,7 @@ async fn get_strand_projection(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     let Some(strand) = proj.strands.get(&strand_id).cloned() else {
         return Err(AppError::not_found("strand not found"));
     };
@@ -1295,7 +1295,7 @@ async fn list_relation_projections(
         soland_http::util::query_param(req, "state").unwrap_or_else(|| "active".to_owned());
 
     let candidates: Vec<SolandRelationState> = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.relations
             .values()
             .filter(|relation| match state_filter.as_str() {
@@ -1369,7 +1369,7 @@ async fn get_document_projection(
     MorphId::new(morph_id.clone())
         .map_err(|_| AppError::invalid_param("invalid morph_id format"))?;
     {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let Some(morph) = proj.morphs.get(&morph_id) else {
             return Err(AppError::not_found("document Morph not found"));
         };
@@ -1387,7 +1387,7 @@ async fn get_document_projection(
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
     let (document, versions, comments) = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let Some(morph) = proj.morphs.get(&morph_id).cloned() else {
             return Err(AppError::not_found("document Morph not found"));
         };
@@ -1461,7 +1461,7 @@ async fn list_morph_projections(
     }
     let history_visibility = realm_history_visibility(state, &realm_id).await;
     let history_policy = realm_history_sharing_policy(state, &realm_id).await;
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     let morphs: Vec<ProjectionMorphRow> = proj
         .morphs
         .values()
@@ -1505,3 +1505,4 @@ async fn list_morph_projections(
         has_more: false,
     })
 }
+

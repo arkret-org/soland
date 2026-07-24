@@ -92,7 +92,7 @@ fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
 
 async fn query_audit_trail(
     state: &AppState,
-    session: &soland_application::identity::SessionIdentityState,
+    session: &soland_services::identity::SessionIdentityState,
     action: &str,
     filters: &BTreeMap<String, String>,
     count: usize,
@@ -121,7 +121,7 @@ async fn query_audit_trail(
 /// canonical grammar — such rows cannot be represented in the typed contract.
 pub(super) fn admin_actor_row(
     state: &AppState,
-    account: &soland_application::identity::AccountProfileState,
+    account: &soland_services::identity::AccountProfileState,
     device_counts: &BTreeMap<String, u64>,
     realm_counts: &BTreeMap<String, u64>,
 ) -> Option<AdminActor> {
@@ -164,8 +164,8 @@ pub(super) async fn actor_count_maps(
 ) -> (BTreeMap<String, u64>, BTreeMap<String, u64>) {
     let mut device_counts: BTreeMap<String, u64> = BTreeMap::new();
     for actor in state
-        .identity_application()
-        .list_active_device_actors(soland_application::identity::ListActiveDeviceActorsQuery)
+        .identities()
+        .list_active_device_actors(soland_services::identity::ListActiveDeviceActorsQuery)
         .await
         .unwrap_or_default()
     {
@@ -173,7 +173,7 @@ pub(super) async fn actor_count_maps(
     }
     let mut realm_counts: BTreeMap<String, u64> = BTreeMap::new();
     let realm_snapshot: Vec<_> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -221,7 +221,7 @@ pub(super) async fn admin_list_actors(
 
     let (device_counts, realm_counts) = actor_count_maps(state).await;
     let mut rows: Vec<AdminActor> = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .map_err(|error| {
@@ -361,7 +361,7 @@ pub(super) async fn admin_query_audit(
     };
 
     let mut entries: Vec<AdminAuditEntry> = state
-        .governance_application()
+        .governance()
         .audit_entries()
         .await
         .map_err(|error| {
@@ -495,7 +495,7 @@ pub(super) async fn admin_list_capabilities(
     };
 
     let mut rows: Vec<CapabilitySummary> = state
-        .authorization_application()
+        .authorization()
         .grants_snapshot()
         .iter()
         .map(capability_summary)
@@ -546,7 +546,7 @@ pub(super) async fn admin_list_capabilities(
 // Devices
 // ---------------------------------------------------------------------------
 
-fn admin_device_row(device: &soland_application::identity::DeviceIdentity) -> AdminDevice {
+fn admin_device_row(device: &soland_services::identity::DeviceIdentity) -> AdminDevice {
     AdminDevice {
         id: device.device_id.clone(),
         actor_id: Some(device.actor_id.clone()),
@@ -582,7 +582,7 @@ pub(super) async fn admin_list_devices(
     }
 
     let mut rows: Vec<AdminDevice> = state
-        .identity_application()
+        .identities()
         .devices()
         .await
         .map_err(|error| {
@@ -668,7 +668,7 @@ mod tests {
     /// authorization decision itself, which dev-mode fixtures cannot reach.)
     #[test]
     fn require_admin_principal_is_fail_closed_in_production() {
-        let session = |actor: &str| soland_application::identity::SessionIdentityState {
+        let session = |actor: &str| soland_services::identity::SessionIdentityState {
             token_hash: "hash".to_owned(),
             actor: actor.to_owned(),
             device_id: "ak:device:test".to_owned(),
@@ -696,3 +696,4 @@ mod tests {
             .expect("listed admin principal must be admitted");
     }
 }
+

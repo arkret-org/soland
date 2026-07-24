@@ -228,7 +228,7 @@ pub(super) async fn embedded_webvh_record_for_request(
         );
         return None;
     };
-    match state.did_application().embedded_document(&local_id).await {
+    match state.dids().embedded_document(&local_id).await {
         Ok(Some(record)) => Some(record),
         Ok(None) => {
             render_error(

@@ -296,7 +296,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
         ));
     }
     let audit_record = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(audit_ref)
         .await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?

@@ -78,7 +78,7 @@ fn validate_key_backup_active_series_transition(
     );
     let current = heads.get(&key).cloned().or_else(|| {
         state
-            .projection_application()
+            .projections()
             .snapshot()
             .key_backup_active_series_head(&key.0, &key.1)
     });

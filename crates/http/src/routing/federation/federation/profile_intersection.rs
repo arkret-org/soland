@@ -6,7 +6,7 @@ use arkret_policy::profile_semantics::{
     ProfileSemanticRequirements, collect_profile_semantic_requirements,
 };
 use serde_json::Value;
-use soland_application::operation_semantics as kinds;
+use soland_services::operation_semantics as kinds;
 
 use crate::state::AppState;
 use crate::wire;
@@ -323,7 +323,7 @@ fn local_semantic_claims(state: &AppState) -> SemanticClaims {
     let mut description = wire::describe(
         state.service_id(),
         &state.config().public_base_url,
-        state.jobs_application().storage_mode(),
+        state.jobs().storage_mode(),
         state.config().development_mode,
         state.config().account_authority_url.as_deref(),
         state.config().account_authority_enrollment_did.as_deref(),
@@ -724,3 +724,4 @@ fn schema_can_fall_back_to_event_payload(schema: &str) -> bool {
         && schema != "ak.schema.grant_constraint.v1"
         && schema != "ak.schema.resource_selector.v1"
 }
+

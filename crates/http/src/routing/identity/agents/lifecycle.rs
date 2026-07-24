@@ -44,10 +44,10 @@ async fn require_agent_provision_allocation(
     requested_scope: &Value,
     pairing_ttl_ms: Option<u64>,
     now: chrono::DateTime<chrono::Utc>,
-) -> Result<soland_application::jobs::IdempotencyState, AppError> {
+) -> Result<soland_services::jobs::IdempotencyState, AppError> {
     let key = agent_provision_allocation_key(agent_id);
     let allocation = state
-        .jobs_application()
+        .jobs()
         .idempotency_record(controller_id, &key)
         .await
         .map_err(|error| {
@@ -158,7 +158,7 @@ pub(super) async fn provision_agent(
     let requested_scope = serde_json::to_value(&requested_scope_typed)
         .map_err(|error| AppError::invalid_param(format!("requested_scope is invalid: {error}")))?;
     let active_recovery_policy = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(&controller_id)
         .await
         .map_err(|error| {
@@ -174,7 +174,7 @@ pub(super) async fn provision_agent(
     }
     let controller_realm = require_controller_principal_control_realm(state, &session).await?;
     let existing = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agents_for_controller(&controller_id)
         .await
         .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?;
@@ -310,7 +310,7 @@ pub(super) async fn provision_agent(
                 &requested_scope,
                 pairing_ttl_ms,
             )?;
-            let allocation = soland_application::jobs::IdempotencyState {
+            let allocation = soland_services::jobs::IdempotencyState {
                 principal_id: controller_id.clone(),
                 idempotency_key: agent_provision_allocation_key(agent_id),
                 service_id: state.service_id().clone(),
@@ -323,7 +323,7 @@ pub(super) async fn provision_agent(
                 expires_at: now_utc + chrono::Duration::hours(AGENT_PROVISION_ALLOCATION_TTL_HOURS),
             };
             state
-                .jobs_application()
+                .jobs()
                 .store_idempotency_record(allocation)
                 .await
                 .map_err(|error| {
@@ -381,8 +381,8 @@ pub(super) async fn provision_agent(
     )
     .await?;
     let controller_account = state
-        .identity_application()
-        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+        .identities()
+        .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
             actor_id: session.actor.clone(),
         })
         .await
@@ -410,7 +410,7 @@ pub(super) async fn provision_agent(
     principal.pairing_code = Some(pairing_code.clone());
     principal.pairing_expires_at = Some(expires_at);
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .save_agent(principal)
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
@@ -520,7 +520,7 @@ pub(super) async fn renew_agent_pairing(
     let agent_slug = record.agent_slug.clone().unwrap_or_default();
     if !agent_slug.is_empty() {
         let siblings = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agents_for_controller(&session.actor)
             .await
             .map_err(|err| AppError::internal(format!("agent slug conflict check failed: {err}")))?
@@ -565,7 +565,7 @@ pub(super) async fn renew_agent_pairing(
     record.approval_notification_id = None;
     record.updated_at = now_utc;
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .save_agent(record.clone())
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
@@ -623,7 +623,7 @@ pub(super) async fn list_agents(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agents_for_controller(&session.actor)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?
@@ -663,7 +663,7 @@ pub(super) async fn get_agent(
     let agent_id = agent_id.into_inner();
     validate_agent_id(&agent_id)?;
     let record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(&agent_id)
         .await
         .map_err(|err| AppError::internal(format!("agent get failed: {err}")))?
@@ -690,7 +690,7 @@ pub(super) async fn get_agent(
     // projection so the controller UI can list and revoke them; the
     // persisted record itself never carries grants.
     view.grants = state
-        .authorization_application()
+        .authorization()
         .grants_for_subject_all_realms(&agent_id)
         .into_iter()
         .filter_map(|grant| {
@@ -739,7 +739,7 @@ pub(super) async fn lazily_expire_pairing(
     record.approval_notification_id = None;
     record.updated_at = now;
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .save_agent(record.clone())
         .await
         .map_err(|error| {
@@ -850,7 +850,7 @@ pub(super) async fn lifecycle_transition(
     .await?;
     if event_kind == "ak.self.agent.deactivate" {
         let (key_ids, grant_locations) = {
-            let proj = state.projection_application().snapshot();
+            let proj = state.projections().snapshot();
             (
                 proj.authorized_key_ids_for(&agent_id),
                 proj.unrevoked_grant_locations_for_subject(&agent_id),
@@ -909,7 +909,7 @@ pub(super) async fn lifecycle_transition(
         sidecar::remove_agent_from_controller_sidecars(state, &session.actor, &agent_id).await?;
     }
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .save_agent(updated_record)
         .await
         .map_err(|error| AppError::internal(format!("agent lifecycle persist failed: {error}")))?;
@@ -932,7 +932,7 @@ fn controller_sidecar_circles_since(
     controller: &str,
     since: Option<chrono::DateTime<chrono::Utc>>,
 ) -> Vec<String> {
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     projection
         .sidecars
         .values()
@@ -1114,7 +1114,7 @@ pub(super) async fn detach_agent_grant(
         .with_wire_code("agent_grant_fanout_unavailable"));
     }
     let locations = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .grant_locations_for_subject(&agent_id)
             .into_iter()
@@ -1144,3 +1144,4 @@ pub(super) async fn detach_agent_grant(
         revoked_at,
     })
 }
+

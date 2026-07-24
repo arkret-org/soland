@@ -30,7 +30,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{
@@ -118,3 +118,4 @@ pub(super) fn local_router() -> Router {
         .push(Router::with_path("bridge/describe").get(super::describe::auth_bridge_describe))
         .push(Router::with_path("dev-login").post(dev_login))
 }
+

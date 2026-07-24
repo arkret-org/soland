@@ -3,9 +3,9 @@
 use super::*;
 
 struct PreparedGhostEvent {
-    command: soland_application::events::CommitAcceptedEventCommand,
+    command: soland_services::events::CommitAcceptedEventCommand,
     operation: Option<arkret_event_draft::Operation>,
-    projected_event: Option<soland_application::events::ProjectedEvent>,
+    projected_event: Option<soland_services::events::ProjectedEvent>,
     actor_id: String,
     device_id: String,
 }
@@ -35,7 +35,7 @@ async fn prepare_ghost_event(
     let parsed =
         validate_event_envelope_with_context(state, session, &envelope, &[], Some(admission))
             .await?;
-    let service = state.event_query_application();
+    let service = state.event_queries();
     if let Some(existing) = service
         .canonical_event(&parsed.event_id)
         .await
@@ -172,14 +172,14 @@ async fn prepare_ghost_event(
         .map_err(|rejection| {
             SubmitOneError::new(rejection.status, rejection.code, rejection.message)
         })?;
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .check_move_preconditions(operation)
             .map_err(|reason| {
                 SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
             })?;
         if let Some(reason) = state
-            .projection_application()
+            .projections()
             .preflight_capability_rejection(operation)
         {
             return Err(SubmitOneError::new(
@@ -199,8 +199,8 @@ async fn prepare_ghost_event(
         )
     });
     let outbox = peer_event_fanout_records(state, &parsed, &envelope).await;
-    let command = soland_application::events::CommitAcceptedEventCommand {
-        event: soland_application::events::AcceptedEvent {
+    let command = soland_services::events::CommitAcceptedEventCommand {
+        event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id,
             actor_id: parsed.actor_id.clone(),
             actor_seq: parsed.actor_seq,
@@ -214,7 +214,7 @@ async fn prepare_ghost_event(
         },
         projections: projected_event
             .iter()
-            .map(|event| soland_application::events::ProjectedEvent {
+            .map(|event| soland_services::events::ProjectedEvent {
                 event_id: event.event_id.clone(),
                 realm_id: event.realm_id.clone(),
                 event_kind: event.event_kind.clone(),
@@ -229,7 +229,7 @@ async fn prepare_ghost_event(
         idempotency: None,
         deliveries: outbox
             .into_iter()
-            .map(|record| soland_application::events::FederationDelivery {
+            .map(|record| soland_services::events::FederationDelivery {
                 id: record.id,
                 peer_did: record.peer_did,
                 peer_url: record.peer_url,
@@ -333,7 +333,7 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     .await?;
     let mut prepared = vec![accountability_prepared, profile_prepared];
     let created_at = now();
-    prepared[0].command.idempotency = Some(soland_application::events::IdempotentResponse {
+    prepared[0].command.idempotency = Some(soland_services::events::IdempotentResponse {
         principal_id: idempotency.principal_id,
         key: idempotency.key,
         service_id: idempotency.service_id,
@@ -344,11 +344,11 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
         expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
     });
     state
-        .event_application()
+        .events()
         .commit_accepted_event_batch(
-            soland_application::events::CommitAcceptedEventBatchCommand {
+            soland_services::events::CommitAcceptedEventBatchCommand {
                 events: prepared.iter().map(|event| event.command.clone()).collect(),
-                applet_ghosts: Some(soland_application::events::CommitAppletGhosts {
+                applet_ghosts: Some(soland_services::events::CommitAppletGhosts {
                     applet_id,
                     ghost,
                 }),
@@ -401,3 +401,4 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     drop(guards);
     Ok(())
 }
+

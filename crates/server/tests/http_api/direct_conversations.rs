@@ -384,7 +384,7 @@ async fn seed_remote_claim_prerequisites(
         .await
         .unwrap();
     let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000293".to_owned();
-    state.test_install_consent_cell(soland_application::identity::ConsentCellRecord {
+    state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
         holder: BOB_DID.to_owned(),
         peer: alice.to_owned(),
         scope: "direct_message".to_owned(),
@@ -392,7 +392,7 @@ async fn seed_remote_claim_prerequisites(
         requested_at: None,
         grant_dots: BTreeMap::from([(
             grant_dot.clone(),
-            soland_application::identity::ConsentGrantDot {
+            soland_services::identity::ConsentGrantDot {
                 dot: grant_dot,
                 expires_at: None,
                 granted_at: now,
@@ -710,7 +710,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         .await
         .unwrap();
     let grant_dot = "ak:event:0196419b-0000-7000-8000-000000000233".to_owned();
-    state.test_install_consent_cell(soland_application::identity::ConsentCellRecord {
+    state.test_install_consent_cell(soland_services::identity::ConsentCellRecord {
         holder: BOB_PAIRWISE_DID.to_owned(),
         peer: "did:web:alice.example".to_owned(),
         scope: "direct_message".to_owned(),
@@ -718,7 +718,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
         requested_at: None,
         grant_dots: BTreeMap::from([(
             grant_dot.clone(),
-            soland_application::identity::ConsentGrantDot {
+            soland_services::identity::ConsentGrantDot {
                 dot: grant_dot,
                 expires_at: None,
                 granted_at: now,
@@ -1080,3 +1080,4 @@ async fn concurrent_direct_resolve_create_converges_to_one_binding() {
     );
     assert_eq!(state.test_direct_conversation_binding_count(), 1);
 }
+

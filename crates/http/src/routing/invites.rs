@@ -34,12 +34,12 @@ use chrono::Duration;
 use salvo::http::{HeaderValue, StatusCode};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::events::{
+use soland_services::events::{
     InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
     InviteLocatorState as InviteLocatorRecord,
 };
-use soland_application::identity::{AccountDataState, SessionIdentityState as SessionRecord};
+use soland_services::identity::{AccountDataState, SessionIdentityState as SessionRecord};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
@@ -141,7 +141,7 @@ async fn issue_invite_locator(
     let (record, token) =
         new_invite_locator(&session.actor, state.service_id(), body.into_inner())?;
     match state
-        .realm_invite_application()
+        .realm_invites()
         .insert_locator(&record, ACTIVE_LOCATOR_LIMIT, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator insert: {error}")))?
@@ -181,7 +181,7 @@ async fn rotate_invite_locator(
         display_hint: body.display_hint,
     };
     let Some(record) = state
-        .realm_invite_application()
+        .realm_invites()
         .rotate_locator(&session.actor, body.locator_id.as_str(), &mutation, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator rotate: {error}")))?
@@ -206,7 +206,7 @@ async fn revoke_invite_locator(
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let revoked_at = now();
     let Some(record) = state
-        .realm_invite_application()
+        .realm_invites()
         .revoke_locator(&session.actor, body.locator_id.as_str(), revoked_at)
         .await
         .map_err(|error| AppError::internal(format!("invite locator revoke: {error}")))?
@@ -412,7 +412,7 @@ async fn resolve_invite_locator(
     let locator_token = body.locator_token.trim();
     let token_digest = format!("sha256:{}", sha256_hex(locator_token.as_bytes()));
     let locator_ref = state
-        .realm_invite_application()
+        .realm_invites()
         .resolve_and_consume_locator(&token_digest, now())
         .await
         .map_err(|error| AppError::internal(format!("invite locator resolve: {error}")))?
@@ -516,7 +516,7 @@ async fn persist_invite_quarantine_entry(
     decision: &ReceiveDecision,
 ) -> Result<bool, AppError> {
     let subject_exists = state
-        .identity_application()
+        .identities()
         .account(subject)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -579,7 +579,7 @@ async fn persist_invite_quarantine_entry(
         "expires_at": expires_at,
     });
 
-    let account_data = state.account_data_application();
+    let account_data = state.account_data();
     let existing = account_data
         .entry(subject, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
         .await
@@ -731,7 +731,7 @@ pub(crate) fn resolve_invite_receive_policy(
     subject: &str,
 ) -> InviteReceivePolicy {
     state
-        .contact_application()
+        .contacts()
         .invite_policy(subject)
         .unwrap_or_else(|| default_invite_receive_policy(subject))
 }
@@ -1574,3 +1574,4 @@ mod invite_locator_security_tests {
         );
     }
 }
+

@@ -665,7 +665,7 @@ async fn direct_bootstrap_source_is_contact_authority(
         return false;
     };
     state
-        .contact_application()
+        .contacts()
         .contact_any(&creator, &peer)
         .await
         .ok()

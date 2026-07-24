@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use futures_util::stream::BoxStream;
 use serde_json::Value;
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 #[async_trait]
 pub trait ObjectStoragePort: Send + Sync {
@@ -48,15 +48,15 @@ pub struct ListRecipientNotificationsQuery {
 
 #[async_trait]
 pub trait NotificationWritePort: Send + Sync {
-    async fn store_notification(&self, record: Value) -> ApplicationResult<()>;
-    async fn store_account_delta(&self, record: Value) -> ApplicationResult<()>;
+    async fn store_notification(&self, record: Value) -> ServiceResult<()>;
+    async fn store_account_delta(&self, record: Value) -> ServiceResult<()>;
     async fn list_for_account(
         &self,
         controller_account_id: &str,
         recipient_service_id: &str,
         after_position: Option<i64>,
-    ) -> ApplicationResult<Vec<Value>>;
-    async fn list_for_recipient(&self, recipient_id: &str) -> ApplicationResult<Vec<Value>>;
+    ) -> ServiceResult<Vec<Value>>;
+    async fn list_for_recipient(&self, recipient_id: &str) -> ServiceResult<Vec<Value>>;
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -71,21 +71,21 @@ pub trait DeviceDeliveryPort: Send + Sync {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> ApplicationResult<DeviceDeliveryPurgeResult>;
+    ) -> ServiceResult<DeviceDeliveryPurgeResult>;
     async fn purge_stale_cross_signing_messages(
         &self,
         actor_id: &str,
         new_generation: u64,
-    ) -> ApplicationResult<usize>;
-    async fn register_push_device(&self, registration: Value) -> ApplicationResult<()>;
+    ) -> ServiceResult<usize>;
+    async fn register_push_device(&self, registration: Value) -> ServiceResult<()>;
     async fn unregister_push_device(
         &self,
         actor_id: &str,
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
-    ) -> ApplicationResult<usize>;
-    async fn push_devices(&self) -> ApplicationResult<Vec<Value>>;
+    ) -> ServiceResult<usize>;
+    async fn push_devices(&self) -> ServiceResult<Vec<Value>>;
 }
 
 #[derive(Clone, Debug)]
@@ -243,9 +243,9 @@ impl PushContractDrift {
 
 #[async_trait]
 pub trait BlobPort: Send + Sync {
-    async fn blob(&self, blob_ref: &str) -> ApplicationResult<Option<BlobState>>;
-    async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ApplicationResult<()>;
-    async fn blobs(&self) -> ApplicationResult<Vec<BlobState>>;
+    async fn blob(&self, blob_ref: &str) -> ServiceResult<Option<BlobState>>;
+    async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ServiceResult<()>;
+    async fn blobs(&self) -> ServiceResult<Vec<BlobState>>;
 }
 
 #[async_trait]
@@ -253,120 +253,120 @@ pub trait PushBridgeCachePort: Send + Sync {
     async fn entry(
         &self,
         bridge_describe_url: &str,
-    ) -> ApplicationResult<Option<OutboundPushBridgeCacheState>>;
+    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>>;
     async fn store_entry(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheState,
-    ) -> ApplicationResult<()>;
-    async fn delete_entry(&self, bridge_describe_url: &str) -> ApplicationResult<bool>;
-    async fn clear(&self) -> ApplicationResult<usize>;
-    async fn entries(&self) -> ApplicationResult<Vec<OutboundPushBridgeCacheState>>;
-    async fn entry_count(&self) -> ApplicationResult<usize>;
+    ) -> ServiceResult<()>;
+    async fn delete_entry(&self, bridge_describe_url: &str) -> ServiceResult<bool>;
+    async fn clear(&self) -> ServiceResult<usize>;
+    async fn entries(&self) -> ServiceResult<Vec<OutboundPushBridgeCacheState>>;
+    async fn entry_count(&self) -> ServiceResult<usize>;
     async fn current_contract(
         &self,
         bridge_describe_url: &str,
-    ) -> ApplicationResult<Option<OutboundPushBridgeCacheState>>;
+    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>>;
     async fn verify_contract_freshness(
         &self,
         bridge_describe_url: &str,
         observed_digest: &str,
         max_age: chrono::Duration,
-    ) -> ApplicationResult<PushContractDrift>;
+    ) -> ServiceResult<PushContractDrift>;
 }
 
 #[async_trait]
 pub trait EphemeralDeliveryPort: Send + Sync {
-    async fn store_presence(&self, presence: PresenceState) -> ApplicationResult<()>;
-    async fn presence_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<PresenceState>>;
-    async fn delete_presence(&self, actor_id: &str) -> ApplicationResult<()>;
-    async fn store_typing(&self, typing: TypingState) -> ApplicationResult<()>;
-    async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> ApplicationResult<()>;
-    async fn typing_for_realm(&self, realm_id: &str) -> ApplicationResult<Vec<TypingState>>;
-    async fn prune_expired_typing(&self) -> ApplicationResult<usize>;
-    async fn store_call_signal(&self, signal: CallSignalState) -> ApplicationResult<()>;
+    async fn store_presence(&self, presence: PresenceState) -> ServiceResult<()>;
+    async fn presence_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<PresenceState>>;
+    async fn delete_presence(&self, actor_id: &str) -> ServiceResult<()>;
+    async fn store_typing(&self, typing: TypingState) -> ServiceResult<()>;
+    async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> ServiceResult<()>;
+    async fn typing_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<TypingState>>;
+    async fn prune_expired_typing(&self) -> ServiceResult<usize>;
+    async fn store_call_signal(&self, signal: CallSignalState) -> ServiceResult<()>;
     async fn call_signals_for_realm(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<CallSignalState>>;
+    ) -> ServiceResult<Vec<CallSignalState>>;
     async fn call_signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
-    ) -> ApplicationResult<u64>;
+    ) -> ServiceResult<u64>;
     async fn advance_call_signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
         position: u64,
-    ) -> ApplicationResult<()>;
-    async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
+    async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ServiceResult<()>;
     async fn read_receipts_for_realm(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<ReadReceiptState>>;
+    ) -> ServiceResult<Vec<ReadReceiptState>>;
     async fn read_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Vec<ReadReceiptState>>;
+    ) -> ServiceResult<Vec<ReadReceiptState>>;
     async fn read_receipt_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
-    ) -> ApplicationResult<u64>;
+    ) -> ServiceResult<u64>;
     async fn advance_read_receipt_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
         position: u64,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
 }
 
 #[async_trait]
 pub trait DeviceMessagePort: Send + Sync {
-    async fn append(&self, message: DeviceMessageState) -> ApplicationResult<()>;
+    async fn append(&self, message: DeviceMessageState) -> ServiceResult<()>;
     async fn inspect_batch(
         &self,
         request_key: &str,
         request_digest: &str,
         items: &[DeviceMessageIntentRecord],
-    ) -> ApplicationResult<DeviceMessageBatchInspection>;
+    ) -> ServiceResult<DeviceMessageBatchInspection>;
     async fn commit_batch(
         &self,
         batch: DeviceMessageBatchRecord,
-    ) -> ApplicationResult<DeviceMessageBatchCommitOutcome>;
+    ) -> ServiceResult<DeviceMessageBatchCommitOutcome>;
     async fn issue_ack_token(
         &self,
         recipient: &str,
         device_id: &str,
         queue_position: i64,
-    ) -> ApplicationResult<Option<String>>;
+    ) -> ServiceResult<Option<String>>;
     async fn acknowledge(
         &self,
         recipient: &str,
         device_id: &str,
         ack_token: &str,
-    ) -> ApplicationResult<Option<usize>>;
+    ) -> ServiceResult<Option<usize>>;
     async fn messages_after(
         &self,
         recipient: &str,
         device_id: &str,
         queue_position: i64,
-    ) -> ApplicationResult<Vec<DeviceMessageState>>;
-    async fn prune(&self, per_device_capacity: usize, now: DateTime<Utc>) -> ApplicationResult<()>;
+    ) -> ServiceResult<Vec<DeviceMessageState>>;
+    async fn prune(&self, per_device_capacity: usize, now: DateTime<Utc>) -> ServiceResult<()>;
     async fn lost_watermark(
         &self,
         recipient: &str,
         device_id: &str,
-    ) -> ApplicationResult<Option<i64>>;
+    ) -> ServiceResult<Option<i64>>;
 }
 
 #[derive(Clone)]
-pub struct DeliveryApplicationService {
+pub struct DeliveryService {
     notifications: Arc<dyn NotificationWritePort>,
     device_delivery: Arc<dyn DeviceDeliveryPort>,
     device_messages: Arc<dyn DeviceMessagePort>,
@@ -377,7 +377,7 @@ pub struct DeliveryApplicationService {
     push_target_hmac_key: [u8; 32],
 }
 
-pub struct DeliveryApplicationRuntime {
+pub struct DeliveryServiceRuntime {
     pub notifications: Arc<dyn NotificationWritePort>,
     pub device_delivery: Arc<dyn DeviceDeliveryPort>,
     pub device_messages: Arc<dyn DeviceMessagePort>,
@@ -388,9 +388,9 @@ pub struct DeliveryApplicationRuntime {
     pub push_target_hmac_key: [u8; 32],
 }
 
-impl DeliveryApplicationService {
-    pub fn new(runtime: DeliveryApplicationRuntime) -> Self {
-        let DeliveryApplicationRuntime {
+impl DeliveryService {
+    pub fn new(runtime: DeliveryServiceRuntime) -> Self {
+        let DeliveryServiceRuntime {
             notifications,
             device_delivery,
             device_messages,
@@ -455,21 +455,21 @@ impl DeliveryApplicationService {
     pub async fn store_notification(
         &self,
         command: StoreNotificationCommand,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.notifications.store_notification(command.record).await
     }
 
     pub async fn store_account_delta(
         &self,
         command: StoreAccountNotificationDeltaCommand,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.notifications.store_account_delta(command.record).await
     }
 
     pub async fn list_account_deltas(
         &self,
         query: ListAccountNotificationDeltasQuery,
-    ) -> ApplicationResult<Vec<Value>> {
+    ) -> ServiceResult<Vec<Value>> {
         self.notifications
             .list_for_account(
                 &query.controller_account_id,
@@ -482,7 +482,7 @@ impl DeliveryApplicationService {
     pub async fn list_recipient_notifications(
         &self,
         query: ListRecipientNotificationsQuery,
-    ) -> ApplicationResult<Vec<Value>> {
+    ) -> ServiceResult<Vec<Value>> {
         self.notifications
             .list_for_recipient(&query.recipient_id)
             .await
@@ -492,7 +492,7 @@ impl DeliveryApplicationService {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> ApplicationResult<DeviceDeliveryPurgeResult> {
+    ) -> ServiceResult<DeviceDeliveryPurgeResult> {
         self.device_delivery
             .purge_device_delivery(actor_id, device_id)
             .await
@@ -502,13 +502,13 @@ impl DeliveryApplicationService {
         &self,
         actor_id: &str,
         new_generation: u64,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         self.device_delivery
             .purge_stale_cross_signing_messages(actor_id, new_generation)
             .await
     }
 
-    pub async fn register_push_device(&self, registration: Value) -> ApplicationResult<()> {
+    pub async fn register_push_device(&self, registration: Value) -> ServiceResult<()> {
         self.device_delivery
             .register_push_device(registration)
             .await
@@ -519,26 +519,26 @@ impl DeliveryApplicationService {
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         self.device_delivery
             .unregister_push_device(actor_id, device_id, push_key, app_id)
             .await
     }
-    pub async fn push_devices(&self) -> ApplicationResult<Vec<Value>> {
+    pub async fn push_devices(&self) -> ServiceResult<Vec<Value>> {
         self.device_delivery.push_devices().await
     }
 
     pub async fn append_device_message(
         &self,
         message: DeviceMessageState,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.device_messages.append(message).await
     }
 
     pub async fn commit_device_message_batch(
         &self,
         batch: DeviceMessageBatchRecord,
-    ) -> ApplicationResult<DeviceMessageBatchCommitOutcome> {
+    ) -> ServiceResult<DeviceMessageBatchCommitOutcome> {
         self.device_messages.commit_batch(batch).await
     }
 
@@ -547,7 +547,7 @@ impl DeliveryApplicationService {
         request_key: &str,
         request_digest: &str,
         items: &[DeviceMessageIntentRecord],
-    ) -> ApplicationResult<DeviceMessageBatchInspection> {
+    ) -> ServiceResult<DeviceMessageBatchInspection> {
         self.device_messages
             .inspect_batch(request_key, request_digest, items)
             .await
@@ -558,7 +558,7 @@ impl DeliveryApplicationService {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
-    ) -> ApplicationResult<Option<String>> {
+    ) -> ServiceResult<Option<String>> {
         self.device_messages
             .issue_ack_token(recipient, device_id, queue_position)
             .await
@@ -569,7 +569,7 @@ impl DeliveryApplicationService {
         recipient: &str,
         device_id: &str,
         ack_token: &str,
-    ) -> ApplicationResult<Option<usize>> {
+    ) -> ServiceResult<Option<usize>> {
         self.device_messages
             .acknowledge(recipient, device_id, ack_token)
             .await
@@ -580,7 +580,7 @@ impl DeliveryApplicationService {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
-    ) -> ApplicationResult<Vec<DeviceMessageState>> {
+    ) -> ServiceResult<Vec<DeviceMessageState>> {
         self.device_messages
             .messages_after(recipient, device_id, queue_position)
             .await
@@ -590,7 +590,7 @@ impl DeliveryApplicationService {
         &self,
         per_device_capacity: usize,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.device_messages.prune(per_device_capacity, now).await
     }
 
@@ -598,50 +598,50 @@ impl DeliveryApplicationService {
         &self,
         recipient: &str,
         device_id: &str,
-    ) -> ApplicationResult<Option<i64>> {
+    ) -> ServiceResult<Option<i64>> {
         self.device_messages
             .lost_watermark(recipient, device_id)
             .await
     }
 
-    pub async fn store_presence(&self, presence: PresenceState) -> ApplicationResult<()> {
+    pub async fn store_presence(&self, presence: PresenceState) -> ServiceResult<()> {
         self.ephemeral.store_presence(presence).await
     }
 
     pub async fn presence_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<PresenceState>> {
+    ) -> ServiceResult<Vec<PresenceState>> {
         self.ephemeral.presence_for_actor(actor_id).await
     }
 
-    pub async fn delete_presence(&self, actor_id: &str) -> ApplicationResult<()> {
+    pub async fn delete_presence(&self, actor_id: &str) -> ServiceResult<()> {
         self.ephemeral.delete_presence(actor_id).await
     }
 
-    pub async fn store_typing(&self, typing: TypingState) -> ApplicationResult<()> {
+    pub async fn store_typing(&self, typing: TypingState) -> ServiceResult<()> {
         self.ephemeral.store_typing(typing).await
     }
 
-    pub async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> ApplicationResult<()> {
+    pub async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> ServiceResult<()> {
         self.ephemeral.remove_typing(actor_id, realm_id).await
     }
 
-    pub async fn typing_for_realm(&self, realm_id: &str) -> ApplicationResult<Vec<TypingState>> {
+    pub async fn typing_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<TypingState>> {
         self.ephemeral.typing_for_realm(realm_id).await
     }
 
-    pub async fn prune_expired_typing(&self) -> ApplicationResult<usize> {
+    pub async fn prune_expired_typing(&self) -> ServiceResult<usize> {
         self.ephemeral.prune_expired_typing().await
     }
 
-    pub async fn store_call_signal(&self, signal: CallSignalState) -> ApplicationResult<()> {
+    pub async fn store_call_signal(&self, signal: CallSignalState) -> ServiceResult<()> {
         self.ephemeral.store_call_signal(signal).await
     }
     pub async fn call_signals_for_realm(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<CallSignalState>> {
+    ) -> ServiceResult<Vec<CallSignalState>> {
         self.ephemeral.call_signals_for_realm(realm_id).await
     }
     pub async fn call_signal_watermark(
@@ -649,7 +649,7 @@ impl DeliveryApplicationService {
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
-    ) -> ApplicationResult<u64> {
+    ) -> ServiceResult<u64> {
         self.ephemeral
             .call_signal_watermark(actor_id, device_id, realm_id)
             .await
@@ -660,24 +660,24 @@ impl DeliveryApplicationService {
         device_id: &str,
         realm_id: &str,
         position: u64,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.ephemeral
             .advance_call_signal_watermark(actor_id, device_id, realm_id, position)
             .await
     }
-    pub async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ApplicationResult<()> {
+    pub async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ServiceResult<()> {
         self.ephemeral.store_read_receipt(receipt).await
     }
     pub async fn read_receipts_for_realm(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<ReadReceiptState>> {
+    ) -> ServiceResult<Vec<ReadReceiptState>> {
         self.ephemeral.read_receipts_for_realm(realm_id).await
     }
     pub async fn read_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Vec<ReadReceiptState>> {
+    ) -> ServiceResult<Vec<ReadReceiptState>> {
         self.ephemeral.read_receipts_for_event(event_id).await
     }
     pub async fn read_receipt_watermark(
@@ -685,7 +685,7 @@ impl DeliveryApplicationService {
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
-    ) -> ApplicationResult<u64> {
+    ) -> ServiceResult<u64> {
         self.ephemeral
             .read_receipt_watermark(actor_id, device_id, realm_id)
             .await
@@ -696,33 +696,33 @@ impl DeliveryApplicationService {
         device_id: &str,
         realm_id: &str,
         position: u64,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.ephemeral
             .advance_read_receipt_watermark(actor_id, device_id, realm_id, position)
             .await
     }
 
-    pub async fn blob(&self, blob_ref: &str) -> ApplicationResult<Option<BlobState>> {
+    pub async fn blob(&self, blob_ref: &str) -> ServiceResult<Option<BlobState>> {
         self.blobs.blob(blob_ref).await
     }
-    pub async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ApplicationResult<()> {
+    pub async fn store_blob(&self, blob_ref: &str, blob: BlobState) -> ServiceResult<()> {
         self.blobs.store_blob(blob_ref, blob).await
     }
-    pub async fn blobs(&self) -> ApplicationResult<Vec<BlobState>> {
+    pub async fn blobs(&self) -> ServiceResult<Vec<BlobState>> {
         self.blobs.blobs().await
     }
 
     pub async fn push_bridge_cache_entry(
         &self,
         bridge_describe_url: &str,
-    ) -> ApplicationResult<Option<OutboundPushBridgeCacheState>> {
+    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
         self.push_bridge_cache.entry(bridge_describe_url).await
     }
     pub async fn store_push_bridge_cache_entry(
         &self,
         bridge_describe_url: &str,
         record: OutboundPushBridgeCacheState,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.push_bridge_cache
             .store_entry(bridge_describe_url, record)
             .await
@@ -730,26 +730,26 @@ impl DeliveryApplicationService {
     pub async fn delete_push_bridge_cache_entry(
         &self,
         bridge_describe_url: &str,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         self.push_bridge_cache
             .delete_entry(bridge_describe_url)
             .await
     }
-    pub async fn clear_push_bridge_cache(&self) -> ApplicationResult<usize> {
+    pub async fn clear_push_bridge_cache(&self) -> ServiceResult<usize> {
         self.push_bridge_cache.clear().await
     }
     pub async fn push_bridge_cache_entries(
         &self,
-    ) -> ApplicationResult<Vec<OutboundPushBridgeCacheState>> {
+    ) -> ServiceResult<Vec<OutboundPushBridgeCacheState>> {
         self.push_bridge_cache.entries().await
     }
-    pub async fn push_bridge_cache_len(&self) -> ApplicationResult<usize> {
+    pub async fn push_bridge_cache_len(&self) -> ServiceResult<usize> {
         self.push_bridge_cache.entry_count().await
     }
     pub async fn current_push_bridge_contract(
         &self,
         bridge_describe_url: &str,
-    ) -> ApplicationResult<Option<OutboundPushBridgeCacheState>> {
+    ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
         self.push_bridge_cache
             .current_contract(bridge_describe_url)
             .await
@@ -759,7 +759,7 @@ impl DeliveryApplicationService {
         bridge_describe_url: &str,
         observed_digest: &str,
         max_age: chrono::Duration,
-    ) -> ApplicationResult<PushContractDrift> {
+    ) -> ServiceResult<PushContractDrift> {
         self.push_bridge_cache
             .verify_contract_freshness(bridge_describe_url, observed_digest, max_age)
             .await
@@ -823,32 +823,32 @@ mod tests {
         async fn entry(
             &self,
             _bridge_describe_url: &str,
-        ) -> ApplicationResult<Option<OutboundPushBridgeCacheState>> {
+        ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
             Ok(None)
         }
         async fn store_entry(
             &self,
             _bridge_describe_url: &str,
             _record: OutboundPushBridgeCacheState,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn delete_entry(&self, _bridge_describe_url: &str) -> ApplicationResult<bool> {
+        async fn delete_entry(&self, _bridge_describe_url: &str) -> ServiceResult<bool> {
             Ok(false)
         }
-        async fn clear(&self) -> ApplicationResult<usize> {
+        async fn clear(&self) -> ServiceResult<usize> {
             Ok(0)
         }
-        async fn entries(&self) -> ApplicationResult<Vec<OutboundPushBridgeCacheState>> {
+        async fn entries(&self) -> ServiceResult<Vec<OutboundPushBridgeCacheState>> {
             Ok(Vec::new())
         }
-        async fn entry_count(&self) -> ApplicationResult<usize> {
+        async fn entry_count(&self) -> ServiceResult<usize> {
             Ok(0)
         }
         async fn current_contract(
             &self,
             _bridge_describe_url: &str,
-        ) -> ApplicationResult<Option<OutboundPushBridgeCacheState>> {
+        ) -> ServiceResult<Option<OutboundPushBridgeCacheState>> {
             Ok(None)
         }
         async fn verify_contract_freshness(
@@ -856,57 +856,57 @@ mod tests {
             _bridge_describe_url: &str,
             _observed_digest: &str,
             _max_age: chrono::Duration,
-        ) -> ApplicationResult<PushContractDrift> {
+        ) -> ServiceResult<PushContractDrift> {
             Ok(PushContractDrift::Unknown)
         }
     }
 
     #[async_trait]
     impl BlobPort for NoBlobs {
-        async fn blob(&self, _blob_ref: &str) -> ApplicationResult<Option<BlobState>> {
+        async fn blob(&self, _blob_ref: &str) -> ServiceResult<Option<BlobState>> {
             Ok(None)
         }
-        async fn store_blob(&self, _blob_ref: &str, _blob: BlobState) -> ApplicationResult<()> {
+        async fn store_blob(&self, _blob_ref: &str, _blob: BlobState) -> ServiceResult<()> {
             Ok(())
         }
-        async fn blobs(&self) -> ApplicationResult<Vec<BlobState>> {
+        async fn blobs(&self) -> ServiceResult<Vec<BlobState>> {
             Ok(Vec::new())
         }
     }
 
     #[async_trait]
     impl EphemeralDeliveryPort for NoEphemeralDelivery {
-        async fn store_presence(&self, _presence: PresenceState) -> ApplicationResult<()> {
+        async fn store_presence(&self, _presence: PresenceState) -> ServiceResult<()> {
             Ok(())
         }
         async fn presence_for_actor(
             &self,
             _actor_id: &str,
-        ) -> ApplicationResult<Vec<PresenceState>> {
+        ) -> ServiceResult<Vec<PresenceState>> {
             Ok(Vec::new())
         }
-        async fn delete_presence(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn delete_presence(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
-        async fn store_typing(&self, _typing: TypingState) -> ApplicationResult<()> {
+        async fn store_typing(&self, _typing: TypingState) -> ServiceResult<()> {
             Ok(())
         }
-        async fn remove_typing(&self, _actor_id: &str, _realm_id: &str) -> ApplicationResult<()> {
+        async fn remove_typing(&self, _actor_id: &str, _realm_id: &str) -> ServiceResult<()> {
             Ok(())
         }
-        async fn typing_for_realm(&self, _realm_id: &str) -> ApplicationResult<Vec<TypingState>> {
+        async fn typing_for_realm(&self, _realm_id: &str) -> ServiceResult<Vec<TypingState>> {
             Ok(Vec::new())
         }
-        async fn prune_expired_typing(&self) -> ApplicationResult<usize> {
+        async fn prune_expired_typing(&self) -> ServiceResult<usize> {
             Ok(0)
         }
-        async fn store_call_signal(&self, _signal: CallSignalState) -> ApplicationResult<()> {
+        async fn store_call_signal(&self, _signal: CallSignalState) -> ServiceResult<()> {
             Ok(())
         }
         async fn call_signals_for_realm(
             &self,
             _realm_id: &str,
-        ) -> ApplicationResult<Vec<CallSignalState>> {
+        ) -> ServiceResult<Vec<CallSignalState>> {
             Ok(Vec::new())
         }
         async fn call_signal_watermark(
@@ -914,7 +914,7 @@ mod tests {
             _actor_id: &str,
             _device_id: &str,
             _realm_id: &str,
-        ) -> ApplicationResult<u64> {
+        ) -> ServiceResult<u64> {
             Ok(0)
         }
         async fn advance_call_signal_watermark(
@@ -923,22 +923,22 @@ mod tests {
             _device_id: &str,
             _realm_id: &str,
             _position: u64,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn store_read_receipt(&self, _receipt: ReadReceiptState) -> ApplicationResult<()> {
+        async fn store_read_receipt(&self, _receipt: ReadReceiptState) -> ServiceResult<()> {
             Ok(())
         }
         async fn read_receipts_for_realm(
             &self,
             _realm_id: &str,
-        ) -> ApplicationResult<Vec<ReadReceiptState>> {
+        ) -> ServiceResult<Vec<ReadReceiptState>> {
             Ok(Vec::new())
         }
         async fn read_receipts_for_event(
             &self,
             _event_id: &str,
-        ) -> ApplicationResult<Vec<ReadReceiptState>> {
+        ) -> ServiceResult<Vec<ReadReceiptState>> {
             Ok(Vec::new())
         }
         async fn read_receipt_watermark(
@@ -946,7 +946,7 @@ mod tests {
             _actor_id: &str,
             _device_id: &str,
             _realm_id: &str,
-        ) -> ApplicationResult<u64> {
+        ) -> ServiceResult<u64> {
             Ok(0)
         }
         async fn advance_read_receipt_watermark(
@@ -955,14 +955,14 @@ mod tests {
             _device_id: &str,
             _realm_id: &str,
             _position: u64,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }
 
     #[async_trait]
     impl DeviceMessagePort for NoDeviceMessages {
-        async fn append(&self, _message: DeviceMessageState) -> ApplicationResult<()> {
+        async fn append(&self, _message: DeviceMessageState) -> ServiceResult<()> {
             Ok(())
         }
         async fn inspect_batch(
@@ -970,7 +970,7 @@ mod tests {
             _request_key: &str,
             _request_digest: &str,
             _items: &[DeviceMessageIntentRecord],
-        ) -> ApplicationResult<DeviceMessageBatchInspection> {
+        ) -> ServiceResult<DeviceMessageBatchInspection> {
             Ok(DeviceMessageBatchInspection::Fresh {
                 existing_message_outcomes: Default::default(),
             })
@@ -978,7 +978,7 @@ mod tests {
         async fn commit_batch(
             &self,
             _batch: DeviceMessageBatchRecord,
-        ) -> ApplicationResult<DeviceMessageBatchCommitOutcome> {
+        ) -> ServiceResult<DeviceMessageBatchCommitOutcome> {
             Ok(DeviceMessageBatchCommitOutcome::Stored(Default::default()))
         }
         async fn issue_ack_token(
@@ -986,7 +986,7 @@ mod tests {
             _recipient: &str,
             _device_id: &str,
             _queue_position: i64,
-        ) -> ApplicationResult<Option<String>> {
+        ) -> ServiceResult<Option<String>> {
             Ok(None)
         }
         async fn acknowledge(
@@ -994,7 +994,7 @@ mod tests {
             _recipient: &str,
             _device_id: &str,
             _ack_token: &str,
-        ) -> ApplicationResult<Option<usize>> {
+        ) -> ServiceResult<Option<usize>> {
             Ok(None)
         }
         async fn messages_after(
@@ -1002,21 +1002,21 @@ mod tests {
             _recipient: &str,
             _device_id: &str,
             _queue_position: i64,
-        ) -> ApplicationResult<Vec<DeviceMessageState>> {
+        ) -> ServiceResult<Vec<DeviceMessageState>> {
             Ok(Vec::new())
         }
         async fn prune(
             &self,
             _per_device_capacity: usize,
             _now: DateTime<Utc>,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn lost_watermark(
             &self,
             _recipient: &str,
             _device_id: &str,
-        ) -> ApplicationResult<Option<i64>> {
+        ) -> ServiceResult<Option<i64>> {
             Ok(None)
         }
     }
@@ -1027,7 +1027,7 @@ mod tests {
             &self,
             _actor_id: &str,
             _device_id: &str,
-        ) -> ApplicationResult<DeviceDeliveryPurgeResult> {
+        ) -> ServiceResult<DeviceDeliveryPurgeResult> {
             Ok(DeviceDeliveryPurgeResult::default())
         }
 
@@ -1035,10 +1035,10 @@ mod tests {
             &self,
             _actor_id: &str,
             _new_generation: u64,
-        ) -> ApplicationResult<usize> {
+        ) -> ServiceResult<usize> {
             Ok(0)
         }
-        async fn register_push_device(&self, _registration: Value) -> ApplicationResult<()> {
+        async fn register_push_device(&self, _registration: Value) -> ServiceResult<()> {
             Ok(())
         }
         async fn unregister_push_device(
@@ -1047,22 +1047,22 @@ mod tests {
             _device_id: &str,
             _push_key: Option<&str>,
             _app_id: Option<&str>,
-        ) -> ApplicationResult<usize> {
+        ) -> ServiceResult<usize> {
             Ok(0)
         }
-        async fn push_devices(&self) -> ApplicationResult<Vec<Value>> {
+        async fn push_devices(&self) -> ServiceResult<Vec<Value>> {
             Ok(Vec::new())
         }
     }
 
     #[async_trait]
     impl NotificationWritePort for RecordingNotifications {
-        async fn store_notification(&self, record: Value) -> ApplicationResult<()> {
+        async fn store_notification(&self, record: Value) -> ServiceResult<()> {
             self.0.lock().expect("notification lock").push(record);
             Ok(())
         }
 
-        async fn store_account_delta(&self, record: Value) -> ApplicationResult<()> {
+        async fn store_account_delta(&self, record: Value) -> ServiceResult<()> {
             self.0.lock().expect("notification lock").push(record);
             Ok(())
         }
@@ -1072,11 +1072,11 @@ mod tests {
             _controller_account_id: &str,
             _recipient_service_id: &str,
             _after_position: Option<i64>,
-        ) -> ApplicationResult<Vec<Value>> {
+        ) -> ServiceResult<Vec<Value>> {
             Ok(self.0.lock().expect("notification lock").clone())
         }
 
-        async fn list_for_recipient(&self, _recipient_id: &str) -> ApplicationResult<Vec<Value>> {
+        async fn list_for_recipient(&self, _recipient_id: &str) -> ServiceResult<Vec<Value>> {
             Ok(self.0.lock().expect("notification lock").clone())
         }
     }
@@ -1084,7 +1084,7 @@ mod tests {
     #[tokio::test]
     async fn notification_write_uses_only_the_narrow_port() {
         let port = Arc::new(RecordingNotifications::default());
-        let service = DeliveryApplicationService::new(DeliveryApplicationRuntime {
+        let service = DeliveryService::new(DeliveryServiceRuntime {
             notifications: port.clone(),
             device_delivery: Arc::new(NoDeviceDelivery),
             device_messages: Arc::new(NoDeviceMessages),
@@ -1103,3 +1103,4 @@ mod tests {
         assert_eq!(port.0.lock().expect("notification lock").len(), 1);
     }
 }
+

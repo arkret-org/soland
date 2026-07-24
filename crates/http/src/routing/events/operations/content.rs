@@ -2,7 +2,7 @@ use super::*;
 
 pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id: &str) -> bool {
     let realm_meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -21,7 +21,7 @@ pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id
 /// ratchet enforced by the reducer, so this read can only flip false→true.
 pub(crate) fn realm_content_floor_requires_e2ee(state: &AppState, realm_id: &str) -> bool {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.realm_content_encryption_floor(realm_id)
     }
     .as_deref()
@@ -238,7 +238,7 @@ pub fn message_operation_is_encrypted(operation: &Operation) -> bool {
 
 pub async fn known_realm_denies_plaintext_service(state: &AppState, realm_id: &str) -> bool {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()

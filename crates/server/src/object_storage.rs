@@ -15,7 +15,7 @@ use object_store::aws::AmazonS3Builder;
 use object_store::local::LocalFileSystem;
 use object_store::path::Path as ObjectPath;
 use object_store::{GetOptions, ObjectStore, ObjectStoreExt};
-use soland_application::delivery::ObjectStoragePort;
+use soland_services::delivery::ObjectStoragePort;
 use soland_http::config::ObjectStorageConfig;
 use tokio::io::AsyncReadExt as _;
 
@@ -247,3 +247,4 @@ mod tests {
         let _ = std::fs::remove_dir_all(root);
     }
 }
+

@@ -8,7 +8,7 @@ use arkret_models_collaboration::agent_operations::{
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
 use arkret_wire::{MlsGroupId, NonEmptyString};
-use soland_application::identity::{
+use soland_services::identity::{
     AgentSidecarContextState as AgentSidecarContextRecord, AgentSidecarState as AgentSidecarRecord,
 };
 
@@ -67,15 +67,15 @@ async fn authorize_sidecar_ensure(
     realm_id: &str,
 ) -> Result<(), AppError> {
     let owner = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
         .flatten()
         .map(|meta| meta.owner);
     let members = realm_members_for_authz(state, realm_id);
-    let verdict = state.authorization_application().check(
-        soland_application::authorization::AuthorizationCheck {
+    let verdict = state.authorization().check(
+        soland_services::authorization::AuthorizationCheck {
             actor: controller,
             action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
             resource: realm_id,
@@ -105,7 +105,7 @@ async fn authorize_sidecar_ensure(
 }
 
 fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
-    let realms = state.realm_directory_application().snapshot();
+    let realms = state.realm_directory().snapshot();
     RealmId::new(realm_id.to_owned())
         .ok()
         .and_then(|id| realms.get(&id).cloned())
@@ -115,7 +115,7 @@ fn realm_members_for_authz(state: &AppState, realm_id: &str) -> Vec<String> {
 
 pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
     let in_realm_directory = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id).cloned())
@@ -128,7 +128,7 @@ pub(super) fn realm_member_joined(state: &AppState, realm_id: &str, actor: &str)
     .unwrap_or(false);
     in_realm_directory
         || state
-            .projection_application()
+            .projections()
             .snapshot()
             .member(realm_id, actor)
             .is_some_and(|membership| membership.state == "join")
@@ -154,7 +154,7 @@ fn validate_sidecar_context_projection(
     state: &AppState,
     context_ref: &AgentSidecarContextRef,
 ) -> Result<(), AppError> {
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let realm_id = context_ref.realm_id().as_str();
     match context_ref {
         AgentSidecarContextRef::Strand(context) => {
@@ -221,7 +221,7 @@ pub(crate) async fn eligible_sidecar_agents(
     addressed_agents: &[String],
 ) -> Result<Vec<String>, AppError> {
     let records = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agents_for_controller(controller)
         .await
         .map_err(|err| AppError::internal(format!("agent list failed: {err}")))?;
@@ -253,7 +253,7 @@ fn agent_record_is_sidecar_eligible(
         && record.state == "active"
         && realm_member_joined(state, realm_id, agent_id)
         && {
-            let projection = state.projection_application().snapshot();
+            let projection = state.projections().snapshot();
             !matches!(
                 projection.agent_lifecycles.get(agent_id),
                 Some(AgentLifecycleState::Paused | AgentLifecycleState::Deactivated)
@@ -277,7 +277,7 @@ fn new_sidecar_operation(
 }
 
 fn backing_circle_is_compliant(
-    circle: &soland_application::projection::CircleReadModel,
+    circle: &soland_services::projection::CircleReadModel,
     sidecar_id: &SidecarId,
     controller: &str,
 ) -> bool {
@@ -313,7 +313,7 @@ async fn ensure_backing_circle(
     circle_id: &CircleId,
 ) -> Result<(), AppError> {
     if let Some(circle) = state
-        .projection_application()
+        .projections()
         .snapshot()
         .circles
         .get(circle_id.as_str())
@@ -359,7 +359,7 @@ async fn ensure_backing_circle(
     .await
     .map_err(sidecar_reducer_reject_to_app_error)?;
     if state
-        .projection_application()
+        .projections()
         .snapshot()
         .circles
         .get(circle_id.as_str())
@@ -379,7 +379,7 @@ async fn ensure_sidecar_aggregate(
     realm_id: &RealmId,
 ) -> Result<AgentSidecarRecord, AppError> {
     if let Some(record) = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecar_for_realm_controller(realm_id.as_str(), controller)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
@@ -435,7 +435,7 @@ async fn ensure_sidecar_aggregate(
         updated_at: None,
     };
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .ensure_sidecar(record)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar persistence failed: {error}")))
@@ -443,7 +443,7 @@ async fn ensure_sidecar_aggregate(
 
 fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .circles
         .get(circle_id)
@@ -485,7 +485,7 @@ pub(crate) async fn remove_agent_from_controller_sidecars(
     agent_id: &str,
 ) -> Result<(), AppError> {
     let sidecars = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecars_for_controller(controller, None)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar list failed: {error}")))?;
@@ -522,7 +522,7 @@ fn private_tracks_for_context(state: &AppState, context_ref: &AgentSidecarContex
         return json!({"synthesis": {}, "discussion": {"profile": "discussion", "is_primary": true}});
     };
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .strands
         .get(context.strand_id.as_str())
@@ -609,7 +609,7 @@ async fn create_private_context(
         created_at: chrono::Utc::now(),
     };
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .ensure_sidecar_context(record)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar context persistence failed: {error}")))
@@ -624,7 +624,7 @@ async fn ensure_private_context(
     normalized_context_ref_digest: &str,
 ) -> Result<AgentSidecarContextRecord, AppError> {
     if let Some(record) = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecar_context(&sidecar.sidecar_id, normalized_context_ref_digest)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar context lookup failed: {error}")))?
@@ -705,7 +705,7 @@ fn typed_desired_agents(desired: &[String]) -> Result<Vec<Did>, AppError> {
 }
 
 fn sidecar_control_frontier(
-    projection: &soland_application::projection::ProjectionSnapshot,
+    projection: &soland_services::projection::ProjectionSnapshot,
     record: &AgentSidecarRecord,
     desired: &[String],
 ) -> Result<Vec<NonEmptyString>, AppError> {
@@ -745,7 +745,7 @@ pub(crate) async fn expected_sidecar_mls_binding(
         .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
     let controller_id = Did::new(record.controller_id.clone())
         .map_err(|error| AppError::internal(format!("stored controller id: {error}")))?;
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let control_frontier = sidecar_control_frontier(&projection, record, &desired)?;
     let desired_access_digest = agent_sidecar_desired_access_digest(
         sidecar_id.clone(),
@@ -790,7 +790,7 @@ pub(crate) fn validate_sidecar_exchange_control_event(
     {
         return Err(REASON);
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let strand = projection.strands.get(strand_id).ok_or(REASON)?;
     // §7.2.3: the control Event must be submitted into the private Strand's
     // own Realm. A mismatched operation.realm_id would let a caller route the
@@ -836,7 +836,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     let circle_id = binding.circle_id().map(ToString::to_string);
     let sidecar_for_scope = circle_id.as_deref().and_then(|circle_id| {
         state
-            .projection_application()
+            .projections()
             .snapshot()
             .sidecars
             .values()
@@ -857,7 +857,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         return Err("mls_sidecar_binding_mismatch");
     }
     let record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecar(&sidecar_projection.sidecar_id)
         .await
         .map_err(|_| "mls_sidecar_binding_state_unavailable")?
@@ -881,7 +881,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         .chain(desired)
         .collect::<std::collections::BTreeSet<_>>();
     let materialized_members = state
-        .projection_application()
+        .projections()
         .snapshot()
         .circles
         .get(&sidecar_projection.backing_circle_id)
@@ -900,7 +900,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         return Err("mls_sidecar_binding_mismatch");
     }
     let current_group = state
-        .projection_application()
+        .projections()
         .snapshot()
         .circles
         .get(&sidecar_projection.backing_circle_id)
@@ -927,7 +927,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
             if current_group.as_deref() != Some(payload_group_id) {
                 return Err("mls_sidecar_group_mismatch");
             }
-            let projection = state.projection_application().snapshot();
+            let projection = state.projections().snapshot();
             let commit_ref = operation
                 .payload
                 .get("commit_ref")
@@ -958,7 +958,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
 }
 
 fn welcome_matches_sidecar_binding(
-    welcome: &soland_application::projection::MlsWelcomeView,
+    welcome: &soland_services::projection::MlsWelcomeView,
     sidecar_id: &SidecarId,
     current_join_ref: &str,
 ) -> bool {
@@ -975,7 +975,7 @@ fn welcome_matches_sidecar_binding(
 }
 
 fn device_has_effective_sidecar_evidence(
-    projection: &soland_application::projection::ProjectionSnapshot,
+    projection: &soland_services::projection::ProjectionSnapshot,
     principal_id: &str,
     device_id: Option<&str>,
     group_id: &str,
@@ -1004,7 +1004,7 @@ fn device_has_effective_sidecar_evidence(
 }
 
 fn principal_has_pending_sidecar_welcome(
-    projection: &soland_application::projection::ProjectionSnapshot,
+    projection: &soland_services::projection::ProjectionSnapshot,
     principal_id: &str,
     group_id: &str,
     sidecar_id: &SidecarId,
@@ -1029,7 +1029,7 @@ fn principal_has_pending_sidecar_welcome(
 }
 
 fn epoch_matches_sidecar_binding(
-    row: &soland_application::projection::MlsCommitEpochView,
+    row: &soland_services::projection::MlsCommitEpochView,
     expected: &SidecarMlsBinding,
 ) -> bool {
     serde_json::from_value::<MlsGovernanceBindingPayload>(row.governance_binding.clone())
@@ -1048,7 +1048,7 @@ async fn sidecar_view(
         eligible_sidecar_agents(state, &record.realm_id, &record.controller_id, &[]).await?;
     let desired_typed = typed_desired_agents(&desired)?;
     let expected_binding = expected_sidecar_mls_binding(state, record).await?;
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let (circle_members, group_id) = projection
         .circles
         .get(&record.backing_circle_id)
@@ -1312,7 +1312,7 @@ pub(super) async fn get_sidecar(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecar(sidecar_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
@@ -1332,7 +1332,7 @@ pub(super) async fn list_sidecars(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let mut records = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecars_for_controller(&session.actor, realm_id.as_ref().map(RealmId::as_str))
         .await
         .map_err(|error| AppError::internal(format!("Sidecar list failed: {error}")))?;
@@ -1608,3 +1608,4 @@ mod tests {
         ));
     }
 }
+

@@ -1196,9 +1196,9 @@ impl AppConfig {
         let development_mode = self.development_mode;
         let tls_enabled = self.tls_enabled();
         let pq_hybrid_tls_required_group =
-            soland_application::protocol_artifacts::pq_hybrid_tls_required_group();
+            soland_services::protocol_artifacts::pq_hybrid_tls_required_group();
         let pq_hybrid_tls_probe_artifact =
-            soland_application::protocol_artifacts::PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF;
+            soland_services::protocol_artifacts::PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF;
         let pq_hybrid_tls_probe_verified = self.pq_hybrid_tls_probe_verified();
         // CSP is enforced upstream by the reverse proxy (Caddyfile /
         // nginx); we can't probe the live header from inside the app,
@@ -2009,3 +2009,4 @@ mod tests {
         assert!(!AppConfig::pq_hybrid_tls_probe_verified_from_value(None));
     }
 }
+

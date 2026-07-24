@@ -130,7 +130,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_canonical_event(
         &self,
         record: crate::events::CanonicalEventRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .events()
             .put(persistence_canonical_event(record))
@@ -140,7 +140,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .events()
             .put_realm_bootstrap_batch_atomic(
@@ -159,7 +159,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         device: Option<crate::events::IdentityAnchorDeviceState>,
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
-    ) -> crate::ApplicationResult<crate::events::IdentityAnchorCommitResult> {
+    ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0
             .events()
@@ -199,7 +199,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn canonical_event(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Option<crate::events::CanonicalEventRecord>> {
         Ok(self
             .0
             .events()
@@ -207,12 +207,12 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .await?
             .map(application_accepted_event))
     }
-    async fn has_canonical_event(&self, event_id: &str) -> crate::ApplicationResult<bool> {
+    async fn has_canonical_event(&self, event_id: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.events().contains(event_id).await?)
     }
     async fn canonical_events(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
         Ok(self
             .0
             .events()
@@ -225,7 +225,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn canonical_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
         Ok(self
             .0
             .events()
@@ -239,7 +239,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         &self,
         realm_id: &str,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
         Ok(self
             .0
             .events()
@@ -252,18 +252,18 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Vec<arkret_wire::EventBatchReceipt>> {
+    ) -> crate::ServiceResult<Vec<arkret_wire::EventBatchReceipt>> {
         Ok(self.0.events().batch_receipts_for_event(event_id).await?)
     }
     async fn realm_event_stats(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<soland_storage::RealmEventStats> {
+    ) -> crate::ServiceResult<soland_storage::RealmEventStats> {
         Ok(self.0.events().realm_event_stats(realm_id).await?)
     }
     async fn peer_authz_state_records(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
         Ok(self
             .0
             .events()
@@ -276,7 +276,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn peer_events_query_page(
         &self,
         query: &crate::events::PeerEventsPageQuery,
-    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
         let query = soland_storage::PeerEventsPageQuery {
             realms: query.realms.clone(),
             actors: query.actors.clone(),
@@ -297,7 +297,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn realm_events_newest_first(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::events::CanonicalEventRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::events::CanonicalEventRecord>> {
         Ok(self
             .0
             .events()
@@ -311,7 +311,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn accepted_event(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::AcceptedEvent>> {
+    ) -> crate::ServiceResult<Option<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -320,7 +320,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .map(application_accepted_event))
     }
 
-    async fn accepted_events(&self) -> crate::ApplicationResult<Vec<crate::events::AcceptedEvent>> {
+    async fn accepted_events(&self) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -333,7 +333,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
 
     async fn projected_events(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::events::ProjectedEvent>> {
+    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
         Ok(self
             .0
             .projection_events()
@@ -347,7 +347,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn projected_events_capped(
         &self,
         limit: usize,
-    ) -> crate::ApplicationResult<Vec<crate::events::ProjectedEvent>> {
+    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
         Ok(self
             .0
             .projection_events()
@@ -361,7 +361,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn append_projected_event(
         &self,
         event: crate::events::ProjectedEvent,
-    ) -> crate::ApplicationResult<crate::events::ProjectedEventAppendResult> {
+    ) -> crate::ServiceResult<crate::events::ProjectedEventAppendResult> {
         Ok(
             match self
                 .0
@@ -382,7 +382,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn accepted_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::events::AcceptedEvent>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedEvent>> {
         Ok(self
             .0
             .events()
@@ -393,14 +393,14 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .collect())
     }
 
-    async fn max_actor_sequence(&self, actor_id: &str) -> crate::ApplicationResult<Option<u64>> {
+    async fn max_actor_sequence(&self, actor_id: &str) -> crate::ServiceResult<Option<u64>> {
         Ok(self.0.events().max_actor_seq(actor_id).await?)
     }
 
     async fn batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::events::AcceptedBatchReceipt>> {
+    ) -> crate::ServiceResult<Vec<crate::events::AcceptedBatchReceipt>> {
         self.0
             .events()
             .batch_receipts_for_event(event_id)
@@ -451,7 +451,7 @@ impl crate::events::MessagePort for PersistenceEventReader {
     async fn message(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::MessageState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MessageState>> {
         Ok(self
             .0
             .messages()
@@ -463,7 +463,7 @@ impl crate::events::MessagePort for PersistenceEventReader {
     async fn store_message(
         &self,
         message: crate::events::MessageState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.messages().put(&persistence_message(message)).await?;
         Ok(())
     }
@@ -472,7 +472,7 @@ impl crate::events::MessagePort for PersistenceEventReader {
         &self,
         realm_id: &str,
         limit: usize,
-    ) -> crate::ApplicationResult<Vec<crate::events::MessageState>> {
+    ) -> crate::ServiceResult<Vec<crate::events::MessageState>> {
         Ok(self
             .0
             .messages()
@@ -513,20 +513,20 @@ fn persistence_applet_replay(
 
 #[async_trait::async_trait]
 impl crate::events::AppletPort for PersistenceEventReader {
-    async fn applet(&self, applet_id: &str) -> crate::ApplicationResult<Option<Value>> {
+    async fn applet(&self, applet_id: &str) -> crate::ServiceResult<Option<Value>> {
         Ok(self.0.applets().get(applet_id).await?)
     }
-    async fn applets(&self) -> crate::ApplicationResult<Vec<Value>> {
+    async fn applets(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.applets().list().await?)
     }
-    async fn store_applet(&self, applet_id: &str, applet: Value) -> crate::ApplicationResult<()> {
+    async fn store_applet(&self, applet_id: &str, applet: Value) -> crate::ServiceResult<()> {
         self.0.applets().put(applet_id, applet).await?;
         Ok(())
     }
     async fn begin_applet_transaction(
         &self,
         replay: crate::events::AppletTransactionReplayState,
-    ) -> crate::ApplicationResult<crate::events::AppletTransactionReplayResult> {
+    ) -> crate::ServiceResult<crate::events::AppletTransactionReplayResult> {
         Ok(
             match self
                 .0
@@ -550,7 +550,7 @@ impl crate::events::AppletPort for PersistenceEventReader {
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .applets()
             .complete_transaction_replay(source_service_id, idempotency_key, outcome)
@@ -565,7 +565,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
         &self,
         origin: &str,
         operation: &arkret_event_draft::Operation,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         let event_type = soland_domain::kinds::canonical_kind_string(operation);
         let is_message_create = soland_domain::kinds::operation_is_message_create(operation);
         let is_membership_or_realm_lifecycle =
@@ -587,7 +587,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
     async fn store_space_container_projection(
         &self,
         record: &crate::events::SpaceContainerProjectionRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         let record = soland_storage::SpaceContainerProjectionRecord {
             container_space_id: record.container_space_id.clone(),
             realm_id: record.realm_id.clone(),
@@ -617,7 +617,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
     async fn store_strand_projection(
         &self,
         record: &crate::events::StrandProjectionRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         let record = soland_storage::StrandProjectionRecord {
             strand_id: record.strand_id.clone(),
             realm_id: record.realm_id.clone(),
@@ -640,7 +640,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
     async fn store_morph_projection(
         &self,
         record: &crate::events::MorphProjectionRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         let record = soland_storage::MorphProjectionRecord {
             morph_id: record.morph_id.clone(),
             realm_id: record.realm_id.clone(),
@@ -666,7 +666,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
     async fn store_realm_organization_statement(
         &self,
         record: &crate::events::RealmOrganizationStatementRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         let record = soland_storage::RealmOrganizationStatementRecord {
             realm_id: record.realm_id.clone(),
             organization_id: record.organization_id.clone(),
@@ -695,7 +695,7 @@ impl crate::events::ProjectionWritePort for PersistenceProjectionWriter {
 
 #[async_trait::async_trait]
 impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
-    async fn commits(&self) -> crate::ApplicationResult<Vec<crate::events::MlsCommitState>> {
+    async fn commits(&self) -> crate::ServiceResult<Vec<crate::events::MlsCommitState>> {
         Ok(self
             .0
             .mls_commits()
@@ -719,7 +719,7 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
         &self,
         effective_scope: &serde_json::Value,
         group_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsCommitState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
         Ok(self
             .0
             .mls_commits()
@@ -731,7 +731,7 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
     async fn initialize_group(
         &self,
         command: crate::events::InitializeMlsGroupCommand,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsCommitState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
         Ok(self
             .0
             .mls_commits()
@@ -752,7 +752,7 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
     async fn advance_epoch(
         &self,
         command: crate::events::AdvanceMlsEpochCommand,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsCommitState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
         Ok(self
             .0
             .mls_commits()
@@ -777,7 +777,7 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
         effective_scope: &serde_json::Value,
         group_id: &str,
         epoch: u64,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsCommitState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsCommitState>> {
         Ok(self
             .0
             .mls_commits()
@@ -895,7 +895,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn store_key_package(
         &self,
         record: &crate::events::MlsKeyPackageState,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .mls_key_packages()
@@ -905,7 +905,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn key_package(
         &self,
         id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsKeyPackageState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -916,7 +916,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn claim_key_package(
         &self,
         command: crate::events::ClaimMlsKeyPackageCommand<'_>,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsKeyPackageState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -938,7 +938,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
-    ) -> crate::ApplicationResult<Option<crate::events::MlsKeyPackageState>> {
+    ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -950,7 +950,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         &self,
         source_service_id: &str,
         claim_request_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
+    ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -961,7 +961,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn claim_peer_key_package(
         &self,
         attempt: crate::events::PeerKeyPackageClaimCommand<'_>,
-    ) -> crate::ApplicationResult<crate::events::PeerKeyPackageClaimResult> {
+    ) -> crate::ServiceResult<crate::events::PeerKeyPackageClaimResult> {
         let ledger = persistence_peer_claim(attempt.ledger);
         Ok(
             match self
@@ -996,7 +996,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn store_peer_claim_terminal(
         &self,
         record: &crate::events::PeerKeyPackageClaimLedgerState,
-    ) -> crate::ApplicationResult<crate::events::PeerKeyPackageClaimLedgerWriteResult> {
+    ) -> crate::ServiceResult<crate::events::PeerKeyPackageClaimLedgerWriteResult> {
         Ok(
             match self
                 .0
@@ -1018,7 +1018,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn revoke_expired_peer_claims(
         &self,
         now_unix_ms: i64,
-    ) -> crate::ApplicationResult<Vec<String>> {
+    ) -> crate::ServiceResult<Vec<String>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -1027,7 +1027,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     }
     async fn key_packages(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::events::MlsKeyPackageState>> {
+    ) -> crate::ServiceResult<Vec<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -1040,7 +1040,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn key_packages_claimed_by_group(
         &self,
         mls_group_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::events::MlsKeyPackageState>> {
+    ) -> crate::ServiceResult<Vec<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
@@ -1055,7 +1055,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         &self,
         actor_id: &str,
         retired_at: i64,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         let rows = self.0.mls_key_packages().snapshot_all().await?;
         let mut retired = 0;
         for row in rows.into_iter().filter(|row| {
@@ -1088,7 +1088,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
     async fn enqueue_welcome(
         &self,
         welcome: crate::events::MlsWelcomeState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .mls_welcomes()
             .enqueue(&persistence_mls_welcome(welcome))
@@ -1120,7 +1120,7 @@ impl crate::events::RealmMetadataPort for PersistenceRealmMetadata {
     async fn realm_metadata(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::RealmMetadata>> {
+    ) -> crate::ServiceResult<Option<crate::events::RealmMetadata>> {
         Ok(self
             .0
             .realm_meta()
@@ -1131,7 +1131,7 @@ impl crate::events::RealmMetadataPort for PersistenceRealmMetadata {
 
     async fn realm_metadata_list(
         &self,
-    ) -> crate::ApplicationResult<Vec<(String, crate::events::RealmMetadata)>> {
+    ) -> crate::ServiceResult<Vec<(String, crate::events::RealmMetadata)>> {
         Ok(self
             .0
             .realm_meta()
@@ -1146,7 +1146,7 @@ impl crate::events::RealmMetadataPort for PersistenceRealmMetadata {
         &self,
         realm_id: &str,
         metadata: crate::events::RealmMetadata,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .realm_meta()
             .put(realm_id, &persistence_realm_metadata(metadata))
@@ -1154,7 +1154,7 @@ impl crate::events::RealmMetadataPort for PersistenceRealmMetadata {
         Ok(())
     }
 
-    async fn delete_realm_metadata(&self, realm_id: &str) -> crate::ApplicationResult<()> {
+    async fn delete_realm_metadata(&self, realm_id: &str) -> crate::ServiceResult<()> {
         self.0.realm_meta().delete(realm_id).await?;
         Ok(())
     }
@@ -1286,7 +1286,7 @@ impl crate::events::RealmInvitePort for PersistenceRealmInvites {
     async fn get(
         &self,
         invite_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::events::RealmInviteState>> {
+    ) -> crate::ServiceResult<Option<crate::events::RealmInviteState>> {
         Ok(self
             .0
             .realm_invites()
@@ -1295,7 +1295,7 @@ impl crate::events::RealmInvitePort for PersistenceRealmInvites {
             .map(application_realm_invite))
     }
 
-    async fn put(&self, record: crate::events::RealmInviteState) -> crate::ApplicationResult<()> {
+    async fn put(&self, record: crate::events::RealmInviteState) -> crate::ServiceResult<()> {
         Ok(self
             .0
             .realm_invites()
@@ -1303,7 +1303,7 @@ impl crate::events::RealmInvitePort for PersistenceRealmInvites {
             .await?)
     }
 
-    async fn snapshot_all(&self) -> crate::ApplicationResult<Vec<crate::events::RealmInviteState>> {
+    async fn snapshot_all(&self) -> crate::ServiceResult<Vec<crate::events::RealmInviteState>> {
         Ok(self
             .0
             .realm_invites()
@@ -1322,7 +1322,7 @@ impl crate::events::InviteLocatorPort for PersistenceRealmInvites {
         record: &crate::events::InviteLocatorState,
         active_limit: usize,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<crate::events::InviteLocatorInsertResult> {
+    ) -> crate::ServiceResult<crate::events::InviteLocatorInsertResult> {
         Ok(
             match self
                 .0
@@ -1344,7 +1344,7 @@ impl crate::events::InviteLocatorPort for PersistenceRealmInvites {
         &self,
         token_digest: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<Option<crate::events::InviteLocatorState>> {
+    ) -> crate::ServiceResult<Option<crate::events::InviteLocatorState>> {
         Ok(self
             .0
             .invite_locators()
@@ -1359,7 +1359,7 @@ impl crate::events::InviteLocatorPort for PersistenceRealmInvites {
         old_locator_id: &str,
         mutation: &crate::events::InviteLocatorRotateCommand,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<Option<crate::events::InviteLocatorState>> {
+    ) -> crate::ServiceResult<Option<crate::events::InviteLocatorState>> {
         let mutation = soland_storage::InviteLocatorRotateMutation {
             locator_id: mutation.locator_id.clone(),
             token_digest: mutation.token_digest.clone(),
@@ -1381,7 +1381,7 @@ impl crate::events::InviteLocatorPort for PersistenceRealmInvites {
         subject_id: &str,
         locator_id: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<Option<crate::events::InviteLocatorState>> {
+    ) -> crate::ServiceResult<Option<crate::events::InviteLocatorState>> {
         Ok(self
             .0
             .invite_locators()
@@ -1396,7 +1396,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
     async fn commit_accepted_event(
         &self,
         command: crate::events::CommitAcceptedEventCommand,
-    ) -> crate::ApplicationResult<crate::events::CommitAcceptedEventResult> {
+    ) -> crate::ServiceResult<crate::events::CommitAcceptedEventResult> {
         let outcome = self
             .0
             .commit_event(persistence_event_commit_request(command))
@@ -1410,7 +1410,7 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
     async fn commit_accepted_event_batch(
         &self,
         command: crate::events::CommitAcceptedEventBatchCommand,
-    ) -> crate::ApplicationResult<crate::events::CommitAcceptedEventResult> {
+    ) -> crate::ServiceResult<crate::events::CommitAcceptedEventResult> {
         let outcome = self
             .0
             .commit_event_batch(soland_storage::EventBatchCommitRequest {
@@ -1435,25 +1435,25 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
 }
 
 #[derive(Clone)]
-pub struct PersistenceEventApplications {
-    pub events: EventApplicationService,
-    pub queries: EventQueryApplicationService,
-    pub mls_commits: MlsCommitQueryApplicationService,
-    pub mls_key_packages: MlsKeyPackageApplicationService,
-    pub realm_queries: RealmQueryApplicationService,
-    pub realm_invites: RealmInviteApplicationService,
+pub struct PersistenceEventServices {
+    pub events: EventService,
+    pub queries: EventQueryService,
+    pub mls_commits: MlsCommitQueryService,
+    pub mls_key_packages: MlsKeyPackageService,
+    pub realm_queries: RealmQueryService,
+    pub realm_invites: RealmInviteService,
 }
 
-pub fn build_persistence_event_applications(
+pub fn build_persistence_event_services(
     persistence: Arc<dyn PersistenceStore>,
     projected_operations: Arc<dyn ProjectedOperationPersistencePort>,
-) -> PersistenceEventApplications {
+) -> PersistenceEventServices {
     let reader = || Arc::new(PersistenceEventReader(persistence.clone()));
-    PersistenceEventApplications {
-        events: EventApplicationService::new(Arc::new(PersistenceEventCommitter(
+    PersistenceEventServices {
+        events: EventService::new(Arc::new(PersistenceEventCommitter(
             persistence.clone(),
         ))),
-        queries: EventQueryApplicationService::new(
+        queries: EventQueryService::new(
             reader(),
             reader(),
             reader(),
@@ -1462,18 +1462,19 @@ pub fn build_persistence_event_applications(
                 projected_operations,
             }),
         ),
-        mls_commits: MlsCommitQueryApplicationService::new(Arc::new(PersistenceMlsCommitReader(
+        mls_commits: MlsCommitQueryService::new(Arc::new(PersistenceMlsCommitReader(
             persistence.clone(),
         ))),
-        mls_key_packages: MlsKeyPackageApplicationService::new(Arc::new(
+        mls_key_packages: MlsKeyPackageService::new(Arc::new(
             PersistenceMlsKeyPackageMaintenance(persistence.clone()),
         )),
-        realm_queries: RealmQueryApplicationService::new(Arc::new(PersistenceRealmMetadata(
+        realm_queries: RealmQueryService::new(Arc::new(PersistenceRealmMetadata(
             persistence.clone(),
         ))),
-        realm_invites: RealmInviteApplicationService::new(
+        realm_invites: RealmInviteService::new(
             Arc::new(PersistenceRealmInvites(persistence.clone())),
             Arc::new(PersistenceRealmInvites(persistence)),
         ),
     }
 }
+

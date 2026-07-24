@@ -1,10 +1,10 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, RealmId};
 use serde_json::{Value, json};
-use soland_application::events::{
+use soland_services::events::{
     RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
 };
-use soland_application::operation_semantics as kinds;
+use soland_services::operation_semantics as kinds;
 
 use super::*;
 use crate::ids;
@@ -22,7 +22,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     let explicit_discoverability =
         operation_realm_discoverability(operation).filter(|value| is_valid_discoverability(value));
     let directory_public = {
-        let directory = state.realm_directory_application();
+        let directory = state.realm_directory();
         if directory.entry(&realm_id).is_some() {
             let public = directory
                 .update_entry(&realm_id, |entry| {
@@ -88,7 +88,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     project_retention_policy_from_operation(state, origin, operation).await;
 
     let now = now();
-    let service = state.realm_query_application();
+    let service = state.realms();
     match service.realm_metadata(realm_id.as_str()).await {
         Ok(None) => {
             let history_sharing_policy = operation_realm_history_sharing_policy(operation);
@@ -241,7 +241,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     if kinds::canonical_kind_for_operation(operation)
         == Some(arkret_wire::events::EventKind::REALM_DESTROY)
     {
-        let service = state.realm_query_application();
+        let service = state.realms();
         if let Ok(Some(mut record)) = service.realm_metadata(operation.realm_id.as_str()).await {
             record.deleted = true;
             record.updated_at = operation.created_at;
@@ -290,7 +290,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             );
             return;
         }
-        let invites = state.realm_invite_application();
+        let invites = state.realm_invites();
         let already_invited = invites
             .snapshot_all()
             .await
@@ -347,7 +347,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 
     let cascaded_agent_ids = if matches!(membership, Some("leave" | "ban")) {
         let agent_ids = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agents_for_controller(member)
             .await
             .unwrap_or_default()
@@ -361,7 +361,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
             .map(ToOwned::to_owned)
             .unwrap_or_else(|| operation.operation_id.as_str().to_owned());
         state
-            .projection_application()
+            .projections()
             .snapshot()
             .cascade_controller_agent_memberships(
                 operation.realm_id.as_str(),
@@ -376,7 +376,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
     };
 
     let updated = state
-        .realm_directory_application()
+        .realm_directory()
         .update_entry(&realm_id, |entry| {
             if let Ok(member) = Did::new(member) {
                 if matches!(membership, Some("leave" | "ban")) {
@@ -406,7 +406,7 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
 }
 
 async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     let Ok(records) = invites.snapshot_all().await else {
         return;
     };
@@ -587,3 +587,4 @@ pub fn project_member_identity_update(state: &AppState, operation: &Operation) {
     };
     state.record_member_identity_update(record, identity_payload);
 }
+

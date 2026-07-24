@@ -2,8 +2,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
 use serde_json::json;
-use soland_application::events::CanonicalEventRecord;
-use soland_application::identity::DirectConversationBindingRecord;
+use soland_services::events::CanonicalEventRecord;
+use soland_services::identity::DirectConversationBindingRecord;
 use soland_storage_postgres::Db;
 
 use super::*;
@@ -80,7 +80,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         projection.apply(&peer_join, state.hlc());
         projection.apply(&strand_create, state.hlc());
     }
-    state.contact_application().install_direct_binding(
+    state.contacts().install_direct_binding(
         "did:web:alice.example\0did:web:bob.example".to_owned(),
         DirectConversationBindingRecord {
             participants_unordered: vec![
@@ -248,7 +248,7 @@ fn grant_circle_action(
     actor: &str,
     action: &str,
 ) {
-    state.authorization_application().create_grant(
+    state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
@@ -267,7 +267,7 @@ fn grant_moderation_decision(
     realm_id: &arkret_identifiers::RealmId,
     actor: &str,
 ) {
-    state.authorization_application().create_grant(
+    state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
@@ -283,7 +283,7 @@ fn grant_call_action(
     actor: &str,
     action: &str,
 ) {
-    state.authorization_application().create_grant(
+    state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
@@ -492,7 +492,7 @@ async fn put_agent_participation_ceiling(
     act_on_behalf: bool,
 ) {
     state
-        .agent_participation_application()
+        .agent_participations()
         .store_ceiling(json!({
             "scope_kind": scope_kind,
             "scope_key": scope_key,
@@ -626,7 +626,7 @@ async fn register_agent_selection(
     reply: bool,
     act_on_behalf: bool,
 ) {
-    let mut record = soland_application::identity::AgentPairingState::new(
+    let mut record = soland_services::identity::AgentPairingState::new(
         agent_id.to_owned(),
         "did:web:alice.example".to_owned(),
         "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
@@ -637,7 +637,7 @@ async fn register_agent_selection(
     record.display_name = Some("Summary".to_owned());
     record.agent_slug = Some("summary".to_owned());
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .save_agent(record)
         .await
         .expect("agent record");
@@ -646,7 +646,7 @@ async fn register_agent_selection(
         .strip_prefix("ak:realm:")
         .expect("realm id prefix");
     state
-        .agent_participation_application()
+        .agent_participations()
         .store_selection(json!({
             "agent_id": agent_id,
             "scope_kind": "realm",
@@ -889,7 +889,7 @@ async fn encrypted_realm_native_agent_join_requires_claimable_keypackage() {
         validate_member_state_policy_for_test(&state, &operation)
             .await
             .unwrap_err(),
-        soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
+        soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
     );
 }
 
@@ -1098,7 +1098,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
 async fn direct_conversation_role_fails_closed_when_binding_cache_is_missing() {
     let (state, realm_id) = state_with_direct_binding();
     state
-        .contact_application()
+        .contacts()
         .replace_runtime_direct_bindings(std::iter::empty());
 
     let invite = op(
@@ -1145,7 +1145,7 @@ async fn act_on_behalf_agent_requires_participation_bit() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1178,7 +1178,7 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1242,7 +1242,7 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1309,7 +1309,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let envelope_grant = state.authorization_application().create_grant(
+    let envelope_grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1317,7 +1317,7 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         vec![arkret_wire::events::EventKind::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
-    let context_grant = state.authorization_application().create_grant(
+    let context_grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1389,7 +1389,7 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1428,7 +1428,7 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1466,7 +1466,7 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1502,7 +1502,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1511,14 +1511,14 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         Vec::new(),
     );
     let mut record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(agent)
         .await
         .expect("agent lookup")
         .expect("agent record");
     record.state = "paused".to_owned();
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .save_agent(record)
         .await
         .expect("agent record update");
@@ -1541,7 +1541,7 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1637,7 +1637,7 @@ async fn profile_accountable_principal_rejects_stored_grant_signed_by_other_acto
     )
     .unwrap();
     state
-        .event_query_application()
+        .event_queries()
         .store_canonical_event(CanonicalEventRecord {
             event_id: "ak:event:01904100-0000-7000-8000-0000000007a6".to_owned(),
             actor_id: "did:web:mallory.example".to_owned(),
@@ -1800,7 +1800,7 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1831,7 +1831,7 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1864,7 +1864,7 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization_application().create_grant(
+    let grant = state.authorization().create_grant(
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -2391,10 +2391,10 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
     .unwrap();
     let now = chrono::Utc::now();
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             realm_id.as_str(),
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -2529,10 +2529,10 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
     let bob_device = "ak:device:01904100-0000-7000-8000-00000000d3d1";
 
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             realm_id.as_str(),
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -2567,12 +2567,12 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
         .await
         .expect("realm meta stored");
     state
-        .identity_application()
-        .save_device(soland_application::identity::SaveDeviceCommand {
+        .identities()
+        .save_device(soland_services::identity::SaveDeviceCommand {
             actor_id: bob.to_owned(),
             device_id: bob_device.to_owned(),
             display_name: None,
-            device: soland_application::identity::DeviceIdentity {
+            device: soland_services::identity::DeviceIdentity {
                 actor_id: bob.to_owned(),
                 device_id: bob_device.to_owned(),
                 display_name: None,
@@ -2701,3 +2701,4 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         "a non-recovery recipient with no history-sharing policy must fail closed"
     );
 }
+

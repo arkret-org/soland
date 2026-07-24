@@ -42,7 +42,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
-use soland_application::delivery::BlobState as BlobRecord;
+use soland_services::delivery::BlobState as BlobRecord;
 use tokio::io::AsyncReadExt as _;
 
 use super::blob::{
@@ -901,9 +901,9 @@ async fn complete_resumable_upload(
     // invariant).
     let media_type = "application/octet-stream".to_owned();
     let blob_ref = format!("ak:blob:sha256:{sha256}");
-    let storage_key = state.delivery_application().object_key_for_sha256(&sha256);
+    let storage_key = state.deliveries().object_key_for_sha256(&sha256);
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .put_object_file(&storage_key, &staged_data_path)
         .await
     {
@@ -919,7 +919,7 @@ async fn complete_resumable_upload(
     let record = BlobRecord {
         sha256: sha256.clone(),
         size_bytes: size_bytes as i64,
-        storage_backend: state.delivery_application().object_storage_backend_name(),
+        storage_backend: state.deliveries().object_storage_backend_name(),
         storage_key: storage_key.clone(),
         media_type: media_type.clone(),
         filename: None,
@@ -936,13 +936,13 @@ async fn complete_resumable_upload(
         created_at: received_at,
     };
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .store_blob(&blob_ref, record)
         .await
     {
         tracing::error!(%error, "failed to persist blob");
         if let Err(delete_error) = state
-            .delivery_application()
+            .deliveries()
             .delete_object(&storage_key)
             .await
         {
@@ -1101,3 +1101,4 @@ mod tests {
         assert!(!is_safe_upload_id(&"x".repeat(65)));
     }
 }
+

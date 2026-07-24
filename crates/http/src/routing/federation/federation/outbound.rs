@@ -8,7 +8,7 @@ use ed25519_dalek::Signer as _;
 use serde_json::Value;
 use serde_json::json;
 use sha2::{Digest, Sha256};
-use soland_application::federation::FederationTransactionRecord;
+use soland_services::federation::FederationTransactionRecord;
 
 use super::{now, sha256_hex};
 use crate::state::AppState;
@@ -270,7 +270,7 @@ pub(super) async fn record_outbound_fanout_attempt(
         processed_at: Some(attempted_at),
     };
     if let Err(error) = state
-        .federation_application()
+        .federation()
         .store_transaction(&record)
         .await
     {
@@ -330,13 +330,13 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
     node_id: &str,
     limit: usize,
     now: DateTime<Utc>,
-) -> soland_application::ApplicationResult<OutboundFanoutRetryReport> {
+) -> soland_services::ServiceResult<OutboundFanoutRetryReport> {
     let mut report = OutboundFanoutRetryReport::default();
     if limit == 0 {
         return Ok(report);
     }
 
-    let records = state.federation_application().transactions().await?;
+    let records = state.federation().transactions().await?;
     for record in records {
         report.scanned += 1;
         if record.origin != *state.service_id() || !record.txn_id.starts_with("outbound_") {
@@ -370,7 +370,7 @@ pub(super) async fn run_outbound_fanout_retry_pass_at(
             report.retried += 1;
         }
         state
-            .federation_application()
+            .federation()
             .store_transaction(&updated)
             .await?;
     }
@@ -512,3 +512,4 @@ pub(crate) fn test_app_state_with_peers(
     };
     AppState::new(cfg, Db { pool: None })
 }
+

@@ -15,7 +15,7 @@ use arkret_models_collaboration::events_payloads::moderation::{
 use arkret_wire::EffectiveScope;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
+use soland_services::runtime_guards::MODERATION_REPORT_EVIDENCE_MAX_TOTAL_BLOB_BYTES;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -172,7 +172,7 @@ fn moderation_target_effective_scope_value(
     if target_ref == realm_id {
         return Ok(json!({"kind": "realm", "realm_id": realm_id}));
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let scope_circle_id = if let Some(message) = moderation_target_message(&projection, target_ref)
         .filter(|message| message.realm_id == realm_id)
     {
@@ -223,9 +223,9 @@ fn moderation_target_effective_scope_value(
 }
 
 fn moderation_target_message<'a>(
-    projection: &'a soland_application::projection::ProjectionSnapshot,
+    projection: &'a soland_services::projection::ProjectionSnapshot,
     target_ref: &str,
-) -> Option<&'a soland_application::projection::MessageReadModel> {
+) -> Option<&'a soland_services::projection::MessageReadModel> {
     projection.messages.get(target_ref).or_else(|| {
         target_ref
             .strip_prefix("ak:message:")
@@ -412,7 +412,7 @@ async fn validate_franking_event_time_anchor(
     proof: &FrankingProof,
 ) -> Result<(), AppError> {
     let record = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(proof.event_id.as_str())
         .await
         .map_err(|error| {
@@ -459,7 +459,7 @@ async fn validate_franking_event_time_anchor(
 }
 
 fn encrypted_event_payload_digest(
-    record: &soland_application::events::CanonicalEventRecord,
+    record: &soland_services::events::CanonicalEventRecord,
 ) -> Option<&str> {
     record
         .envelope
@@ -651,14 +651,14 @@ async fn moderation_report(
     report_fields.insert("created_at".to_owned(), json!(now()));
     let report_payload = Value::Object(report_fields);
     if let Err(error) = state
-        .governance_application()
+        .governance()
         .append_moderation_report(report_payload.clone())
         .await
     {
         tracing::error!(%error, "failed to append moderation report");
     }
     if let Err(error) = state
-        .governance_application()
+        .governance()
         .append_moderation_action(json!({
             "action_id": ids::generate("moderation_action"),
             "report_id": report_id,
@@ -689,7 +689,7 @@ async fn moderation_report(
         "created_at": now(),
     });
     if let Err(error) = state
-        .governance_application()
+        .governance()
         .upsert_moderation_queue_item(queue_item)
         .await
     {
@@ -726,7 +726,7 @@ pub(crate) async fn visible_reports_for_actor(
     realm_filter: Option<&str>,
 ) -> Vec<Value> {
     let all = state
-        .governance_application()
+        .governance()
         .moderation_reports()
         .await
         .unwrap_or_default();
@@ -770,7 +770,7 @@ async fn moderation_routing_visible_to_actor(
         return true;
     }
     let owner = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -780,7 +780,7 @@ async fn moderation_routing_visible_to_actor(
         return true;
     }
     let members = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id))
@@ -801,8 +801,8 @@ async fn moderation_routing_visible_to_actor(
     .into_iter()
     .any(|action| {
         state
-            .authorization_application()
-            .check(soland_application::authorization::AuthorizationCheck {
+            .authorization()
+            .check(soland_services::authorization::AuthorizationCheck {
                 actor,
                 action,
                 resource: realm_id,
@@ -876,8 +876,8 @@ mod report_safety_tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         state
-            .event_query_application()
-            .store_canonical_event(soland_application::events::CanonicalEventRecord {
+            .event_queries()
+            .store_canonical_event(soland_services::events::CanonicalEventRecord {
                 event_id: FRANKING_EVENT.to_owned(),
                 actor_id: REPORTER.to_owned(),
                 actor_seq: 1,
@@ -1027,3 +1027,4 @@ mod report_safety_tests {
         assert_eq!(error.wire_code(), arkret_wire::ReasonCode::PROOF_INVALID);
     }
 }
+

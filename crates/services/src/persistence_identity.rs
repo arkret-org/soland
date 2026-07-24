@@ -29,7 +29,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn find_account_by_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AccountIdentity>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AccountIdentity>> {
         Ok(self
             .0
             .accounts()
@@ -43,7 +43,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn register_account(
         &self,
         command: crate::identity::RegisterAccountCommand,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         let account = soland_storage::AccountRecord {
             id: command.account_id,
             did: command.actor_id.clone(),
@@ -64,7 +64,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn account(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AccountProfileState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AccountProfileState>> {
         Ok(self
             .0
             .accounts()
@@ -75,7 +75,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
 
     async fn accounts(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::identity::AccountProfileState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::AccountProfileState>> {
         Ok(self
             .0
             .accounts()
@@ -89,7 +89,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn save_account(
         &self,
         account: crate::identity::AccountProfileState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .accounts()
             .put(&persistence_account_profile(account))
@@ -97,7 +97,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         Ok(())
     }
 
-    async fn delete_account(&self, actor_id: &str) -> crate::ApplicationResult<()> {
+    async fn delete_account(&self, actor_id: &str) -> crate::ServiceResult<()> {
         self.0.accounts().delete(actor_id).await?;
         Ok(())
     }
@@ -105,7 +105,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn account_localparts(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::AccountLocalpartState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::AccountLocalpartState>> {
         Ok(self
             .0
             .account_localparts()
@@ -119,7 +119,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
     async fn localpart_owner(
         &self,
         localpart: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AccountLocalpartState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AccountLocalpartState>> {
         Ok(self
             .0
             .account_localparts()
@@ -133,7 +133,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         actor_id: &str,
         localpart: &str,
         primary: bool,
-    ) -> crate::ApplicationResult<crate::identity::AccountLocalpartState> {
+    ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
         Ok(application_account_localpart(
             self.0
                 .account_localparts()
@@ -146,7 +146,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         &self,
         actor_id: &str,
         localpart: &str,
-    ) -> crate::ApplicationResult<crate::identity::AccountLocalpartState> {
+    ) -> crate::ServiceResult<crate::identity::AccountLocalpartState> {
         Ok(application_account_localpart(
             self.0
                 .account_localparts()
@@ -159,7 +159,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         &self,
         actor_id: &str,
         localpart: &str,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .account_localparts()
             .remove(actor_id, localpart)
@@ -167,7 +167,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         Ok(())
     }
 
-    async fn clear_localparts(&self, actor_id: &str) -> crate::ApplicationResult<()> {
+    async fn clear_localparts(&self, actor_id: &str) -> crate::ServiceResult<()> {
         self.0
             .account_localparts()
             .clear_for_account(actor_id)
@@ -179,7 +179,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         &self,
         localpart: &str,
         released_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.handle_releases().put(localpart, released_at).await?;
         Ok(())
     }
@@ -188,7 +188,7 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         &self,
         actor_id: &str,
         lifecycle: crate::identity::AccountLifecycleState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .account_lifecycle()
             .put(
@@ -204,14 +204,14 @@ impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
         Ok(())
     }
 
-    async fn delete_account_lifecycle(&self, actor_id: &str) -> crate::ApplicationResult<()> {
+    async fn delete_account_lifecycle(&self, actor_id: &str) -> crate::ServiceResult<()> {
         self.0.account_lifecycle().delete(actor_id).await?;
         Ok(())
     }
 
     async fn account_lifecycles(
         &self,
-    ) -> crate::ApplicationResult<Vec<(String, crate::identity::AccountLifecycleState)>> {
+    ) -> crate::ServiceResult<Vec<(String, crate::identity::AccountLifecycleState)>> {
         Ok(self
             .0
             .account_lifecycle()
@@ -280,7 +280,7 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
         &self,
         actor_id: &str,
         data_type: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AccountDataState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AccountDataState>> {
         Ok(self
             .0
             .account_data()
@@ -292,7 +292,7 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
     async fn entries_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::AccountDataState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::AccountDataState>> {
         Ok(self
             .0
             .account_data()
@@ -306,7 +306,7 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
     async fn save_entry(
         &self,
         entry: crate::identity::AccountDataState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .account_data()
             .put(&soland_storage::AccountDataRecord {
@@ -319,7 +319,7 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
         Ok(())
     }
 
-    async fn delete_entry(&self, actor_id: &str, data_type: &str) -> crate::ApplicationResult<()> {
+    async fn delete_entry(&self, actor_id: &str, data_type: &str) -> crate::ServiceResult<()> {
         self.0.account_data().delete(actor_id, data_type).await?;
         Ok(())
     }
@@ -341,7 +341,7 @@ impl crate::identity::ConsentCellPort for PersistenceConsentCells {
     async fn save_cell(
         &self,
         cell: crate::identity::ConsentCellRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .consent_cells()
             .put(&storage_consent_cell(cell))
@@ -351,7 +351,7 @@ impl crate::identity::ConsentCellPort for PersistenceConsentCells {
 
     async fn cells(
         &self,
-    ) -> crate::ApplicationResult<
+    ) -> crate::ServiceResult<
         Vec<(
             crate::identity::ConsentCellKey,
             crate::identity::ConsentCellRecord,
@@ -374,7 +374,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
         &self,
         requester: &str,
         target: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::ContactRecord>> {
+    ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
         Ok(self
             .0
             .contacts()
@@ -388,7 +388,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
         requester: &str,
         target: &str,
         scope: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::ContactRecord>> {
+    ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
         Ok(self
             .0
             .contacts()
@@ -400,7 +400,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
     async fn contacts_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::ContactRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::ContactRecord>> {
         Ok(self
             .0
             .contacts()
@@ -414,7 +414,7 @@ impl crate::identity::ContactPort for PersistenceContacts {
     async fn save_contact(
         &self,
         contact: crate::identity::ContactRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.contacts().put(&storage_contact(contact)).await?;
         Ok(())
     }
@@ -425,14 +425,14 @@ impl crate::identity::InviteReceivePolicyPort for PersistenceInviteReceivePolici
     async fn save_policy(
         &self,
         policy: arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.invite_receive_policies().put(&policy).await?;
         Ok(())
     }
 
     async fn policies(
         &self,
-    ) -> crate::ApplicationResult<
+    ) -> crate::ServiceResult<
         Vec<(
             String,
             arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy,
@@ -448,7 +448,7 @@ impl crate::identity::DirectConversationBindingPort for PersistenceDirectConvers
         &self,
         pair_key: &str,
         binding: crate::identity::DirectConversationBindingRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .direct_conversation_bindings()
             .put(pair_key, &storage_direct_binding(binding))
@@ -456,7 +456,7 @@ impl crate::identity::DirectConversationBindingPort for PersistenceDirectConvers
         Ok(())
     }
 
-    async fn delete_binding(&self, pair_key: &str) -> crate::ApplicationResult<()> {
+    async fn delete_binding(&self, pair_key: &str) -> crate::ServiceResult<()> {
         self.0
             .direct_conversation_bindings()
             .delete(pair_key)
@@ -466,7 +466,7 @@ impl crate::identity::DirectConversationBindingPort for PersistenceDirectConvers
 
     async fn bindings(
         &self,
-    ) -> crate::ApplicationResult<Vec<(String, crate::identity::DirectConversationBindingRecord)>>
+    ) -> crate::ServiceResult<Vec<(String, crate::identity::DirectConversationBindingRecord)>>
     {
         Ok(self
             .0
@@ -614,7 +614,7 @@ impl crate::identity::DeviceKeyPort for PersistenceDeviceKeys {
         actor_id: String,
         device_id: String,
         payload: Value,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .device_keys()
             .put(actor_id, device_id, payload)
@@ -626,7 +626,7 @@ impl crate::identity::DeviceKeyPort for PersistenceDeviceKeys {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> crate::ApplicationResult<Option<Value>> {
+    ) -> crate::ServiceResult<Option<Value>> {
         Ok(self.0.device_keys().get(actor_id, device_id).await?)
     }
 }
@@ -638,7 +638,7 @@ impl crate::identity::OneTimeKeyPort for PersistenceOneTimeKeys {
         actor_id: String,
         device_id: String,
         keys: Vec<Value>,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .one_time_keys()
             .put(actor_id, device_id, keys)
@@ -650,14 +650,14 @@ impl crate::identity::OneTimeKeyPort for PersistenceOneTimeKeys {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> crate::ApplicationResult<Option<Value>> {
+    ) -> crate::ServiceResult<Option<Value>> {
         Ok(self.0.one_time_keys().claim(actor_id, device_id).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
-    async fn list_active_device_actors(&self) -> crate::ApplicationResult<Vec<String>> {
+    async fn list_active_device_actors(&self) -> crate::ServiceResult<Vec<String>> {
         Ok(self
             .0
             .devices()
@@ -669,7 +669,7 @@ impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
             .collect())
     }
 
-    async fn devices(&self) -> crate::ApplicationResult<Vec<crate::identity::DeviceIdentity>> {
+    async fn devices(&self) -> crate::ServiceResult<Vec<crate::identity::DeviceIdentity>> {
         Ok(self
             .0
             .devices()
@@ -684,7 +684,7 @@ impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::DeviceIdentity>> {
+    ) -> crate::ServiceResult<Option<crate::identity::DeviceIdentity>> {
         Ok(self
             .0
             .devices()
@@ -696,7 +696,7 @@ impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
     async fn save_device(
         &self,
         command: crate::identity::SaveDeviceCommand,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .devices()
             .put(&soland_storage::DeviceInventoryRecord {
@@ -716,7 +716,7 @@ impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
     async fn save_device_if_absent(
         &self,
         device: crate::identity::DeviceIdentity,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .devices()
@@ -727,7 +727,7 @@ impl crate::identity::DeviceDirectoryPort for PersistenceDeviceDirectory {
     async fn devices_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::DeviceIdentity>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::DeviceIdentity>> {
         Ok(self
             .0
             .devices()
@@ -774,7 +774,7 @@ impl crate::identity::AgentDirectoryPort for PersistenceAgentDirectory {
     async fn find_agent_controller(
         &self,
         agent_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentController>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentController>> {
         Ok(self
             .0
             .agents()
@@ -791,7 +791,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
     async fn pairing_record(
         &self,
         pairing_request_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentPairingState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentPairingState>> {
         Ok(self
             .0
             .agents()
@@ -803,7 +803,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
     async fn agent(
         &self,
         agent_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentPairingState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentPairingState>> {
         Ok(self
             .0
             .agents()
@@ -815,7 +815,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
     async fn agents_for_controller(
         &self,
         controller_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::AgentPairingState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::AgentPairingState>> {
         Ok(self
             .0
             .agents()
@@ -829,7 +829,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
     async fn save_agent(
         &self,
         agent: crate::identity::AgentPairingState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .agents()
             .put(persistence_agent_pairing(agent))
@@ -840,7 +840,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
     async fn store_runtime_approval(
         &self,
         command: &crate::identity::StoreAgentRuntimeApprovalCommand,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentPairingState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentPairingState>> {
         let write = soland_storage::AgentRuntimeApprovalWrite {
             agent_id: command.agent_id.clone(),
             pairing_request_id: command.pairing_request_id.clone(),
@@ -865,7 +865,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
     async fn activate_runtime_if_current(
         &self,
         command: &crate::identity::ActivateAgentRuntimeCommand,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         let activation = soland_storage::AgentRuntimeActivation {
             agent_id: command.agent_id.clone(),
             approval_request_id: command.approval_request_id.clone(),
@@ -888,7 +888,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
         &self,
         agent_id: &str,
         approval_request_id: &str,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .agents()
@@ -1031,7 +1031,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
     async fn ensure_sidecar(
         &self,
         sidecar: crate::identity::AgentSidecarState,
-    ) -> crate::ApplicationResult<crate::identity::AgentSidecarState> {
+    ) -> crate::ServiceResult<crate::identity::AgentSidecarState> {
         Ok(application_sidecar(
             self.0
                 .sidecars()
@@ -1042,7 +1042,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
     async fn sidecar(
         &self,
         sidecar_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentSidecarState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentSidecarState>> {
         Ok(self
             .0
             .sidecars()
@@ -1054,7 +1054,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
         &self,
         realm_id: &str,
         controller_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentSidecarState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentSidecarState>> {
         Ok(self
             .0
             .sidecars()
@@ -1066,7 +1066,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
         &self,
         controller_id: &str,
         realm_id: Option<&str>,
-    ) -> crate::ApplicationResult<Vec<crate::identity::AgentSidecarState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::AgentSidecarState>> {
         Ok(self
             .0
             .sidecars()
@@ -1079,7 +1079,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
     async fn ensure_context(
         &self,
         context: crate::identity::AgentSidecarContextState,
-    ) -> crate::ApplicationResult<crate::identity::AgentSidecarContextState> {
+    ) -> crate::ServiceResult<crate::identity::AgentSidecarContextState> {
         Ok(application_sidecar_context(
             self.0
                 .sidecars()
@@ -1091,7 +1091,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
         &self,
         sidecar_id: &str,
         digest: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::AgentSidecarContextState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::AgentSidecarContextState>> {
         Ok(self
             .0
             .sidecars()
@@ -1103,7 +1103,7 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
 
 #[async_trait::async_trait]
 impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
-    async fn store_selection(&self, selection: serde_json::Value) -> crate::ApplicationResult<()> {
+    async fn store_selection(&self, selection: serde_json::Value) -> crate::ServiceResult<()> {
         self.0
             .agent_participation()
             .put_selection(selection)
@@ -1111,7 +1111,7 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
         Ok(())
     }
 
-    async fn selections(&self, agent_id: &str) -> crate::ApplicationResult<Vec<serde_json::Value>> {
+    async fn selections(&self, agent_id: &str) -> crate::ServiceResult<Vec<serde_json::Value>> {
         Ok(self
             .0
             .agent_participation()
@@ -1122,7 +1122,7 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
     async fn ceilings(
         &self,
         scope_keys: &[String],
-    ) -> crate::ApplicationResult<Vec<serde_json::Value>> {
+    ) -> crate::ServiceResult<Vec<serde_json::Value>> {
         Ok(self
             .0
             .agent_participation()
@@ -1130,7 +1130,7 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
             .await?)
     }
 
-    async fn store_ceiling(&self, ceiling: serde_json::Value) -> crate::ApplicationResult<()> {
+    async fn store_ceiling(&self, ceiling: serde_json::Value) -> crate::ServiceResult<()> {
         self.0.agent_participation().put_ceiling(ceiling).await?;
         Ok(())
     }
@@ -1138,14 +1138,14 @@ impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
 
 #[async_trait::async_trait]
 impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
-    async fn backup(&self, backup_id: &str) -> crate::ApplicationResult<Option<serde_json::Value>> {
+    async fn backup(&self, backup_id: &str) -> crate::ServiceResult<Option<serde_json::Value>> {
         Ok(self.0.key_backups().get(backup_id).await?)
     }
 
     async fn backups_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<serde_json::Value>> {
+    ) -> crate::ServiceResult<Vec<serde_json::Value>> {
         Ok(self.0.key_backups().list_for_actor(actor_id).await?)
     }
 
@@ -1153,12 +1153,12 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
         &self,
         backup_id: String,
         payload: serde_json::Value,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.key_backups().put(backup_id, payload).await?;
         Ok(())
     }
 
-    async fn delete_backup(&self, backup_id: &str) -> crate::ApplicationResult<bool> {
+    async fn delete_backup(&self, backup_id: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.key_backups().delete(backup_id).await?)
     }
 }
@@ -1168,7 +1168,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
     async fn session(
         &self,
         token_hash: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::SessionIdentityState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::SessionIdentityState>> {
         Ok(self
             .0
             .sessions()
@@ -1179,7 +1179,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
 
     async fn sessions(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::identity::SessionIdentityState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::SessionIdentityState>> {
         Ok(self
             .0
             .sessions()
@@ -1193,7 +1193,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
     async fn save_session(
         &self,
         session: crate::identity::SessionIdentityState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .sessions()
             .put(&persistence_session_identity(session))
@@ -1205,7 +1205,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
         &self,
         token_hash: &str,
         revoked_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<Option<crate::identity::SessionIdentityState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::SessionIdentityState>> {
         let Some(mut session) = self.0.sessions().get(token_hash).await? else {
             return Ok(None);
         };
@@ -1221,7 +1221,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
         &self,
         actor_id: &str,
         revoked_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         self.revoke_matching_sessions(actor_id, None, revoked_at)
             .await
     }
@@ -1231,7 +1231,7 @@ impl crate::identity::SessionIdentityPort for PersistenceSessions {
         actor_id: &str,
         device_id: &str,
         revoked_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         self.revoke_matching_sessions(actor_id, Some(device_id), revoked_at)
             .await
     }
@@ -1243,7 +1243,7 @@ impl PersistenceSessions {
         actor_id: &str,
         device_id: Option<&str>,
         revoked_at: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         let sessions = self.0.sessions().snapshot_all().await?;
         let mut count = 0;
         for mut session in sessions.into_iter().filter(|session| {
@@ -1344,7 +1344,7 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
     async fn active_policy(
         &self,
         principal_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::RecoveryPolicyState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::RecoveryPolicyState>> {
         Ok(self
             .0
             .recovery_policies()
@@ -1356,7 +1356,7 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
     async fn policy_history(
         &self,
         principal_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::RecoveryPolicyState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::RecoveryPolicyState>> {
         Ok(self
             .0
             .recovery_policies()
@@ -1370,7 +1370,7 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
     async fn insert_policy(
         &self,
         policy: crate::identity::RecoveryPolicyState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .recovery_policies()
             .insert(persistence_recovery_policy(policy))
@@ -1426,7 +1426,7 @@ impl crate::identity::RecoveryReceiptPort for PersistenceRecoveryReceipts {
     async fn receipt_history(
         &self,
         principal_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::RecoveryReceiptState>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::RecoveryReceiptState>> {
         Ok(self
             .0
             .recovery_receipts()
@@ -1440,7 +1440,7 @@ impl crate::identity::RecoveryReceiptPort for PersistenceRecoveryReceipts {
     async fn insert_receipt(
         &self,
         receipt: crate::identity::RecoveryReceiptState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .recovery_receipts()
             .insert(persistence_recovery_receipt(receipt))
@@ -1506,7 +1506,7 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
     async fn session(
         &self,
         recovery_session_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::RecoverySessionState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::RecoverySessionState>> {
         Ok(self
             .0
             .recovery_sessions()
@@ -1518,7 +1518,7 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
     async fn insert_session(
         &self,
         session: crate::identity::RecoverySessionState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .recovery_sessions()
             .insert(persistence_recovery_session(session))
@@ -1529,7 +1529,7 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
     async fn update_session(
         &self,
         session: crate::identity::RecoverySessionState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .recovery_sessions()
             .update(persistence_recovery_session(session))
@@ -1597,7 +1597,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
     async fn document(
         &self,
         did: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::DidDocumentState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::DidDocumentState>> {
         Ok(self
             .0
             .webvh()
@@ -1609,7 +1609,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
     async fn embedded_document(
         &self,
         local_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::identity::DidDocumentState>> {
+    ) -> crate::ServiceResult<Option<crate::identity::DidDocumentState>> {
         Ok(self
             .0
             .webvh()
@@ -1621,7 +1621,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
     async fn log_events(
         &self,
         did: &str,
-    ) -> crate::ApplicationResult<Vec<crate::identity::DidLogEvent>> {
+    ) -> crate::ServiceResult<Vec<crate::identity::DidLogEvent>> {
         Ok(self
             .0
             .webvh()
@@ -1635,7 +1635,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
     async fn store_document(
         &self,
         document: crate::identity::DidDocumentState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .webvh()
             .put_document(persistence_did_document(document))
@@ -1646,7 +1646,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
     async fn append_log_event(
         &self,
         event: crate::identity::DidLogEvent,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .webvh()
             .append_log_event(persistence_did_log_event(event))
@@ -1657,7 +1657,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
     async fn service_registration(
         &self,
         key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
-    ) -> crate::ApplicationResult<
+    ) -> crate::ServiceResult<
         Option<arkret_models_identity::service_identity::ServiceRegistrationOutcome>,
     > {
         Ok(self.0.webvh().get_service_registration(key).await?)
@@ -1669,7 +1669,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
         outcome: arkret_models_identity::service_identity::ServiceRegistrationOutcome,
         document: crate::identity::DidDocumentState,
         event: crate::identity::DidLogEvent,
-    ) -> crate::ApplicationResult<crate::identity::ServiceRegistrationCommitResult> {
+    ) -> crate::ServiceResult<crate::identity::ServiceRegistrationCommitResult> {
         Ok(
             match self
                 .0
@@ -1700,7 +1700,7 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
         expected_current_head: Option<String>,
         document: crate::identity::DidDocumentState,
         event: crate::identity::DidLogEvent,
-    ) -> crate::ApplicationResult<crate::identity::DidLogCommitResult> {
+    ) -> crate::ServiceResult<crate::identity::DidLogCommitResult> {
         Ok(
             match self
                 .0
@@ -1727,70 +1727,71 @@ impl crate::identity::DidDocumentPort for PersistenceDidDocuments {
 }
 
 #[derive(Clone)]
-pub struct PersistenceIdentityApplications {
-    pub identity: IdentityApplicationService,
-    pub account_data: AccountDataApplicationService,
-    pub key_material: KeyMaterialApplicationService,
-    pub consent: ConsentApplicationService,
-    pub contact: ContactApplicationService,
-    pub agent_pairing: AgentPairingApplicationService,
-    pub agent_participation: AgentParticipationApplicationService,
-    pub key_backup: KeyBackupApplicationService,
-    pub session: SessionApplicationService,
-    pub recovery_policy: RecoveryPolicyApplicationService,
-    pub recovery_receipt: RecoveryReceiptApplicationService,
-    pub recovery_session: RecoverySessionApplicationService,
-    pub did: DidApplicationService,
+pub struct PersistenceIdentityServices {
+    pub identity: IdentityService,
+    pub account_data: AccountDataService,
+    pub key_material: KeyMaterialService,
+    pub consent: ConsentService,
+    pub contact: ContactService,
+    pub agent_pairing: AgentPairingService,
+    pub agent_participation: AgentParticipationService,
+    pub key_backup: KeyBackupService,
+    pub session: SessionService,
+    pub recovery_policy: RecoveryPolicyService,
+    pub recovery_receipt: RecoveryReceiptService,
+    pub recovery_session: RecoverySessionService,
+    pub did: DidService,
 }
 
-pub fn build_persistence_identity_applications(
+pub fn build_persistence_identity_services(
     persistence: Arc<dyn PersistenceStore>,
     did_resolver: Arc<dyn DidResolverPort>,
-) -> PersistenceIdentityApplications {
-    PersistenceIdentityApplications {
-        identity: IdentityApplicationService::new(
+) -> PersistenceIdentityServices {
+    PersistenceIdentityServices {
+        identity: IdentityService::new(
             Arc::new(PersistenceAccountLookup(persistence.clone())),
             Arc::new(PersistenceDeviceDirectory(persistence.clone())),
             Arc::new(PersistenceAgentDirectory(persistence.clone())),
         ),
-        account_data: AccountDataApplicationService::new(Arc::new(PersistenceAccountData(
+        account_data: AccountDataService::new(Arc::new(PersistenceAccountData(
             persistence.clone(),
         ))),
-        key_material: KeyMaterialApplicationService::new(
+        key_material: KeyMaterialService::new(
             Arc::new(PersistenceDeviceKeys(persistence.clone())),
             Arc::new(PersistenceOneTimeKeys(persistence.clone())),
         ),
-        consent: ConsentApplicationService::new(Arc::new(PersistenceConsentCells(
+        consent: ConsentService::new(Arc::new(PersistenceConsentCells(
             persistence.clone(),
         ))),
-        contact: ContactApplicationService::new(
+        contact: ContactService::new(
             Arc::new(PersistenceContacts(persistence.clone())),
             Arc::new(PersistenceInviteReceivePolicies(persistence.clone())),
             Arc::new(PersistenceDirectConversationBindings(persistence.clone())),
         ),
-        agent_pairing: AgentPairingApplicationService::new(
+        agent_pairing: AgentPairingService::new(
             Arc::new(PersistenceAgentPairing(persistence.clone())),
             Arc::new(PersistenceSidecars(persistence.clone())),
         ),
-        agent_participation: AgentParticipationApplicationService::new(Arc::new(
+        agent_participation: AgentParticipationService::new(Arc::new(
             PersistenceAgentParticipation(persistence.clone()),
         )),
-        key_backup: KeyBackupApplicationService::new(Arc::new(PersistenceKeyBackups(
+        key_backup: KeyBackupService::new(Arc::new(PersistenceKeyBackups(
             persistence.clone(),
         ))),
-        session: SessionApplicationService::new(Arc::new(PersistenceSessions(persistence.clone()))),
-        recovery_policy: RecoveryPolicyApplicationService::new(Arc::new(
+        session: SessionService::new(Arc::new(PersistenceSessions(persistence.clone()))),
+        recovery_policy: RecoveryPolicyService::new(Arc::new(
             PersistenceRecoveryPolicies(persistence.clone()),
         )),
-        recovery_receipt: RecoveryReceiptApplicationService::new(Arc::new(
+        recovery_receipt: RecoveryReceiptService::new(Arc::new(
             PersistenceRecoveryReceipts(persistence.clone()),
         )),
-        recovery_session: RecoverySessionApplicationService::new(Arc::new(
+        recovery_session: RecoverySessionService::new(Arc::new(
             PersistenceRecoverySessions(persistence.clone()),
         )),
-        did: DidApplicationService::new(
+        did: DidService::new(
             Arc::new(PersistenceDidDocuments(persistence)),
             did_resolver,
         ),
     }
 }
+

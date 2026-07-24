@@ -84,7 +84,7 @@ pub(crate) async fn minimal_metadata_author_context(
     let coordinates = minimal_metadata_author_coordinates(object)?;
     let realm_id = event_string_field(object, &["realm_id"])?;
     let is_minimal = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(&realm_id)
         .await
         .ok()
@@ -130,7 +130,7 @@ async fn validate_accepted_group_state(
     coordinates: &MinimalMetadataAuthorCoordinates,
 ) -> Result<(), EventValidationError> {
     let record = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(&coordinates.group_state_ref)
         .await
         .map_err(|error| author_credential_invalid(format!("group_state_ref lookup: {error}")))?
@@ -194,7 +194,7 @@ async fn validate_accepted_group_state(
         })
         .ok_or_else(|| author_credential_invalid("group_state_ref carries no effective_scope"))?;
     let epoch_row = state
-        .mls_commit_query_application()
+        .mls_commits()
         .commit(&effective_scope, &coordinates.group_id)
         .await
         .map_err(|error| author_credential_invalid(format!("mls commit store: {error}")))?
@@ -223,12 +223,12 @@ async fn active_author_leaves(
     coordinates: &MinimalMetadataAuthorCoordinates,
 ) -> Result<Vec<AuthorLeaf>, EventValidationError> {
     let rows = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .key_packages_claimed_by_group(&coordinates.group_id)
         .await
         .map_err(|error| author_credential_invalid(format!("keypackage store: {error}")))?;
     let removed_actors: std::collections::BTreeSet<String> = state
-        .projection_application()
+        .projections()
         .snapshot()
         .mls_remove_proposals
         .values()

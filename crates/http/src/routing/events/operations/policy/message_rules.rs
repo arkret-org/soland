@@ -32,7 +32,7 @@ pub(super) fn validate_reaction_scope_policy(
         return Ok(());
     };
     let target_realm = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.message_realm(target)
     };
     let Some(target_realm) = target_realm else {
@@ -54,7 +54,7 @@ pub(super) fn validate_reaction_scope_policy(
 /// writes derive scope from the projected target. `ak.message.create` derives
 /// scope from the projected Strand — a Message never self-declares its scope.
 pub(super) fn operation_target_scope_circle_id(
-    projection: &soland_application::projection::ProjectionSnapshot,
+    projection: &soland_services::projection::ProjectionSnapshot,
     operation: &Operation,
 ) -> Option<String> {
     let top_level_scope = || -> Option<String> {
@@ -171,7 +171,7 @@ pub(super) fn validate_circle_scope_membership(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let Some(scope_circle_id) = operation_target_scope_circle_id(&projection, operation) else {
         return Ok(());
     };
@@ -220,8 +220,8 @@ pub(super) async fn validate_applet_registration_authz(
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: "ak.realm.admin",
             resource: realm_id,
@@ -262,7 +262,7 @@ pub(in crate::routing::events::operations) fn validate_principal_control_realm_b
         .get("principal_id")
         .and_then(Value::as_str)
         .ok_or("principal_control_event_missing_principal_id")?;
-    let expected = soland_application::identity::principal_control_realm_for_did(principal);
+    let expected = soland_services::identity::principal_control_realm_for_did(principal);
     if realm_ids_match(operation.realm_id.as_str(), &expected) {
         Ok(())
     } else {
@@ -344,7 +344,7 @@ pub(in crate::routing::events::operations) async fn validate_managed_agent_contr
     }
     if kind == "ak.agent.key.authorize" {
         let record = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agent(&agent_id)
             .await
             .map_err(|_| "managed_agent_principal_binding_unavailable")?
@@ -428,7 +428,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
         return Ok(());
     };
     let created_at = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.message_origin(target_ref).map(|origin| origin.0)
     };
     let Some(created_at) = created_at else {
@@ -443,7 +443,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     };
 
     let grants = state
-        .authorization_application()
+        .authorization()
         .grants_for_subject(actor, realm_id);
 
     // Admin override: a broader (non-`.own`) capability is not time-boxed.
@@ -580,3 +580,4 @@ pub async fn validate_content_encryption_floor(
     }
     Ok(())
 }
+

@@ -7,7 +7,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::delivery::BlobState as BlobRecord;
+use soland_services::delivery::BlobState as BlobRecord;
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, require_admin_principal};
@@ -145,7 +145,7 @@ async fn admin_get_realm_media_service(
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.cell_value(&cell_id).cloned()
     };
 
@@ -256,7 +256,7 @@ async fn get_media_by_actor(
 
 async fn media_snapshot(state: &AppState) -> Vec<BlobRecord> {
     state
-        .delivery_application()
+        .deliveries()
         .blobs()
         .await
         .unwrap_or_default()
@@ -264,7 +264,7 @@ async fn media_snapshot(state: &AppState) -> Vec<BlobRecord> {
 
 async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<MediaByActorRow> {
     let accounts: BTreeMap<String, _> = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .unwrap_or_default()
@@ -300,3 +300,4 @@ fn add_bucket(buckets: &mut BTreeMap<String, MediaBucket>, key: &str, size: u64)
     entry.size_bytes = entry.size_bytes.saturating_add(size);
     entry.total_size = entry.size_bytes;
 }
+

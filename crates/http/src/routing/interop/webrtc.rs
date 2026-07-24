@@ -30,8 +30,8 @@ use ed25519_dalek::Signer as _;
 use salvo::http::HeaderValue;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::events::CanonicalEventRecord;
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::events::CanonicalEventRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -837,13 +837,13 @@ impl CallStateCell {
     async fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
         let cell_id = call_state_cell_ref(call_id)?;
         let cached = {
-            let projection = state.projection_application().snapshot();
+            let projection = state.projections().snapshot();
             projection.cell_value(&cell_id).cloned()
         };
         let value = match call_state_from_event_log(state, call_id, &cell_id).await? {
             Some(value) => {
                 state
-                    .projection_application()
+                    .projections()
                     .cache_cell(cell_id, value.clone());
                 Some(value)
             }
@@ -926,7 +926,7 @@ async fn call_state_from_event_log(
     cell_id: &CellRef,
 ) -> Result<Option<Value>, AppError> {
     let mut records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
@@ -954,7 +954,7 @@ async fn call_state_from_event_log(
         operations.push(operation);
     }
     Ok(state
-        .projection_application()
+        .projections()
         .project_call_state_cell(&operations, cell_id))
 }
 
@@ -1010,7 +1010,7 @@ fn media_service_epoch_for_realm(
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.cell_value(&cell_id).cloned()
     }
     .ok_or_else(|| {
@@ -1442,14 +1442,14 @@ const CAP_CALL_SCREEN_SHARE: &str = "ak.call.screen_share";
 /// `events::operations::realm_owner_and_members` / `circles::circle_authz_principals`.
 async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<String>, Vec<String>) {
     let owner = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
         .flatten()
         .map(|meta| meta.owner);
     let members = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         Some({
             arkret_identifiers::RealmId::new(realm_id.to_owned())
                 .ok()
@@ -1474,8 +1474,8 @@ pub(crate) async fn actor_has_call_capability(
 ) -> bool {
     let (owner, members) = call_authz_principals(state, realm_id).await;
     state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action,
             resource: realm_id,
@@ -1500,3 +1500,4 @@ fn is_valid_webrtc_session_id(value: &str) -> bool {
     };
     parsed.get_version_num() == 7
 }
+

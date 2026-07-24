@@ -94,9 +94,9 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
     let Ok(realm) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     let mut cells: BTreeSet<CellRef> = state
-        .projection_application()
+        .projections()
         .realm_cells(&realm)
         .unwrap_or_default()
         .into_iter()
@@ -153,7 +153,7 @@ pub(crate) async fn admin_list_bottom_global(
     let _session = aa.authenticated_session(state, req).await?;
     let mut out = Vec::new();
     let realm_ids: Vec<String> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -231,7 +231,7 @@ pub(crate) async fn admin_repair_bottom(
                     .with_status(StatusCode::BAD_REQUEST)
             })?;
             let witness_seal = state
-                .projection_application()
+                .projections()
                 .seal_by_id(&state_witness_seal)
                 .map_err(|e| app_error!(InternalError, "seal_store.get failed: {e}"))?
                 .ok_or_else(|| {
@@ -340,7 +340,7 @@ pub(crate) async fn admin_repair_bottom(
             let move_id = signed_move.id.as_str().to_owned();
 
             state
-                .projection_application()
+                .projections()
                 .put_pending_move(&signed_move)
                 .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 

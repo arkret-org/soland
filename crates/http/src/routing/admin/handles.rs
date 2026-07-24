@@ -95,7 +95,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     let claims_by_subject: BTreeMap<String, Vec<HandleClaimEvidenceRecord>> = claims;
 
     let accounts = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .unwrap_or_default();
@@ -103,7 +103,7 @@ pub(super) async fn admin_handle_items(state: &AppState) -> Vec<AdminHandleRecor
     let mut rows = Vec::new();
     for account in accounts {
         let localparts = state
-            .identity_application()
+            .identities()
             .account_localparts(&account.did)
             .await
             .unwrap_or_default();
@@ -237,7 +237,7 @@ async fn get_handle_audit(
     let handle_at = record.aliases.first().cloned().unwrap_or_default();
 
     let entries = state
-        .governance_application()
+        .governance()
         .audit_entries()
         .await
         .unwrap_or_default();
@@ -331,7 +331,7 @@ async fn revoke_handle(
     // records the release in the post-release grace ledger.
     let released = handle_id.clone();
     state
-        .identity_application()
+        .identities()
         .remove_localpart(&subject_did, &released)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -390,7 +390,7 @@ async fn reassign_handle(
 
     // Target account must exist before we re-bind onto it.
     let target = state
-        .identity_application()
+        .identities()
         .account(&new_subject_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -402,14 +402,14 @@ async fn reassign_handle(
         && previous != new_subject_id
     {
         state
-            .identity_application()
+            .identities()
             .remove_localpart(previous, &localpart)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
     }
 
     state
-        .identity_application()
+        .identities()
         .add_localpart(&target.did, &localpart, true)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

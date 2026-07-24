@@ -67,7 +67,7 @@ use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::{Signature, Verifier};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -268,3 +268,4 @@ mod tests {
         assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.blind_index.v1"));
     }
 }
+

@@ -46,8 +46,8 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
-use soland_application::identity::{
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::identity::{
     AccountLifecycleState, AccountLocalpartState as AccountLocalpartRecord,
     AccountProfileState as AccountRecord, AgentPairingState, ContactRecord, DeviceIdentity,
     DirectConversationBindingRecord,
@@ -78,10 +78,10 @@ use crate::wire::SolandAccountRegisterOutcome;
 pub(crate) async fn record_handle_release(
     state: &AppState,
     localpart: &str,
-) -> soland_application::ApplicationResult<()> {
+) -> soland_services::ServiceResult<()> {
     let released_at = chrono::Utc::now();
     state
-        .identity_application()
+        .identities()
         .record_handle_release(localpart, released_at)
         .await?;
     Ok(())
@@ -133,7 +133,7 @@ pub(crate) async fn local_account_primary_handle_claim(
     audience: &str,
 ) -> Option<Value> {
     let account = state
-        .identity_application()
+        .identities()
         .account(subject)
         .await
         .ok()
@@ -281,7 +281,7 @@ fn normalize_account_localpart_for_request(localpart: &str) -> Result<String, Ap
         .map_err(|_| AppError::invalid_param("localpart is not a valid handle localpart"))
 }
 
-fn localpart_persistence_error(error: soland_application::ApplicationError) -> AppError {
+fn localpart_persistence_error(error: soland_services::ServiceError) -> AppError {
     if error.is_not_found() {
         AppError::not_found(error.detail())
     } else if error.is_conflict_kind() {
@@ -296,7 +296,7 @@ fn localpart_persistence_error(error: soland_application::ApplicationError) -> A
 
 async fn account_exists(state: &AppState, account_did: &str) -> Result<(), AppError> {
     state
-        .identity_application()
+        .identities()
         .account(account_did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -470,7 +470,7 @@ fn account_registration_retry_after_ms(
         return Some(0);
     }
     state
-        .identity_application()
+        .identities()
         .account_registration_retry_after_ms(
             did,
             rate_limit.max_attempts,
@@ -638,7 +638,7 @@ async fn managed_agent_direct_authorization_basis(
     agent_id: &str,
 ) -> Result<Option<arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationBasis>, AppError>{
     let Some(record) = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(agent_id)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
@@ -723,13 +723,13 @@ async fn local_account_register(
 
     let localpart = normalize_account_localpart_for_request(&body.handle)?;
     let account_exists = state
-        .identity_application()
+        .identities()
         .account(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
     let localpart_exists = state
-        .identity_application()
+        .identities()
         .localpart_owner(&localpart)
         .await
         .map_err(localpart_persistence_error)?
@@ -754,8 +754,8 @@ async fn local_account_register(
         created_at: now(),
     };
     state
-        .identity_application()
-        .register_account(soland_application::identity::RegisterAccountCommand {
+        .identities()
+        .register_account(soland_services::identity::RegisterAccountCommand {
             account_id: account.id.clone(),
             actor_id: did.clone(),
             localpart: account.localpart.clone(),
@@ -797,7 +797,7 @@ async fn local_account_me(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account = state
-        .identity_application()
+        .identities()
         .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -819,7 +819,7 @@ async fn list_account_localparts(
     validate_did(&account_did).map_err(|_| AppError::invalid_param("invalid account DID"))?;
     account_exists(state, &account_did).await?;
     let records = state
-        .identity_application()
+        .identities()
         .account_localparts(&account_did)
         .await
         .map_err(localpart_persistence_error)?;
@@ -850,13 +850,13 @@ async fn add_account_localpart(
     let body = body.into_inner();
     let localpart = normalize_account_localpart_for_request(&body.localpart)?;
     let existing = state
-        .identity_application()
+        .identities()
         .account_localparts(&account_did)
         .await
         .map_err(localpart_persistence_error)?;
     let primary = body.is_primary.unwrap_or(existing.is_empty()) || existing.is_empty();
     let record = state
-        .identity_application()
+        .identities()
         .add_localpart(&account_did, &localpart, primary)
         .await
         .map_err(localpart_persistence_error)?;
@@ -899,7 +899,7 @@ async fn update_account_localpart(
         ));
     }
     let record = state
-        .identity_application()
+        .identities()
         .set_primary_localpart(&account_did, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
@@ -934,7 +934,7 @@ async fn delete_account_localpart(
     account_exists(state, &account_did).await?;
     let localpart = normalize_account_localpart_for_request(&localpart.into_inner())?;
     let before = state
-        .identity_application()
+        .identities()
         .account_localparts(&account_did)
         .await
         .map_err(localpart_persistence_error)?;
@@ -942,13 +942,13 @@ async fn delete_account_localpart(
         .iter()
         .any(|record| record.localpart == localpart && record.is_primary);
     state
-        .identity_application()
+        .identities()
         .remove_localpart(&account_did, &localpart)
         .await
         .map_err(localpart_persistence_error)?;
     if removed_primary
         && let Some(replacement) = state
-            .identity_application()
+            .identities()
             .account_localparts(&account_did)
             .await
             .map_err(localpart_persistence_error)?
@@ -956,7 +956,7 @@ async fn delete_account_localpart(
             .next()
     {
         state
-            .identity_application()
+            .identities()
             .set_primary_localpart(&account_did, &replacement.localpart)
             .await
             .map_err(localpart_persistence_error)?;
@@ -988,7 +988,7 @@ pub(crate) async fn account_viewer(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let account = state
-        .identity_application()
+        .identities()
         .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -1044,7 +1044,7 @@ async fn gate_account_register(
         enforce_account_registration_policy(state, &did, None, body.policy_evidence.as_ref())
             .await?;
     let existing = state
-        .identity_application()
+        .identities()
         .account(&did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1096,13 +1096,13 @@ async fn gate_account_register(
         created_at: now(),
     };
     state
-        .identity_application()
+        .identities()
         .save_account(account.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if !account.localpart.is_empty() {
         state
-            .identity_application()
+            .identities()
             .add_localpart(&did, &account.localpart, true)
             .await
             .map_err(localpart_persistence_error)?;
@@ -1139,8 +1139,8 @@ async fn gate_account_register(
             revoked_at: None,
         };
         state
-            .identity_application()
-            .save_device(soland_application::identity::SaveDeviceCommand {
+            .identities()
+            .save_device(soland_services::identity::SaveDeviceCommand {
                 actor_id: did.clone(),
                 device_id: device.device_id.clone(),
                 display_name: device.display_name.clone(),
@@ -1185,7 +1185,7 @@ async fn update_profile(
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     let mut current = state
-        .identity_application()
+        .identities()
         .account(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -1210,7 +1210,7 @@ async fn update_profile(
         current.avatar_blob_ref = avatar_blob_ref;
     }
     state
-        .identity_application()
+        .identities()
         .save_account(current.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1516,7 +1516,7 @@ async fn put_account_device_placeholder(
         revoked_at: None,
     };
     state
-        .identity_application()
+        .identities()
         .save_device_if_absent(device)
         .await
         .map(|_| ())
@@ -1528,7 +1528,7 @@ async fn account_device_summaries(
     actor: &str,
 ) -> Result<Vec<AccountDeviceSummary>, AppError> {
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1657,25 +1657,25 @@ mod tests {
     #[test]
     fn principal_realm_for_did_is_deterministic() {
         let a =
-            soland_application::identity::principal_control_realm_for_did("did:web:alice.example");
+            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
         let b =
-            soland_application::identity::principal_control_realm_for_did("did:web:alice.example");
+            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
         assert_eq!(a, b);
     }
 
     #[test]
     fn principal_realm_for_did_diverges_per_did() {
         let a =
-            soland_application::identity::principal_control_realm_for_did("did:web:alice.example");
+            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
         let c =
-            soland_application::identity::principal_control_realm_for_did("did:web:bob.example");
+            soland_services::identity::principal_control_realm_for_did("did:web:bob.example");
         assert_ne!(a, c);
     }
 
     #[test]
     fn principal_realm_for_did_is_realm_uuid7() {
         let s =
-            soland_application::identity::principal_control_realm_for_did("did:web:alice.example");
+            soland_services::identity::principal_control_realm_for_did("did:web:alice.example");
         assert!(s.starts_with("ak:realm:"), "got {s}");
         let uuid_segment = s.strip_prefix("ak:realm:").unwrap();
         // Sections separated by '-'.
@@ -1692,3 +1692,4 @@ mod tests {
         );
     }
 }
+

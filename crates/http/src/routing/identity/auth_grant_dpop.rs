@@ -38,7 +38,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::Request;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use soland_application::identity::{
+use soland_services::identity::{
     AgentSessionState as AgentSessionRecord, SessionIdentityState as SessionRecord,
 };
 
@@ -879,3 +879,4 @@ mod tests {
         assert_eq!(err.2, "agent session revocation freshness is unknown");
     }
 }
+

@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::OperationId;
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
-use soland_application::operation_semantics as kinds;
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::operation_semantics as kinds;
 
 use super::*;
 use crate::state::AppState;
@@ -11,9 +11,9 @@ use crate::state::AppState;
 pub async fn append_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
-) -> soland_application::ApplicationResult<soland_application::events::ProjectedEventAppendResult> {
+) -> soland_services::ServiceResult<soland_services::events::ProjectedEventAppendResult> {
     state
-        .event_query_application()
+        .event_queries()
         .append_projected_event(event)
         .await
 }
@@ -21,9 +21,9 @@ pub async fn append_projection_event(
 pub async fn persist_and_publish_projection_event(
     state: &AppState,
     event: ProjectionEventRecord,
-) -> soland_application::ApplicationResult<soland_application::events::ProjectedEventAppendResult> {
+) -> soland_services::ServiceResult<soland_services::events::ProjectedEventAppendResult> {
     let outcome = append_projection_event(state, event.clone()).await?;
-    if outcome == soland_application::events::ProjectedEventAppendResult::Inserted {
+    if outcome == soland_services::events::ProjectedEventAppendResult::Inserted {
         let _ = state.publish_event_notification(crate::state::EventNotification::event(
             event.realm_id.clone(),
             event.event_id.clone(),
@@ -81,7 +81,7 @@ pub async fn projected_event_page_for_realms_through(
         return Ok(None);
     }
     let redacted = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         redaction_target_event_ids_from_events(&events, &projection)
     };
     let start = if let Some(cursor) = cursor {
@@ -114,7 +114,7 @@ pub async fn projected_event_page_for_realms_through(
         .take(limit.saturating_add(1))
         .collect::<Vec<_>>();
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         for event in &mut page_items {
             tombstone_projection_event_for_erased_actor(&projection, event);
             tombstone_projection_event_for_message_redaction(&projection, event);
@@ -148,7 +148,7 @@ async fn ordered_projected_events_for_realms(
     realm_ids: &BTreeSet<String>,
 ) -> anyhow::Result<Vec<ProjectionEventRecord>> {
     let mut events = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .unwrap_or_default()
@@ -211,7 +211,7 @@ pub async fn ingest_federation_operations(
     for operation in operations {
         let operation_id = operation.operation_id.clone();
         if state
-            .federation_application()
+            .federation()
             .has_operation(operation_id.as_str())
             .await
             .unwrap_or(false)
@@ -268,7 +268,7 @@ pub async fn ingest_federation_operations(
             continue;
         }
         if let Err(error) = state
-            .federation_application()
+            .federation()
             .append_operation(operation.clone())
             .await
         {
@@ -314,7 +314,7 @@ pub async fn project_federation_operation(state: &AppState, origin: &str, operat
     // Also apply to the deterministic reducer.
     let reducer_effect = Some(
         state
-            .projection_application()
+            .projections()
             .apply_via_lattice_registry(operation, state.hlc()),
     );
     if let Some(effect) = reducer_effect {
@@ -407,8 +407,9 @@ pub async fn persist_projected_operation(
     operation: &Operation,
 ) -> anyhow::Result<()> {
     state
-        .event_query_application()
+        .event_queries()
         .persist_projected_operation(origin, operation)
         .await
         .map_err(Into::into)
 }
+

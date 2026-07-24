@@ -231,7 +231,7 @@ async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> an
 /// hand-rolled endpoint.
 pub async fn render_metrics(state: &AppState) -> String {
     // Sample scrape-time gauges into the recorder right before rendering.
-    gauge!(DB_POOL_IN_USE).set(state.jobs_application().database_pool_in_use() as f64);
+    gauge!(DB_POOL_IN_USE).set(state.jobs().database_pool_in_use() as f64);
     gauge!(FEDERATION_OUTBOX_DEPTH).set(federation_outbox_depth(state).await as f64);
 
     match prometheus_handle() {
@@ -280,7 +280,7 @@ pub fn record_federation_retry_state(state: &str) {
 
 async fn federation_outbox_depth(state: &AppState) -> usize {
     state
-        .federation_application()
+        .federation()
         .deliveries()
         .await
         .map(|rows| rows.iter().filter(|row| row.delivered_at.is_none()).count())

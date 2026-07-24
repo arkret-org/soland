@@ -14,7 +14,7 @@
 //! container; it is not a synonym for `strand_id`.
 
 use serde_json::json;
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 
 use super::{now, realm_discoverability, sha256_hex};
 use crate::state::AppState;
@@ -81,7 +81,7 @@ pub async fn strand_projection_for_realm(
     summary: Option<&str>,
 ) -> serde_json::Value {
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -132,3 +132,4 @@ pub async fn strand_projection_for_realm(
         "updated_at": updated_at
     })
 }
+

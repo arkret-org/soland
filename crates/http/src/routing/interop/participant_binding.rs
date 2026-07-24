@@ -169,7 +169,7 @@ fn media_service_anchors(state: &AppState, realm_id: &str) -> Option<MediaServic
     ))
     .ok()?;
     let value = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.cell_value(&cell_id).cloned()?
     };
     // `apply_realm_media_service` stores either the wrapped

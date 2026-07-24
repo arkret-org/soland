@@ -10,7 +10,7 @@ use ed25519_dalek::Signer;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::identity::{
+use soland_services::identity::{
     DidDocumentState, DidLogEvent, ServiceRegistrationCommitResult,
 };
 use soland_http::error::{AppError, ErrorCode};
@@ -82,14 +82,14 @@ pub(crate) async fn ensure(
     };
 
     match state
-        .did_application()
+        .dids()
         .commit_service_registration(key, outcome, document.clone(), event)
         .await
         .map_err(provider_unavailable)?
     {
         ServiceRegistrationCommitResult::Created(outcome) => {
             if let Err(error) = state
-                .did_application()
+                .dids()
                 .cache_resolved_document_state(document)
             {
                 tracing::warn!(%error, "failed to cache newly registered service DID document");
@@ -121,7 +121,7 @@ pub(crate) async fn get(
     let key = ServiceRegistrationKey::new(service_type, public_base)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let outcome = state
-        .did_application()
+        .dids()
         .service_registration(&key)
         .await
         .map_err(provider_unavailable)?
@@ -258,3 +258,4 @@ fn provider_unavailable(error: impl std::fmt::Display) -> AppError {
         format!("service identity provider unavailable: {error}"),
     )
 }
+

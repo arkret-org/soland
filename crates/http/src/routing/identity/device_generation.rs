@@ -5,8 +5,8 @@ use std::sync::{Arc, OnceLock};
 use arkret_identifiers::{MoveId, RealmId, SealId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
 use serde_json::Value;
-use soland_application::ApplicationError;
-use soland_application::events::CanonicalEventRecord;
+use soland_services::ServiceError;
+use soland_services::events::CanonicalEventRecord;
 
 use crate::state::AppState;
 
@@ -35,12 +35,12 @@ pub struct DeviceGenerationView {
 pub async fn current_device_generation(
     state: &AppState,
     principal_id: &str,
-) -> Result<Option<DeviceGenerationView>, ApplicationError> {
+) -> Result<Option<DeviceGenerationView>, ServiceError> {
     let records = state
-        .event_query_application()
+        .event_queries()
         .accepted_events_for_actor(principal_id)
         .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .map_err(|error| ServiceError::internal(error.to_string()))?
         .into_iter()
         .map(persistence_event_record)
         .collect::<Vec<_>>();
@@ -51,7 +51,7 @@ async fn generation_view_from_records(
     state: &AppState,
     principal_id: &str,
     records: &[CanonicalEventRecord],
-) -> Result<Option<DeviceGenerationView>, ApplicationError> {
+) -> Result<Option<DeviceGenerationView>, ServiceError> {
     let Some(mut last_unconflicted) =
         bootstrap_generation_ref(state, principal_id, records).await?
     else {
@@ -113,7 +113,7 @@ async fn bootstrap_generation_ref(
     state: &AppState,
     principal_id: &str,
     records: &[CanonicalEventRecord],
-) -> Result<Option<String>, ApplicationError> {
+) -> Result<Option<String>, ServiceError> {
     let bootstrap = records.iter().find(|record| {
         record.actor_id == principal_id
             && record.kind == arkret_wire::events::EventKind::REALM_CREATE
@@ -150,10 +150,10 @@ async fn bootstrap_generation_ref(
         return Ok(None);
     }
     let mut entries = state
-        .did_application()
+        .dids()
         .log_events(principal_id)
         .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?;
+        .map_err(|error| ServiceError::internal(error.to_string()))?;
     entries.sort_by_key(|entry| entry.seq);
     let is_external_enrollment_model = entries.first().is_some_and(|entry| {
         entry
@@ -221,12 +221,12 @@ fn reanchor_unit_fingerprint(
 pub async fn authorized_generation_for_event(
     state: &AppState,
     record: &CanonicalEventRecord,
-) -> Result<Option<String>, ApplicationError> {
+) -> Result<Option<String>, ServiceError> {
     let records = state
-        .event_query_application()
+        .event_queries()
         .accepted_events_for_actor(&record.actor_id)
         .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .map_err(|error| ServiceError::internal(error.to_string()))?
         .into_iter()
         .map(persistence_event_record)
         .collect::<Vec<_>>();
@@ -257,12 +257,12 @@ pub async fn authorized_generation_for_event(
 pub async fn quarantined_generation_event_digests(
     state: &AppState,
     principal_id: &str,
-) -> Result<BTreeSet<String>, ApplicationError> {
+) -> Result<BTreeSet<String>, ServiceError> {
     let records = state
-        .event_query_application()
+        .event_queries()
         .accepted_events_for_actor(principal_id)
         .await
-        .map_err(|error| ApplicationError::internal(error.to_string()))?
+        .map_err(|error| ServiceError::internal(error.to_string()))?
         .into_iter()
         .map(persistence_event_record)
         .collect::<Vec<_>>();
@@ -273,7 +273,7 @@ pub async fn quarantined_generation_event_digests(
 }
 
 fn persistence_event_record(
-    record: soland_application::events::AcceptedEvent,
+    record: soland_services::events::AcceptedEvent,
 ) -> CanonicalEventRecord {
     CanonicalEventRecord {
         event_id: record.event_id,
@@ -364,13 +364,13 @@ pub async fn accepted_device_generation_seal_leaves(
     state: &AppState,
     principal_id: &str,
     realm_id: &RealmId,
-) -> Result<Vec<SealId>, ApplicationError> {
+) -> Result<Vec<SealId>, ServiceError> {
     let quarantined = quarantined_generation_event_digests(state, principal_id).await?;
     let raw_leaves = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(realm_id)
         .map_err(|error| {
-            ApplicationError::internal(format!("Seal frontier unavailable: {error}"))
+            ServiceError::internal(format!("Seal frontier unavailable: {error}"))
         })?;
     if quarantined.is_empty() {
         return Ok(raw_leaves);
@@ -380,7 +380,7 @@ pub async fn accepted_device_generation_seal_leaves(
         .map(MoveId::new)
         .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|error| {
-            ApplicationError::internal(format!("quarantined Event digest is invalid: {error}"))
+            ServiceError::internal(format!("quarantined Event digest is invalid: {error}"))
         })?;
     let mut accepted = BTreeSet::new();
     let mut pending = raw_leaves;
@@ -390,10 +390,10 @@ pub async fn accepted_device_generation_seal_leaves(
             continue;
         }
         let coverage = state
-            .projection_application()
+            .projections()
             .seal_leaf_union_proof(std::slice::from_ref(&seal_id))
             .map_err(|error| {
-                ApplicationError::internal(format!("Seal coverage unavailable: {error}"))
+                ServiceError::internal(format!("Seal coverage unavailable: {error}"))
             })?
             .into_iter()
             .flat_map(|proof| proof.covered_event_digests)
@@ -403,21 +403,21 @@ pub async fn accepted_device_generation_seal_leaves(
             continue;
         }
         let seal = state
-            .projection_application()
+            .projections()
             .seal_by_id(&seal_id)
             .map_err(|error| {
-                ApplicationError::internal(format!("Seal lookup unavailable: {error}"))
+                ServiceError::internal(format!("Seal lookup unavailable: {error}"))
             })?
-            .ok_or_else(|| ApplicationError::internal(format!("Seal {seal_id} is missing")))?;
+            .ok_or_else(|| ServiceError::internal(format!("Seal {seal_id} is missing")))?;
         pending.extend(seal.predecessor_refs);
     }
     let accepted_snapshot = accepted.iter().cloned().collect::<Vec<_>>();
     for seal_id in accepted_snapshot {
         let mut ancestors = state
-            .projection_application()
+            .projections()
             .seal_by_id(&seal_id)
             .map_err(|error| {
-                ApplicationError::internal(format!("Seal lookup unavailable: {error}"))
+                ServiceError::internal(format!("Seal lookup unavailable: {error}"))
             })?
             .map(|seal| seal.predecessor_refs)
             .unwrap_or_default();
@@ -428,10 +428,10 @@ pub async fn accepted_device_generation_seal_leaves(
             }
             accepted.remove(&ancestor);
             if let Some(seal) = state
-                .projection_application()
+                .projections()
                 .seal_by_id(&ancestor)
                 .map_err(|error| {
-                    ApplicationError::internal(format!("Seal lookup unavailable: {error}"))
+                    ServiceError::internal(format!("Seal lookup unavailable: {error}"))
                 })?
             {
                 ancestors.extend(seal.predecessor_refs);
@@ -542,3 +542,4 @@ mod tests {
         );
     }
 }
+

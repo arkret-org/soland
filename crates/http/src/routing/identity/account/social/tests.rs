@@ -24,7 +24,7 @@ fn install_active_direct_binding_fixture(
     bob: &str,
 ) {
     let timestamp = now();
-    state.contact_application().install_direct_binding(
+    state.contacts().install_direct_binding(
         pair_key.to_owned(),
         DirectConversationBindingRecord {
             participants_unordered: sorted_participants(alice, bob),
@@ -280,7 +280,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         .iter()
         .find(|event| event.event_id == event_id)
         .expect("message projection event");
-    let bob_session = soland_application::identity::SessionIdentityState {
+    let bob_session = soland_services::identity::SessionIdentityState {
         token_hash: "test".to_owned(),
         actor: bob.to_owned(),
         device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
@@ -345,10 +345,11 @@ async fn participant_leave_retires_direct_binding() {
     assert!(active_direct_binding(&state, &pair_key).is_none());
     assert_eq!(
         state
-            .contact_application()
+            .contacts()
             .direct_binding(&pair_key)
             .expect("retired binding")
             .state,
         "retired"
     );
 }
+

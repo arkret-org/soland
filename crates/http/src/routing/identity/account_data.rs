@@ -18,8 +18,8 @@ use arkret_wire::Event;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::identity::{
-    AccountDataState, FindAgentControllerQuery, IdentityApplicationService,
+use soland_services::identity::{
+    AccountDataState, FindAgentControllerQuery, IdentityService,
 };
 use soland_http::error::{AppError, ErrorCode};
 
@@ -195,7 +195,7 @@ fn entry_from(record: AccountDataState) -> AccountDataEntry {
 }
 
 async fn session_actor_is_agent_runtime(
-    identity: &IdentityApplicationService,
+    identity: &IdentityService,
     actor: &str,
 ) -> Result<bool, AppError> {
     identity
@@ -214,17 +214,17 @@ async fn session_actor_is_agent_runtime(
 /// forbidden to write (non-disclosure: get stays `not_found`, list filters).
 async fn session_is_agent_context(
     state: &AppState,
-    session: &soland_application::identity::SessionIdentityState,
+    session: &soland_services::identity::SessionIdentityState,
 ) -> Result<bool, AppError> {
     if session.agent_session.is_some() {
         return Ok(true);
     }
-    session_actor_is_agent_runtime(state.identity_application(), &session.actor).await
+    session_actor_is_agent_runtime(state.identities(), &session.actor).await
 }
 
 async fn persist_account_data_event(
     state: &AppState,
-    session: &soland_application::identity::SessionIdentityState,
+    session: &soland_services::identity::SessionIdentityState,
     data_type: &str,
     content: Option<Value>,
 ) -> Result<(), AppError> {
@@ -232,10 +232,10 @@ async fn persist_account_data_event(
     let _service_event_guard = service_event_lock.lock().await;
     let service_actor = state.service_id().as_str();
     let realm_id =
-        RealmId::new(soland_application::identity::principal_control_realm_for_did(&session.actor))
+        RealmId::new(soland_services::identity::principal_control_realm_for_did(&session.actor))
             .map_err(|error| AppError::internal(format!("account_data realm invalid: {error}")))?;
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events_for_realm_actor(realm_id.as_str(), service_actor)
         .await
         .map_err(|error| {
@@ -381,7 +381,7 @@ async fn put_account_data(
     }
 
     let existed = state
-        .account_data_application()
+        .account_data()
         .entry(&session.actor, &data_type)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -389,7 +389,7 @@ async fn put_account_data(
 
     persist_account_data_event(state, &session, &data_type, Some(body.content)).await?;
     let record = state
-        .account_data_application()
+        .account_data()
         .entry(&session.actor, &data_type)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -433,7 +433,7 @@ async fn get_account_data(
     }
 
     match state
-        .account_data_application()
+        .account_data()
         .entry(&session.actor, &data_type)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -456,7 +456,7 @@ async fn list_account_data(
     // principal (non-disclosure list filtering).
     let agent_context = session_is_agent_context(state, &session).await?;
     let entries = state
-        .account_data_application()
+        .account_data()
         .entries_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -514,8 +514,8 @@ mod tests {
     use async_trait::async_trait;
     use chrono::{DateTime, Utc};
     use serde_json::{Value, json};
-    use soland_application::ApplicationResult;
-    use soland_application::identity::{
+    use soland_services::ServiceResult;
+    use soland_services::identity::{
         AccountIdentity, AccountLifecycleState, AccountLocalpartState, AccountLookupPort,
         AccountProfileState, AgentController, AgentDirectoryPort, DeviceDirectoryPort,
         DeviceIdentity, SaveDeviceCommand,
@@ -532,44 +532,44 @@ mod tests {
         async fn find_account_by_actor(
             &self,
             _actor_id: &str,
-        ) -> ApplicationResult<Option<AccountIdentity>> {
+        ) -> ServiceResult<Option<AccountIdentity>> {
             Ok(None)
         }
 
         async fn register_account(
             &self,
-            _command: soland_application::identity::RegisterAccountCommand,
-        ) -> ApplicationResult<()> {
+            _command: soland_services::identity::RegisterAccountCommand,
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn account(&self, _actor_id: &str) -> ApplicationResult<Option<AccountProfileState>> {
+        async fn account(&self, _actor_id: &str) -> ServiceResult<Option<AccountProfileState>> {
             Ok(None)
         }
 
-        async fn accounts(&self) -> ApplicationResult<Vec<AccountProfileState>> {
+        async fn accounts(&self) -> ServiceResult<Vec<AccountProfileState>> {
             Ok(Vec::new())
         }
 
-        async fn save_account(&self, _account: AccountProfileState) -> ApplicationResult<()> {
+        async fn save_account(&self, _account: AccountProfileState) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn delete_account(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn delete_account(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn account_localparts(
             &self,
             _actor_id: &str,
-        ) -> ApplicationResult<Vec<AccountLocalpartState>> {
+        ) -> ServiceResult<Vec<AccountLocalpartState>> {
             Ok(Vec::new())
         }
 
         async fn localpart_owner(
             &self,
             _localpart: &str,
-        ) -> ApplicationResult<Option<AccountLocalpartState>> {
+        ) -> ServiceResult<Option<AccountLocalpartState>> {
             Ok(None)
         }
 
@@ -578,7 +578,7 @@ mod tests {
             _actor_id: &str,
             _localpart: &str,
             _primary: bool,
-        ) -> ApplicationResult<AccountLocalpartState> {
+        ) -> ServiceResult<AccountLocalpartState> {
             unreachable!("NoAccounts mock: add_localpart is not exercised by these tests")
         }
 
@@ -586,7 +586,7 @@ mod tests {
             &self,
             _actor_id: &str,
             _localpart: &str,
-        ) -> ApplicationResult<AccountLocalpartState> {
+        ) -> ServiceResult<AccountLocalpartState> {
             unreachable!("NoAccounts mock: set_primary_localpart is not exercised by these tests")
         }
 
@@ -594,11 +594,11 @@ mod tests {
             &self,
             _actor_id: &str,
             _localpart: &str,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn clear_localparts(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn clear_localparts(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -606,7 +606,7 @@ mod tests {
             &self,
             _localpart: &str,
             _released_at: DateTime<Utc>,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
@@ -614,22 +614,22 @@ mod tests {
             &self,
             _actor_id: &str,
             _lifecycle: AccountLifecycleState,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ApplicationResult<()> {
+        async fn delete_account_lifecycle(&self, _actor_id: &str) -> ServiceResult<()> {
             Ok(())
         }
     }
 
     #[async_trait]
     impl DeviceDirectoryPort for NoDevices {
-        async fn list_active_device_actors(&self) -> ApplicationResult<Vec<String>> {
+        async fn list_active_device_actors(&self) -> ServiceResult<Vec<String>> {
             Ok(Vec::new())
         }
 
-        async fn devices(&self) -> ApplicationResult<Vec<DeviceIdentity>> {
+        async fn devices(&self) -> ServiceResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
 
@@ -637,22 +637,22 @@ mod tests {
             &self,
             _actor_id: &str,
             _device_id: &str,
-        ) -> ApplicationResult<Option<DeviceIdentity>> {
+        ) -> ServiceResult<Option<DeviceIdentity>> {
             Ok(None)
         }
 
-        async fn save_device(&self, _command: SaveDeviceCommand) -> ApplicationResult<()> {
+        async fn save_device(&self, _command: SaveDeviceCommand) -> ServiceResult<()> {
             Ok(())
         }
 
-        async fn save_device_if_absent(&self, _device: DeviceIdentity) -> ApplicationResult<bool> {
+        async fn save_device_if_absent(&self, _device: DeviceIdentity) -> ServiceResult<bool> {
             Ok(true)
         }
 
         async fn devices_for_actor(
             &self,
             _actor_id: &str,
-        ) -> ApplicationResult<Vec<DeviceIdentity>> {
+        ) -> ServiceResult<Vec<DeviceIdentity>> {
             Ok(Vec::new())
         }
     }
@@ -662,7 +662,7 @@ mod tests {
         async fn find_agent_controller(
             &self,
             agent_id: &str,
-        ) -> ApplicationResult<Option<AgentController>> {
+        ) -> ServiceResult<Option<AgentController>> {
             Ok(
                 (agent_id == "did:web:agent.alice.example").then(|| AgentController {
                     controller_id: "did:web:alice.example".to_owned(),
@@ -805,7 +805,7 @@ mod tests {
 
     #[tokio::test]
     async fn controller_private_writer_classifier_uses_agent_principal_projection() {
-        let identity = IdentityApplicationService::new(
+        let identity = IdentityService::new(
             Arc::new(NoAccounts),
             Arc::new(NoDevices),
             Arc::new(AgentClassifier),
@@ -824,3 +824,5 @@ mod tests {
         );
     }
 }
+
+

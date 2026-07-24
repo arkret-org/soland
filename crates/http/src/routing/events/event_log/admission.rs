@@ -269,7 +269,7 @@ pub fn realm_policy_components_check(
     binding_discussion_metadata_digest: Option<&str>,
 ) -> Result<(), (ErrorCode, String)> {
     if let Some(join_policy) = payload.get("join_policy") {
-        soland_application::operation_semantics::validate_join_policy_payload(join_policy)
+        soland_services::operation_semantics::validate_join_policy_payload(join_policy)
             .map_err(|reason| {
                 (
                     ErrorCode::SchemaViolation,
@@ -307,7 +307,7 @@ pub fn realm_policy_components_check(
             .and_then(Value::as_str)
             == Some("ak.profile.e2ee_relaxed.v1");
     let compliance_active = active_profiles.iter().any(|p| {
-        soland_application::operation_semantics::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str())
+        soland_services::operation_semantics::AUDIT_COMPLIANCE_PROFILES.contains(&p.as_str())
     });
     if relaxed_active && compliance_active {
         return Err((
@@ -431,3 +431,4 @@ fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_ide
     };
     derive_media_decrypt_metadata_digest(&value).ok()
 }
+

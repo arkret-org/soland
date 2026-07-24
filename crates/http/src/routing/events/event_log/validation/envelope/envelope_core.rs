@@ -200,7 +200,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     // always evaluated — a terminal Realm can never be written to because a
     // lock failure defaulted the answer to "not terminal" (fail-open).
     let realm_terminal = state
-        .projection_application()
+        .projections()
         .snapshot()
         .realm_is_in_terminal_state(&realm_id);
     if let Some((code, reason)) = terminal_realm_check(realm_terminal, &kind) {
@@ -211,7 +211,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         ));
     }
     let realm_frozen = state
-        .projection_application()
+        .projections()
         .snapshot()
         .realm_is_frozen_at(&realm_id, chrono::Utc::now());
     if let Some(reason) = frozen_realm_check(realm_frozen, &kind) {
@@ -582,8 +582,8 @@ async fn enforce_device_generation_fence(
             )
         })?;
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: actor_id.to_owned(),
             device_id: device_id.clone(),
         })
@@ -615,3 +615,4 @@ async fn enforce_device_generation_fence(
     }
     Ok(())
 }
+

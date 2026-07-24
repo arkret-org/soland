@@ -20,8 +20,8 @@ use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::json;
-use soland_application::ApplicationError;
-use soland_application::join_applications::{
+use soland_services::ServiceError;
+use soland_services::join_applications::{
     JoinApplicationCommand, JoinApplicationCommandOutcome, JoinApplicationMutation,
     JoinApplicationRecord,
 };
@@ -107,27 +107,27 @@ fn projection_error(reason: &'static str) -> AppError {
     }
 }
 
-fn application_error(error: ApplicationError) -> AppError {
+fn service_error(error: ServiceError) -> AppError {
     let detail = error.detail().to_owned();
     match error {
-        ApplicationError::NotFound(_) => AppError::not_found("join application not found"),
-        ApplicationError::Conflict(_) if detail.contains("duplicate_conflict") => {
+        ServiceError::NotFound(_) => AppError::not_found("join application not found"),
+        ServiceError::Conflict(_) if detail.contains("duplicate_conflict") => {
             AppError::new(ErrorCode::DuplicateConflict, "Idempotency-Key conflict")
         }
-        ApplicationError::Conflict(_) if detail.contains("ttl_expired") => {
+        ServiceError::Conflict(_) if detail.contains("ttl_expired") => {
             failed_precondition("ttl_expired", "join application has expired")
         }
-        ApplicationError::Conflict(_) => failed_precondition(
+        ServiceError::Conflict(_) => failed_precondition(
             "failed_precondition",
             "join application precondition failed",
         )
         .with_private_detail(detail),
-        ApplicationError::SchemaViolation(_) => AppError::new(
+        ServiceError::SchemaViolation(_) => AppError::new(
             ErrorCode::SchemaViolation,
             "join application schema violation",
         )
         .with_private_detail(detail),
-        ApplicationError::Database(_) | ApplicationError::Internal(_) => AppError::internal(detail),
+        ServiceError::Database(_) | ServiceError::Internal(_) => AppError::internal(detail),
     }
 }
 
@@ -246,7 +246,7 @@ async fn submit_join_application(
         }
     }
 
-    let snapshot = state.projection_application().snapshot();
+    let snapshot = state.projections().snapshot();
     let admission = snapshot
         .check_private_join_application(&body.receipt, &body.private_body)
         .map_err(projection_error)?;
@@ -310,14 +310,14 @@ async fn submit_join_application(
     };
     let (record, response_body) = command_record(
         state
-            .join_application_service()
+            .join_applications()
             .execute(command)
             .await
-            .map_err(application_error)?,
+            .map_err(service_error)?,
     )?;
     let (record, response) = response_from_value(record, response_body)?;
     state
-        .projection_application()
+        .projections()
         .install_join_application_record(&record);
     json_ok(response)
 }
@@ -359,15 +359,15 @@ async fn review_join_application(
     )
     .await?;
     let accept_threshold = state
-        .projection_application()
+        .projections()
         .snapshot()
         .check_private_join_application_review(&body.receipt)
         .map_err(projection_error)?;
     let existing = state
-        .join_application_service()
+        .join_applications()
         .get(realm_id.as_str(), application_ref.as_str(), Utc::now())
         .await
-        .map_err(application_error)?
+        .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     let command = JoinApplicationCommand {
         principal_id: session.actor,
@@ -383,14 +383,14 @@ async fn review_join_application(
     };
     let (record, response_body) = command_record(
         state
-            .join_application_service()
+            .join_applications()
             .execute(command)
             .await
-            .map_err(application_error)?,
+            .map_err(service_error)?,
     )?;
     let (record, response) = response_from_value(record, response_body)?;
     state
-        .projection_application()
+        .projections()
         .install_join_application_record(&record);
     json_ok(response)
 }
@@ -432,10 +432,10 @@ async fn cancel_join_application(
     )
     .await?;
     let existing = state
-        .join_application_service()
+        .join_applications()
         .get(realm_id.as_str(), application_ref.as_str(), Utc::now())
         .await
-        .map_err(application_error)?
+        .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     if existing.receipt.applicant_did.as_str() != session.actor {
         return Err(AppError::not_found("join application not found"));
@@ -453,20 +453,20 @@ async fn cancel_join_application(
     };
     let (record, response_body) = command_record(
         state
-            .join_application_service()
+            .join_applications()
             .execute(command)
             .await
-            .map_err(application_error)?,
+            .map_err(service_error)?,
     )?;
     let (record, response) = response_from_value(record, response_body)?;
     state
-        .projection_application()
+        .projections()
         .install_join_application_record(&record);
     json_ok(response)
 }
 
 fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, bool, bool) {
-    let snapshot = state.projection_application().snapshot();
+    let snapshot = state.projections().snapshot();
     let review_action = snapshot
         .realm_join_policy_review_capability(realm_id.as_str())
         .unwrap_or_else(|| REVIEW_ACTION_FALLBACK.to_owned());
@@ -528,7 +528,7 @@ async fn audit_body_read(
     actor: &str,
 ) -> Result<(), AppError> {
     state
-        .join_application_service()
+        .join_applications()
         .append_read_audit(
             record.receipt.realm_id.as_str(),
             record.application_ref.as_str(),
@@ -536,7 +536,7 @@ async fn audit_body_read(
             Utc::now(),
         )
         .await
-        .map_err(application_error)?;
+        .map_err(service_error)?;
     super::append_audit_log(
         state,
         Some(actor),
@@ -572,10 +572,10 @@ async fn list_join_applications(
     }
     let (reviewer, _, member) = viewer_context(state, &realm_id, &session.actor);
     let mut records = state
-        .join_application_service()
+        .join_applications()
         .list(realm_id.as_str(), Utc::now())
         .await
-        .map_err(application_error)?;
+        .map_err(service_error)?;
     records.sort_by(|left, right| left.application_ref.cmp(&right.application_ref));
     let mut visible = records
         .into_iter()
@@ -627,10 +627,10 @@ async fn get_join_application(
     let realm_id = realm_id.into_inner();
     let application_ref = parse_application_ref(application_ref.into_inner())?;
     let record = state
-        .join_application_service()
+        .join_applications()
         .get(realm_id.as_str(), application_ref.as_str(), Utc::now())
         .await
-        .map_err(application_error)?
+        .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     let (reviewer, ..) = viewer_context(state, &realm_id, &session.actor);
     if !reviewer && record.receipt.applicant_did.as_str() != session.actor {
@@ -657,10 +657,10 @@ async fn list_join_application_audit(
     let realm_id = realm_id.into_inner();
     let application_ref = parse_application_ref(application_ref.into_inner())?;
     let record = state
-        .join_application_service()
+        .join_applications()
         .get(realm_id.as_str(), application_ref.as_str(), Utc::now())
         .await
-        .map_err(application_error)?
+        .map_err(service_error)?
         .ok_or_else(|| AppError::not_found("join application not found"))?;
     let (reviewer, audit_reader, _) = viewer_context(state, &realm_id, &session.actor);
     if !reviewer && !audit_reader && record.receipt.applicant_did.as_str() != session.actor {
@@ -672,3 +672,4 @@ async fn list_join_application_audit(
         entries: record.audit_entries,
     })
 }
+

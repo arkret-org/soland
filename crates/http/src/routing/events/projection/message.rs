@@ -1,6 +1,6 @@
 use arkret_event_draft::Operation;
 use serde_json::Value;
-use soland_application::events::MessageState;
+use soland_services::events::MessageState;
 
 use crate::state::AppState;
 
@@ -16,11 +16,11 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
                 operation.operation_id.as_str().replace(':', "")
             )
         });
-    let message_id = soland_application::operation_semantics::message_id_from_payload_or_event_id(
+    let message_id = soland_services::operation_semantics::message_id_from_payload_or_event_id(
         &operation.payload,
         &event_id,
     );
-    let events = state.event_query_application();
+    let events = state.event_queries();
     if matches!(events.message(&event_id).await, Ok(Some(_))) {
         return;
     }
@@ -31,7 +31,7 @@ pub async fn project_federated_message(state: &AppState, origin: &str, operation
         .get("strand_id")
         .and_then(Value::as_str)
         .and_then(|strand_id| {
-            let proj = state.projection_application().snapshot();
+            let proj = state.projections().snapshot();
             proj.strand_scope_circle_id(strand_id)
         });
     let content = message_content_from_payload(&operation.payload, strand_scope);
@@ -106,3 +106,4 @@ fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>
     }
     content
 }
+

@@ -1,4 +1,4 @@
-use soland_application::delivery::TypingState;
+use soland_services::delivery::TypingState;
 
 use super::*;
 
@@ -291,10 +291,10 @@ async fn incremental_sync_includes_presence_only_for_presence_delta() {
     let state = test_state();
     let session = roster_session(&state, ROSTER_ACTOR);
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, true));
     state
-        .delivery_application()
+        .deliveries()
         .store_presence(PresenceRecord {
             actor: ROSTER_ACTOR.to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
@@ -387,7 +387,7 @@ async fn typing_state_is_emitted_once_per_cursor_revision() {
     let state = test_state();
     let session = roster_session(&state, ROSTER_ACTOR);
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, true));
     let updated_at = now();
     let mut envelope = test_presence_envelope(
@@ -408,7 +408,7 @@ async fn typing_state_is_emitted_once_per_cursor_revision() {
         ),
     ]);
     state
-        .delivery_application()
+        .deliveries()
         .store_typing(TypingState {
             actor: ROSTER_ACTOR.to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
@@ -554,7 +554,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
@@ -565,10 +565,10 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
 
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             ROSTER_REALM,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -686,8 +686,8 @@ async fn put_canonical_event_received_at_for_actor(
     });
     let canonical_bytes = serde_json::to_vec(&envelope).expect("canonical event test envelope");
     state
-        .event_query_application()
-        .store_canonical_event(soland_application::events::CanonicalEventRecord {
+        .event_queries()
+        .store_canonical_event(soland_services::events::CanonicalEventRecord {
             event_id: event_id.to_owned(),
             actor_id: actor_id.to_owned(),
             actor_seq,
@@ -709,7 +709,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, true));
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
@@ -721,10 +721,10 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     let post_join_received_at = created_at + ChronoDuration::milliseconds(300);
 
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             ROSTER_REALM,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -1239,7 +1239,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, true));
 
     let created_at = DateTime::parse_from_rfc3339("2026-06-18T00:00:00.000Z")
@@ -1257,12 +1257,12 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         ),
     ] {
         state
-            .identity_application()
-            .save_device(soland_application::identity::SaveDeviceCommand {
+            .identities()
+            .save_device(soland_services::identity::SaveDeviceCommand {
                 actor_id: actor.to_owned(),
                 device_id: device_id.to_owned(),
                 display_name: None,
-                device: soland_application::identity::DeviceIdentity {
+                device: soland_services::identity::DeviceIdentity {
                     actor_id: actor.to_owned(),
                     device_id: device_id.to_owned(),
                     display_name: None,
@@ -1296,7 +1296,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .expect("initial cursor parses");
 
     let mut revoked = state
-        .identity_application()
+        .identities()
         .devices_for_actor(ROSTER_ACTOR)
         .await
         .expect("device list")
@@ -1306,8 +1306,8 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     revoked.revoked_at = Some(updated_at + ChronoDuration::seconds(1));
     revoked.updated_at = updated_at + ChronoDuration::seconds(1);
     state
-        .identity_application()
-        .save_device(soland_application::identity::SaveDeviceCommand {
+        .identities()
+        .save_device(soland_services::identity::SaveDeviceCommand {
             actor_id: revoked.actor_id.clone(),
             device_id: revoked.device_id.clone(),
             display_name: revoked.display_name.clone(),
@@ -1343,7 +1343,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     .expect("revocation cursor parses");
 
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, false));
     let after_scope_loss = build_sync_snapshot(
         &state,
@@ -1367,7 +1367,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, true));
 
     let first_created_at = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
@@ -1376,10 +1376,10 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     let second_created_at = first_created_at + ChronoDuration::seconds(1);
     let meta_created_at = first_created_at - ChronoDuration::seconds(1);
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             ROSTER_REALM,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -1402,7 +1402,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
         .expect("realm meta stored");
     crate::routing::events::projection::append_projection_event(
         &state,
-        soland_application::events::ProjectedEvent {
+        soland_services::events::ProjectedEvent {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::events::EventKind::STRAND_UPDATE.to_owned(),
@@ -1456,7 +1456,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
 
     crate::routing::events::projection::append_projection_event(
         &state,
-        soland_application::events::ProjectedEvent {
+        soland_services::events::ProjectedEvent {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::events::EventKind::STRAND_UPDATE.to_owned(),
@@ -1524,17 +1524,17 @@ async fn membership_only_projection_advances_incremental_roster() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_ACTOR);
     state
-        .realm_directory_application()
+        .realm_directory()
         .upsert(roster_realm(false, false));
 
     let created_at = DateTime::parse_from_rfc3339("2026-06-24T10:30:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             ROSTER_REALM,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: ROSTER_ACTOR.to_owned(),
                 deleted: false,
                 discoverability: "invite_only".to_owned(),
@@ -2074,7 +2074,7 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
         .and_then(Value::as_str)
         .expect("cursor handle");
     let record = state
-        .sync_application()
+        .sync()
         .cursor(handle)
         .await
         .unwrap()
@@ -2274,7 +2274,7 @@ async fn presenting_a_cursor_prunes_strictly_older_stream_handles() {
             .await
             .expect("new cursor parses");
     let pruned = state
-        .sync_application()
+        .sync()
         .prune_superseded_cursors(
             &session.actor,
             &session.device_id,
@@ -2314,8 +2314,8 @@ async fn revoked_cursor_returns_revoked_error() {
         .await
         .expect("freshly issued cursor validates");
 
-    state.sync_application().cache_cursor_revocation(
-        soland_application::sync::CursorRevocationState {
+    state.sync().cache_cursor_revocation(
+        soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
             device_id: None,
@@ -2349,8 +2349,8 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
     )
     .await;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    state.sync_application().cache_cursor_revocation(
-        soland_application::sync::CursorRevocationState {
+    state.sync().cache_cursor_revocation(
+        soland_services::sync::CursorRevocationState {
             cursor_digest: sha256_hex(token.as_bytes()),
             principal_id: "did:web:alice.example".to_owned(),
             device_id: None,
@@ -2365,7 +2365,8 @@ async fn expired_revocation_entry_is_pruned_and_does_not_block() {
         .await
         .expect("expired revocation entry must be pruned, not block a valid cursor");
     assert!(
-        state.sync_application().cached_cursor_revocation_count() == 0,
+        state.sync().cached_cursor_revocation_count() == 0,
         "expired revocation entry should have been pruned"
     );
 }
+

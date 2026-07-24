@@ -39,9 +39,9 @@ use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::events::CanonicalEventRecord;
-use soland_application::identity::SessionIdentityState as SessionRecord;
-use soland_application::{operation_semantics as kinds, protocol_artifacts as artifacts};
+use soland_services::events::CanonicalEventRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
+use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
 use soland_http::error::{AppError, ErrorCode, error_http_status};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -123,3 +123,4 @@ mod admission_tests;
 #[cfg(test)]
 #[path = "event_log_proof_strictness_tests.rs"]
 mod proof_strictness_tests;
+

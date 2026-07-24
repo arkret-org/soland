@@ -33,7 +33,7 @@ async fn submit_event_seal(
     super::super::require_agent_session_scope(&session, "ak.self.events.command.submit_seal")?;
     let seal = body.into_inner();
     let expected_realm =
-        soland_application::identity::principal_control_realm_for_did(&session.actor);
+        soland_services::identity::principal_control_realm_for_did(&session.actor);
     let managed_agent = if seal.realm_id.as_str() == expected_realm {
         None
     } else {
@@ -94,7 +94,7 @@ async fn events_describe(
     let mut description = describe(
         state.service_id(),
         &state.config().public_base_url,
-        state.jobs_application().storage_mode(),
+        state.jobs().storage_mode(),
         state.config().development_mode,
         state.config().account_authority_url.as_deref(),
         state.config().account_authority_enrollment_did.as_deref(),
@@ -197,7 +197,7 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             }
         };
         match state
-            .jobs_application()
+            .jobs()
             .idempotency_record(&session.actor, key)
             .await
         {
@@ -397,7 +397,7 @@ async fn persist_idempotency_first_response(
     body: &Value,
 ) {
     let created_at = now();
-    let record = soland_application::jobs::IdempotencyState {
+    let record = soland_services::jobs::IdempotencyState {
         principal_id: principal_id.to_owned(),
         idempotency_key: idempotency_key.to_owned(),
         service_id: state.service_id().clone(),
@@ -408,7 +408,7 @@ async fn persist_idempotency_first_response(
         expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
     };
     if let Err(error) = state
-        .jobs_application()
+        .jobs()
         .store_idempotency_record(record)
         .await
     {
@@ -480,7 +480,7 @@ async fn get_event(
     let session = aa.authenticated_session(state, req).await?;
     let event_id = event_id.into_inner();
     let record = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(&event_id)
         .await
         .ok()
@@ -509,7 +509,7 @@ async fn resolve_events(
             "too many events requested",
         ));
     }
-    let service = state.event_query_application();
+    let service = state.event_queries();
     let mut found = Vec::new();
     let mut missing = Vec::new();
     for event_id in body.event_ids {
@@ -563,7 +563,7 @@ async fn events_frontier(
     {
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
-        let own_pcr = soland_application::identity::principal_control_realm_for_did(&session.actor);
+        let own_pcr = soland_services::identity::principal_control_realm_for_did(&session.actor);
         let managed_agent_pcr =
             crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
                 state,
@@ -629,7 +629,7 @@ async fn events_frontier(
             Some(seal) => seal,
             None => {
                 let stats = state
-                    .event_query_application()
+                    .event_queries()
                     .realm_event_stats(realm_id.as_str())
                     .await
                     .map_err(|error| {
@@ -670,9 +670,9 @@ async fn events_frontier(
         let realm_id = RealmId::new(realm_value.clone())
             .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
         let own_actor_pcr = actor == session.actor
-            && realm_value == soland_application::identity::principal_control_realm_for_did(&actor);
+            && realm_value == soland_services::identity::principal_control_realm_for_did(&actor);
         let managed_actor_pcr = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agent(&actor)
             .await
             .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
@@ -709,14 +709,14 @@ async fn events_frontier(
     }
 
     let managed_actor_pcr = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(&actor)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
         .filter(|record| record.controller_id == session.actor && record.state != "deactivated")
         .map(|record| record.principal_control_realm_id);
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events_for_actor(actor_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
@@ -762,7 +762,7 @@ pub(super) async fn load_realm_actor_frontier(
     actor_id: Did,
 ) -> Result<RealmActorFrontierView, AppError> {
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events_for_realm_actor(realm_id.as_str(), actor_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("actor frontier unavailable: {error}")))?;
@@ -806,7 +806,7 @@ pub(super) fn build_realm_actor_frontier(
     frontier_event_ids: Vec<EventId>,
 ) -> Result<RealmActorFrontierView, AppError> {
     let suite_name = state
-        .projection_application()
+        .projections()
         .snapshot()
         .realm_digest_algorithm(realm_id.as_str())
         .unwrap_or_else(|| "sha256".to_owned());
@@ -821,3 +821,4 @@ pub(super) fn build_realm_actor_frontier(
     )
     .map_err(|error| AppError::internal(format!("actor frontier is invalid: {error}")))
 }
+

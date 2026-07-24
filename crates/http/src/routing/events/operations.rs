@@ -33,7 +33,7 @@
 
 use arkret_event_draft::Operation;
 use serde_json::Value;
-use soland_application::operation_semantics as kinds;
+use soland_services::operation_semantics as kinds;
 
 use super::{is_valid_hash_digest, validate_did};
 use crate::routing::interop::participant_binding;
@@ -127,3 +127,4 @@ mod strand_tracks_update_tests;
 #[cfg(test)]
 #[path = "operations_wire_payload_tests.rs"]
 mod wire_payload_tests;
+

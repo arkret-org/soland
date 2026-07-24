@@ -62,12 +62,12 @@ fn application_push_contract_drift(
 }
 #[async_trait::async_trait]
 impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
-    async fn store_notification(&self, record: Value) -> crate::ApplicationResult<()> {
+    async fn store_notification(&self, record: Value) -> crate::ServiceResult<()> {
         self.0.notifications().put(record).await?;
         Ok(())
     }
 
-    async fn store_account_delta(&self, record: Value) -> crate::ApplicationResult<()> {
+    async fn store_account_delta(&self, record: Value) -> crate::ServiceResult<()> {
         self.0.notifications().put_account_delta(record).await?;
         Ok(())
     }
@@ -77,7 +77,7 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
         controller_account_id: &str,
         recipient_service_id: &str,
         after_position: Option<i64>,
-    ) -> crate::ApplicationResult<Vec<Value>> {
+    ) -> crate::ServiceResult<Vec<Value>> {
         Ok(self
             .0
             .notifications()
@@ -85,7 +85,7 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
             .await?)
     }
 
-    async fn list_for_recipient(&self, recipient_id: &str) -> crate::ApplicationResult<Vec<Value>> {
+    async fn list_for_recipient(&self, recipient_id: &str) -> crate::ServiceResult<Vec<Value>> {
         Ok(self
             .0
             .notifications()
@@ -100,7 +100,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         &self,
         actor_id: &str,
         device_id: &str,
-    ) -> crate::ApplicationResult<crate::delivery::DeviceDeliveryPurgeResult> {
+    ) -> crate::ServiceResult<crate::delivery::DeviceDeliveryPurgeResult> {
         let to_device_messages_dropped = match self
             .0
             .device_messages()
@@ -135,7 +135,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         &self,
         actor_id: &str,
         new_generation: u64,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         Ok(self
             .0
             .device_messages()
@@ -143,7 +143,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
             .await?)
     }
 
-    async fn register_push_device(&self, registration: Value) -> crate::ApplicationResult<()> {
+    async fn register_push_device(&self, registration: Value) -> crate::ServiceResult<()> {
         self.0.push_devices().register(registration).await?;
         Ok(())
     }
@@ -154,7 +154,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
         device_id: &str,
         push_key: Option<&str>,
         app_id: Option<&str>,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         Ok(self
             .0
             .push_devices()
@@ -162,7 +162,7 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
             .await?)
     }
 
-    async fn push_devices(&self) -> crate::ApplicationResult<Vec<Value>> {
+    async fn push_devices(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.push_devices().snapshot_all().await?)
     }
 }
@@ -220,7 +220,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn store_presence(
         &self,
         presence: crate::delivery::PresenceState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .presence()
             .put(persistence_presence(presence))
@@ -231,7 +231,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn presence_for_actor(
         &self,
         actor_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::PresenceState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::PresenceState>> {
         Ok(self
             .0
             .presence()
@@ -242,7 +242,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
             .collect())
     }
 
-    async fn delete_presence(&self, actor_id: &str) -> crate::ApplicationResult<()> {
+    async fn delete_presence(&self, actor_id: &str) -> crate::ServiceResult<()> {
         self.0.presence().delete(actor_id).await?;
         Ok(())
     }
@@ -250,12 +250,12 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn store_typing(
         &self,
         typing: crate::delivery::TypingState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.typing().put(persistence_typing(typing)).await?;
         Ok(())
     }
 
-    async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> crate::ApplicationResult<()> {
+    async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> crate::ServiceResult<()> {
         self.0.typing().remove(actor_id, realm_id).await?;
         Ok(())
     }
@@ -263,7 +263,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn typing_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::TypingState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::TypingState>> {
         Ok(self
             .0
             .typing()
@@ -274,14 +274,14 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
             .collect())
     }
 
-    async fn prune_expired_typing(&self) -> crate::ApplicationResult<usize> {
+    async fn prune_expired_typing(&self) -> crate::ServiceResult<usize> {
         Ok(self.0.typing().prune_expired().await?)
     }
 
     async fn store_call_signal(
         &self,
         signal: crate::delivery::CallSignalState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .call_signal_relay()
             .append(persistence_call_signal(signal))
@@ -291,7 +291,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn call_signals_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::CallSignalState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::CallSignalState>> {
         Ok(self
             .0
             .call_signal_relay()
@@ -306,7 +306,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
-    ) -> crate::ApplicationResult<u64> {
+    ) -> crate::ServiceResult<u64> {
         Ok(self
             .0
             .call_signal_relay()
@@ -319,7 +319,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
         device_id: &str,
         realm_id: &str,
         position: u64,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .call_signal_relay()
             .advance(actor_id, device_id, realm_id, position)
@@ -329,7 +329,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn store_read_receipt(
         &self,
         receipt: crate::delivery::ReadReceiptState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .read_receipt_relay()
             .append(persistence_read_receipt(receipt))
@@ -339,7 +339,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn read_receipts_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::ReadReceiptState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::ReadReceiptState>> {
         Ok(self
             .0
             .read_receipt_relay()
@@ -352,7 +352,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     async fn read_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::ReadReceiptState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::ReadReceiptState>> {
         Ok(self
             .0
             .read_receipt_relay()
@@ -367,7 +367,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
-    ) -> crate::ApplicationResult<u64> {
+    ) -> crate::ServiceResult<u64> {
         Ok(self
             .0
             .read_receipt_relay()
@@ -380,7 +380,7 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
         device_id: &str,
         realm_id: &str,
         position: u64,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .read_receipt_relay()
             .advance(actor_id, device_id, realm_id, position)
@@ -492,21 +492,21 @@ impl crate::delivery::BlobPort for PersistenceBlobs {
     async fn blob(
         &self,
         blob_ref: &str,
-    ) -> crate::ApplicationResult<Option<crate::delivery::BlobState>> {
+    ) -> crate::ServiceResult<Option<crate::delivery::BlobState>> {
         Ok(self.0.blobs().get(blob_ref).await?.map(application_blob))
     }
     async fn store_blob(
         &self,
         blob_ref: &str,
         blob: crate::delivery::BlobState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .blobs()
             .put(blob_ref, &persistence_blob(blob))
             .await?;
         Ok(())
     }
-    async fn blobs(&self) -> crate::ApplicationResult<Vec<crate::delivery::BlobState>> {
+    async fn blobs(&self) -> crate::ServiceResult<Vec<crate::delivery::BlobState>> {
         Ok(self
             .0
             .blobs()
@@ -523,7 +523,7 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
     async fn entry(
         &self,
         bridge_describe_url: &str,
-    ) -> crate::ApplicationResult<Option<crate::delivery::OutboundPushBridgeCacheState>> {
+    ) -> crate::ServiceResult<Option<crate::delivery::OutboundPushBridgeCacheState>> {
         Ok(self
             .0
             .push_bridge_cache()
@@ -536,7 +536,7 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
         &self,
         bridge_describe_url: &str,
         record: crate::delivery::OutboundPushBridgeCacheState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .push_bridge_cache()
             .put(bridge_describe_url, persistence_push_bridge_cache(record))
@@ -544,7 +544,7 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
         Ok(())
     }
 
-    async fn delete_entry(&self, bridge_describe_url: &str) -> crate::ApplicationResult<bool> {
+    async fn delete_entry(&self, bridge_describe_url: &str) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .push_bridge_cache()
@@ -552,13 +552,13 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
             .await?)
     }
 
-    async fn clear(&self) -> crate::ApplicationResult<usize> {
+    async fn clear(&self) -> crate::ServiceResult<usize> {
         Ok(self.0.push_bridge_cache().clear().await?)
     }
 
     async fn entries(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::OutboundPushBridgeCacheState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::OutboundPushBridgeCacheState>> {
         Ok(self
             .0
             .push_bridge_cache()
@@ -569,14 +569,14 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
             .collect())
     }
 
-    async fn entry_count(&self) -> crate::ApplicationResult<usize> {
+    async fn entry_count(&self) -> crate::ServiceResult<usize> {
         Ok(self.0.push_bridge_cache().len().await?)
     }
 
     async fn current_contract(
         &self,
         bridge_describe_url: &str,
-    ) -> crate::ApplicationResult<Option<crate::delivery::OutboundPushBridgeCacheState>> {
+    ) -> crate::ServiceResult<Option<crate::delivery::OutboundPushBridgeCacheState>> {
         Ok(self
             .0
             .push_bridge_cache()
@@ -589,7 +589,7 @@ impl crate::delivery::PushBridgeCachePort for PersistencePushBridgeCache {
         bridge_describe_url: &str,
         observed_digest: &str,
         max_age: chrono::Duration,
-    ) -> crate::ApplicationResult<crate::delivery::PushContractDrift> {
+    ) -> crate::ServiceResult<crate::delivery::PushContractDrift> {
         Ok(application_push_contract_drift(
             self.0
                 .push_bridge_cache()
@@ -692,7 +692,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
     async fn append(
         &self,
         message: crate::delivery::DeviceMessageState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .device_messages()
             .append(persistence_device_message(message))
@@ -703,7 +703,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
     async fn commit_batch(
         &self,
         batch: crate::delivery::DeviceMessageBatchRecord,
-    ) -> crate::ApplicationResult<crate::delivery::DeviceMessageBatchCommitOutcome> {
+    ) -> crate::ServiceResult<crate::delivery::DeviceMessageBatchCommitOutcome> {
         Ok(application_device_message_commit_outcome(
             self.0
                 .device_messages()
@@ -717,7 +717,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         request_key: &str,
         request_digest: &str,
         items: &[crate::delivery::DeviceMessageIntentRecord],
-    ) -> crate::ApplicationResult<crate::delivery::DeviceMessageBatchInspection> {
+    ) -> crate::ServiceResult<crate::delivery::DeviceMessageBatchInspection> {
         let items = items
             .iter()
             .map(|item| soland_storage::DeviceMessageIntentRecord {
@@ -738,7 +738,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
-    ) -> crate::ApplicationResult<Option<String>> {
+    ) -> crate::ServiceResult<Option<String>> {
         Ok(self
             .0
             .device_messages()
@@ -751,7 +751,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         recipient: &str,
         device_id: &str,
         ack_token: &str,
-    ) -> crate::ApplicationResult<Option<usize>> {
+    ) -> crate::ServiceResult<Option<usize>> {
         Ok(self
             .0
             .device_messages()
@@ -764,7 +764,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         recipient: &str,
         device_id: &str,
         queue_position: i64,
-    ) -> crate::ApplicationResult<Vec<crate::delivery::DeviceMessageState>> {
+    ) -> crate::ServiceResult<Vec<crate::delivery::DeviceMessageState>> {
         Ok(self
             .0
             .device_messages()
@@ -779,7 +779,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         &self,
         per_device_capacity: usize,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.device_messages().prune_expired(now).await?;
         self.0
             .device_messages()
@@ -792,7 +792,7 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
         &self,
         recipient: &str,
         device_id: &str,
-    ) -> crate::ApplicationResult<Option<i64>> {
+    ) -> crate::ServiceResult<Option<i64>> {
         Ok(self
             .0
             .device_messages()
@@ -801,12 +801,12 @@ impl crate::delivery::DeviceMessagePort for PersistenceDeviceMessages {
     }
 }
 
-pub fn build_persistence_delivery_application(
+pub fn build_persistence_delivery_service(
     persistence: Arc<dyn PersistenceStore>,
     object_storage: Arc<dyn ObjectStoragePort>,
     push_target_hmac_key: [u8; 32],
-) -> DeliveryApplicationService {
-    DeliveryApplicationService::new(crate::delivery::DeliveryApplicationRuntime {
+) -> DeliveryService {
+    DeliveryService::new(crate::delivery::DeliveryServiceRuntime {
         notifications: Arc::new(PersistenceNotificationWriter(persistence.clone())),
         device_delivery: Arc::new(PersistenceDeviceDelivery(persistence.clone())),
         device_messages: Arc::new(PersistenceDeviceMessages(persistence.clone())),
@@ -817,3 +817,4 @@ pub fn build_persistence_delivery_application(
         push_target_hmac_key,
     })
 }
+

@@ -25,7 +25,7 @@ pub mod runtime_guards;
 pub mod sync;
 
 #[derive(Debug, thiserror::Error)]
-pub enum ApplicationError {
+pub enum ServiceError {
     #[error("not found: {0}")]
     NotFound(String),
     #[error("conflict: {0}")]
@@ -39,7 +39,7 @@ pub enum ApplicationError {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ApplicationErrorKind {
+pub enum ServiceErrorKind {
     NotFound,
     Conflict,
     Database,
@@ -47,15 +47,15 @@ pub enum ApplicationErrorKind {
     Internal,
 }
 
-impl ApplicationError {
+impl ServiceError {
     #[must_use]
-    pub fn kind(&self) -> ApplicationErrorKind {
+    pub fn kind(&self) -> ServiceErrorKind {
         match self {
-            Self::NotFound(_) => ApplicationErrorKind::NotFound,
-            Self::Conflict(_) => ApplicationErrorKind::Conflict,
-            Self::Database(_) => ApplicationErrorKind::Database,
-            Self::SchemaViolation(_) => ApplicationErrorKind::SchemaViolation,
-            Self::Internal(_) => ApplicationErrorKind::Internal,
+            Self::NotFound(_) => ServiceErrorKind::NotFound,
+            Self::Conflict(_) => ServiceErrorKind::Conflict,
+            Self::Database(_) => ServiceErrorKind::Database,
+            Self::SchemaViolation(_) => ServiceErrorKind::SchemaViolation,
+            Self::Internal(_) => ServiceErrorKind::Internal,
         }
     }
 
@@ -99,7 +99,7 @@ impl ApplicationError {
     }
 }
 
-impl From<soland_storage::PersistenceError> for ApplicationError {
+impl From<soland_storage::PersistenceError> for ServiceError {
     fn from(error: soland_storage::PersistenceError) -> Self {
         match error {
             soland_storage::PersistenceError::NotFound(detail) => Self::NotFound(detail),
@@ -113,7 +113,7 @@ impl From<soland_storage::PersistenceError> for ApplicationError {
     }
 }
 
-pub type ApplicationResult<T> = Result<T, ApplicationError>;
+pub type ServiceResult<T> = Result<T, ServiceError>;
 
 pub fn validate_embedded_artifacts() -> Result<(), soland_domain::artifacts::ArtifactError> {
     soland_domain::artifacts::validate_embedded_artifacts()

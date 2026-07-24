@@ -9,7 +9,7 @@ use chrono::{DateTime, Duration, Utc};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::governance::{RetentionPolicyRecord, RetentionTombstoneRecord};
+use soland_services::governance::{RetentionPolicyRecord, RetentionTombstoneRecord};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -102,7 +102,7 @@ async fn configure_retention_policy(
         updated_at: now,
     };
     state
-        .governance_application()
+        .governance()
         .store_retention_policy(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -134,14 +134,14 @@ async fn sweep_retention_policy(
     let realm_id = required_string(body.realm_id.as_deref(), "realm_id")?;
     let now = optional_now(body.now.as_deref())?.unwrap_or_else(Utc::now);
     let policy = state
-        .governance_application()
+        .governance()
         .retention_policy(&realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("retention policy not found"))?;
     let cutoff = now - Duration::seconds(policy.ttl_seconds);
     let events = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .unwrap_or_default()
@@ -158,14 +158,14 @@ async fn sweep_retention_policy(
         .filter(|event| {
             event.created_at <= cutoff
                 && state
-                    .governance_application()
+                    .governance()
                     .cached_retention_tombstone(&event.event_id)
                     .is_none()
         })
         .collect();
     for event in pending {
         if state
-            .governance_application()
+            .governance()
             .retention_tombstone(&event.event_id)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -174,7 +174,7 @@ async fn sweep_retention_policy(
             continue;
         }
         let sealed = state
-            .event_query_application()
+            .event_queries()
             .has_canonical_event(&event.event_id)
             .await
             .unwrap_or(false);
@@ -188,7 +188,7 @@ async fn sweep_retention_policy(
             sealed,
         };
         state
-            .governance_application()
+            .governance()
             .store_retention_tombstone(&tombstone)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -282,3 +282,4 @@ fn tombstone_item(record: &RetentionTombstoneRecord) -> RetentionTombstoneItem {
         physical_delete: false,
     }
 }
+

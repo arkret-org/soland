@@ -52,15 +52,15 @@ use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signer as _;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::events::{
+use soland_services::events::{
     MlsKeyPackageState as MlsKeyPackageRow,
     PeerKeyPackageClaimCommand as PeerKeyPackageClaimAttempt,
     PeerKeyPackageClaimLedgerState as PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult,
     PeerKeyPackageClaimResult as PeerKeyPackageClaimAttemptResult,
 };
-use soland_application::identity::SessionIdentityState as SessionRecord;
-use soland_application::projection::{MlsProjectionEffect, ProjectionEffectView};
+use soland_services::identity::SessionIdentityState as SessionRecord;
+use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -227,7 +227,7 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
     revoke_event_id: &str,
 ) -> usize {
     state
-        .projection_application()
+        .projections()
         .enqueue_device_revoke_mls_removals(actor_id, device_id, revoke_event_id, now())
 }
 
@@ -447,7 +447,7 @@ async fn upload_keypackage(
             publish_payload,
         );
         let effect = state
-            .projection_application()
+            .projections()
             .apply_mls_keypackage_publish(&op);
         match effect {
             ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished { .. }) => {}
@@ -466,11 +466,11 @@ async fn upload_keypackage(
         // projection row instead of re-parsing the body so persistence and
         // in-process state stay aligned.
         let record = state
-            .projection_application()
+            .projections()
             .mls_key_package_record(&keypackage_id)
             .expect("publish reducer landed the row");
         state
-            .mls_key_package_application()
+            .mls_key_packages()
             .store_key_package(&record)
             .await
             .map_err(|err| AppError::internal(format!("mls_key_packages.put: {err}")))?;
@@ -527,7 +527,7 @@ async fn peer_claim_keypackage(
         .map_err(|error| AppError::internal(format!("peer claim digest: {error}")))?;
     revoke_expired_peer_claims(state).await?;
     if let Some(existing) = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .peer_claim(&source_service_id, claim_request_id)
         .await
         .map_err(|error| AppError::internal(format!("peer claim ledger lookup: {error}")))?
@@ -579,7 +579,7 @@ async fn peer_claim_keypackage(
     .map_err(|_| peer_claim_failed())?;
     let now_secs = now().timestamp();
     let candidate_ids = {
-        let keypackages = state.projection_application().mls_key_package_records();
+        let keypackages = state.projections().mls_key_package_records();
         let mut candidates = keypackages
             .iter()
             .filter(|keypackage| !keypackage.last_resort)
@@ -613,7 +613,7 @@ async fn peer_claim_keypackage(
     for (_, candidate_id, binding) in candidate_ids {
         let binding = binding.map_err(|_| peer_claim_failed())?;
         let Some(mut predicted) = state
-            .mls_key_package_application()
+            .mls_key_packages()
             .key_package(&candidate_id)
             .await
             .map_err(|error| AppError::internal(format!("peer claim candidate lookup: {error}")))?
@@ -649,7 +649,7 @@ async fn peer_claim_keypackage(
             updated_at: now_secs,
         };
         match state
-            .mls_key_package_application()
+            .mls_key_packages()
             .claim_peer_key_package(PeerKeyPackageClaimAttempt {
                 keypackage_id: &candidate_id,
                 mls_group_id: body.mls_group_id.as_str(),
@@ -664,7 +664,7 @@ async fn peer_claim_keypackage(
             .map_err(|error| AppError::internal(format!("peer KeyPackage CAS: {error}")))?
         {
             PeerKeyPackageClaimAttemptResult::Claimed(claimed) => {
-                state.projection_application().mark_key_package_claimed(
+                state.projections().mark_key_package_claimed(
                     &candidate_id,
                     body.mls_group_id.as_str().to_owned(),
                     now_secs,
@@ -702,7 +702,7 @@ async fn peer_query_keypackage_claim(
     let source_service_id = transport.source_service_id.as_str().to_owned();
     revoke_expired_peer_claims(state).await?;
     let Some(record) = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .peer_claim(&source_service_id, body.claim_request_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("peer claim query ledger: {error}")))?
@@ -820,7 +820,7 @@ async fn verify_peer_claim_participant_authorization(
         })?;
     let key = if let Some(generation) = authorization.ssk_generation {
         let current = state
-            .identity_application()
+            .identities()
             .current_cross_signing(&body.requester);
         let Some(current) = current else {
             return Ok(false);
@@ -911,7 +911,7 @@ async fn peer_claim_policy_authorized(
     source_service_id: &str,
 ) -> Result<bool, AppError> {
     if state
-        .identity_application()
+        .identities()
         .account(body.target_principal_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("target authority lookup: {error}")))?
@@ -931,7 +931,7 @@ async fn peer_claim_policy_authorized(
             {
                 return Ok(false);
             }
-            let projection = state.projection_application().snapshot();
+            let projection = state.projections().snapshot();
             let is_participant = |actor_id: &str| {
                 projection
                     .member(body.intended_realm_id.as_str(), actor_id)
@@ -1111,7 +1111,7 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
         return Err("peer_claim_welcome_invalid");
     }
     let ledger = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .peer_claim(source_service_id, receipt.claim_request_id.as_str())
         .await
         .map_err(|_| "peer_claim_welcome_pending")?
@@ -1160,7 +1160,7 @@ async fn record_peer_claim_failed(
         updated_at: timestamp,
     };
     match state
-        .mls_key_package_application()
+        .mls_key_packages()
         .store_peer_claim_terminal(&record)
         .await
         .map_err(|error| AppError::internal(format!("peer claim failure ledger: {error}")))?
@@ -1197,7 +1197,7 @@ fn replay_peer_claim(
 
 async fn revoke_expired_peer_claims(state: &AppState) -> Result<(), AppError> {
     let revoked = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .revoke_expired_peer_claims(now().timestamp_millis())
         .await
         .map_err(|error| AppError::internal(format!("peer claim expiry sweep: {error}")))?;
@@ -1205,7 +1205,7 @@ async fn revoke_expired_peer_claims(state: &AppState) -> Result<(), AppError> {
         return Ok(());
     }
     state
-        .projection_application()
+        .projections()
         .mark_key_packages_revoked(&revoked);
     Ok(())
 }
@@ -1300,7 +1300,7 @@ pub(crate) async fn claim_keypackages_for_request(
     );
     let now_secs = now().timestamp();
     let selected_keypackage = {
-        let keypackages = state.projection_application().mls_key_package_records();
+        let keypackages = state.projections().mls_key_package_records();
         let ordinary = keypackages
             .iter()
             .filter(|kp| !kp.last_resort)
@@ -1348,7 +1348,7 @@ pub(crate) async fn claim_keypackages_for_request(
         let reason_code = if available_before > 0 {
             "claim_failed"
         } else {
-            soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
+            soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
         };
         return Ok(KeyPackagesClaimOutcome {
             claims: Vec::new(),
@@ -1382,7 +1382,7 @@ pub(crate) async fn claim_keypackages_for_request(
     claim_binding.insert_into(&mut payload);
     let op = build_op(arkret_wire::events::EventKind::MLS_KEYPACKAGE, payload);
     let effect = state
-        .projection_application()
+        .projections()
         .apply_mls_keypackage_claim(&op);
     let (claimed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackageClaimed {
@@ -1397,14 +1397,14 @@ pub(crate) async fn claim_keypackages_for_request(
             //   - mls_keypackage_not_found        → 404 not_found
             //   - mls_keypackage_expired          → 412 failed_precondition
             let err = match reason.as_str() {
-                soland_application::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED => {
+                soland_services::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED => {
                     AppError::new(
                         ErrorCode::CasConflict,
                         "KeyPackage already claimed by another Welcome",
                     )
                     .with_wire_code(reason)
                 }
-                soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND => {
+                soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND => {
                     AppError::not_found("KeyPackage not found").with_wire_code(reason)
                 }
                 arkret_wire::ReasonCode::KEYPACKAGE_EXPIRED => {
@@ -1416,7 +1416,7 @@ pub(crate) async fn claim_keypackages_for_request(
                     "KeyPackage cross-signing generation mismatch",
                 )
                 .with_wire_code(reason),
-                soland_application::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH => {
+                soland_services::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH => {
                     AppError::new(
                         ErrorCode::FailedPrecondition,
                         "KeyPackage Realm affinity mismatch",
@@ -1439,8 +1439,8 @@ pub(crate) async fn claim_keypackages_for_request(
     // Pg-backed deployment; for the in-memory backend the reducer's
     // lock above already serialised them.
     let updated = state
-        .mls_key_package_application()
-        .claim_key_package(soland_application::events::ClaimMlsKeyPackageCommand {
+        .mls_key_packages()
+        .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
             id: &claimed_keypackage_id,
             mls_group_id: &claimed_group_id,
             intended_realm_id: claimed_realm_id.as_deref(),
@@ -1461,7 +1461,7 @@ pub(crate) async fn claim_keypackages_for_request(
             "KeyPackage already claimed in store",
         )
         .with_wire_code(
-            soland_application::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED,
+            soland_services::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED,
         ));
     }
     let Some(claimed_record) = updated else {
@@ -1522,7 +1522,7 @@ async fn consume_keypackages(
     let mut failures = Vec::new();
     for keypackage_id in refs {
         match state
-            .mls_key_package_application()
+            .mls_key_packages()
             .key_package(&keypackage_id)
             .await
         {
@@ -1538,7 +1538,7 @@ async fn consume_keypackages(
                 {
                     failures.push(keypackage_ref_failure(
                         keypackage_id,
-                        soland_application::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH,
+                        soland_services::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH,
                     ));
                     continue;
                 }
@@ -1574,13 +1574,13 @@ async fn consume_keypackages(
             }
         }
         match state
-            .mls_key_package_application()
+            .mls_key_packages()
             .consume_key_package_claim(&keypackage_id, &group_id, consumed_at)
             .await
         {
             Ok(Some(_)) => {
                 state
-                    .projection_application()
+                    .projections()
                     .mark_key_package_consumed(&keypackage_id, consumed_at);
                 consumed.push(keypackage_id)
             }
@@ -1607,7 +1607,7 @@ async fn validate_direct_keypackage_consume(
         return Ok(());
     };
     if !state
-        .projection_application()
+        .projections()
         .snapshot()
         .realm_is_direct_conversation(&realm_id)
     {
@@ -1626,7 +1626,7 @@ async fn validate_direct_keypackage_consume(
         ));
     }
     let binding = state
-        .contact_application()
+        .contacts()
         .active_direct_binding_for_realm(&realm_id)
         .filter(|binding| {
             crate::routing::identity::account::direct_binding_matches_projection(state, binding)
@@ -1644,7 +1644,7 @@ async fn validate_direct_keypackage_consume(
         ));
     }
     let binding_event = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(&binding.binding_event_ref)
         .await
         .map_err(|error| AppError::internal(format!("direct binding lookup failed: {error}")))?
@@ -1679,7 +1679,7 @@ async fn validate_direct_keypackage_consume(
         ));
     }
     let welcome_event = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(welcome_ref)
         .await
         .map_err(|error| AppError::internal(format!("direct Welcome lookup failed: {error}")))?
@@ -1738,7 +1738,7 @@ async fn validate_sidecar_keypackage_consume(
         return Ok(());
     };
     let sidecar = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .sidecars
             .values()
@@ -1755,7 +1755,7 @@ async fn validate_sidecar_keypackage_consume(
         return Ok(());
     };
     let sidecar_record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .sidecar(&sidecar.sidecar_id)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
@@ -1778,7 +1778,7 @@ async fn validate_sidecar_keypackage_consume(
     }
     let welcome_ref = body.welcome_ref.as_deref().expect("checked above");
     let stored = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(welcome_ref)
         .await
         .map_err(|error| AppError::internal(format!("Sidecar Welcome lookup failed: {error}")))?
@@ -1819,7 +1819,7 @@ async fn validate_sidecar_keypackage_consume(
             )
         })?;
     let current_epoch_matches = state
-        .projection_application()
+        .projections()
         .snapshot()
         .mls_commit_epochs
         .values()
@@ -1853,7 +1853,7 @@ async fn validate_sidecar_keypackage_consume(
         || !current_epoch_matches
         || welcome.commit_ref.as_ref().is_none_or(|commit_ref| {
             !state
-                .projection_application()
+                .projections()
                 .snapshot()
                 .accepted_mls_commit_refs
                 .contains(commit_ref.as_str())
@@ -1865,7 +1865,7 @@ async fn validate_sidecar_keypackage_consume(
         ));
     }
     let delivered = state
-        .projection_application()
+        .projections()
         .snapshot()
         .mls_welcomes
         .values()
@@ -1936,7 +1936,7 @@ async fn revoke_keypackages(
     let mut failures = Vec::new();
     for keypackage_id in refs {
         match state
-            .mls_key_package_application()
+            .mls_key_packages()
             .key_package(&keypackage_id)
             .await
         {
@@ -1948,8 +1948,8 @@ async fn revoke_keypackages(
             }
             Ok(Some(_)) => {
                 match state
-                    .mls_key_package_application()
-                    .claim_key_package(soland_application::events::ClaimMlsKeyPackageCommand {
+                    .mls_key_packages()
+                    .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                         id: &keypackage_id,
                         mls_group_id: "revoked",
                         intended_realm_id: None,
@@ -1990,7 +1990,7 @@ pub(crate) async fn retire_device_keypackages(
     device_id: &str,
 ) -> Result<usize, AppError> {
     let rows = state
-        .mls_key_package_application()
+        .mls_key_packages()
         .key_packages()
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
@@ -2003,8 +2003,8 @@ pub(crate) async fn retire_device_keypackages(
             && row.consumed_at.is_none()
     }) {
         if state
-            .mls_key_package_application()
-            .claim_key_package(soland_application::events::ClaimMlsKeyPackageCommand {
+            .mls_key_packages()
+            .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                 id: &row.id,
                 mls_group_id: "revoked",
                 intended_realm_id: None,
@@ -2020,7 +2020,7 @@ pub(crate) async fn retire_device_keypackages(
             })?
             .is_some()
         {
-            state.projection_application().mark_key_package_claimed(
+            state.projections().mark_key_package_claimed(
                 &row.id,
                 "revoked".to_owned(),
                 retired_at,
@@ -2100,7 +2100,7 @@ async fn validate_agent_keypackage_upload(
     signing_input: &[u8],
 ) -> Result<(), String> {
     let accepted = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(authorize_event_id)
         .await
         .map_err(|_| "claim_generation_mismatch".to_owned())?
@@ -2164,8 +2164,8 @@ async fn verify_device_keypackage_signature(
     signing_input: &[u8],
 ) -> Result<(), AppError> {
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: principal.to_string(),
             device_id: device_id.to_owned(),
         })
@@ -2231,7 +2231,7 @@ async fn verify_session_keypackage_write_signature(
             .expect("Agent trust binding always carries authorization Event");
         for keypackage_ref in keypackage_refs {
             let record = state
-                .mls_key_package_application()
+                .mls_key_packages()
                 .key_package(keypackage_ref)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
@@ -2299,7 +2299,7 @@ fn current_accepted_ssk_generation(
     principal: &arkret_identifiers::Did,
 ) -> Option<u64> {
     state
-        .identity_application()
+        .identities()
         .current_cross_signing(principal)
         .map(|publish| publish.generation.get())
 }
@@ -2309,7 +2309,7 @@ async fn current_agent_keypackage_trust_binding(
     principal: &arkret_identifiers::Did,
 ) -> Result<Option<KeyPackageTrustBinding>, AppError> {
     let Some(agent) = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(principal.as_str())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -2341,7 +2341,7 @@ async fn current_agent_keypackage_trust_binding(
             .with_wire_code("claim_generation_mismatch")
         })?;
     let active_event = state
-        .projection_application()
+        .projections()
         .snapshot()
         .active_agent_key_authorizations(principal.as_str())
         .into_iter()
@@ -2354,7 +2354,7 @@ async fn current_agent_keypackage_trust_binding(
         .with_wire_code("claim_generation_mismatch"));
     }
     let accepted = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(event_ref)
         .await
         .map_err(|error| {
@@ -2422,8 +2422,8 @@ async fn current_keypackage_trust_binding(
         return Ok(KeyPackageTrustBinding::cross_signing(generation));
     }
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: principal.to_string(),
             device_id: device_id.to_owned(),
         })
@@ -2462,7 +2462,7 @@ async fn current_keypackage_claim_trust_selector(
     let mut bindings = BTreeMap::new();
     if target_device_ids.is_empty() {
         for device in state
-            .identity_application()
+            .identities()
             .devices_for_actor(principal.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -2474,8 +2474,8 @@ async fn current_keypackage_claim_trust_selector(
     } else {
         for device_id in target_device_ids {
             if let Some(device) = state
-                .identity_application()
-                .find_device(soland_application::identity::FindDeviceQuery {
+                .identities()
+                .find_device(soland_services::identity::FindDeviceQuery {
                     actor_id: principal.to_string(),
                     device_id: device_id.clone(),
                 })
@@ -2491,7 +2491,7 @@ async fn current_keypackage_claim_trust_selector(
 }
 
 fn device_authorize_trust_binding(
-    device: &soland_application::identity::DeviceIdentity,
+    device: &soland_services::identity::DeviceIdentity,
 ) -> Option<KeyPackageTrustBinding> {
     if device.revoked_at.is_some() || device.verification_state != "verified" {
         return None;
@@ -2560,7 +2560,7 @@ fn available_keypackage_count(
 ) -> u64 {
     let now_secs = now().timestamp();
     state
-        .projection_application()
+        .projections()
         .mls_key_package_records()
         .iter()
         .filter(|kp| kp.actor_id == actor_id)
@@ -2606,7 +2606,7 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         BTreeSet::from(["ak.content.v1".to_owned(), "mimi.content.v1".to_owned()]);
     let now_secs = now().timestamp();
     state
-        .projection_application()
+        .projections()
         .mls_key_package_records()
         .iter()
         .any(|keypackage| {
@@ -2784,8 +2784,8 @@ mod trust_binding_tests {
         .unwrap();
         let authorize_event_id = authorize_event.event_id.to_string();
         state
-            .event_query_application()
-            .store_canonical_event(soland_application::events::CanonicalEventRecord {
+            .event_queries()
+            .store_canonical_event(soland_services::events::CanonicalEventRecord {
                 event_id: authorize_event_id.clone(),
                 actor_id: principal.to_string(),
                 actor_seq: 1,
@@ -2827,3 +2827,4 @@ mod trust_binding_tests {
         .unwrap();
     }
 }
+

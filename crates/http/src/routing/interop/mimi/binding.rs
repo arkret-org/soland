@@ -12,7 +12,7 @@ pub(super) async fn latest_mimi_room_binding(
     room_id: &str,
 ) -> Option<MimiRoomBindingProjection> {
     let entries = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .ok()?;
@@ -296,12 +296,12 @@ pub(super) fn validate_mimi_submit_governance_binding(
         return Err(error("mls_governance_binding_encoding_profile_invalid"));
     }
     if binding.get("binding_profile").and_then(Value::as_str)
-        != Some(soland_application::operation_semantics::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+        != Some(soland_services::operation_semantics::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
     {
         return Err(error("mls_governance_binding_profile_invalid"));
     }
     if binding.get("reducer_profile").and_then(Value::as_str)
-        != Some(soland_application::operation_semantics::MLS_REDUCER_PROFILE_V1)
+        != Some(soland_services::operation_semantics::MLS_REDUCER_PROFILE_V1)
     {
         return Err(error("mls_governance_binding_reducer_profile_invalid"));
     }
@@ -535,3 +535,4 @@ pub(super) fn valid_mimi_content_type(value: &str) -> bool {
             | "application/vnd.arkret.content+json"
     )
 }
+

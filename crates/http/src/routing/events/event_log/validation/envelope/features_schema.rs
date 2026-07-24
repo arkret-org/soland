@@ -126,7 +126,7 @@ pub(super) fn service_declared_event_requirement_features(
     let mut description = crate::wire::describe(
         state.service_id(),
         &state.config().public_base_url,
-        state.jobs_application().storage_mode(),
+        state.jobs().storage_mode(),
         state.config().development_mode,
         state.config().account_authority_url.as_deref(),
         state.config().account_authority_enrollment_did.as_deref(),

@@ -10,7 +10,7 @@ pub(super) async fn enforce_recovery_policy_ref_typed(
     };
 
     let active = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(actor_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
@@ -53,8 +53,8 @@ pub(super) async fn ensure_key_backup_writer_device_authorized(
         return Err(unauthorized());
     }
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: actor_id.to_owned(),
             device_id: session_device_id.to_owned(),
         })
@@ -81,7 +81,7 @@ pub(super) async fn enforce_key_backup_series_chain_typed(
         .as_ref()
         .map(|backup_id| backup_id.as_str().to_owned());
     let snapshot = state
-        .key_backup_application()
+        .key_backups()
         .backups_for_actor(actor_id)
         .await
         .map_err(|error| {
@@ -238,7 +238,7 @@ pub(super) async fn owned_key_backup_snapshot(
     // deletion eligibility checks and could let a useful recovery envelope be
     // deleted.
     let snapshot = state
-        .key_backup_application()
+        .key_backups()
         .backups_for_actor(actor_id)
         .await
         .map_err(|error| {
@@ -302,7 +302,7 @@ pub(super) async fn put_key_backup(
     let ciphertext_digest = backup.ciphertext_digest.clone();
     let backup_value = key_backup_to_value(&backup)?;
     let existing = state
-        .key_backup_application()
+        .key_backups()
         .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?;
@@ -316,7 +316,7 @@ pub(super) async fn put_key_backup(
     }
     enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
     state
-        .key_backup_application()
+        .key_backups()
         .store_backup(backup_id.clone(), backup_value)
         .await
         .map_err(|error| {
@@ -384,7 +384,7 @@ pub(crate) async fn list_key_backups(
         )));
     }
     let mut backups: Vec<Value> = state
-        .key_backup_application()
+        .key_backups()
         .backups_for_actor(&session.actor)
         .await
         .map_err(|error| {
@@ -442,7 +442,7 @@ pub(super) async fn unlock_key_backup(
         AppError::internal(format!("key backup unlock proof serialize: {error}"))
     })?;
     let Some(backup) = state
-        .key_backup_application()
+        .key_backups()
         .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
@@ -515,7 +515,7 @@ pub(super) async fn delete_key_backup(
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
     let owned_backup = state
-        .key_backup_application()
+        .key_backups()
         .backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?
@@ -529,7 +529,7 @@ pub(super) async fn delete_key_backup(
     verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
     ensure_key_backup_delete_allowed(state, &session.actor, &backup).await?;
     let deleted = state
-        .key_backup_application()
+        .key_backups()
         .delete_backup(&backup_id)
         .await
         .map_err(|error| AppError::internal(format!("key backup delete failed: {error}")))?;
@@ -556,3 +556,4 @@ pub(super) async fn delete_key_backup(
         backup_id: BackupId::new(backup_id).ok(),
     })
 }
+

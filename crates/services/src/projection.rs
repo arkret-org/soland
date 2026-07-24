@@ -21,7 +21,7 @@ use soland_domain::reducer::{
 use soland_storage::{JoinApplicationRecord, PersistenceResult, PersistenceStore};
 
 use crate::authorization::{
-    AuthorizationApplicationService, RealmPolicyServerConfig, RealmPolicyServerConfigView,
+    AuthorizationService, RealmPolicyServerConfig, RealmPolicyServerConfigView,
 };
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
@@ -102,11 +102,11 @@ pub trait EventSealCommitPort: Send + Sync {
 }
 
 /// Process-local hybrid logical clock owned by the application layer.
-pub struct ApplicationClock {
+pub struct ServiceClock {
     inner: ServerHlc,
 }
 
-impl ApplicationClock {
+impl ServiceClock {
     #[must_use]
     pub fn new(node: &str) -> Self {
         Self {
@@ -120,7 +120,7 @@ impl ApplicationClock {
     }
 }
 
-impl std::ops::Deref for ApplicationClock {
+impl std::ops::Deref for ServiceClock {
     type Target = ServerHlc;
 
     fn deref(&self) -> &Self::Target {
@@ -134,14 +134,14 @@ impl std::ops::Deref for ApplicationClock {
 /// explicit application operations so HTTP code cannot lock and edit the
 /// shared projection maps directly.
 #[derive(Clone)]
-pub struct ProjectionApplicationService {
+pub struct ProjectionService {
     state: Arc<Mutex<ProjectionState>>,
     move_store: Arc<dyn MoveStore>,
     seal_store: Arc<dyn SealStore>,
     cell_store: Arc<dyn CellStore>,
     cell_registry: Arc<dyn CellRegistry>,
     event_seal_committer: Arc<dyn EventSealCommitPort>,
-    clock: Arc<ApplicationClock>,
+    clock: Arc<ServiceClock>,
 }
 
 #[derive(Clone, Debug)]
@@ -374,7 +374,7 @@ impl From<ProjectionEffect> for ProjectionEffectView {
     }
 }
 
-impl ProjectionApplicationService {
+impl ProjectionService {
     #[must_use]
     pub fn new(
         move_store: Arc<dyn MoveStore>,
@@ -391,14 +391,14 @@ impl ProjectionApplicationService {
             cell_store,
             cell_registry,
             event_seal_committer,
-            clock: Arc::new(ApplicationClock::new(clock_node)),
+            clock: Arc::new(ServiceClock::new(clock_node)),
         }
     }
 
     pub async fn hydrate_from_persistence(
         &self,
         persistence: &dyn PersistenceStore,
-        authorization: &AuthorizationApplicationService,
+        authorization: &AuthorizationService,
         projection_adapter: &dyn HydrationProjectionAdapter,
         realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
@@ -660,7 +660,7 @@ impl ProjectionApplicationService {
     }
 
     #[must_use]
-    pub fn clock(&self) -> &ApplicationClock {
+    pub fn clock(&self) -> &ServiceClock {
         &self.clock
     }
 
@@ -1885,3 +1885,4 @@ fn pending_device_revoke_exists(
                 .any(|event_id| event_id == revoke_event_id)
     })
 }
+

@@ -585,7 +585,7 @@ async fn require_local_handle_binding(
     localpart: &str,
 ) -> Result<(), AppError> {
     let owner = state
-        .identity_application()
+        .identities()
         .localpart_owner(localpart)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -871,7 +871,7 @@ async fn list_handles_cursor_start(
     };
     let cursor = CursorAuthority::decode_stream(cursor.trim()).map_err(cursor_app_error)?;
     let stored = state
-        .sync_application()
+        .sync()
         .cursor(&cursor.h)
         .await
         .map_err(|error| AppError::internal(format!("cursor binding lookup failed: {error}")))?;
@@ -897,8 +897,8 @@ async fn mint_list_handles_cursor(
         CursorAuthority::mint_stream(context, json!({ "offset": offset }), 60 * 60 * 1000)
             .map_err(cursor_app_error)?;
     state
-        .sync_application()
-        .upsert_cursor(&soland_application::sync::CursorState {
+        .sync()
+        .upsert_cursor(&soland_services::sync::CursorState {
             handle: record.handle,
             principal_id: Some(record.context.principal_id),
             device_id: record.context.device_id,
@@ -918,7 +918,7 @@ async fn mint_list_handles_cursor(
 }
 
 fn cursor_binding_record(
-    record: soland_application::sync::CursorState,
+    record: soland_services::sync::CursorState,
 ) -> Result<CursorBindingRecord, CursorAuthorityError> {
     let purpose = match record.purpose.as_str() {
         "stream" => CursorPurpose::Stream,
@@ -1174,3 +1174,4 @@ mod tests {
         ));
     }
 }
+

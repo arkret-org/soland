@@ -38,8 +38,8 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
-use soland_application::jobs::IdempotencyState as IdempotencyRecord;
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::jobs::IdempotencyState as IdempotencyRecord;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 use soland_http::result::{JsonResult, json_ok};
@@ -91,3 +91,4 @@ pub(super) fn router() -> Router {
 pub(super) fn well_known_router() -> Router {
     Router::with_path(".well-known/mimi-protocol-directory").get(mimi_protocol_directory)
 }
+

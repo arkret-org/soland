@@ -19,8 +19,8 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
 use sha2::Sha256;
-use soland_application::delivery::PushContractDrift as DriftResult;
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::delivery::PushContractDrift as DriftResult;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 use subtle::ConstantTimeEq;
@@ -146,7 +146,7 @@ pub(super) async fn push_register(
     let push_route_id = push_route_id_for_registration(&body);
     let salt_epoch_id = push_target_salt_epoch_id_at(now());
     let push_target_id = derive_push_target_id(
-        state.delivery_application().push_target_hmac_key(),
+        state.deliveries().push_target_hmac_key(),
         state.service_id(),
         &principal_id,
         &device_id,
@@ -155,7 +155,7 @@ pub(super) async fn push_register(
     )?;
     let registration_id = push_target_id.clone();
     let previous_registrations = state
-        .delivery_application()
+        .deliveries()
         .push_devices()
         .await
         .unwrap_or_else(|error| {
@@ -175,12 +175,12 @@ pub(super) async fn push_register(
         warnings.push(auth_warning);
     }
     state
-        .delivery_application()
+        .deliveries()
         .unregister_push_device(&principal_id, &device_id, None, app_id.as_deref())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .register_push_device(json!({
             "registration_id": registration_id,
             "actor": session.actor,
@@ -337,7 +337,7 @@ pub(super) async fn push_unregister(
         return Err(AppError::invalid_param("invalid device_id"));
     }
     let removed = state
-        .delivery_application()
+        .deliveries()
         .unregister_push_device(
             &session.actor,
             body.device_id.as_str(),
@@ -389,7 +389,7 @@ pub(super) async fn push_notify(
         .cloned()
         .unwrap_or_default();
     let registered = state
-        .delivery_application()
+        .deliveries()
         .push_devices()
         .await
         .unwrap_or_default();
@@ -484,7 +484,7 @@ async fn verify_push_gateway_contract_drift(
     };
     let bridge_describe_url =
         join_push_gateway_url(&service_base_url, "/_floria/push/bridge/describe");
-    let service = state.delivery_application();
+    let service = state.deliveries();
     let snapshot_digest = match service
         .current_push_bridge_contract(&bridge_describe_url)
         .await
@@ -770,3 +770,4 @@ mod tests {
         ));
     }
 }
+

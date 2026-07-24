@@ -24,7 +24,7 @@ use arkret_identifiers::{Did, Hash, Hlc, MoveId, RealmId, SealId};
 use arkret_wire::{PartialSignature, Seal, ThresholdAggregator, WireError};
 use base64::Engine as _;
 use chrono::Utc;
-use soland_application::governance::MultisigPendingRecord;
+use soland_services::governance::MultisigPendingRecord;
 
 use crate::state::AppState;
 
@@ -122,7 +122,7 @@ pub async fn run_watchdog_pass(
     state: &AppState,
     config: &MultisigWatchdogConfig,
 ) -> WatchdogPassReport {
-    let service = state.governance_application();
+    let service = state.governance();
     let now = Utc::now();
     let lease_expiry = now
         + chrono::Duration::from_std(config.lease_duration)
@@ -225,7 +225,7 @@ pub async fn renew_lease_during_aggregation(
     seal_id: &str,
     fence_seq: i64,
 ) -> Result<bool, String> {
-    let service = state.governance_application();
+    let service = state.governance();
     let now = Utc::now();
     let new_until = now
         + chrono::Duration::from_std(config.lease_duration)
@@ -843,3 +843,4 @@ mod tests {
         );
     }
 }
+

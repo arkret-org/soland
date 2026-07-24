@@ -3,10 +3,10 @@ use std::sync::Arc;
 use serde_json::Value;
 use soland_storage::*;
 
-use crate::federation::FederationApplicationService;
-use crate::governance::{AdminSigningKeyPort, GovernanceApplicationService, RuntimeSettingsPort};
-use crate::jobs::{JobsApplicationService, RuntimeHealthPort};
-use crate::sync::SyncApplicationService;
+use crate::federation::FederationService;
+use crate::governance::{AdminSigningKeyPort, GovernanceService, RuntimeSettingsPort};
+use crate::jobs::{JobsService, RuntimeHealthPort};
+use crate::sync::SyncService;
 
 struct PersistenceFederationOutbox(Arc<dyn PersistenceStore>);
 struct PersistenceAuditLog(Arc<dyn PersistenceStore>);
@@ -141,7 +141,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
     async fn enqueue(
         &self,
         delivery: &crate::federation::FederationDeliveryRecord,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .federation_outbox()
@@ -153,7 +153,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
         &self,
         peer_did: &str,
         idempotency_key: &str,
-    ) -> crate::ApplicationResult<Option<crate::federation::FederationDeliveryRecord>> {
+    ) -> crate::ServiceResult<Option<crate::federation::FederationDeliveryRecord>> {
         Ok(self
             .0
             .federation_outbox()
@@ -168,7 +168,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
         &self,
         now: i64,
         limit: usize,
-    ) -> crate::ApplicationResult<Vec<crate::federation::PendingFederationDelivery>> {
+    ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
         Ok(self
             .0
             .federation_outbox()
@@ -182,7 +182,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
     async fn update(
         &self,
         delivery: &crate::federation::PendingFederationDelivery,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .federation_outbox()
             .update(&persistence_pending_delivery(delivery))
@@ -193,7 +193,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
     async fn insert_dead_letter(
         &self,
         record: &crate::federation::FederationDeadLetter,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .federation_outbox()
             .insert_dead_letter(&soland_storage::FederationOutboxDeadLetterRecord {
@@ -214,7 +214,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
 
     async fn deliveries(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::federation::PendingFederationDelivery>> {
+    ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
         Ok(self
             .0
             .federation_outbox()
@@ -232,7 +232,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
         &self,
         origin: &str,
         txn_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::federation::FederationTransactionRecord>> {
+    ) -> crate::ServiceResult<Option<crate::federation::FederationTransactionRecord>> {
         Ok(self
             .0
             .federation_transactions()
@@ -243,7 +243,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn begin_transaction(
         &self,
         record: &crate::federation::FederationTransactionRecord,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .federation_transactions()
@@ -253,7 +253,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn store_transaction(
         &self,
         record: &crate::federation::FederationTransactionRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .federation_transactions()
             .put(&persistence_federation_transaction(record))
@@ -262,7 +262,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     }
     async fn transactions(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::federation::FederationTransactionRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::federation::FederationTransactionRecord>> {
         Ok(self
             .0
             .federation_transactions()
@@ -275,11 +275,11 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn append_operation(
         &self,
         operation: arkret_event_draft::Operation,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0.federation_operations().append(operation).await?;
         Ok(())
     }
-    async fn has_operation(&self, operation_id: &str) -> crate::ApplicationResult<bool> {
+    async fn has_operation(&self, operation_id: &str) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .federation_operations()
@@ -289,21 +289,21 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
     async fn operations_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<arkret_event_draft::Operation>> {
+    ) -> crate::ServiceResult<Vec<arkret_event_draft::Operation>> {
         Ok(self
             .0
             .federation_operations()
             .list_for_realm(realm_id)
             .await?)
     }
-    async fn operations(&self) -> crate::ApplicationResult<Vec<arkret_event_draft::Operation>> {
+    async fn operations(&self) -> crate::ServiceResult<Vec<arkret_event_draft::Operation>> {
         Ok(self.0.federation_operations().snapshot_all().await?)
     }
     async fn frontier_exchange(
         &self,
         realm_id: &str,
         peer_service_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::federation::FederationFrontierExchangeRecord>> {
+    ) -> crate::ServiceResult<Option<crate::federation::FederationFrontierExchangeRecord>> {
         Ok(self
             .0
             .federation_frontier_exchange()
@@ -317,7 +317,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
         peer_service_id: &str,
         frontier_root: &str,
         observed_at: i64,
-    ) -> crate::ApplicationResult<crate::federation::FederationFrontierExchangeRecord> {
+    ) -> crate::ServiceResult<crate::federation::FederationFrontierExchangeRecord> {
         Ok(application_frontier_exchange(
             self.0
                 .federation_frontier_exchange()
@@ -331,7 +331,7 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
         peer_service_id: &str,
         reason: &str,
         observed_at: i64,
-    ) -> crate::ApplicationResult<crate::federation::FederationFrontierExchangeRecord> {
+    ) -> crate::ServiceResult<crate::federation::FederationFrontierExchangeRecord> {
         Ok(application_frontier_exchange(
             self.0
                 .federation_frontier_exchange()
@@ -343,51 +343,51 @@ impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
 
 #[async_trait::async_trait]
 impl crate::governance::AuditLogPort for PersistenceAuditLog {
-    async fn append(&self, entry: Value) -> crate::ApplicationResult<()> {
+    async fn append(&self, entry: Value) -> crate::ServiceResult<()> {
         self.0.audit().append(entry).await?;
         Ok(())
     }
 
-    async fn entries(&self) -> crate::ApplicationResult<Vec<Value>> {
+    async fn entries(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.audit().snapshot_all().await?)
     }
 
-    async fn entries_for_actor(&self, actor_id: &str) -> crate::ApplicationResult<Vec<Value>> {
+    async fn entries_for_actor(&self, actor_id: &str) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.audit().list_for_actor(actor_id).await?)
     }
 }
 
 #[async_trait::async_trait]
 impl crate::governance::ModerationPort for PersistenceModeration {
-    async fn append_report(&self, report: Value) -> crate::ApplicationResult<()> {
+    async fn append_report(&self, report: Value) -> crate::ServiceResult<()> {
         self.0.moderation().append_report(report).await?;
         Ok(())
     }
-    async fn append_action(&self, action: Value) -> crate::ApplicationResult<()> {
+    async fn append_action(&self, action: Value) -> crate::ServiceResult<()> {
         self.0.moderation().append_action(action).await?;
         Ok(())
     }
-    async fn reports(&self) -> crate::ApplicationResult<Vec<Value>> {
+    async fn reports(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.moderation().list_reports().await?)
     }
-    async fn upsert_queue_item(&self, item: Value) -> crate::ApplicationResult<()> {
+    async fn upsert_queue_item(&self, item: Value) -> crate::ServiceResult<()> {
         self.0.moderation().upsert_queue_item(item).await?;
         Ok(())
     }
-    async fn queue_items(&self) -> crate::ApplicationResult<Vec<Value>> {
+    async fn queue_items(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.moderation().list_queue_items().await?)
     }
-    async fn queue_item(&self, id: &str) -> crate::ApplicationResult<Option<Value>> {
+    async fn queue_item(&self, id: &str) -> crate::ServiceResult<Option<Value>> {
         Ok(self.0.moderation().get_queue_item(id).await?)
     }
-    async fn append_appeal(&self, appeal: Value) -> crate::ApplicationResult<()> {
+    async fn append_appeal(&self, appeal: Value) -> crate::ServiceResult<()> {
         self.0.moderation().append_appeal(appeal).await?;
         Ok(())
     }
-    async fn appeals(&self) -> crate::ApplicationResult<Vec<Value>> {
+    async fn appeals(&self) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.moderation().list_appeals().await?)
     }
-    async fn appeal_history(&self, appeal_id: &str) -> crate::ApplicationResult<Vec<Value>> {
+    async fn appeal_history(&self, appeal_id: &str) -> crate::ServiceResult<Vec<Value>> {
         Ok(self.0.moderation().appeal_history(appeal_id).await?)
     }
 }
@@ -601,7 +601,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn organization(
         &self,
         organization_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::governance::OrganizationRecord>> {
+    ) -> crate::ServiceResult<Option<crate::governance::OrganizationRecord>> {
         Ok(self
             .0
             .organizations()
@@ -613,7 +613,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn store_organization(
         &self,
         record: &crate::governance::OrganizationRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .organizations()
             .put(&persistence_organization(record))
@@ -623,7 +623,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn organizations(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::OrganizationRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::OrganizationRecord>> {
         Ok(self
             .0
             .organizations()
@@ -637,7 +637,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn organization_policy(
         &self,
         organization_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::governance::OrganizationPolicyRecord>> {
+    ) -> crate::ServiceResult<Option<crate::governance::OrganizationPolicyRecord>> {
         Ok(self
             .0
             .organization_policies()
@@ -649,7 +649,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn store_organization_policy(
         &self,
         record: &crate::governance::OrganizationPolicyRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .organization_policies()
             .put(&persistence_organization_policy(record))
@@ -659,7 +659,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn organization_policies(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::OrganizationPolicyRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::OrganizationPolicyRecord>> {
         Ok(self
             .0
             .organization_policies()
@@ -674,7 +674,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         &self,
         realm_id: &str,
         organization_id: &str,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .realm_organizations()
             .link(realm_id, organization_id)
@@ -684,14 +684,14 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn realm_organization_links(
         &self,
-    ) -> crate::ApplicationResult<Vec<(String, std::collections::BTreeSet<String>)>> {
+    ) -> crate::ServiceResult<Vec<(String, std::collections::BTreeSet<String>)>> {
         Ok(self.0.realm_organizations().snapshot_all().await?)
     }
 
     async fn store_realm_moderation_policy(
         &self,
         record: &crate::governance::RealmModerationPolicyRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .realm_moderation_policies()
             .put(&persistence_realm_moderation_policy(record))
@@ -701,7 +701,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn realm_moderation_policies(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::RealmModerationPolicyRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::RealmModerationPolicyRecord>> {
         Ok(self
             .0
             .realm_moderation_policies()
@@ -715,7 +715,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn policy_document(
         &self,
         policy_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::governance::PolicyDocumentRecord>> {
+    ) -> crate::ServiceResult<Option<crate::governance::PolicyDocumentRecord>> {
         Ok(self
             .0
             .policy_documents()
@@ -727,7 +727,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn store_policy_document(
         &self,
         record: crate::governance::PolicyDocumentRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .policy_documents()
             .put(persistence_policy_document(record))
@@ -735,14 +735,14 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         Ok(())
     }
 
-    async fn delete_policy_document(&self, policy_id: &str) -> crate::ApplicationResult<bool> {
+    async fn delete_policy_document(&self, policy_id: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.policy_documents().delete(policy_id).await?)
     }
 
     async fn policy_documents_for_owner(
         &self,
         owner: &str,
-    ) -> crate::ApplicationResult<Vec<crate::governance::PolicyDocumentRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::PolicyDocumentRecord>> {
         Ok(self
             .0
             .policy_documents()
@@ -755,7 +755,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn policy_documents(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::PolicyDocumentRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::PolicyDocumentRecord>> {
         Ok(self
             .0
             .policy_documents()
@@ -768,7 +768,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn active_policy_documents(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::PolicyDocumentRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::PolicyDocumentRecord>> {
         Ok(self
             .0
             .policy_documents()
@@ -782,7 +782,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn retention_policy(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::governance::RetentionPolicyRecord>> {
+    ) -> crate::ServiceResult<Option<crate::governance::RetentionPolicyRecord>> {
         Ok(self
             .0
             .retention_policies()
@@ -794,7 +794,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn store_retention_policy(
         &self,
         record: &crate::governance::RetentionPolicyRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .retention_policies()
             .put(&persistence_retention_policy(record))
@@ -805,7 +805,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn retention_tombstone(
         &self,
         event_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::governance::RetentionTombstoneRecord>> {
+    ) -> crate::ServiceResult<Option<crate::governance::RetentionTombstoneRecord>> {
         Ok(self
             .0
             .retention_tombstones()
@@ -816,7 +816,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn retention_tombstones(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::RetentionTombstoneRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::RetentionTombstoneRecord>> {
         Ok(self
             .0
             .retention_tombstones()
@@ -830,7 +830,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn store_retention_tombstone(
         &self,
         record: &crate::governance::RetentionTombstoneRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .retention_tombstones()
             .put(&persistence_retention_tombstone(record))
@@ -841,7 +841,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn multisig_pending(
         &self,
         seal_id: &str,
-    ) -> crate::ApplicationResult<Option<crate::governance::MultisigPendingRecord>> {
+    ) -> crate::ServiceResult<Option<crate::governance::MultisigPendingRecord>> {
         Ok(self
             .0
             .multisig_pending()
@@ -853,7 +853,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn store_multisig_pending(
         &self,
         record: crate::governance::MultisigPendingRecord,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .multisig_pending()
             .upsert(persistence_multisig_pending(record))
@@ -864,7 +864,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
     async fn multisig_pending_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ApplicationResult<Vec<crate::governance::MultisigPendingRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::MultisigPendingRecord>> {
         Ok(self
             .0
             .multisig_pending()
@@ -877,7 +877,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
 
     async fn multisig_pending_all(
         &self,
-    ) -> crate::ApplicationResult<Vec<crate::governance::MultisigPendingRecord>> {
+    ) -> crate::ServiceResult<Vec<crate::governance::MultisigPendingRecord>> {
         Ok(self
             .0
             .multisig_pending()
@@ -894,7 +894,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<(bool, i64)> {
+    ) -> crate::ServiceResult<(bool, i64)> {
         Ok(self
             .0
             .multisig_pending()
@@ -906,7 +906,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         &self,
         seal_id: &str,
         node_id: &str,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .multisig_pending()
             .release_claim(seal_id, node_id)
@@ -919,7 +919,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         seal_id: &str,
         node_id: &str,
         claim_seq: i64,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .multisig_pending()
@@ -933,7 +933,7 @@ impl crate::governance::GovernanceRecordsPort for PersistenceGovernanceRecords {
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<bool> {
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
             .multisig_pending()
@@ -947,7 +947,7 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
     async fn prune_expired_idempotency(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         Ok(self.0.idempotency_keys().prune_expired(now).await?)
     }
 
@@ -955,7 +955,7 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
         &self,
         principal_id: &str,
         key: &str,
-    ) -> crate::ApplicationResult<Option<crate::jobs::IdempotencyState>> {
+    ) -> crate::ServiceResult<Option<crate::jobs::IdempotencyState>> {
         Ok(self
             .0
             .idempotency_keys()
@@ -967,7 +967,7 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
     async fn store_idempotency_record(
         &self,
         record: crate::jobs::IdempotencyState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .idempotency_keys()
             .record(&persistence_idempotency(record))
@@ -1064,7 +1064,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
     async fn get(
         &self,
         handle: &str,
-    ) -> crate::ApplicationResult<Option<crate::sync::CursorState>> {
+    ) -> crate::ServiceResult<Option<crate::sync::CursorState>> {
         Ok(self
             .0
             .sync_cursors()
@@ -1073,7 +1073,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
             .map(application_cursor_state))
     }
 
-    async fn upsert(&self, record: &crate::sync::CursorState) -> crate::ApplicationResult<()> {
+    async fn upsert(&self, record: &crate::sync::CursorState) -> crate::ServiceResult<()> {
         self.0
             .sync_cursors()
             .upsert(&persistence_cursor_state(record))
@@ -1081,7 +1081,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
         Ok(())
     }
 
-    async fn delete(&self, handle: &str) -> crate::ApplicationResult<bool> {
+    async fn delete(&self, handle: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.sync_cursors().delete(handle).await?)
     }
 
@@ -1091,7 +1091,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
-    ) -> crate::ApplicationResult<usize> {
+    ) -> crate::ServiceResult<usize> {
         Ok(self
             .0
             .sync_cursors()
@@ -1104,14 +1104,14 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
             .await?)
     }
 
-    async fn prune_expired(&self, now_ms: i64) -> crate::ApplicationResult<usize> {
+    async fn prune_expired(&self, now_ms: i64) -> crate::ServiceResult<usize> {
         Ok(self.0.sync_cursors().prune_expired(now_ms).await?)
     }
 
     async fn record_revocation(
         &self,
         record: &crate::sync::CursorRevocationState,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.0
             .sync_cursors()
             .record_revocation(&persistence_cursor_revocation(record))
@@ -1122,7 +1122,7 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
     async fn active_revocations(
         &self,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> crate::ApplicationResult<Vec<crate::sync::CursorRevocationState>> {
+    ) -> crate::ServiceResult<Vec<crate::sync::CursorRevocationState>> {
         Ok(self
             .0
             .sync_cursors()
@@ -1135,39 +1135,40 @@ impl crate::sync::CursorStorePort for PersistenceCursorStore {
 }
 
 #[derive(Clone)]
-pub struct PersistenceOperationalApplications {
-    pub federation: FederationApplicationService,
-    pub governance: GovernanceApplicationService,
-    pub sync: SyncApplicationService,
-    pub jobs: JobsApplicationService,
+pub struct PersistenceOperationalServices {
+    pub federation: FederationService,
+    pub governance: GovernanceService,
+    pub sync: SyncService,
+    pub jobs: JobsService,
 }
 
-pub fn build_persistence_operational_applications(
+pub fn build_persistence_operational_services(
     persistence: Arc<dyn PersistenceStore>,
     admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
     runtime_health: Arc<dyn RuntimeHealthPort>,
     sync_cursor_hmac_key: [u8; 32],
-) -> PersistenceOperationalApplications {
-    PersistenceOperationalApplications {
-        federation: FederationApplicationService::new(
+) -> PersistenceOperationalServices {
+    PersistenceOperationalServices {
+        federation: FederationService::new(
             Arc::new(PersistenceFederationOutbox(persistence.clone())),
             Arc::new(PersistenceFederationOutbox(persistence.clone())),
         ),
-        governance: GovernanceApplicationService::new(
+        governance: GovernanceService::new(
             Arc::new(PersistenceAuditLog(persistence.clone())),
             Arc::new(PersistenceModeration(persistence.clone())),
             Arc::new(PersistenceGovernanceRecords(persistence.clone())),
             admin_signing_keys,
             runtime_settings,
         ),
-        sync: SyncApplicationService::new(
+        sync: SyncService::new(
             Arc::new(PersistenceCursorStore(persistence.clone())),
             sync_cursor_hmac_key,
         ),
-        jobs: JobsApplicationService::new(
+        jobs: JobsService::new(
             Arc::new(PersistenceMaintenance(persistence)),
             runtime_health,
         ),
     }
 }
+

@@ -74,7 +74,7 @@ async fn get_realm_policy_server(
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let view = state
-        .projection_application()
+        .projections()
         .realm_policy_server_config(&realm_id)
         .ok_or_else(|| AppError::not_found("no ak.realm.policy_server declared for this realm"))?;
     let cfg = view.config;
@@ -133,7 +133,7 @@ async fn put_realm_policy_server(
         .await
         .map_err(reducer_reject_to_app_error)?;
 
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let cfg = projection
         .realm_policy_servers
         .get(&realm_id)
@@ -173,7 +173,7 @@ async fn delete_realm_policy_server(
     // structured cache directly. We use the projection-side delete
     // path for the tombstone effect.
     if !state
-        .projection_application()
+        .projections()
         .remove_realm_policy_server(&realm_id)
     {
         return Err(AppError::not_found(

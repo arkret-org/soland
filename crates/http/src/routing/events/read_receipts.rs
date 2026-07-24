@@ -4,9 +4,9 @@ use arkret_models_collaboration::objects::read_receipts::ReadReceipt;
 use arkret_wire::ReadScopeKind;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
-use soland_application::delivery::ReadReceiptState;
-use soland_application::events::CanonicalEventRecord;
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::delivery::ReadReceiptState;
+use soland_services::events::CanonicalEventRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
 
 use crate::routing::events::event_log::{
@@ -31,7 +31,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
 ) -> Result<(), AppError> {
     let normalized = normalize_read_receipt_payload(realm_id, envelope)?;
     let target = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(&normalized.event_id)
         .await
         .ok()
@@ -48,7 +48,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         ));
     }
     state
-        .projection_application()
+        .projections()
         .observe_message_read_for_expiry(
             &session.actor,
             &normalized.event_id,
@@ -71,7 +71,7 @@ pub(crate) async fn relay_ephemeral_read_receipt(
         position: 0,
     };
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .store_read_receipt(record)
         .await
     {
@@ -170,7 +170,7 @@ pub(crate) async fn deliver_read_receipt_envelopes_for_subscriber(
         (session, records.iter().map(|record| record.position).max())
     {
         let _ = state
-            .delivery_application()
+            .deliveries()
             .advance_read_receipt_watermark(
                 &session.actor,
                 &session.device_id,
@@ -193,7 +193,7 @@ async fn pending_read_receipt_records_for_subscriber(
         0
     } else if let Some(session) = session {
         state
-            .delivery_application()
+            .deliveries()
             .read_receipt_watermark(&session.actor, &session.device_id, realm_id)
             .await
             .unwrap_or(0)
@@ -202,7 +202,7 @@ async fn pending_read_receipt_records_for_subscriber(
     };
     let mut visible = Vec::new();
     for record in state
-        .delivery_application()
+        .deliveries()
         .read_receipts_for_realm(realm_id)
         .await
         .unwrap_or_default()
@@ -225,7 +225,7 @@ pub(crate) async fn visible_read_receipts_for_event(
     let now = Utc::now();
     let mut visible = Vec::new();
     for record in state
-        .delivery_application()
+        .deliveries()
         .read_receipts_for_event(&target.event_id)
         .await
         .unwrap_or_default()
@@ -295,7 +295,7 @@ async fn target_record_visible_to_session(
         target.clone()
     } else {
         let Some(target) = state
-            .event_query_application()
+            .event_queries()
             .canonical_event(&record.event_id)
             .await
             .ok()
@@ -339,7 +339,7 @@ async fn target_event_visible_to_session(
 
 async fn active_realm_member(state: &AppState, realm_id: &str, actor: &str) -> bool {
     let projected_state = state
-        .projection_application()
+        .projections()
         .snapshot()
         .member(realm_id, actor)
         .map(|member| member.state.clone());
@@ -359,7 +359,7 @@ fn read_scope_visible_to_session(
         return true;
     };
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .circle_scope_visible_to_actor_at(&circle_id, &session.actor, created_at)
 }
@@ -370,7 +370,8 @@ fn read_scope_circle_id(state: &AppState, read_scope: &Value) -> Option<String> 
     }
     let strand_id = read_scope.get("object_ref").and_then(Value::as_str)?;
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .strand_scope_circle_id(strand_id)
 }
+

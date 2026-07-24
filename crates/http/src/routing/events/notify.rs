@@ -53,7 +53,7 @@ fn operation_source_actor_id(operation: &arkret_event_draft::Operation) -> Optio
 
 fn explicit_watch_level(state: &AppState, strand_id: &str, actor_id: &str) -> Option<String> {
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .strand_watches
         .get(&(strand_id.to_owned(), actor_id.to_owned()))
@@ -62,7 +62,7 @@ fn explicit_watch_level(state: &AppState, strand_id: &str, actor_id: &str) -> Op
 
 fn all_watch_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .strand_watches
         .values()
@@ -79,7 +79,7 @@ fn actor_can_see_strand(state: &AppState, realm_id: &str, strand_id: &str, actor
     if !actor_has_realm_access(state, realm_id, actor_id) {
         return false;
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let Some(strand) = projection.strands.get(strand_id) else {
         return false;
     };
@@ -101,7 +101,7 @@ fn actor_can_receive_watched_message(
     if !actor_has_realm_access(state, realm_id, actor_id) {
         return false;
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let Some(strand) = projection.strands.get(strand_id) else {
         return true;
     };
@@ -142,13 +142,13 @@ fn mention_subjects(payload: &Value) -> Vec<String> {
 fn realm_joined_members(state: &AppState, realm_id: &str) -> BTreeSet<String> {
     let mut members = BTreeSet::new();
     if let Ok(parsed_realm_id) = arkret_identifiers::RealmId::new(realm_id.to_owned()) {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         if let Some(entry) = realms.get(&parsed_realm_id) {
             members.extend(entry.members.iter().map(|did| did.as_str().to_owned()));
         }
     }
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         members.extend(
             projection
                 .members_of_realm(realm_id)
@@ -217,8 +217,8 @@ async fn put_notification(
         record["preview"] = preview;
     }
     if let Err(error) = state
-        .delivery_application()
-        .store_notification(soland_application::delivery::StoreNotificationCommand { record })
+        .deliveries()
+        .store_notification(soland_services::delivery::StoreNotificationCommand { record })
         .await
     {
         tracing::warn!(%error, "failed to persist notification");
@@ -353,7 +353,7 @@ pub(crate) async fn dispatch_message_notifications(
         }
         if let Some(circle_id) = scope_circle_id.as_deref() {
             let visible = state
-                .projection_application()
+                .projections()
                 .snapshot()
                 .circle_scope_visible_to_actor(circle_id, &subject);
             if !visible {
@@ -362,8 +362,8 @@ pub(crate) async fn dispatch_message_notifications(
         }
         // AKP-0016 §9.4.5 — agent third-party mention gate.
         if let Ok(Some(agent_record)) = state
-            .identity_application()
-            .find_agent_controller(soland_application::identity::FindAgentControllerQuery {
+            .identities()
+            .find_agent_controller(soland_services::identity::FindAgentControllerQuery {
                 agent_id: subject.clone(),
             })
             .await
@@ -495,7 +495,7 @@ fn patch_touches_schedule(payload: &Value) -> bool {
 }
 
 fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let mut recipients = projection
         .relations
         .values()
@@ -604,9 +604,9 @@ mod tests {
 
     async fn notifications_for(state: &AppState, recipient_id: &str) -> Vec<Value> {
         state
-            .delivery_application()
+            .deliveries()
             .list_recipient_notifications(
-                soland_application::delivery::ListRecipientNotificationsQuery {
+                soland_services::delivery::ListRecipientNotificationsQuery {
                     recipient_id: recipient_id.to_owned(),
                 },
             )
@@ -622,11 +622,11 @@ mod tests {
                 arkret_identifiers::Did::new((*member).to_owned()).expect("valid member did"),
             );
         }
-        state.realm_directory_application().upsert(entry);
+        state.realm_directory().upsert(entry);
     }
 
     async fn put_agent(state: &AppState, agent: &str, controller: &str) {
-        let mut record = soland_application::identity::AgentPairingState::new(
+        let mut record = soland_services::identity::AgentPairingState::new(
             agent.to_owned(),
             controller.to_owned(),
             "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
@@ -637,7 +637,7 @@ mod tests {
         record.agent_slug = Some("summary".to_owned());
         record.display_name = Some("Summary".to_owned());
         state
-            .agent_pairing_application()
+            .agent_pairings()
             .save_agent(record)
             .await
             .expect("agent record");
@@ -650,7 +650,7 @@ mod tests {
         accept_third_party_mention: bool,
     ) {
         state
-            .agent_participation_application()
+            .agent_participations()
             .store_selection(json!({
                 "agent_id": agent,
                 "scope_kind": "realm",
@@ -673,7 +673,7 @@ mod tests {
         accept_third_party_mention: bool,
     ) {
         state
-            .agent_participation_application()
+            .agent_participations()
             .store_selection(json!({
                 "agent_id": agent,
                 "scope_kind": "circle",
@@ -698,7 +698,7 @@ mod tests {
         accept_third_party_mention: bool,
     ) {
         state
-            .agent_participation_application()
+            .agent_participations()
             .store_ceiling(json!({
                 "scope_kind": "circle",
                 "scope_key": crate::routing::agent_participation::circle_scope_key(
@@ -1030,7 +1030,7 @@ mod tests {
 
         let operation = relation_create(realm_id, "000000009994", alice, strand_id, bob);
         state
-            .projection_application()
+            .projections()
             .apply(&operation, state.hlc());
         dispatch_assignment_notifications(&state, &operation).await;
 
@@ -1060,7 +1060,7 @@ mod tests {
         seed_strand(&state, realm_id, strand_id);
         let assignment = relation_create(realm_id, "000000009997", alice, strand_id, bob);
         state
-            .projection_application()
+            .projections()
             .apply(&assignment, state.hlc());
         seed_strand_watch(&state, strand_id, carol, "all");
 
@@ -1192,3 +1192,4 @@ mod tests {
         }));
     }
 }
+

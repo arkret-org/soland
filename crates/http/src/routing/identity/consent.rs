@@ -17,8 +17,8 @@ use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
-use soland_application::identity::{AccountDataState, ConsentCellRecord, FindAccountByActorQuery};
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::identity::{AccountDataState, ConsentCellRecord, FindAccountByActorQuery};
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
@@ -42,7 +42,7 @@ pub(super) fn router() -> Router {
 }
 
 pub(crate) async fn project_consent_operation(state: &AppState, operation: &Operation) {
-    let kind = soland_application::operation_semantics::canonical_kind_string(operation);
+    let kind = soland_services::operation_semantics::canonical_kind_string(operation);
     let projected = match kind.as_str() {
         "ak.consent.grant" => project_consent_grant_operation(state, operation).await,
         "ak.consent.revoke" => project_consent_revoke_operation(state, operation).await,
@@ -113,7 +113,7 @@ async fn list_consent_cells(
     let session = aa.authenticated_session(state, req).await?;
     let now = now();
     let mut cells = state
-        .consent_application()
+        .consents()
         .visible_cells(&session.actor)
         .iter()
         .map(|cell| consent_response(cell, now))
@@ -152,7 +152,7 @@ async fn get_consent_cell(
     let scope_param = query_param(req, "consent_scope").or_else(|| query_param(req, "scope"));
     let scope = normalize_scope(scope_param.as_deref())?;
     let cell = state
-        .consent_application()
+        .consents()
         .cell(&holder, &peer, &scope)
         .ok_or_else(|| AppError::not_found("consent cell not found"))?;
     json_ok(consent_response(&cell, now())?)
@@ -272,7 +272,7 @@ async fn request_consent_cell(
         ));
     }
     let holder_account = state
-        .identity_application()
+        .identities()
         .find_account_by_actor(FindAccountByActorQuery {
             actor_id: body.holder_did.as_str().to_owned(),
         })
@@ -320,7 +320,7 @@ pub(super) fn consent_cell_snapshot(
     peer: &str,
     scope: &str,
 ) -> Option<ConsentCellRecord> {
-    state.consent_application().cell(holder, peer, scope)
+    state.consents().cell(holder, peer, scope)
 }
 
 /// Write-through a single mutated consent cell to durable storage.
@@ -333,7 +333,7 @@ pub(super) async fn persist_consent_cell(
     record: &ConsentCellRecord,
     previous: Option<ConsentCellRecord>,
 ) -> Result<(), AppError> {
-    if let Err(error) = state.consent_application().save_cell(record.clone()).await {
+    if let Err(error) = state.consents().save_cell(record.clone()).await {
         let restored = restore_consent_cell_after_persist_failure(state, record, previous);
         tracing::error!(
             %error,
@@ -356,7 +356,7 @@ fn restore_consent_cell_after_persist_failure(
     previous: Option<ConsentCellRecord>,
 ) -> bool {
     state
-        .consent_application()
+        .consents()
         .restore_cell_if_current(record, previous)
 }
 
@@ -378,7 +378,7 @@ fn record_pending_request_with_cell_id(
     requested_at: DateTime<Utc>,
     cell_id: Option<String>,
 ) -> ConsentCellRecord {
-    state.consent_application().record_pending_request(
+    state.consents().record_pending_request(
         holder,
         peer,
         scope,
@@ -398,7 +398,7 @@ pub(crate) fn has_active_consent_for_scope(
     let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
     [&scope, "any"].iter().any(|scope| {
         state
-            .consent_application()
+            .consents()
             .cell(holder, peer, scope)
             .is_some_and(|cell| effective_state(&cell, at) == "granted")
     })
@@ -459,11 +459,11 @@ pub(crate) async fn materialize_mimi_consent_update_by_id(
 ) -> Result<Option<(ConsentCellRecord, Option<String>)>, AppError> {
     validate_did(actor_id).map_err(|_| AppError::invalid_param("invalid actor DID"))?;
     let existing = state
-        .consent_application()
+        .consents()
         .cell_by_id(consent_id)
         .or_else(|| {
             state
-                .consent_application()
+                .consents()
                 .cell_by_id(&consent_cell_id_for_consent_id(consent_id))
         });
     let Some(existing) = existing else {
@@ -509,7 +509,7 @@ pub(crate) fn has_active_consent_grant_evidence(
         .filter(|value| !value.is_empty())
         .map(consent_cell_id_for_consent_id);
     state
-        .consent_application()
+        .consents()
         .cells_for_pair(subject, inviter)
         .iter()
         .any(|cell| {
@@ -585,7 +585,7 @@ pub(crate) fn active_invite_consent_grant_ref(
     at: DateTime<Utc>,
 ) -> Option<String> {
     for scope in ["invite", "any"] {
-        if let Some(cell) = state.consent_application().cell(holder, peer, scope) {
+        if let Some(cell) = state.consents().cell(holder, peer, scope) {
             for dot in active_grant_dots(&cell, at) {
                 if let Some(event_ref) = event_ref_for_dot(&dot) {
                     return Some(event_ref.to_owned());
@@ -679,7 +679,7 @@ pub(crate) fn revoke_contact_managed_consent(
     // or every scope the holder currently has a cell for toward `peer`.
     let target_scopes: Vec<String> = if scopes.is_empty() {
         state
-            .consent_application()
+            .consents()
             .cells_for_pair(holder, peer)
             .iter()
             .map(|cell| cell.scope.clone())
@@ -701,7 +701,7 @@ pub(crate) fn revoke_contact_managed_consent(
     let mut mutated = Vec::new();
     for scope in target_scopes {
         let active_before = state
-            .consent_application()
+            .consents()
             .cell(holder, peer, &scope)
             .map(|cell| active_grant_dots(&cell, revoked_at))
             .unwrap_or_default();
@@ -734,7 +734,7 @@ pub(super) async fn auto_revoke_requester_side_contact_consent(
     contact_event_ref: Option<&str>,
 ) -> Result<(Vec<String>, bool), AppError> {
     let requester_exists = state
-        .identity_application()
+        .identities()
         .find_account_by_actor(FindAccountByActorQuery {
             actor_id: requester.to_owned(),
         })
@@ -828,7 +828,7 @@ fn grant_cell_with_dot(
     expires_at: Option<DateTime<Utc>>,
     granted_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
-    state.consent_application().grant_cell(
+    state.consents().grant_cell(
         holder,
         peer,
         scope,
@@ -908,7 +908,7 @@ fn revoke_target_scopes(scope: &str) -> Vec<String> {
 }
 
 fn grant_dots_for_cell(state: &AppState, holder: &str, peer: &str, scope: &str) -> Vec<String> {
-    state.consent_application().grant_dots(holder, peer, scope)
+    state.consents().grant_dots(holder, peer, scope)
 }
 
 fn mark_cell_superseded_by_any_revoke(
@@ -918,7 +918,7 @@ fn mark_cell_superseded_by_any_revoke(
     scope: &str,
     revoked_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
-    state.consent_application().mark_superseded_by_any_revoke(
+    state.consents().mark_superseded_by_any_revoke(
         holder,
         peer,
         scope,
@@ -935,7 +935,7 @@ fn revoke_cell(
     scope: &str,
     revoked_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
-    let observed_dots = state.consent_application().grant_dots(holder, peer, scope);
+    let observed_dots = state.consents().grant_dots(holder, peer, scope);
     revoke_cell_with_dots(state, holder, peer, scope, &observed_dots, revoked_at)
 }
 
@@ -947,7 +947,7 @@ fn revoke_cell_with_dots(
     observed_dots: &[String],
     revoked_at: DateTime<Utc>,
 ) -> ConsentCellRecord {
-    state.consent_application().revoke_cell(
+    state.consents().revoke_cell(
         holder,
         peer,
         scope,
@@ -1095,7 +1095,7 @@ fn consent_revoke_target(
     }
     let cell_id = consent_cell_id_for_consent_id(consent_id);
     state
-        .consent_application()
+        .consents()
         .holder_cell_by_id(holder, &cell_id)
         .as_ref()
         .map(|cell| (cell.peer.clone(), cell.scope.clone()))
@@ -1330,7 +1330,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
         state,
         ProjectionEventRecord {
             event_id: ids::generate_event_id(),
-            realm_id: soland_application::identity::principal_control_realm_for_did(holder),
+            realm_id: soland_services::identity::principal_control_realm_for_did(holder),
             event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
             operation_type: "consent_revoke_cache_invalidation".to_owned(),
             operation_id: None,
@@ -1362,7 +1362,7 @@ async fn consent_invalidation_peer_service_ids(
 ) -> Vec<String> {
     let mut services = BTreeSet::new();
     for actor in [holder, peer] {
-        let records = match state.contact_application().contacts_for_actor(actor).await {
+        let records = match state.contacts().contacts_for_actor(actor).await {
             Ok(records) => records,
             Err(error) => {
                 tracing::warn!(
@@ -1404,7 +1404,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         return Ok(0);
     }
     let Some(existing) = state
-        .account_data_application()
+        .account_data()
         .entry(holder, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -1454,7 +1454,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         updated_at: revoked_at,
     };
     state
-        .account_data_application()
+        .account_data()
         .save_entry(record.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1658,7 +1658,7 @@ mod tests {
         persist_consent_cell(&state, &cell, previous).await.unwrap();
 
         // Persistence holds the cell.
-        let snapshot = state.consent_application().cells().await.unwrap();
+        let snapshot = state.consents().cells().await.unwrap();
         assert_eq!(snapshot.len(), 1, "one cell persisted");
 
         // A fresh AppState that shares the same persistence store re-hydrates
@@ -1675,3 +1675,4 @@ mod tests {
         );
     }
 }
+

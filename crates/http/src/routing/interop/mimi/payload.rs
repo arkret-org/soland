@@ -19,7 +19,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     let _service_event_guard = service_event_lock.lock().await;
     let actor_id = state.service_id().as_str();
     let scoped_records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events_for_realm_actor(realm_id, actor_id)
         .await
         .map_err(|error| AppError::internal(format!("MIMI actor frontier lookup: {error}")))?;
@@ -79,7 +79,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     )
     .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;
     let now = chrono::Utc::now();
-    let session = soland_application::identity::SessionIdentityState {
+    let session = soland_services::identity::SessionIdentityState {
         token_hash: "mimi-provider-facade".to_owned(),
         actor: state.service_id().clone(),
         device_id: "mimi-provider-facade".to_owned(),
@@ -567,3 +567,4 @@ pub(super) fn mimi_plaintext_detected(value: &Value) -> bool {
         _ => false,
     }
 }
+

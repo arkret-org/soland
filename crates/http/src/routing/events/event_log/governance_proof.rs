@@ -41,7 +41,7 @@ pub(super) async fn mls_governance_proof(
     }
 
     let realm_value = request.realm_id.as_str();
-    let own_pcr = soland_application::identity::principal_control_realm_for_did(&session.actor);
+    let own_pcr = soland_services::identity::principal_control_realm_for_did(&session.actor);
     let managed_agent_pcr =
         crate::routing::identity::managed_agent_pcr::controller_manages_agent_pcr(
             state,
@@ -86,7 +86,7 @@ fn scope_visible_to_session(
     match scope {
         GovernanceScope::Realm { .. } => true,
         GovernanceScope::Circle { circle_id, .. } => state
-            .projection_application()
+            .projections()
             .snapshot()
             .circle_scope_visible_to_actor(circle_id.as_str(), &session.actor),
         _ => false,
@@ -105,7 +105,7 @@ async fn materialize_realm_control(
     realm_id: &RealmId,
 ) -> Result<MaterializedRealmControl, AppError> {
     let stats = state
-        .event_query_application()
+        .event_queries()
         .realm_event_stats(realm_id.as_str())
         .await
         .map_err(|error| {
@@ -126,7 +126,7 @@ async fn materialize_realm_control(
         ));
     }
     let realm_records = state
-        .event_query_application()
+        .event_queries()
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| {
@@ -178,7 +178,7 @@ async fn materialize_realm_control(
         && active_device_generation.is_some()
     {
         state
-            .identity_application()
+            .identities()
             .devices_for_actor(principal_id)
             .await
             .map_err(|error| {
@@ -194,7 +194,7 @@ async fn materialize_realm_control(
         && !requirement.accepted_frontier_refs.is_empty()
     {
         state
-            .projection_application()
+            .projections()
             .seal_leaf_union_proof(&requirement.accepted_frontier_refs)
             .map_err(|error| {
                 AppError::new(
@@ -378,7 +378,7 @@ async fn materialize_realm_control(
     for (cell, mut ops) in ops_by_cell {
         ops.sort_by(|left, right| right.move_id.as_str().cmp(left.move_id.as_str()));
         let binding = state
-            .projection_application()
+            .projections()
             .resolve_cell(realm_id, &cell)
             .map_err(|error| {
                 AppError::new(
@@ -429,7 +429,7 @@ async fn materialize_realm_control(
 fn materialize_managed_agent_realm_control(
     state: &AppState,
     realm_id: &RealmId,
-    records: &[soland_application::events::CanonicalEventRecord],
+    records: &[soland_services::events::CanonicalEventRecord],
 ) -> Result<MaterializedRealmControl, AppError> {
     let mut events = Vec::with_capacity(records.len());
     for record in records {
@@ -1140,3 +1140,4 @@ mod tests {
         assert!(canonical_event_ops(&event, &move_id).is_err());
     }
 }
+

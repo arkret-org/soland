@@ -9,7 +9,7 @@ pub(super) fn validate_pin_scope_safety(
     {
         return Ok(());
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     projection.check_pin_scope_safety(operation)
 }
 
@@ -33,7 +33,7 @@ pub(super) async fn validate_accountability_profile_policy(
     };
     let now = chrono::Utc::now();
     let accepted_events = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .unwrap_or_default();
@@ -130,7 +130,7 @@ pub(super) fn accountability_grant_operation_signed_by(
 }
 
 pub(super) fn accountability_grant_envelope_signed_by(
-    record: &soland_application::events::CanonicalEventRecord,
+    record: &soland_services::events::CanonicalEventRecord,
     issuer: &str,
 ) -> bool {
     record
@@ -216,7 +216,7 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     // minimal-metadata profile; absent meta (target realm unknown) leaves the
     // obligation to the committer / client.
     let is_minimal = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(operation.realm_id.as_str())
         .await
         .ok()
@@ -262,7 +262,7 @@ pub(super) fn validate_disappearing_message_policy(
         .and_then(Value::as_str)
         .ok_or("disappearing_expiry_trigger_missing")?;
     let policy = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         {
             projection
                 .realm_disappearing_policy_cell_value(operation.realm_id.as_str())
@@ -319,3 +319,4 @@ pub(in crate::routing::events::operations) fn minimal_metadata_aad_visibility(
         _ => None,
     }
 }
+

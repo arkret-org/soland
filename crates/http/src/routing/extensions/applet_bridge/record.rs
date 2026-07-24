@@ -71,7 +71,7 @@ pub(super) async fn applet_record(
     applet_id: &str,
 ) -> Result<Option<AppletRecord>, AppError> {
     let Some(value) = state
-        .event_query_application()
+        .event_queries()
         .applet(applet_id)
         .await
         .map_err(|error| {
@@ -90,7 +90,7 @@ pub(in crate::routing::extensions) async fn applet_records(
     state: &AppState,
 ) -> Result<Vec<AppletRecord>, AppError> {
     state
-        .event_query_application()
+        .event_queries()
         .applets()
         .await
         .map_err(|error| {
@@ -113,7 +113,7 @@ pub(super) async fn persist_applet_record(
     let value = serde_json::to_value(record)
         .map_err(|error| AppError::internal(format!("applet record serialize failed: {error}")))?;
     state
-        .event_query_application()
+        .event_queries()
         .store_applet(&record.applet_id, value)
         .await
         .map_err(|error| {

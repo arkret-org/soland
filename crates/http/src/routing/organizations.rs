@@ -16,7 +16,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::governance::{
+use soland_services::governance::{
     OrganizationPolicyRecord, OrganizationRecord, RealmModerationPolicyRecord,
 };
 use soland_http::error::{AppError, ErrorCode};
@@ -188,22 +188,22 @@ fn ensure_organization_registry_admin(state: &AppState, actor: &str) -> Result<(
 
 pub(crate) async fn refresh_organization_projection(
     state: &AppState,
-) -> soland_application::ApplicationResult<()> {
-    let organizations = state.governance_application().organizations().await?;
+) -> soland_services::ServiceResult<()> {
+    let organizations = state.governance().organizations().await?;
     let policies = state
-        .governance_application()
+        .governance()
         .organization_policies()
         .await?;
     let links = state
-        .governance_application()
+        .governance()
         .realm_organization_links()
         .await?;
     let realm_policies = state
-        .governance_application()
+        .governance()
         .realm_moderation_policies()
         .await?;
     state
-        .governance_application()
+        .governance()
         .replace_organization_projection(organizations, policies, links, realm_policies);
 
     Ok(())
@@ -222,7 +222,7 @@ async fn list_organizations(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut rows = state
-        .governance_application()
+        .governance()
         .cached_organizations()
         .iter()
         .map(|record| organization_record_view(state, record))
@@ -283,7 +283,7 @@ async fn upsert_organization(
         updated_at: now,
     };
     state
-        .governance_application()
+        .governance()
         .store_organization(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -305,7 +305,7 @@ async fn get_organization(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let record = state
-        .governance_application()
+        .governance()
         .cached_organization(&organization_id)
         .ok_or_else(|| AppError::not_found("organization not found"))?;
     json_ok(organization_record_view(state, &record))
@@ -329,7 +329,7 @@ async fn get_organization_policy(
         .map_err(|error| AppError::internal(error.to_string()))?;
     let organization_id = normalized_organization_id(&organization_did.into_inner())?;
     let policy = state
-        .governance_application()
+        .governance()
         .cached_organization_policy(&organization_id)
         .ok_or_else(|| AppError::not_found("organization policy not found"))?;
     json_ok(organization_policy_record_view(state, &policy))
@@ -378,7 +378,7 @@ async fn upsert_organization_policy(
     }
     let now = Utc::now();
     let version = state
-        .governance_application()
+        .governance()
         .organization_policy(&organization_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -404,7 +404,7 @@ async fn upsert_organization_policy(
         updated_at: now,
     };
     state
-        .governance_application()
+        .governance()
         .store_organization_policy(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -484,9 +484,9 @@ pub(crate) async fn link_realm_to_organization(
     state: &AppState,
     realm_id: &str,
     organization_id: &str,
-) -> soland_application::ApplicationResult<()> {
+) -> soland_services::ServiceResult<()> {
     state
-        .governance_application()
+        .governance()
         .link_realm_organization(realm_id, organization_id)
         .await?;
     Ok(())
@@ -496,7 +496,7 @@ pub(crate) async fn link_realm_to_organization(
 /// discovery surface ONLY; never use this to drive policy inheritance.
 pub(crate) fn realm_organization_ids(state: &AppState, realm_id: &str) -> Vec<String> {
     state
-        .governance_application()
+        .governance()
         .cached_realm_organizations(realm_id)
 }
 
@@ -511,7 +511,7 @@ pub(crate) fn verified_moderation_organization_ids(
     realm_id: &str,
 ) -> Vec<String> {
     let now = Utc::now();
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     let mut ids = proj.verified_organizations_with_scope(
         realm_id,
         arkret_models_collaboration::RealmOrganizationControlScope::ModerationPolicy,
@@ -532,7 +532,7 @@ pub(crate) fn effective_policy_for_realm(
     // `owning_organizations` hints no longer qualify.
     let org_ids = verified_moderation_organization_ids(state, realm_id);
     let org_layers = state
-        .governance_application()
+        .governance()
         .cached_organization_policies(&org_ids)
         .into_iter()
         .map(|(org_id, policy)| OrganizationPolicyLayer {
@@ -542,13 +542,13 @@ pub(crate) fn effective_policy_for_realm(
             version: policy.version,
             policy: policy.payload.clone(),
             applies_to_realms: state
-                .governance_application()
+                .governance()
                 .cached_organization_realms(&org_id),
         })
         .collect::<Vec<_>>();
 
     let realm_policy = state
-        .governance_application()
+        .governance()
         .cached_realm_moderation_policy(realm_id)
         .as_ref()
         .map(realm_policy_record_outcome);
@@ -604,7 +604,7 @@ pub(crate) async fn organization_policy_blocks_join(
     }
     org_ids.iter().any(|org_id| {
         state
-            .governance_application()
+            .governance()
             .cached_organization_policy(org_id)
             .is_some_and(|policy| policy_denies_join_actor(&policy.payload, actor))
     })
@@ -639,7 +639,7 @@ fn realm_policy_override_requires_approval_cached(
     targets.iter().any(|target| {
         org_ids.iter().any(|org_id| {
             state
-                .governance_application()
+                .governance()
                 .cached_organization_policy(org_id)
                 .is_some_and(|policy| policy_denies_join_actor(&policy.payload, target))
         })
@@ -694,7 +694,7 @@ fn organizations_denying_override_targets(
         .into_iter()
         .filter(|org_id| {
             state
-                .governance_application()
+                .governance()
                 .cached_organization_policy(org_id)
                 .is_some_and(|policy| {
                     targets
@@ -710,7 +710,7 @@ pub(crate) async fn persist_realm_moderation_policy(
     realm_id: &str,
     payload: Value,
     actor: &str,
-) -> soland_application::ApplicationResult<RealmModerationPolicyRecord> {
+) -> soland_services::ServiceResult<RealmModerationPolicyRecord> {
     let record = RealmModerationPolicyRecord {
         realm_id: realm_id.to_owned(),
         payload,
@@ -718,7 +718,7 @@ pub(crate) async fn persist_realm_moderation_policy(
         updated_at: Utc::now(),
     };
     state
-        .governance_application()
+        .governance()
         .store_realm_moderation_policy(&record)
         .await?;
     Ok(record)
@@ -726,7 +726,7 @@ pub(crate) async fn persist_realm_moderation_policy(
 
 pub(crate) fn organization_records_for_directory(state: &AppState) -> Vec<Value> {
     state
-        .governance_application()
+        .governance()
         .cached_organizations()
         .iter()
         .map(|record| organization_record_json(state, record))
@@ -737,9 +737,9 @@ async fn ensure_organization_placeholder(
     state: &AppState,
     organization_id: &str,
     actor: &str,
-) -> soland_application::ApplicationResult<()> {
+) -> soland_services::ServiceResult<()> {
     if state
-        .governance_application()
+        .governance()
         .organization(organization_id)
         .await?
         .is_some()
@@ -762,7 +762,7 @@ async fn ensure_organization_placeholder(
         updated_at: now,
     };
     state
-        .governance_application()
+        .governance()
         .store_organization(&record)
         .await?;
     Ok(())
@@ -770,7 +770,7 @@ async fn ensure_organization_placeholder(
 
 fn organization_record_view(state: &AppState, record: &OrganizationRecord) -> OrganizationView {
     let realms = state
-        .governance_application()
+        .governance()
         .cached_organization_realms(&record.organization_id);
     let realm_count = realms.len();
     OrganizationView {
@@ -801,7 +801,7 @@ fn organization_policy_record_view(
     record: &OrganizationPolicyRecord,
 ) -> OrganizationPolicyView {
     let applies_to_realms = state
-        .governance_application()
+        .governance()
         .cached_organization_realms(&record.organization_id);
     OrganizationPolicyView {
         kind: "ak.organization.moderation_policy".to_owned(),
@@ -834,14 +834,14 @@ fn effective_rules(state: &AppState, realm_id: &str) -> Vec<Value> {
     let mut rules = Vec::new();
     for org_id in org_ids {
         if let Some(policy) = state
-            .governance_application()
+            .governance()
             .cached_organization_policy(&org_id)
         {
             rules.extend(policy_rules(&policy.payload));
         }
     }
     if let Some(realm_policy) = state
-        .governance_application()
+        .governance()
         .cached_realm_moderation_policy(realm_id)
     {
         rules.extend(
@@ -901,7 +901,7 @@ fn policy_denies_join_actor(policy: &Value, actor: &str) -> bool {
 
 fn accepted_realm_override_allows_join(state: &AppState, realm_id: &str, actor: &str) -> bool {
     state
-        .governance_application()
+        .governance()
         .cached_realm_moderation_policy(realm_id)
         .as_ref()
         .is_some_and(|record| allow_join_override_targets(&record.payload).contains(actor))
@@ -1036,3 +1036,4 @@ mod tests {
         );
     }
 }
+

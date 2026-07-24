@@ -1,11 +1,11 @@
-use soland_application::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
+use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
 
 use super::*;
 
 /// Revoke every active bearer session for an actor.
 pub async fn revoke_sessions_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     state
-        .session_application()
+        .sessions()
         .revoke_actor_sessions(actor, now())
         .await
         .map_err(|error| error.to_string())
@@ -16,7 +16,7 @@ pub async fn active_delegated_sessions_for_actor(
     actor: &str,
 ) -> Result<usize, String> {
     state
-        .session_application()
+        .sessions()
         .active_delegated_sessions_for_actor(actor)
         .await
         .map_err(|error| error.to_string())
@@ -29,7 +29,7 @@ pub async fn revoke_delegated_sessions_for_applet(
     grant_refs: &[String],
 ) -> Result<Vec<String>, String> {
     state
-        .session_application()
+        .sessions()
         .revoke_delegated_sessions(applet_id, service_id, grant_refs, now())
         .await
         .map_err(|error| error.to_string())
@@ -39,7 +39,7 @@ pub async fn revoke_delegated_sessions_for_applet(
 pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<usize, String> {
     let revoked_at = now();
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(actor)
         .await
         .map_err(|error| error.to_string())?;
@@ -51,7 +51,7 @@ pub async fn revoke_devices_for_actor(state: &AppState, actor: &str) -> Result<u
         device.revoked_at = Some(revoked_at);
         device.updated_at = revoked_at;
         state
-            .identity_application()
+            .identities()
             .save_device(SaveDeviceCommand {
                 actor_id: device.actor_id.clone(),
                 device_id: device.device_id.clone(),
@@ -74,7 +74,7 @@ pub async fn revoke_device_record(
 ) -> Result<(), String> {
     let revoked_at = now();
     let mut record = state
-        .identity_application()
+        .identities()
         .find_device(FindDeviceQuery {
             actor_id: actor.to_owned(),
             device_id: device_id.to_owned(),
@@ -94,7 +94,7 @@ pub async fn revoke_device_record(
     record.revoked_at = Some(revoked_at);
     record.updated_at = revoked_at;
     state
-        .identity_application()
+        .identities()
         .save_device(SaveDeviceCommand {
             actor_id: actor.to_owned(),
             device_id: device_id.to_owned(),
@@ -110,7 +110,7 @@ pub async fn revoke_device_record(
 /// or if the device cannot be located at all.
 pub async fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -> bool {
     match state
-        .identity_application()
+        .identities()
         .find_device(FindDeviceQuery {
             actor_id: actor.to_owned(),
             device_id: device_id.to_owned(),
@@ -118,7 +118,7 @@ pub async fn is_device_revoked(state: &AppState, actor: &str, device_id: &str) -
         .await
     {
         Ok(Some(record)) => record.revoked_at.is_some(),
-        Ok(None) => match state.identity_application().devices_for_actor(actor).await {
+        Ok(None) => match state.identities().devices_for_actor(actor).await {
             Ok(devices) => !devices.iter().any(|record| record.device_id == device_id),
             Err(_) => true,
         },
@@ -140,7 +140,7 @@ pub(crate) async fn purge_device_delivery_state(
     device_id: &str,
 ) -> DeviceDeliveryPurgeOutcome {
     let result = match state
-        .delivery_application()
+        .deliveries()
         .purge_device_delivery(actor, device_id)
         .await
     {
@@ -181,3 +181,4 @@ pub fn session_credential_hash(token: &str, audience: &str) -> String {
     hasher.update(token.as_bytes());
     format!("sha256:{}", URL_SAFE_NO_PAD.encode(hasher.finalize()))
 }
+

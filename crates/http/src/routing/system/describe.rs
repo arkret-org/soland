@@ -116,11 +116,11 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutco
     json_ok(HealthOutcome {
         ok,
         service: "soland",
-        storage: state.jobs_application().storage_mode(),
+        storage: state.jobs().storage_mode(),
         checks: json!({
             "database": {
                 "ok": database_ok,
-                "mode": state.jobs_application().storage_mode(),
+                "mode": state.jobs().storage_mode(),
             },
             "events": {
                 "ok": true,
@@ -144,7 +144,7 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
     // orchestrators that drained traffic onto a still-migrating replica
     // could observe transient `relation does not exist` errors on the
     // first few requests; the gate makes that race fail-closed.
-    let migrations_applied = state.jobs_application().migrations_applied();
+    let migrations_applied = state.jobs().migrations_applied();
     let session_grant_introspection_ready =
         state.config().session_grant_introspection_url.is_none()
             || state.config().session_grant_introspection_bearer.is_some();
@@ -175,7 +175,7 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
     } else {
         None
     };
-    let migrations = if state.jobs_application().database_configured() {
+    let migrations = if state.jobs().database_configured() {
         if migrations_applied {
             "applied"
         } else {
@@ -187,17 +187,17 @@ async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutco
     json_ok(ReadyzOutcome {
         ok,
         service: "soland".to_owned(),
-        storage: state.jobs_application().storage_mode().to_owned(),
+        storage: state.jobs().storage_mode().to_owned(),
         reason,
         checks: ReadyzChecks {
             database: ReadyzDatabaseCheck {
                 ok: database_ok,
-                mode: state.jobs_application().storage_mode().to_owned(),
+                mode: state.jobs().storage_mode().to_owned(),
                 migrations: migrations.to_owned(),
             },
             migrations: ReadyzMigrationCheck {
                 ok: migrations_applied,
-                mode: state.jobs_application().storage_mode().to_owned(),
+                mode: state.jobs().storage_mode().to_owned(),
             },
             session_grant_introspection: ReadyzConfiguredCheck {
                 ok: session_grant_introspection_ready,
@@ -293,7 +293,7 @@ fn service_identity_health(state: &ServiceIdentityState) -> Value {
 }
 
 async fn database_ready(state: &AppState) -> bool {
-    state.jobs_application().database_ready().await
+    state.jobs().database_ready().await
 }
 
 #[handler]
@@ -353,7 +353,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
     let mut description = describe(
         state.service_id(),
         &state.config().public_base_url,
-        state.jobs_application().storage_mode(),
+        state.jobs().storage_mode(),
         state.config().development_mode,
         state.config().account_authority_url.as_deref(),
         state.config().account_authority_enrollment_did.as_deref(),

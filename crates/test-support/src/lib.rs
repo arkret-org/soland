@@ -22,13 +22,13 @@ use futures_util::stream::{self, BoxStream, StreamExt};
 use parking_lot::Mutex;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use soland_application::delivery::ObjectStoragePort;
-use soland_application::events::{ProjectedOperationPersistencePort, RealmDirectoryIndex};
-use soland_application::governance::RuntimeSettingsPort;
-use soland_application::jobs::RuntimeHealthPort;
-use soland_application::persistence::PersistenceHandle;
-use soland_application::projection::{
-    EventSealCommitPort, ProjectionApplicationService, ProjectionSnapshot,
+use soland_services::delivery::ObjectStoragePort;
+use soland_services::events::{ProjectedOperationPersistencePort, RealmDirectoryIndex};
+use soland_services::governance::RuntimeSettingsPort;
+use soland_services::jobs::RuntimeHealthPort;
+use soland_services::persistence::PersistenceHandle;
+use soland_services::projection::{
+    EventSealCommitPort, ProjectionService, ProjectionSnapshot,
 };
 use soland_http::config::AppConfig;
 use soland_http::state::{AppState, AppStateRuntime, EventBroadcast};
@@ -79,7 +79,7 @@ pub fn app_state_with_identity(
     service_identity: ServiceIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> AppState {
-    let cell_registry = ProjectionApplicationService::sdk_cell_registry();
+    let cell_registry = ProjectionService::sdk_cell_registry();
     let move_store: Arc<dyn MoveStore> = Arc::new(MemoryMoveStore::default());
     let seal_store = Arc::new(MemorySealStore::default());
     let cell_store = Arc::new(MemoryCellStore::default());
@@ -94,7 +94,7 @@ pub fn app_state_with_identity(
         .expect("fixture has a serving identity")
         .service_id
         .to_string();
-    let projection_application = ProjectionApplicationService::new(
+    let projections = ProjectionService::new(
         move_store,
         seal_store.clone(),
         cell_store,
@@ -102,16 +102,16 @@ pub fn app_state_with_identity(
         event_seal_committer,
         &service_id,
     );
-    let projection = Box::leak(Box::new(projection_application.test_state().clone()));
-    let realm_directory_application =
-        soland_http::state::build_realm_directory_application(&config);
-    let realms = Box::leak(Box::new(realm_directory_application.test_index().clone()));
+    let projection = Box::leak(Box::new(projections.test_state().clone()));
+    let realm_directory =
+        soland_http::state::build_realm_directory(&config);
+    let realms = Box::leak(Box::new(realm_directory.test_index().clone()));
     let state = AppState::from_runtime(
         config,
         AppStateRuntime {
             persistence: PersistenceHandle::from_shared(persistence.clone()),
-            projection_application,
-            realm_directory_application,
+            projections,
+            realm_directory,
             projected_operation_persistence: Arc::new(NoProjectedOperationPersistence),
             object_storage: Arc::new(MemoryObjectStorage::default()),
             settings_persistence: Arc::new(NoRuntimeSettings),
@@ -305,7 +305,7 @@ struct NoRuntimeSettings;
 
 #[async_trait]
 impl RuntimeSettingsPort for NoRuntimeSettings {
-    async fn load_overrides(&self) -> soland_application::ApplicationResult<Vec<(String, Value)>> {
+    async fn load_overrides(&self) -> soland_services::ServiceResult<Vec<(String, Value)>> {
         Ok(Vec::new())
     }
 
@@ -314,7 +314,7 @@ impl RuntimeSettingsPort for NoRuntimeSettings {
         _key: &str,
         _value: &Value,
         _updated_by: &str,
-    ) -> soland_application::ApplicationResult<()> {
+    ) -> soland_services::ServiceResult<()> {
         Ok(())
     }
 }
@@ -443,5 +443,7 @@ fn effective_state_with_new_ops(
     Ok(joined)
 }
 
-pub use soland_application::identity::principal_control_realm_for_did;
+pub use soland_services::identity::principal_control_realm_for_did;
 pub use soland_http::project_accepted_operations;
+
+

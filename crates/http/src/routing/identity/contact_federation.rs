@@ -28,8 +28,8 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
-use soland_application::identity::ContactRecord;
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::identity::ContactRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -102,7 +102,7 @@ pub(crate) async fn federate_contact_fact(
 
     let fact_kind = PeerContactFactKind::from_wire(fact_kind)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    let issuer_pcr = soland_application::identity::principal_control_realm_for_did(issuer);
+    let issuer_pcr = soland_services::identity::principal_control_realm_for_did(issuer);
     let contact_event = build_contact_envelope(
         state,
         fact_kind,
@@ -470,7 +470,7 @@ async fn accept_delivered_direct_binding(
         ));
     }
     let contact = state
-        .contact_application()
+        .contacts()
         .contact_any(issuer, subject_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -501,7 +501,7 @@ async fn accept_delivered_direct_binding(
         .chain(std::iter::once(&payload.mls_welcome_event_ref));
     for event_ref in referenced_events {
         let available = state
-            .event_query_application()
+            .event_queries()
             .canonical_event(event_ref.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -518,7 +518,7 @@ async fn accept_delivered_direct_binding(
 
     let created_at = now();
     let federation_device_id = "federation:contact-binding";
-    let session = soland_application::identity::SessionIdentityState {
+    let session = soland_services::identity::SessionIdentityState {
         token_hash: format!("peer-contact-binding:{}", event.event_id),
         actor: issuer.to_owned(),
         device_id: federation_device_id.to_owned(),
@@ -564,7 +564,7 @@ async fn accept_delivered_direct_binding(
         .map_err(super::super::events::peer::schema_violation)?;
 
     if let Some(existing) = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(&parsed.event_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -577,8 +577,8 @@ async fn accept_delivered_direct_binding(
         return Ok("duplicate");
     }
     state
-        .event_query_application()
-        .store_canonical_event(soland_application::events::CanonicalEventRecord {
+        .event_queries()
+        .store_canonical_event(soland_services::events::CanonicalEventRecord {
             event_id: parsed.event_id,
             actor_id: parsed.actor_id,
             actor_seq: parsed.actor_seq,
@@ -653,7 +653,7 @@ async fn should_stub_incoming_contact_message(
         return Ok(false);
     }
     let contacts = state
-        .contact_application()
+        .contacts()
         .contacts_for_actor(target)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -727,7 +727,7 @@ async fn append_delivered_contact_fact_projection_event(
         state,
         ProjectionEventRecord {
             event_id: contact_event_id.to_owned(),
-            realm_id: soland_application::identity::principal_control_realm_for_did(issuer),
+            realm_id: soland_services::identity::principal_control_realm_for_did(issuer),
             event_kind: fact_kind.to_owned(),
             operation_type: "delivered_contact_fact".to_owned(),
             operation_id: None,
@@ -766,7 +766,7 @@ async fn project_delivered_contact_fact(
             })
             .or_else(|| payload.get("scope").and_then(Value::as_str)),
     )?;
-    let contacts = state.contact_application();
+    let contacts = state.contacts();
     match fact_kind {
         "ak.contact.requested" => {
             // requester = issuer, target = subject_id (this holder). Form a
@@ -1111,7 +1111,7 @@ mod tests {
         assert_eq!(outcome, "accepted");
 
         let record = state
-            .contact_application()
+            .contacts()
             .contact(requester, target, "direct_message")
             .await
             .expect("contact store lookup")
@@ -1135,3 +1135,4 @@ mod tests {
         );
     }
 }
+

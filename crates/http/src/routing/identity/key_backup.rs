@@ -12,7 +12,7 @@ use ed25519_dalek::{Signature, Verifier as _};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_application::runtime_guards::key_backup_daily_download_limit;
+use soland_services::runtime_guards::key_backup_daily_download_limit;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -667,30 +667,30 @@ mod tests {
 
     #[test]
     fn download_limit_defaults_and_clamps_to_spec_range() {
-        use soland_application::runtime_guards::{
+        use soland_services::runtime_guards::{
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT, KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX,
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN,
         };
 
         // Unset → spec default (64).
         assert_eq!(
-            soland_application::runtime_guards::clamp_key_backup_daily_download_limit(None),
+            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(None),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT
         );
         // In-range values are honored as-is.
         assert_eq!(
-            soland_application::runtime_guards::clamp_key_backup_daily_download_limit(Some(100)),
+            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(Some(100)),
             100
         );
         // Outside the spec-allowed [16, 256] range the value is clamped —
         // §7.8 forbids relaxing past the ceiling, and a sub-floor value
         // would break a single legitimate long-series restore.
         assert_eq!(
-            soland_application::runtime_guards::clamp_key_backup_daily_download_limit(Some(1)),
+            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(Some(1)),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MIN
         );
         assert_eq!(
-            soland_application::runtime_guards::clamp_key_backup_daily_download_limit(Some(
+            soland_services::runtime_guards::clamp_key_backup_daily_download_limit(Some(
                 100_000
             )),
             KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_MAX
@@ -716,3 +716,4 @@ mod tests {
         assert!(metadata.pointer("/auth_data/signature").is_none());
     }
 }
+

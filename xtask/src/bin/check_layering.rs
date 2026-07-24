@@ -4,7 +4,7 @@ use std::process::Command;
 const GUARDED_PACKAGES: &[&str] = &[
     "soland",
     "soland-http",
-    "soland-application",
+    "soland-services",
     "soland-storage-postgres",
     "soland-storage-memory",
     "soland-storage",
@@ -14,15 +14,15 @@ const GUARDED_PACKAGES: &[&str] = &[
 
 const ALLOWED: &[(&str, &str)] = &[
     ("soland", "soland-http"),
-    ("soland", "soland-application"),
+    ("soland", "soland-services"),
     ("soland", "soland-storage-postgres"),
     ("soland", "soland-storage-memory"),
-    ("soland-http", "soland-application"),
+    ("soland-http", "soland-services"),
     ("soland-http", "soland-contracts"),
     ("soland-http", "arkret-sdk"),
-    ("soland-application", "soland-domain"),
-    ("soland-application", "soland-storage"),
-    ("soland-application", "arkret-sdk"),
+    ("soland-services", "soland-domain"),
+    ("soland-services", "soland-storage"),
+    ("soland-services", "arkret-sdk"),
     ("soland-storage-postgres", "soland-storage"),
     ("soland-storage-memory", "soland-storage"),
     ("soland-storage", "soland-domain"),
@@ -46,7 +46,7 @@ const BANNED: &[(&str, &[&str])] = &[
     ("soland-storage", &["salvo", "diesel", "diesel-async"]),
     ("soland-storage-memory", &["diesel", "diesel-async"]),
     (
-        "soland-application",
+        "soland-services",
         &[
             "salvo",
             "diesel",
@@ -189,3 +189,4 @@ fn detect_cycle(
     active.remove(node);
     visited.insert(node.to_owned());
 }
+

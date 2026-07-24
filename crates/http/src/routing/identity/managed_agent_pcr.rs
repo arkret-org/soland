@@ -16,8 +16,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
 use ed25519_dalek::{Signature, Verifier as _};
 use serde_json::{Value, json};
-use soland_application::events::ActiveAgentAccountabilityQuery;
-use soland_application::identity::{
+use soland_services::events::ActiveAgentAccountabilityQuery;
+use soland_services::identity::{
     AgentPairingState as AgentPrincipalRecord, DidDocumentState, DidLogCommitResult, DidLogEvent,
 };
 use soland_http::error::{AppError, ErrorCode};
@@ -91,7 +91,7 @@ pub(crate) async fn persist_managed_agent_did_binding(
         ))
     })?;
     let commit = state
-        .did_application()
+        .dids()
         .commit_log_operation(
             None,
             DidDocumentState {
@@ -251,7 +251,7 @@ pub(crate) async fn project_agent_pcr_recovery(
     let pcr_id = agent_record.principal_control_realm_id.as_str();
     let authorization_ref = agent_record.controller_authorization_ref.as_str();
     let backups = state
-        .key_backup_application()
+        .key_backups()
         .backups_for_actor(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR backup lookup failed: {error}")))?;
@@ -298,7 +298,7 @@ pub(crate) async fn project_agent_pcr_recovery(
     };
 
     let active_pointer = state
-        .projection_application()
+        .projections()
         .key_backup_active_series(controller_id, "mls_history");
     let Some(active_pointer) = active_pointer else {
         return Ok(stale());
@@ -338,7 +338,7 @@ pub(crate) async fn project_agent_pcr_recovery(
         return Ok(stale());
     }
     let active_policy = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?;
@@ -369,10 +369,10 @@ pub(crate) async fn active_series_pointer_is_current(
     pointer: &arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
     let controller_realm =
-        RealmId::new(soland_application::identity::principal_control_realm_for_did(controller_id))
+        RealmId::new(soland_services::identity::principal_control_realm_for_did(controller_id))
             .map_err(|error| AppError::internal(format!("controller PCR id invalid: {error}")))?;
     let leaves = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(&controller_realm)
         .map_err(|error| {
             AppError::internal(format!("controller Seal frontier lookup failed: {error}"))
@@ -388,7 +388,7 @@ pub(crate) async fn active_series_pointer_is_current(
             return Ok(false);
         }
         let seal = state
-            .projection_application()
+            .projections()
             .seal_by_id(&seal_id)
             .map_err(|error| {
                 AppError::internal(format!("controller Seal ancestry lookup failed: {error}"))
@@ -447,7 +447,7 @@ pub(crate) async fn active_series_pointer_is_current(
                 return Ok(false);
             }
             let Some(authorize) = state
-                .event_query_application()
+                .event_queries()
                 .canonical_event(event_id.as_str())
                 .await
                 .map_err(|error| {
@@ -483,7 +483,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     state: &AppState,
     operation: &arkret_event_draft::Operation,
 ) -> Result<(), &'static str> {
-    if soland_application::operation_semantics::canonical_kind_for_operation(operation)
+    if soland_services::operation_semantics::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
     {
         return Ok(());
@@ -501,7 +501,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     }
     let backup_class = record.backup_class.as_str().to_owned();
     let series_exists = state
-        .key_backup_application()
+        .key_backups()
         .backups_for_actor(record.actor_id.as_str())
         .await
         .map_err(|_| "key_backup_active_series_authority_unavailable")?
@@ -557,7 +557,7 @@ async fn active_series_signature_is_valid(
         return Ok(false);
     };
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("controller device lookup failed: {error}")))?;
@@ -633,7 +633,7 @@ pub(crate) async fn resolve_agent_pcr_for_principal(
     principal_id: &str,
 ) -> Result<Option<String>, AppError> {
     Ok(state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(principal_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR lookup failed: {error}")))?
@@ -658,7 +658,7 @@ pub(crate) async fn managed_agent_record_for_controller_pcr(
     pcr_id: &str,
 ) -> Result<Option<AgentPrincipalRecord>, AppError> {
     let agents = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agents_for_controller(controller_id)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent PCR lookup failed: {error}")))?;
@@ -691,7 +691,7 @@ pub(crate) async fn managed_agent_event_seal_head(
     let realm_id = RealmId::new(pcr_id.to_owned())
         .map_err(|error| AppError::internal(format!("stored Agent PCR id invalid: {error}")))?;
     let events = state
-        .event_query_application()
+        .event_queries()
         .accepted_events()
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR event lookup failed: {error}")))?;
@@ -766,7 +766,7 @@ async fn validate_active_agent_accountability(
         accepted_at,
     };
     let active = state
-        .event_query_application()
+        .event_queries()
         .has_active_agent_accountability(&query)
         .await
         .map_err(|error| AppError::internal(format!("accountability lookup failed: {error}")))?;
@@ -977,7 +977,7 @@ async fn current_managed_frontier(
         return Ok(None);
     };
     let commits = state
-        .mls_commit_query_application()
+        .mls_commits()
         .commits()
         .await
         .map_err(|error| AppError::internal(format!("Agent PCR MLS lookup failed: {error}")))?;
@@ -1014,7 +1014,7 @@ async fn managed_agent_record(
     agent_id: &str,
 ) -> Result<AgentPrincipalRecord, AppError> {
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(agent_id)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
@@ -1062,7 +1062,7 @@ async fn agent_did_document_at(
     accepted_at: DateTime<Utc>,
 ) -> Result<Value, AppError> {
     let mut history = state
-        .did_application()
+        .dids()
         .log_events(agent_id)
         .await
         .map_err(|error| AppError::internal(format!("Agent DID history lookup failed: {error}")))?;
@@ -1206,7 +1206,7 @@ async fn validate_current_recovery_recipient(
     evaluated_at: DateTime<Utc>,
 ) -> Result<(), AppError> {
     let policy = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(backup.actor_id.as_str())
         .await
         .map_err(|error| AppError::internal(format!("recovery policy lookup failed: {error}")))?
@@ -1516,3 +1516,4 @@ mod tests {
         ));
     }
 }
+

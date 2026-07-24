@@ -1,6 +1,6 @@
 use arkret_event_draft::Operation;
-use soland_application::events::ProjectedEvent as ProjectionEventRecord;
-use soland_application::operation_semantics as kinds;
+use soland_services::events::ProjectedEvent as ProjectionEventRecord;
+use soland_services::operation_semantics as kinds;
 
 use super::*;
 
@@ -26,3 +26,4 @@ pub fn projection_event_from_operation(
         received_at: now(),
     }
 }
+

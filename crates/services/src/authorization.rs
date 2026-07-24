@@ -59,11 +59,11 @@ pub trait AuthorizationPort: Send + Sync {
 }
 
 #[derive(Clone)]
-pub struct AuthorizationApplicationService {
+pub struct AuthorizationService {
     port: Arc<dyn AuthorizationPort>,
 }
 
-impl AuthorizationApplicationService {
+impl AuthorizationService {
     pub fn new(port: Arc<dyn AuthorizationPort>) -> Self {
         Self { port }
     }
@@ -113,3 +113,4 @@ impl AuthorizationApplicationService {
         self.port.grants_snapshot()
     }
 }
+

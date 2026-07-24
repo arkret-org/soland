@@ -582,7 +582,7 @@ pub(crate) async fn event_view_for_state(
     session: &SessionRecord,
 ) -> JsonResult<EventView> {
     let mut receipts = state
-        .event_query_application()
+        .event_queries()
         .canonical_batch_receipts_for_event(&record.event_id)
         .await
         .map_err(|error| AppError::internal(format!("Event Batch Receipt lookup failed: {error}")))?
@@ -617,7 +617,7 @@ pub(crate) fn sdk_event_for_state(
 
 fn sdk_event_from_record(
     record: &CanonicalEventRecord,
-    tombstone: Option<soland_application::governance::RetentionTombstoneRecord>,
+    tombstone: Option<soland_services::governance::RetentionTombstoneRecord>,
 ) -> Result<Event, AppError> {
     let object = record
         .envelope
@@ -1040,7 +1040,7 @@ fn circle_event_visible_to_session(
         return true;
     }
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .circle_scope_visible_to_actor_at(&scope_circle_id, &session.actor, record.received_at)
 }
@@ -1067,7 +1067,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     // `ak.component.realm.read_receipt_policy.v1` along with the event
     // kind.)
     {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let cell_id = arkret_identifiers::CellRef::new(format!(
             "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
         ))
@@ -1080,7 +1080,7 @@ pub async fn effective_read_receipt_policy_for_realm(
     // boot before the projection has been rehydrated, or when a server is
     // running with persistence disabled.
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .ok()?;
@@ -1152,3 +1152,4 @@ mod refs_limit_tests {
         assert_eq!(out, vec!["ak:event:e1".to_owned()]);
     }
 }
+

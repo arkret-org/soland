@@ -4,8 +4,8 @@ use std::sync::Arc;
 use arkret_identifiers::RealmId;
 use soland_storage::{PersistenceResult, PersistenceStore};
 
-use crate::authorization::AuthorizationApplicationService;
-use crate::delivery::{DeliveryApplicationService, ObjectStoragePort};
+use crate::authorization::AuthorizationService;
+use crate::delivery::{DeliveryService, ObjectStoragePort};
 use crate::events::RealmDirectoryIndex;
 use crate::governance::{AdminSigningKeyPort, RuntimeSettingsPort};
 use crate::hydration::{
@@ -17,18 +17,18 @@ use crate::identity::{
     ServiceRegistrationCommitResult,
 };
 use crate::jobs::RuntimeHealthPort;
-use crate::join_applications::JoinApplicationApplicationService;
-use crate::persistence_delivery::build_persistence_delivery_application;
+use crate::join_applications::JoinApplicationService;
+use crate::persistence_delivery::build_persistence_delivery_service;
 use crate::persistence_events::{
-    PersistenceEventApplications, build_persistence_event_applications,
+    PersistenceEventServices, build_persistence_event_services,
 };
 use crate::persistence_identity::{
-    PersistenceIdentityApplications, build_persistence_identity_applications,
+    PersistenceIdentityServices, build_persistence_identity_services,
 };
 use crate::persistence_operations::{
-    PersistenceOperationalApplications, build_persistence_operational_applications,
+    PersistenceOperationalServices, build_persistence_operational_services,
 };
-use crate::projection::ProjectionApplicationService;
+use crate::projection::ProjectionService;
 
 #[doc(hidden)]
 pub type TestPersistenceStore = dyn PersistenceStore;
@@ -44,7 +44,7 @@ pub struct PersistenceHandle {
 impl PersistenceHandle {
     pub async fn stored_service_identity(
         &self,
-    ) -> crate::ApplicationResult<Option<arkret_identity::service_identity::StoredServiceIdentity>>
+    ) -> crate::ServiceResult<Option<arkret_identity::service_identity::StoredServiceIdentity>>
     {
         Ok(self.persistence.service_identity().get().await?)
     }
@@ -52,7 +52,7 @@ impl PersistenceHandle {
     pub async fn store_service_identity(
         &self,
         identity: arkret_identity::service_identity::StoredServiceIdentity,
-    ) -> crate::ApplicationResult<()> {
+    ) -> crate::ServiceResult<()> {
         self.persistence.service_identity().put(identity).await?;
         Ok(())
     }
@@ -60,7 +60,7 @@ impl PersistenceHandle {
     pub async fn service_registration(
         &self,
         key: &arkret_models_identity::service_identity::ServiceRegistrationKey,
-    ) -> crate::ApplicationResult<
+    ) -> crate::ServiceResult<
         Option<arkret_models_identity::service_identity::ServiceRegistrationOutcome>,
     > {
         Ok(self
@@ -70,7 +70,7 @@ impl PersistenceHandle {
             .await?)
     }
 
-    pub async fn webvh_history(&self, did: &str) -> crate::ApplicationResult<Vec<DidLogEvent>> {
+    pub async fn webvh_history(&self, did: &str) -> crate::ServiceResult<Vec<DidLogEvent>> {
         Ok(self
             .persistence
             .webvh()
@@ -93,7 +93,7 @@ impl PersistenceHandle {
         outcome: arkret_models_identity::service_identity::ServiceRegistrationOutcome,
         document: DidDocumentState,
         event: DidLogEvent,
-    ) -> crate::ApplicationResult<ServiceRegistrationCommitResult> {
+    ) -> crate::ServiceResult<ServiceRegistrationCommitResult> {
         let document = soland_storage::WebvhDocumentRecord {
             did: document.did,
             did_document: document.did_document,
@@ -131,7 +131,7 @@ impl PersistenceHandle {
         )
     }
 
-    pub async fn seed_demo_identity(&self) -> crate::ApplicationResult<()> {
+    pub async fn seed_demo_identity(&self) -> crate::ServiceResult<()> {
         let now = chrono::Utc::now();
         let account = soland_storage::AccountRecord {
             id: "ak:account:0196419b-0000-7000-8000-000000000001".to_owned(),
@@ -186,40 +186,40 @@ impl PersistenceHandle {
         Self { persistence }
     }
 
-    pub fn event_applications(
+    pub fn event_services(
         &self,
         projected_operations: Arc<dyn crate::events::ProjectedOperationPersistencePort>,
-    ) -> PersistenceEventApplications {
-        build_persistence_event_applications(self.persistence.clone(), projected_operations)
+    ) -> PersistenceEventServices {
+        build_persistence_event_services(self.persistence.clone(), projected_operations)
     }
 
-    pub fn delivery_application(
+    pub fn delivery_service(
         &self,
         object_storage: Arc<dyn ObjectStoragePort>,
         push_target_hmac_key: [u8; 32],
-    ) -> DeliveryApplicationService {
-        build_persistence_delivery_application(
+    ) -> DeliveryService {
+        build_persistence_delivery_service(
             self.persistence.clone(),
             object_storage,
             push_target_hmac_key,
         )
     }
 
-    pub fn identity_applications(
+    pub fn identity_services(
         &self,
         did_resolver: Arc<dyn DidResolverPort>,
-    ) -> PersistenceIdentityApplications {
-        build_persistence_identity_applications(self.persistence.clone(), did_resolver)
+    ) -> PersistenceIdentityServices {
+        build_persistence_identity_services(self.persistence.clone(), did_resolver)
     }
 
-    pub fn operational_applications(
+    pub fn operational_services(
         &self,
         admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
         runtime_settings: Arc<dyn RuntimeSettingsPort>,
         runtime_health: Arc<dyn RuntimeHealthPort>,
         sync_cursor_hmac_key: [u8; 32],
-    ) -> PersistenceOperationalApplications {
-        build_persistence_operational_applications(
+    ) -> PersistenceOperationalServices {
+        build_persistence_operational_services(
             self.persistence.clone(),
             admin_signing_keys,
             runtime_settings,
@@ -228,8 +228,8 @@ impl PersistenceHandle {
         )
     }
 
-    pub fn join_application_service(&self) -> JoinApplicationApplicationService {
-        JoinApplicationApplicationService::new(self.persistence.clone())
+    pub fn join_application_service(&self) -> JoinApplicationService {
+        JoinApplicationService::new(self.persistence.clone())
     }
 
     pub async fn hydrate_realm_directory(&self, local_service_id: &str) -> RealmDirectoryIndex {
@@ -249,8 +249,8 @@ impl PersistenceHandle {
 
     pub async fn hydrate_projection(
         &self,
-        projection: &ProjectionApplicationService,
-        authorization: &AuthorizationApplicationService,
+        projection: &ProjectionService,
+        authorization: &AuthorizationService,
         projection_adapter: &dyn HydrationProjectionAdapter,
         realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
@@ -269,3 +269,4 @@ impl PersistenceHandle {
         self.persistence.clone()
     }
 }
+

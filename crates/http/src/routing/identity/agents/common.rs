@@ -75,7 +75,7 @@ pub(super) async fn require_agent_controller(
 ) -> Result<AgentPrincipalRecord, AppError> {
     validate_agent_id(agent_id)?;
     let record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(agent_id)
         .await
         .map_err(|err| AppError::internal(format!("agent controller lookup failed: {err}")))?
@@ -758,7 +758,7 @@ fn active_agent_key_authorizations(
     AppError,
 > {
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .active_agent_key_authorizations(agent_id)
         .into_iter()

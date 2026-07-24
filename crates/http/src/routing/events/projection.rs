@@ -44,16 +44,16 @@ use invite::*;
 pub use message::*;
 pub use operation_fields::*;
 pub use realm::*;
-pub use soland_application::projection::tombstone::*;
+pub use soland_services::projection::tombstone::*;
 pub use store::*;
 pub use timeline::*;
 
 pub fn retention_tombstone_for_event(
     state: &crate::state::AppState,
     event_id: &str,
-) -> Option<soland_application::governance::RetentionTombstoneRecord> {
+) -> Option<soland_services::governance::RetentionTombstoneRecord> {
     state
-        .governance_application()
+        .governance()
         .cached_retention_tombstone(event_id)
 }
 
@@ -111,7 +111,7 @@ mod tests {
         let created_at = chrono::DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
-        let event = soland_application::events::ProjectedEvent {
+        let event = soland_services::events::ProjectedEvent {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
             realm_id: REALM_ID.to_owned(),
             event_kind: arkret_wire::events::EventKind::STRAND_UPDATE.to_owned(),
@@ -265,3 +265,4 @@ mod tests {
         assert_eq!(operation_realm_title(&operation), Some("Renamed Room"));
     }
 }
+

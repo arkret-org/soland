@@ -129,7 +129,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.realm_invite_application().get(invite_id).await else {
+    let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
         return false;
     };
     if invite.status != "pending" || invite.invitee.as_deref() != Some(actor) {
@@ -164,7 +164,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.realm_invite_application().get(invite_id).await else {
+    let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
         return false;
     };
     if invite.realm_id != realm_id
@@ -203,7 +203,7 @@ pub(super) async fn invite_claim_actor_claims_pending_third_party_invite(
     if crate::ids::parse_typed_uuid(invite_id, "invite").is_none() {
         return false;
     }
-    let Ok(Some(invite)) = state.realm_invite_application().get(invite_id).await else {
+    let Ok(Some(invite)) = state.realm_invites().get(invite_id).await else {
         return false;
     };
     if invite.realm_id != realm_id {
@@ -234,7 +234,7 @@ pub(super) fn realm_exists_in_index(state: &AppState, realm_id: &str) -> bool {
         return false;
     };
     state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .get(&realm_id_typed)
         .is_some()
@@ -349,7 +349,7 @@ pub(super) async fn bootstrap_realm_member_index(
     // (legacy) string array entries.
     plaintext_visible_services.extend(plaintext_visible_service_classes.keys().cloned());
     let minimal_metadata_realm = payload_object.is_some_and(
-        soland_application::operation_semantics::payload_declares_minimal_metadata_realm,
+        soland_services::operation_semantics::payload_declares_minimal_metadata_realm,
     );
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
     entry.description = summary.clone();
@@ -363,8 +363,8 @@ pub(super) async fn bootstrap_realm_member_index(
         .map(ToOwned::to_owned);
     entry.public = discoverability == "public";
     entry.members.insert(actor_typed);
-    state.realm_directory_application().upsert(entry);
-    let meta = soland_application::events::RealmMetadata {
+    state.realm_directory().upsert(entry);
+    let meta = soland_services::events::RealmMetadata {
         owner: actor.to_owned(),
         deleted: false,
         discoverability,
@@ -383,10 +383,11 @@ pub(super) async fn bootstrap_realm_member_index(
         updated_at: super::now(),
     };
     if let Err(error) = state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(realm_id, meta)
         .await
     {
         tracing::error!(%error, %realm_id, "bootstrap_realm_member_index: failed to persist Realm meta record");
     }
 }
+

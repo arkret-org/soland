@@ -163,26 +163,26 @@ async fn get_server_status(
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let account_count = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .map(|items| items.len())
         .ok();
     let device_count = state
-        .identity_application()
+        .identities()
         .devices()
         .await
         .map(|items| items.len())
         .ok();
     let realm_count = state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .search(Default::default())
         .len();
     json_ok(AdminServerStatusOutcome {
         status: "ok".to_owned(),
         service_id: state.service_id().clone(),
-        storage: state.jobs_application().storage_mode().to_owned(),
+        storage: state.jobs().storage_mode().to_owned(),
         development_mode: state.config().development_mode,
         checked_by: session.actor,
         generated_at: arkret_canonical::format_timestamp_canonical(super::now()),
@@ -228,7 +228,7 @@ async fn get_server_stats(
     let _ = require_admin_principal(state, session)?;
 
     let accounts = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .unwrap_or_default();
@@ -238,29 +238,29 @@ async fn get_server_stats(
         .filter(|account| state.account_lifecycle_state(&account.did) == "active")
         .count() as u64;
     let realm_count = state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .search(Default::default())
         .len() as u64;
     let device_count = state
-        .identity_application()
+        .identities()
         .devices()
         .await
         .map(|items| items.len() as u64)
         .unwrap_or(0);
     let report_count = state
-        .governance_application()
+        .governance()
         .moderation_queue_items()
         .await
         .map(|items| items.len() as u64)
         .unwrap_or(0);
     let federation_peer_count = state.settings().federation_peers.len() as u64;
     let applet_count = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.applets.len() as u64
     };
     let blobs = state
-        .delivery_application()
+        .deliveries()
         .blobs()
         .await
         .unwrap_or_default();
@@ -508,7 +508,7 @@ async fn revoke_device(
     let mut target_actor = body.actor.or(body.account_id);
     if target_actor.is_none() {
         target_actor = state
-            .identity_application()
+            .identities()
             .devices()
             .await
             .ok()
@@ -554,7 +554,7 @@ async fn get_moderation_queue(
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
-        .governance_application()
+        .governance()
         .moderation_queue_items()
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;

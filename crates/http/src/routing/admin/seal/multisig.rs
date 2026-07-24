@@ -83,14 +83,14 @@ pub(crate) async fn admin_submit_multisig_partial(
     // row via the notary worker when threshold signing kicks off, but a
     // defaulted row lets the H'9 UI exercise the full path against a fresh
     // seal_id in dev/test without an explicit pre-create dance.
-    let service = state.governance_application();
+    let service = state.governance();
     let mut record = match service
         .multisig_pending(&seal_id_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
         Some(r) => r,
-        None => soland_application::governance::MultisigPendingRecord {
+        None => soland_services::governance::MultisigPendingRecord {
             seal_id: seal_id_str.clone(),
             realm_id: realm_id_str.clone(),
             threshold_k: 1,
@@ -181,7 +181,7 @@ pub(crate) async fn admin_list_multisig_pending(
     })?;
 
     let rows = state
-        .governance_application()
+        .governance()
         .multisig_pending_for_realm(&realm_id_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -287,7 +287,7 @@ pub(crate) async fn admin_rotate_signing_key(
 /// Errors are intentionally swallowed by the caller (best-effort); the
 /// row stays in the store so a watchdog can retry.
 fn try_aggregate_partials(
-    record: &soland_application::governance::MultisigPendingRecord,
+    record: &soland_services::governance::MultisigPendingRecord,
 ) -> Result<String, String> {
     use base64::Engine;
     use base64::engine::general_purpose::STANDARD;
@@ -330,3 +330,4 @@ fn try_aggregate_partials(
 
     Ok(record.seal_id.clone())
 }
+

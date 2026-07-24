@@ -24,7 +24,8 @@ futures-util.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
-soland-application = { version = "0.3.0", path = "../application" }
+soland-services = { version = "0.3.0", path = "../services" }
 soland-http = { version = "0.3.0", path = "../http", features = ["test-support"] }
 soland-storage = { version = "0.3.0", path = "../storage" }
 soland-storage-memory = { version = "0.3.0", path = "../storage-memory", features = ["fault-injection"] }
+

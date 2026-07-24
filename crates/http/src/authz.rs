@@ -33,7 +33,7 @@ pub use arkret_policy::authz::delegation::{
 };
 use parking_lot::Mutex;
 use serde::Serialize;
-use soland_application::authorization::{AuthorizationApplicationService, AuthorizationDecision};
+use soland_services::authorization::{AuthorizationService, AuthorizationDecision};
 
 use crate::ids;
 
@@ -1071,7 +1071,7 @@ fn capability_action_risk_tier(action: &str) -> Option<arkret_schema::Capability
 
 #[allow(clippy::too_many_arguments)]
 pub async fn check_with_policy_server(
-    engine: &AuthorizationApplicationService,
+    engine: &AuthorizationService,
     actor: &str,
     action: &str,
     resource: &str,
@@ -1080,12 +1080,12 @@ pub async fn check_with_policy_server(
     members: &[String],
     resource_facets: &[String],
     policy_client: Option<&policy_client::PolicyClient>,
-    realm_config: Option<soland_application::authorization::RealmPolicyServerConfig>,
+    realm_config: Option<soland_services::authorization::RealmPolicyServerConfig>,
     policy_request: Option<policy_client::PolicyCheckRequestInput>,
     request_ctx: &mut obligation_executor::RequestContext,
 ) -> MergedAuthzDecision {
     // Step 1 — local capability check (existing behaviour).
-    let local = engine.check(soland_application::authorization::AuthorizationCheck {
+    let local = engine.check(soland_services::authorization::AuthorizationCheck {
         actor,
         action,
         resource,
@@ -1547,3 +1547,5 @@ mod tests {
         assert_eq!(result.reason, "capability_denied");
     }
 }
+
+

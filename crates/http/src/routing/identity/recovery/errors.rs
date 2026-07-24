@@ -14,25 +14,25 @@ pub(super) fn recovery_session_store_error(error: PersistenceError) -> AppError 
 
 pub(super) fn recovery_store_error(error: PersistenceError) -> AppError {
     match error.kind() {
-        soland_application::ApplicationErrorKind::Conflict => AppError::conflict(error.detail()),
-        soland_application::ApplicationErrorKind::NotFound => AppError::not_found(error.detail()),
-        soland_application::ApplicationErrorKind::Database => AppError::internal(format!(
+        soland_services::ServiceErrorKind::Conflict => AppError::conflict(error.detail()),
+        soland_services::ServiceErrorKind::NotFound => AppError::not_found(error.detail()),
+        soland_services::ServiceErrorKind::Database => AppError::internal(format!(
             "recovery persistence database error: {}",
             error.detail()
         )),
-        soland_application::ApplicationErrorKind::SchemaViolation => {
+        soland_services::ServiceErrorKind::SchemaViolation => {
             AppError::invalid_param(error.detail()).with_wire_code("schema_violation")
         }
-        soland_application::ApplicationErrorKind::Internal => AppError::internal(error.detail()),
+        soland_services::ServiceErrorKind::Internal => AppError::internal(error.detail()),
     }
 }
 
-pub(super) fn recovery_application_error(error: soland_application::ApplicationError) -> AppError {
+pub(super) fn recovery_service_error(error: soland_services::ServiceError) -> AppError {
     recovery_store_error(error)
 }
 
-pub(super) fn recovery_policy_application_error(
-    error: soland_application::ApplicationError,
+pub(super) fn recovery_policy_service_error(
+    error: soland_services::ServiceError,
 ) -> AppError {
     recovery_policy_store_error(error)
 }
@@ -61,3 +61,4 @@ pub(super) fn recovery_receipt_store_error(error: PersistenceError) -> AppError 
         AppError::conflict(error.detail()).with_wire_code("recovery_receipt_conflict")
     }
 }
+

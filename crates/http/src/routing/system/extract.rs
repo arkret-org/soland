@@ -3,7 +3,7 @@
 use salvo::extract::{Extractible, Metadata};
 use salvo::http::ParseError;
 use salvo::prelude::{Depot, Request};
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
 
 use super::auth::authenticated_session as authenticated_session_inner;
@@ -50,3 +50,4 @@ impl AuthArgs {
         }
     }
 }
+

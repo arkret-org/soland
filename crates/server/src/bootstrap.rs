@@ -24,11 +24,11 @@ use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use soland_application::identity::{
+use soland_services::identity::{
     DidDocumentState as WebvhDocumentRecord, DidLogEvent as WebvhLogRecord,
     ServiceRegistrationCommitResult as ServiceRegistrationCommitOutcome,
 };
-use soland_application::persistence::PersistenceHandle;
+use soland_services::persistence::PersistenceHandle;
 use soland_http::config::AppConfig;
 use soland_http::webvh_validation::{
     WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
@@ -1693,3 +1693,4 @@ mod tests {
         );
     }
 }
+

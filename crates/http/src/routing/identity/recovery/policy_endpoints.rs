@@ -26,7 +26,7 @@ pub(super) async fn resolve_recovery_read_principal(
 }
 
 pub(super) fn recovery_policy_summary(
-    record: &soland_application::identity::RecoveryPolicyState,
+    record: &soland_services::identity::RecoveryPolicyState,
 ) -> Value {
     json!({
         "policy_id": record.policy_id,
@@ -43,7 +43,7 @@ pub(super) fn recovery_policy_summary(
 }
 
 pub(super) fn typed_recovery_policy_summary(
-    record: &soland_application::identity::RecoveryPolicyState,
+    record: &soland_services::identity::RecoveryPolicyState,
 ) -> Result<RecoveryPolicySummary, AppError> {
     serde_json::from_value(recovery_policy_summary(record))
         .map_err(|error| stored_recovery_type_error("policy summary", error))
@@ -51,8 +51,8 @@ pub(super) fn typed_recovery_policy_summary(
 
 fn application_recovery_policy(
     record: RecoveryPolicyRecord,
-) -> soland_application::identity::RecoveryPolicyState {
-    soland_application::identity::RecoveryPolicyState {
+) -> soland_services::identity::RecoveryPolicyState {
+    soland_services::identity::RecoveryPolicyState {
         policy_id: record.policy_id,
         principal_id: record.principal_id,
         version: record.version,
@@ -68,7 +68,7 @@ fn application_recovery_policy(
 }
 
 fn persistence_recovery_policy(
-    policy: soland_application::identity::RecoveryPolicyState,
+    policy: soland_services::identity::RecoveryPolicyState,
 ) -> RecoveryPolicyRecord {
     RecoveryPolicyRecord {
         policy_id: policy.policy_id,
@@ -109,10 +109,10 @@ pub(super) async fn recovery_policy_get(
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let active = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(&principal)
         .await
-        .map_err(recovery_application_error)?;
+        .map_err(recovery_service_error)?;
     let active_policy = active
         .as_ref()
         .map(typed_recovery_policy_summary)
@@ -145,10 +145,10 @@ pub(super) async fn recovery_policies_get(
     let principal =
         resolve_recovery_read_principal(&aa, state, req, principal_id.into_inner()).await?;
     let policies = state
-        .recovery_policy_application()
+        .recovery_policies()
         .policy_history(&principal)
         .await
-        .map_err(recovery_application_error)?;
+        .map_err(recovery_service_error)?;
     let policies = policies
         .iter()
         .map(typed_recovery_policy_summary)
@@ -183,10 +183,10 @@ pub(super) async fn recovery_policy_put(
         .with_wire_code("recovery_principal_isolation"));
     }
     let existing = state
-        .recovery_policy_application()
+        .recovery_policies()
         .active_policy(&record.principal_id)
         .await
-        .map_err(recovery_application_error)?;
+        .map_err(recovery_service_error)?;
     let existing_record = existing.clone().map(persistence_recovery_policy);
 
     verify_recovery_policy_auth_signature(
@@ -205,17 +205,17 @@ pub(super) async fn recovery_policy_put(
     let accepted_at = chrono::Utc::now();
     record.accepted_at = accepted_at;
     let publish_result = state
-        .recovery_policy_application()
-        .publish_policy(soland_application::identity::PublishRecoveryPolicyCommand {
+        .recovery_policies()
+        .publish_policy(soland_services::identity::PublishRecoveryPolicyCommand {
             policy: application_recovery_policy(record),
         })
         .await
-        .map_err(recovery_policy_application_error)?;
+        .map_err(recovery_policy_service_error)?;
     let record = match publish_result {
-        soland_application::identity::PublishRecoveryPolicyResult::Accepted(policy) => {
+        soland_services::identity::PublishRecoveryPolicyResult::Accepted(policy) => {
             persistence_recovery_policy(policy)
         }
-        soland_application::identity::PublishRecoveryPolicyResult::GenesisVersionInvalid {
+        soland_services::identity::PublishRecoveryPolicyResult::GenesisVersionInvalid {
             actual,
         } => {
             return Err(AppError::invalid_param(format!(
@@ -223,7 +223,7 @@ pub(super) async fn recovery_policy_put(
             ))
             .with_wire_code("recovery_policy_genesis_not_v1"));
         }
-        soland_application::identity::PublishRecoveryPolicyResult::VersionNotMonotonic {
+        soland_services::identity::PublishRecoveryPolicyResult::VersionNotMonotonic {
             actual,
             current,
         } => {
@@ -232,7 +232,7 @@ pub(super) async fn recovery_policy_put(
             ))
             .with_wire_code("recovery_policy_version_not_monotonic"));
         }
-        soland_application::identity::PublishRecoveryPolicyResult::SupersedesInvalid {
+        soland_services::identity::PublishRecoveryPolicyResult::SupersedesInvalid {
             actual,
             current_policy_id,
         } => {
@@ -269,3 +269,4 @@ pub(super) async fn recovery_policy_put(
     };
     json_ok(outcome)
 }
+

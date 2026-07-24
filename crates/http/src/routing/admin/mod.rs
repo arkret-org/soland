@@ -20,7 +20,7 @@ mod settings;
 
 use audit::append_audit_log;
 pub(super) use introspect::{introspect_admin_scopes, require_admin_scope};
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util;
 
@@ -229,3 +229,4 @@ pub fn admin_router() -> Router {
         // `/_soland/self/audit/*` instead of a second mount of this tree).
         .push(audit::ops_router())
 }
+

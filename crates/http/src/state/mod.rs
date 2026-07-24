@@ -8,7 +8,7 @@ mod app_state;
 mod member_identity;
 mod notification;
 
-pub use app_state::{AppState, AppStateRuntime, build_realm_directory_application, getrandom_seed};
+pub use app_state::{AppState, AppStateRuntime, build_realm_directory, getrandom_seed};
 pub(crate) use member_identity::{
     HandleClaimDigestInput, HandleClaimEvidenceRecord, MemberIdentityEventRecord,
     MemberIdentityReplacementEdge, MemberIdentitySnapshot, MemberIdentitySubjectKey,
@@ -17,6 +17,7 @@ pub(crate) use member_identity::{
 pub use notification::{
     EventBroadcast, EventNotification, EventNotificationKind, EventNotificationRelay, Mutex,
 };
-pub use soland_application::events::{
+pub use soland_services::events::{
     RealmDirectoryEntry, RealmDirectoryIndex, RealmDirectoryQuery,
 };
+

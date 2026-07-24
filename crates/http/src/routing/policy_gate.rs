@@ -6,7 +6,7 @@ use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_identity::{DidDocument, DidResolver};
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
-use soland_application::operation_semantics as kinds;
+use soland_services::operation_semantics as kinds;
 
 use crate::authz::obligation_executor::{ObligationError, RequestContext};
 use crate::authz::policy_client::{PolicyCheckRequestInput, PolicyClient, PolicyFrontierSnapshot};
@@ -47,7 +47,7 @@ impl PolicyGateRejection {
 
 #[derive(Clone)]
 struct SharedDidResolver {
-    inner: Arc<dyn soland_application::identity::DidResolverPort>,
+    inner: Arc<dyn soland_services::identity::DidResolverPort>,
 }
 
 impl DidResolver for SharedDidResolver {
@@ -68,7 +68,7 @@ pub(crate) async fn enforce_operation_policy_server(
 ) -> Result<(), PolicyGateRejection> {
     let realm_id = operation.realm_id.as_str();
     let realm_config = state
-        .projection_application()
+        .projections()
         .realm_policy_server_config(realm_id)
         .map(|view| view.config);
     let Some(realm_config) = realm_config else {
@@ -96,7 +96,7 @@ pub(crate) async fn enforce_operation_policy_server(
     };
 
     let decision = check_with_policy_server(
-        state.authorization_application(),
+        state.authorization(),
         actor_id,
         &action,
         &resource,
@@ -164,7 +164,7 @@ fn policy_client_for_state(state: &AppState) -> Result<PolicyClient, PolicyGateR
             state.config().development_mode,
         ))
         .with_policy_did_resolver(Arc::new(SharedDidResolver {
-            inner: state.did_application().shared_resolver(),
+            inner: state.dids().shared_resolver(),
         })))
 }
 
@@ -198,7 +198,7 @@ async fn policy_request_for_operation(
         }
     };
     let mut policy_doc_ids = state
-        .governance_application()
+        .governance()
         .active_policy_documents()
         .await
         .map_err(|error| PolicyGateRejection::internal(format!("policy documents: {error}")))?
@@ -288,7 +288,7 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
-    let realms = state.realm_directory_application().snapshot();
+    let realms = state.realm_directory().snapshot();
     match realms.get(&realm_id_typed) {
         Some(space) => space
             .members
@@ -298,3 +298,4 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
         None => Vec::new(),
     }
 }
+

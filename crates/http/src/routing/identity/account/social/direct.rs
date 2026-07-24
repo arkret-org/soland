@@ -27,15 +27,15 @@ pub(crate) async fn ensure_direct_peer_resolvable(
     peer: &str,
 ) -> Result<(), AppError> {
     let account = state
-        .identity_application()
-        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+        .identities()
+        .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
             actor_id: peer.to_owned(),
         })
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     if account.is_none() {
         let managed_agent = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agent(peer)
             .await
             .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?;
@@ -64,7 +64,7 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         )
     })?;
     let has_cross_signing_control = state
-        .identity_application()
+        .identities()
         .current_cross_signing(&peer_did)
         .is_some();
     if !has_cross_signing_control {
@@ -128,7 +128,7 @@ pub(crate) fn active_direct_binding(
     pair_key: &str,
 ) -> Option<DirectConversationBindingRecord> {
     let binding = state
-        .contact_application()
+        .contacts()
         .direct_binding(pair_key)
         .filter(|binding| {
             binding.state == "active" && valid_contact_event_ref(&binding.binding_event_ref)
@@ -143,7 +143,7 @@ pub(crate) fn direct_binding_matches_projection(
     if binding.participants_unordered.len() != 2 {
         return false;
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     if !projection.realm_is_direct_conversation(&binding.realm_id)
         || projection.realm_is_destroyed(&binding.realm_id)
         || projection.realm_is_tombstoned(&binding.realm_id)
@@ -183,7 +183,7 @@ pub(crate) async fn retire_direct_bindings_for_operation(
     state: &AppState,
     operation: &arkret_event_draft::Operation,
 ) {
-    let kind = soland_application::operation_semantics::canonical_kind_for_operation(operation);
+    let kind = soland_services::operation_semantics::canonical_kind_for_operation(operation);
     let member_ended = kind == Some(arkret_wire::events::EventKind::MEMBER_STATE)
         && matches!(
             operation.payload.get("membership").and_then(Value::as_str),
@@ -205,7 +205,7 @@ pub(crate) async fn retire_direct_bindings_for_operation(
     let member = member_ended
         .then(|| crate::routing::events::operations::membership_target(operation))
         .flatten();
-    let retired = state.contact_application().retire_affected_direct_bindings(
+    let retired = state.contacts().retire_affected_direct_bindings(
         operation.realm_id.as_str(),
         member,
         archived_strand,
@@ -214,7 +214,7 @@ pub(crate) async fn retire_direct_bindings_for_operation(
     );
     for (pair_key, binding) in retired {
         if let Err(error) = state
-            .contact_application()
+            .contacts()
             .save_direct_binding(&pair_key, binding)
             .await
         {
@@ -243,7 +243,7 @@ pub(crate) async fn validate_direct_binding_operation(
     state: &AppState,
     operation: &arkret_event_draft::Operation,
 ) -> Result<(), &'static str> {
-    if soland_application::operation_semantics::canonical_kind_for_operation(operation)
+    if soland_services::operation_semantics::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND)
     {
         return Ok(());
@@ -274,7 +274,7 @@ pub(crate) async fn validate_direct_binding_operation(
             .as_ref()
             .ok_or("direct_conversation_binding_invalid")?;
         let current = state
-            .contact_application()
+            .contacts()
             .direct_binding(payload.pair_key.as_str())
             .ok_or("direct_conversation_binding_invalid")?;
         return (current.binding_event_ref == supersedes.as_str())
@@ -311,7 +311,7 @@ pub(crate) async fn validate_direct_binding_operation(
         let left = payload.participants_unordered[0].as_str();
         let right = payload.participants_unordered[1].as_str();
         let contact = state
-            .contact_application()
+            .contacts()
             .contact_any(left, right)
             .await
             .map_err(|_| "direct_conversation_binding_invalid")?
@@ -339,7 +339,7 @@ async fn accepted_direct_event(
     kind: &str,
 ) -> Result<arkret_wire::Event, &'static str> {
     let accepted = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(event_id.as_str())
         .await
         .map_err(|_| "direct_conversation_binding_invalid")?
@@ -361,7 +361,7 @@ async fn validate_direct_binding_event_refs(
     let mut peer_member_ref = None;
     for event_id in &payload.member_event_refs {
         let accepted = state
-            .event_query_application()
+            .event_queries()
             .accepted_event(event_id.as_str())
             .await
             .map_err(|_| "direct_conversation_binding_invalid")?
@@ -427,7 +427,7 @@ async fn validate_direct_binding_event_refs(
     let mut authorization_kinds = BTreeSet::new();
     for event_ref in &payload.authorization_basis.event_refs {
         let accepted = state
-            .event_query_application()
+            .event_queries()
             .accepted_event(event_ref.as_str())
             .await
             .map_err(|_| "direct_conversation_binding_invalid")?
@@ -456,7 +456,7 @@ async fn validate_direct_binding_event_refs(
                 return Err("direct_conversation_binding_invalid");
             }
             let record = state
-                .agent_pairing_application()
+                .agent_pairings()
                 .agent(peer)
                 .await
                 .map_err(|_| "direct_conversation_binding_invalid")?
@@ -599,7 +599,7 @@ pub(crate) async fn project_canonical_direct_binding(
     state: &AppState,
     operation: &arkret_event_draft::Operation,
 ) {
-    if soland_application::operation_semantics::canonical_kind_for_operation(operation)
+    if soland_services::operation_semantics::canonical_kind_for_operation(operation)
         != Some(arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND)
     {
         return;
@@ -622,12 +622,12 @@ pub(crate) async fn project_canonical_direct_binding(
             .as_ref()
             .and_then(|supersedes| {
                 state
-                    .contact_application()
+                    .contacts()
                     .retire_direct_binding_if_current(&pair_key, supersedes.as_str(), now())
             });
         if let Some(binding) = retired
             && let Err(error) = state
-                .contact_application()
+                .contacts()
                 .save_direct_binding(&pair_key, binding)
                 .await
         {
@@ -643,13 +643,13 @@ pub(crate) async fn project_canonical_direct_binding(
     if incoming_digest.is_empty() {
         return;
     }
-    let current = state.contact_application().direct_binding(&pair_key);
+    let current = state.contacts().direct_binding(&pair_key);
     if let Some(current) = current.as_ref()
         && current.binding_event_ref != event_ref
         && direct_binding_matches_projection(state, current)
     {
         let current_digest = state
-            .event_query_application()
+            .event_queries()
             .accepted_event(&current.binding_event_ref)
             .await
             .ok()
@@ -677,7 +677,7 @@ pub(crate) async fn project_canonical_direct_binding(
         updated_at: now(),
     };
     if let Err(error) = state
-        .contact_application()
+        .contacts()
         .save_direct_binding(&pair_key, binding.clone())
         .await
     {
@@ -698,8 +698,8 @@ pub(crate) async fn project_canonical_direct_binding(
         return;
     };
     let is_local_issuer = state
-        .identity_application()
-        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+        .identities()
+        .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
             actor_id: issuer.clone(),
         })
         .await
@@ -718,7 +718,7 @@ pub(crate) async fn project_canonical_direct_binding(
         return;
     };
     let Ok(Some(contact)) = state
-        .contact_application()
+        .contacts()
         .contact_any(&issuer, &peer)
         .await
     else {
@@ -728,7 +728,7 @@ pub(crate) async fn project_canonical_direct_binding(
         return;
     };
     let Ok(Some(record)) = state
-        .event_query_application()
+        .event_queries()
         .accepted_event(&event_ref)
         .await
     else {
@@ -810,7 +810,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
             "direct conversation peer service is not configured",
         ));
     }
-    if let Some(existing) = state.contact_application().direct_binding(pair_key)
+    if let Some(existing) = state.contacts().direct_binding(pair_key)
         && existing.state == "authoring_required"
         && let Some(context) = remote_authoring_context(&existing)
     {
@@ -875,7 +875,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
     })?);
     reserved.updated_at = now();
     state
-        .contact_application()
+        .contacts()
         .save_direct_binding(pair_key, reserved.clone())
         .await
         .map_err(|error| AppError::internal(format!("save remote direct reservation: {error}")))?;
@@ -899,7 +899,7 @@ pub(crate) async fn complete_remote_direct_binding_with_realm(
     AppError,
 > {
     let reserved = state
-        .contact_application()
+        .contacts()
         .direct_binding(pair_key)
         .ok_or_else(|| {
             AppError::new(
@@ -967,7 +967,7 @@ pub(crate) fn pending_direct_materialization(
     arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
 )> {
     let binding = state
-        .contact_application()
+        .contacts()
         .direct_binding(pair_key)
         .filter(|binding| binding.state == "authoring_required")?;
     let draft = serde_json::from_value(binding.authoring_context.clone()?).ok()?;
@@ -1054,7 +1054,7 @@ async fn execute_remote_peer_claim(
         })?);
         dispatched.updated_at = now();
         state
-            .contact_application()
+            .contacts()
             .save_direct_binding(pair_key, dispatched.clone())
             .await
             .map_err(|error| {
@@ -1703,7 +1703,7 @@ async fn prepare_reserved_direct_materialization(
     })?);
     staged.updated_at = now();
     state
-        .contact_application()
+        .contacts()
         .save_direct_binding(pair_key, staged.clone())
         .await
         .map_err(|error| AppError::internal(format!("save direct materialization: {error}")))?;
@@ -1739,7 +1739,7 @@ fn unsigned_direct_binding_event(
     payload: Value,
 ) -> Result<arkret_wire::Event, AppError> {
     let realm_id = arkret_identifiers::RealmId::new(
-        soland_application::identity::principal_control_realm_for_did(actor),
+        soland_services::identity::principal_control_realm_for_did(actor),
     )
     .map_err(|error| AppError::internal(format!("direct binding PCR id invalid: {error}")))?;
     let actor_id = arkret_identifiers::Did::new(actor.to_owned())
@@ -1841,7 +1841,7 @@ fn reserve_direct_binding(
     expected_event_ref: Option<&str>,
 ) -> DirectBindingReservation {
     if expected_event_ref.is_none()
-        && let Some(existing) = state.contact_application().direct_binding(pair_key)
+        && let Some(existing) = state.contacts().direct_binding(pair_key)
     {
         if existing.state == "active"
             && valid_contact_event_ref(&existing.binding_event_ref)
@@ -1883,7 +1883,7 @@ fn reserve_direct_binding(
         updated_at: created_at,
     };
     if let Err(current) = state
-        .contact_application()
+        .contacts()
         .replace_direct_binding_if_current(pair_key, expected_event_ref, binding.clone())
     {
         return match current {
@@ -1915,7 +1915,7 @@ pub(super) fn stage_reserved_direct_binding(
     staged.authoring_context = None;
     staged.updated_at = now();
     let still_reserved = state
-        .contact_application()
+        .contacts()
         .direct_binding_is_current(pair_key, &reserved.binding_event_ref);
     if !still_reserved {
         return Err(AppError::new(
@@ -1932,7 +1932,7 @@ pub(super) fn publish_reserved_direct_binding(
     active: &DirectConversationBindingRecord,
 ) -> Result<(), AppError> {
     if state
-        .contact_application()
+        .contacts()
         .replace_direct_binding_if_current(
             pair_key,
             Some(&active.binding_event_ref),
@@ -1965,7 +1965,7 @@ pub(super) async fn wait_for_pending_direct_binding(
             DIRECT_BINDING_PENDING_POLL_DELAY_MS,
         ))
         .await;
-        let observed = state.contact_application().direct_binding(pair_key);
+        let observed = state.contacts().direct_binding(pair_key);
         match observed {
             Some(binding)
                 if binding.binding_event_ref == binding_event_ref && binding.state == "active" =>
@@ -2011,11 +2011,11 @@ pub(super) async fn rollback_reserved_direct_binding(
     reserved: &DirectConversationBindingRecord,
 ) {
     let removed = state
-        .contact_application()
+        .contacts()
         .remove_direct_binding_if_current(pair_key, &reserved.binding_event_ref);
     if removed
         && let Err(error) = state
-            .contact_application()
+            .contacts()
             .delete_direct_binding(pair_key)
             .await
     {
@@ -2273,3 +2273,4 @@ pub(super) fn direct_strand_create_operation(
     operation.created_at = created_at;
     Ok(operation)
 }
+

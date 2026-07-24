@@ -53,8 +53,8 @@ async fn ingest_fresh_webvh_document(state: &AppState, did: &str) {
     let now = chrono::Utc::now();
     let public_key_multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7u8; 32]);
     state
-        .did_application()
-        .store_document(soland_application::identity::DidDocumentState {
+        .dids()
+        .store_document(soland_services::identity::DidDocumentState {
             did: did.to_owned(),
             did_document: json!({
                 "id": did,
@@ -265,10 +265,10 @@ async fn policy_components_media_plaintext_reads_realm_meta() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let now = chrono::Utc::now();
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             realm_id,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -310,10 +310,10 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000002";
     let now = chrono::Utc::now();
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             realm_id,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -718,10 +718,10 @@ async fn applet_registration_requires_realm_admin() {
     let outsider = "did:web:mallory.example";
     let now = chrono::Utc::now();
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             realm_id,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: owner.to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -781,10 +781,10 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000003";
     let now = chrono::Utc::now();
     state
-        .realm_query_application()
+        .realms()
         .store_realm_metadata(
             realm_id,
-            soland_application::events::RealmMetadata {
+            soland_services::events::RealmMetadata {
                 owner: "did:web:alice.example".to_owned(),
                 deleted: false,
                 discoverability: "restricted".to_owned(),
@@ -1108,7 +1108,7 @@ fn event_payload_validator_catalog_covers_active_standard_durable_events() {
         arkret_wire::events::EventKind::RELATION_TOMBSTONE,
     ];
     let catalog = arkret_schema::event_payload_validator_catalog().unwrap();
-    let event_kinds = soland_application::protocol_artifacts::active_durable_event_kinds()
+    let event_kinds = soland_services::protocol_artifacts::active_durable_event_kinds()
         .iter()
         .map(String::as_str)
         .filter(|kind| arkret_wire::events::is_standard_event_kind(kind))
@@ -1556,7 +1556,7 @@ fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_identifiers::Mov
         hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
         kind: arkret_wire::SealKind::Normal,
     };
-    state.projection_application().test_put_seal(&seal).unwrap();
+    state.projections().test_put_seal(&seal).unwrap();
     seal_id.as_str().to_owned()
 }
 
@@ -1636,7 +1636,7 @@ fn insert_historical_data_event_grant(
         issuer_seq: None,
     };
     state
-        .projection_application()
+        .projections()
         .test_append_sealed_effects(
             &realm,
             &seal_id,
@@ -1702,7 +1702,7 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         issuer_seq: None,
     };
     state
-        .projection_application()
+        .projections()
         .test_append_sealed_effects(
             &realm,
             &seal_id,
@@ -1807,7 +1807,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     }
 
     state
-        .projection_application()
+        .projections()
         .test_append_sealed_effects(&realm, &seal_id, &ops)
         .unwrap();
     insert_data_event_seal(state, move_ids)
@@ -1970,7 +1970,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
     let grant_id = "ak:grant:01904100-0000-7000-8000-000000000115";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
     state
-        .authorization_application()
+        .authorization()
         .upsert_projected_grant(data_event_grant(grant_id, "ak.message.create", true));
     let object = data_event_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
@@ -2058,8 +2058,8 @@ async fn ingest_principal_with_enrollment_authority(
 ) {
     let now = chrono::Utc::now();
     state
-        .did_application()
-        .store_document(soland_application::identity::DidDocumentState {
+        .dids()
+        .store_document(soland_services::identity::DidDocumentState {
             did: principal_did.to_owned(),
             did_document: json!({
                 "id": principal_did,
@@ -2229,3 +2229,4 @@ async fn non_enrollment_device_authorize_passes_through_gate() {
         .await
         .expect("non-enrollment device.authorize must pass through this gate");
 }
+

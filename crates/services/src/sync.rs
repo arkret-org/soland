@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct CursorState {
@@ -35,33 +35,33 @@ pub struct CursorRevocationState {
 
 #[async_trait]
 pub trait CursorStorePort: Send + Sync {
-    async fn get(&self, handle: &str) -> ApplicationResult<Option<CursorState>>;
-    async fn upsert(&self, record: &CursorState) -> ApplicationResult<()>;
-    async fn delete(&self, handle: &str) -> ApplicationResult<bool>;
+    async fn get(&self, handle: &str) -> ServiceResult<Option<CursorState>>;
+    async fn upsert(&self, record: &CursorState) -> ServiceResult<()>;
+    async fn delete(&self, handle: &str) -> ServiceResult<bool>;
     async fn prune_stream_superseded(
         &self,
         principal_id: &str,
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
-    ) -> ApplicationResult<usize>;
-    async fn prune_expired(&self, now_ms: i64) -> ApplicationResult<usize>;
-    async fn record_revocation(&self, record: &CursorRevocationState) -> ApplicationResult<()>;
+    ) -> ServiceResult<usize>;
+    async fn prune_expired(&self, now_ms: i64) -> ServiceResult<usize>;
+    async fn record_revocation(&self, record: &CursorRevocationState) -> ServiceResult<()>;
     async fn active_revocations(
         &self,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Vec<CursorRevocationState>>;
+    ) -> ServiceResult<Vec<CursorRevocationState>>;
 }
 
 #[derive(Clone)]
-pub struct SyncApplicationService {
+pub struct SyncService {
     cursors: Arc<dyn CursorStorePort>,
     cursor_hmac_key: [u8; 32],
     reconnect_deadlines: Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>,
     cursor_revocations: Arc<Mutex<Vec<CursorRevocationState>>>,
 }
 
-impl SyncApplicationService {
+impl SyncService {
     pub fn new(cursors: Arc<dyn CursorStorePort>, cursor_hmac_key: [u8; 32]) -> Self {
         Self {
             cursors,
@@ -126,15 +126,15 @@ impl SyncApplicationService {
         self.cursor_revocations.lock().len()
     }
 
-    pub async fn cursor(&self, handle: &str) -> ApplicationResult<Option<CursorState>> {
+    pub async fn cursor(&self, handle: &str) -> ServiceResult<Option<CursorState>> {
         self.cursors.get(handle).await
     }
 
-    pub async fn upsert_cursor(&self, record: &CursorState) -> ApplicationResult<()> {
+    pub async fn upsert_cursor(&self, record: &CursorState) -> ServiceResult<()> {
         self.cursors.upsert(record).await
     }
 
-    pub async fn delete_cursor(&self, handle: &str) -> ApplicationResult<bool> {
+    pub async fn delete_cursor(&self, handle: &str) -> ServiceResult<bool> {
         self.cursors.delete(handle).await
     }
 
@@ -144,7 +144,7 @@ impl SyncApplicationService {
         device_id: &str,
         filter_digest: &str,
         presented_issued_at_ms: i64,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         self.cursors
             .prune_stream_superseded(
                 principal_id,
@@ -155,21 +155,21 @@ impl SyncApplicationService {
             .await
     }
 
-    pub async fn prune_expired_cursors(&self, now_ms: i64) -> ApplicationResult<usize> {
+    pub async fn prune_expired_cursors(&self, now_ms: i64) -> ServiceResult<usize> {
         self.cursors.prune_expired(now_ms).await
     }
 
     pub async fn record_cursor_revocation(
         &self,
         record: &CursorRevocationState,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.cursors.record_revocation(record).await
     }
 
     pub async fn active_cursor_revocations(
         &self,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Vec<CursorRevocationState>> {
+    ) -> ServiceResult<Vec<CursorRevocationState>> {
         self.cursors.active_revocations(now).await
     }
 }
@@ -185,7 +185,7 @@ mod tests {
 
     #[async_trait]
     impl CursorStorePort for RecordingCursors {
-        async fn get(&self, handle: &str) -> ApplicationResult<Option<CursorState>> {
+        async fn get(&self, handle: &str) -> ServiceResult<Option<CursorState>> {
             Ok(self
                 .0
                 .lock()
@@ -195,12 +195,12 @@ mod tests {
                 .cloned())
         }
 
-        async fn upsert(&self, record: &CursorState) -> ApplicationResult<()> {
+        async fn upsert(&self, record: &CursorState) -> ServiceResult<()> {
             self.0.lock().expect("cursor lock").push(record.clone());
             Ok(())
         }
 
-        async fn delete(&self, handle: &str) -> ApplicationResult<bool> {
+        async fn delete(&self, handle: &str) -> ServiceResult<bool> {
             let mut records = self.0.lock().expect("cursor lock");
             let before = records.len();
             records.retain(|record| record.handle != handle);
@@ -213,25 +213,25 @@ mod tests {
             _device_id: &str,
             _filter_digest: &str,
             _presented_issued_at_ms: i64,
-        ) -> ApplicationResult<usize> {
+        ) -> ServiceResult<usize> {
             Ok(0)
         }
 
-        async fn prune_expired(&self, _now_ms: i64) -> ApplicationResult<usize> {
+        async fn prune_expired(&self, _now_ms: i64) -> ServiceResult<usize> {
             Ok(0)
         }
 
         async fn record_revocation(
             &self,
             _record: &CursorRevocationState,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
 
         async fn active_revocations(
             &self,
             _now: DateTime<Utc>,
-        ) -> ApplicationResult<Vec<CursorRevocationState>> {
+        ) -> ServiceResult<Vec<CursorRevocationState>> {
             Ok(Vec::new())
         }
     }
@@ -239,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn cursor_lifecycle_uses_only_the_cursor_port() {
         let port = Arc::new(RecordingCursors::default());
-        let service = SyncApplicationService::new(port, [0; 32]);
+        let service = SyncService::new(port, [0; 32]);
         let record = CursorState {
             handle: "cursor-handle".to_owned(),
             principal_id: None,
@@ -258,7 +258,7 @@ mod tests {
 
     #[test]
     fn subscribe_reconnect_window_expires() {
-        let service = SyncApplicationService::new(Arc::new(RecordingCursors::default()), [0; 32]);
+        let service = SyncService::new(Arc::new(RecordingCursors::default()), [0; 32]);
         let now = Utc::now();
         let key = "ak.self.events.stream.subscribe|alice|realm-a";
         service.arm_subscribe_reconnect(key.to_owned(), now, 10_000);
@@ -273,3 +273,4 @@ mod tests {
         );
     }
 }
+

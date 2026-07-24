@@ -97,7 +97,7 @@ pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
             pool, fallback,
         ));
     let persistence =
-        soland_application::persistence::PersistenceHandle::from_shared(persistence_store.clone());
+        soland_services::persistence::PersistenceHandle::from_shared(persistence_store.clone());
     let identity = soland_test_support::fixture_service_identity(&config);
     let signing_seed = soland_test_support::fixture_signing_seed(&config, &identity);
     let state = soland::runtime::build_app_state(config, db, persistence, identity, signing_seed)
@@ -1828,3 +1828,4 @@ pub(crate) async fn persist_test_message(
         .unwrap();
     record
 }
+

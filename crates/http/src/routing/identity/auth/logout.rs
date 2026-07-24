@@ -132,7 +132,7 @@ fn auth_error_to_app_error(error: (StatusCode, &'static str, &'static str)) -> A
 async fn dev_mode_local_logout(state: &AppState, token: &str) -> Result<LogoutOutcome, AppError> {
     let token_hash = session_credential_hash(token, state.service_id());
     let revoked_session = state
-        .session_application()
+        .sessions()
         .revoke_session(&token_hash, now())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -308,7 +308,7 @@ async fn revoke_sessions_for_actor_device(
 ) -> Result<usize, AppError> {
     let revoked_at = now();
     state
-        .session_application()
+        .sessions()
         .revoke_actor_device_sessions(actor, device_id, revoked_at)
         .await
         .map_err(|error| AppError::internal(error.to_string()))
@@ -385,7 +385,7 @@ pub(super) async fn session_revoke(
     let revoked_at = now();
     let revoked_count: usize = if body.all_sessions == Some(true) {
         state
-            .session_application()
+            .sessions()
             .revoke_actor_sessions(&session.actor, revoked_at)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -393,7 +393,7 @@ pub(super) async fn session_revoke(
         // Sessions are filtered by the calling actor, so a device owned by
         // another principal can never be revoked through this path.
         state
-            .session_application()
+            .sessions()
             .revoke_actor_device_sessions(&session.actor, target_device_id.as_str(), revoked_at)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -407,7 +407,7 @@ pub(super) async fn session_revoke(
         // device authorization stays untouched per the spec contract.
         usize::from(
             state
-                .session_application()
+                .sessions()
                 .revoke_session(&session.token_hash, revoked_at)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?

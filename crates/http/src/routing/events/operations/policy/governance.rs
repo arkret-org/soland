@@ -95,7 +95,7 @@ pub(super) async fn validate_member_state_policy(
                 )
                 .await
             {
-                return Err(soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND);
+                return Err(soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND);
             }
             return Ok(());
         }
@@ -106,8 +106,8 @@ pub(super) async fn validate_member_state_policy(
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         for action in ["ak.realm.admin", "ak.realm.join.review"] {
             if state
-                .authorization_application()
-                .check(soland_application::authorization::AuthorizationCheck {
+                .authorization()
+                .check(soland_services::authorization::AuthorizationCheck {
                     actor,
                     action,
                     resource: realm_id,
@@ -145,8 +145,8 @@ pub(super) async fn validate_member_state_policy(
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         for action in ["ak.realm.admin", "ak.realm.join.review"] {
             if state
-                .authorization_application()
-                .check(soland_application::authorization::AuthorizationCheck {
+                .authorization()
+                .check(soland_services::authorization::AuthorizationCheck {
                     actor,
                     action,
                     resource: realm_id,
@@ -183,8 +183,8 @@ pub(super) async fn validate_member_state_policy(
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: "ak.realm.admin",
             resource: realm_id,
@@ -204,9 +204,9 @@ async fn native_agent_controlled_by_record(
     state: &AppState,
     agent_id: &str,
     controller_id: &str,
-) -> Option<soland_application::identity::AgentPairingState> {
+) -> Option<soland_services::identity::AgentPairingState> {
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(agent_id)
         .await
         .ok()
@@ -216,7 +216,7 @@ async fn native_agent_controlled_by_record(
 
 async fn realm_member_is_joined(state: &AppState, realm_id: &str, actor_id: &str) -> bool {
     if state
-        .projection_application()
+        .projections()
         .snapshot()
         .member(realm_id, actor_id)
         .is_some_and(|member| member.state == "join")
@@ -233,7 +233,7 @@ async fn has_active_accountability_grant(
 ) -> bool {
     let now = chrono::Utc::now();
     state
-        .event_query_application()
+        .event_queries()
         .accepted_events()
         .await
         .unwrap_or_default()
@@ -261,7 +261,7 @@ async fn native_agent_controlled_by(
     controller_id: &str,
     require_active: bool,
 ) -> bool {
-    let Ok(Some(record)) = state.agent_pairing_application().agent(agent_id).await else {
+    let Ok(Some(record)) = state.agent_pairings().agent(agent_id).await else {
         return false;
     };
     record.controller_id == controller_id && (!require_active || record.state == "active")
@@ -299,8 +299,8 @@ pub(super) async fn validate_set_default_strand_policy(
     // an admin holder need not also hold the narrow set_default_strand action.
     for action in ["ak.realm.set_default_strand", "ak.realm.admin"] {
         if state
-            .authorization_application()
-            .check(soland_application::authorization::AuthorizationCheck {
+            .authorization()
+            .check(soland_services::authorization::AuthorizationCheck {
                 actor,
                 action,
                 resource: realm_id,
@@ -418,8 +418,8 @@ pub(super) async fn validate_realm_organization_policy(
     }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: "ak.realm.admin",
             resource: realm_id,
@@ -507,8 +507,8 @@ pub(super) async fn validate_moderation_event_policy(
     }
     if actions.iter().any(|action| {
         state
-            .authorization_application()
-            .check(soland_application::authorization::AuthorizationCheck {
+            .authorization()
+            .check(soland_services::authorization::AuthorizationCheck {
                 actor,
                 action,
                 resource: realm_id,
@@ -542,8 +542,8 @@ pub(super) async fn validate_call_recording_start_policy(
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action,
             resource: realm_id,
@@ -681,7 +681,7 @@ pub(super) fn moderation_close_is_appellant_withdrawal(
         return false;
     };
     let appellant = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.moderation_appeal_appellant(appeal_id)
     };
     matches!(appellant, Some(appellant) if appellant == actor)
@@ -707,7 +707,7 @@ pub(super) fn direct_conversation_member_state_guard(
         {
             let target = membership_target(operation)?;
             let reserved_participant = state
-                .contact_application()
+                .contacts()
                 .pending_direct_binding_has_participant(operation.realm_id.as_str(), target);
             if reserved_participant {
                 return None;
@@ -736,7 +736,7 @@ pub(super) fn direct_conversation_member_state_guard(
 
 pub(super) fn is_direct_conversation_realm(state: &AppState, realm_id: &str) -> bool {
     state
-        .projection_application()
+        .projections()
         .snapshot()
         .realm_is_direct_conversation(realm_id)
 }
@@ -744,10 +744,11 @@ pub(super) fn is_direct_conversation_realm(state: &AppState, realm_id: &str) -> 
 pub(super) fn active_direct_conversation_binding_for_realm(
     state: &AppState,
     realm_id: &str,
-) -> Option<soland_application::identity::DirectConversationBindingRecord> {
+) -> Option<soland_services::identity::DirectConversationBindingRecord> {
     let binding = state
-        .contact_application()
+        .contacts()
         .active_direct_binding_for_realm(realm_id)?;
     crate::routing::identity::account::direct_binding_matches_projection(state, &binding)
         .then_some(binding)
 }
+

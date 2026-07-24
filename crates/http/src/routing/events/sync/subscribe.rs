@@ -164,7 +164,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // (principal, device, filter) stream. Best-effort.
     if let Some(presented_issued_at_ms) = after_cursor.issued_at_ms {
         let _ = state
-            .sync_application()
+            .sync()
             .prune_superseded_cursors(
                 &session.actor,
                 &session.device_id,
@@ -405,7 +405,7 @@ async fn account_subscribe_notification_should_wake(
             return false;
         }
         return state
-            .identity_application()
+            .identities()
             .account(&session.actor)
             .await
             .ok()
@@ -498,7 +498,7 @@ pub(crate) async fn presence_events_for_actors(
         }
         events.extend(
             state
-                .delivery_application()
+                .deliveries()
                 .presence_for_actor(&actor)
                 .await
                 .unwrap_or_default()

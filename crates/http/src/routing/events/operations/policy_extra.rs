@@ -3,7 +3,7 @@ use arkret_models_collaboration::objects::read_receipts::{
     ReadReceiptPolicy, ReadReceiptPolicyChildViolation,
 };
 use serde_json::Value;
-use soland_application::operation_semantics::poll_id_from_content;
+use soland_services::operation_semantics::poll_id_from_content;
 
 use super::*;
 
@@ -20,7 +20,7 @@ pub(crate) async fn validate_history_visibility_policy(
         return Ok(());
     }
     let Some(meta) = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(operation.realm_id.as_str())
         .await
         .ok()
@@ -140,7 +140,7 @@ async fn intended_history_visibility_for_realm(
         }
     }
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -176,7 +176,7 @@ async fn intended_content_scheme_for_realm(
         }
     }
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.realm_content_scheme(realm_id)
     }
 }
@@ -200,7 +200,7 @@ async fn intended_encryption_profile_for_realm(
         }
     }
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -306,7 +306,7 @@ fn read_receipt_policy_parent_realm_id(
         });
     }
     let policy = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.realm_inheritance_policy(realm_id).cloned()
     }?;
     if !policy
@@ -331,7 +331,7 @@ fn pending_read_receipt_policy_source_realm(
         {
             continue;
         }
-        let policies = soland_application::operation_semantics::inheritance_allowed_policies(
+        let policies = soland_services::operation_semantics::inheritance_allowed_policies(
             &operation.payload,
         );
         if !policies
@@ -385,7 +385,7 @@ fn active_read_receipt_parent_link(
                 .is_some_and(read_receipt_parent_link_kind);
     }
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.realm_links.get(realm_id).cloned()
     }
     .is_some_and(|links| {
@@ -436,7 +436,7 @@ pub(crate) async fn validate_realm_key_share_policy(
         .map(arkret_identifiers::DeviceId::as_str)
         .ok_or("policy_denied")?;
     let Some(meta) = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(operation.realm_id.as_str())
         .await
         .ok()
@@ -466,8 +466,8 @@ pub(crate) async fn validate_realm_key_share_policy(
         return Err("device_revoked");
     }
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: share.recipient_principal_id.to_string(),
             device_id: recipient_device_id.to_owned(),
         })
@@ -570,7 +570,7 @@ fn validate_rrk_targeted_realm_key_share(
     // Snapshot the durability policy off the projection without holding the lock
     // across any await (this function is sync).
     let durability = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.realm_durability_policy(realm_id)?
     };
     if matches!(durability.mode, DurabilityMode::None) {
@@ -627,7 +627,7 @@ async fn realm_key_share_receiver_is_current_member(
     receiver: &str,
 ) -> bool {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         if let Some(member) = projection.member(realm_id, receiver) {
             return member.state == "join";
         }
@@ -641,7 +641,7 @@ fn realm_key_share_receiver_event_state(
     receiver: &str,
 ) -> arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         if let Some(member) = projection.member(realm_id, receiver) {
             return match member.state.as_str() {
                 "join" => arkret_models_collaboration::governance::history_visibility::HistoryReaderEventState::Joined,
@@ -715,7 +715,7 @@ pub(crate) async fn validate_realm_moderation_policy(
 
 pub(crate) async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -739,7 +739,7 @@ pub(crate) fn validate_poll_operation_policy(
     let Some(poll_id) = poll_id_from_content(content) else {
         return Ok(());
     };
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     if projection.poll(&poll_id).is_some_and(|poll| poll.closed) {
         Err("poll_closed")
     } else {
@@ -775,8 +775,8 @@ pub(crate) async fn validate_audience_mention_operation_policy(
         .and_then(Value::as_str)
         .unwrap_or(realm_id);
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    let authz = state.authorization_application().check(
-        soland_application::authorization::AuthorizationCheck {
+    let authz = state.authorization().check(
+        soland_services::authorization::AuthorizationCheck {
             actor,
             action: arkret_wire::CapabilityActionId::MESSAGE_MENTION_BROADCAST,
             resource,
@@ -820,7 +820,7 @@ async fn validate_sidecar_mention_subjects(
         .or_else(|| operation.payload.get("target_ref"))
         .and_then(Value::as_str);
     let Some((controller_id, realm_id)) = strand_id.and_then(|strand_id| {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         let circle_id = projection
             .strands
             .get(strand_id)
@@ -878,14 +878,14 @@ pub(crate) async fn realm_owner_and_members(
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
         .flatten();
     let owner = meta.map(|meta| meta.owner);
     let members = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         arkret_identifiers::RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id))
@@ -921,7 +921,7 @@ pub(crate) async fn effective_audience_mention_policy_for_realm(
     realm_id: &str,
 ) -> Option<Value> {
     let events = state
-        .event_query_application()
+        .event_queries()
         .realm_events_newest_first(realm_id)
         .await
         .ok()?;
@@ -957,7 +957,7 @@ pub(crate) fn estimate_audience_recipient_count(
             .and_then(Value::as_str)
             .map(|strand_id| {
                 {
-                    let projection = state.projection_application().snapshot();
+                    let projection = state.projections().snapshot();
                     Some({
                         projection
                             .messages_for_thread(strand_id)
@@ -1091,3 +1091,4 @@ mod tests {
         );
     }
 }
+

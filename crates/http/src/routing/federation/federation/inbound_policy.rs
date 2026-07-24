@@ -191,7 +191,7 @@ fn enforce_realm_federation_policy(
     direction: FederationDirection,
 ) -> Result<(), AppError> {
     let policy = state
-        .projection_application()
+        .projections()
         .snapshot()
         .realm_federation_policy(realm_id)
         .unwrap_or_else(|| "open".to_owned());
@@ -235,7 +235,7 @@ fn enforce_realm_moderation_federation_policy(
     direction: FederationDirection,
 ) -> Result<(), AppError> {
     let record = state
-        .governance_application()
+        .governance()
         .cached_realm_moderation_policy(realm_id);
     let Some(record) = record else {
         return Ok(());

@@ -204,7 +204,7 @@ pub(super) async fn submit_event_value_with_context(
     let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();
-    let service = state.event_query_application();
+    let service = state.event_queries();
     if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await {
         if existing.canonical_bytes == parsed.canonical_bytes {
             let frontier = super::super::endpoints::load_realm_actor_frontier(
@@ -567,7 +567,7 @@ pub(super) async fn submit_event_value_with_context(
             // (fail-closed). The projection lock is a `parking_lot::Mutex`
             // (no poisoning), so acquiring it cannot fail and this block
             // always runs.
-            let proj = state.projection_application().snapshot();
+            let proj = state.projections().snapshot();
             if let Err(reason) = proj.check_space_container_lifecycle_transition(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -695,7 +695,7 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             if let Some(reason) = state
-                .projection_application()
+                .projections()
                 .preflight_capability_rejection(operation)
             {
                 return Err(SubmitOneError::new(
@@ -705,7 +705,7 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             if let Some(reason) = state
-                .projection_application()
+                .projections()
                 .preflight_calendar_rejection(operation)
             {
                 return Err(SubmitOneError::new(
@@ -715,7 +715,7 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             if let Some(reason) = state
-                .projection_application()
+                .projections()
                 .preflight_mls_rejection(operation)
             {
                 return Err(SubmitOneError::new(
@@ -730,7 +730,7 @@ pub(super) async fn submit_event_value_with_context(
             // in-batch decision / lift submits, so the atomicity checks
             // resolve against the live moderation_state cell.
             if let Some(reason) = state
-                .projection_application()
+                .projections()
                 .preflight_moderation_rejection(operation)
             {
                 return Err(SubmitOneError::new(
@@ -740,11 +740,11 @@ pub(super) async fn submit_event_value_with_context(
                 ));
             }
             let invite_preflight_reject = state
-                .projection_application()
+                .projections()
                 .preflight_invite_rejection(operation);
             let invite_proof_context = if invite_preflight_reject.is_none() {
                 invite_claim_proof_context_from_projection(
-                    state.projection_application(),
+                    state.projections(),
                     operation,
                 )
                 .map_err(|reason| {
@@ -932,7 +932,7 @@ pub(super) async fn submit_event_value_with_context(
         .map(ToOwned::to_owned);
     if let Some(scope_strand_id) = scope_strand_id {
         let scope = {
-            let proj = state.projection_application().snapshot();
+            let proj = state.projections().snapshot();
             proj.strand_scope_circle_id(&scope_strand_id)
         };
         if let Some(scope) = scope
@@ -1027,8 +1027,8 @@ pub(super) async fn submit_event_value_with_context(
         prospective_frontier,
     )
     .await;
-    let command = soland_application::events::CommitAcceptedEventCommand {
-        event: soland_application::events::AcceptedEvent {
+    let command = soland_services::events::CommitAcceptedEventCommand {
+        event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.clone(),
             actor_id: parsed.actor_id.clone(),
             actor_seq: parsed.actor_seq,
@@ -1042,7 +1042,7 @@ pub(super) async fn submit_event_value_with_context(
         },
         projections: projected_event
             .iter()
-            .map(|event| soland_application::events::ProjectedEvent {
+            .map(|event| soland_services::events::ProjectedEvent {
                 event_id: event.event_id.clone(),
                 realm_id: event.realm_id.clone(),
                 event_kind: event.event_kind.clone(),
@@ -1056,7 +1056,7 @@ pub(super) async fn submit_event_value_with_context(
             .collect(),
         idempotency: commit_idempotency.map(|record| {
             let created_at = now();
-            soland_application::events::IdempotentResponse {
+            soland_services::events::IdempotentResponse {
                 principal_id: record.principal_id,
                 key: record.key,
                 service_id: record.service_id,
@@ -1070,7 +1070,7 @@ pub(super) async fn submit_event_value_with_context(
         }),
         deliveries: outbox
             .into_iter()
-            .map(|record| soland_application::events::FederationDelivery {
+            .map(|record| soland_services::events::FederationDelivery {
                 id: record.id,
                 peer_did: record.peer_did,
                 peer_url: record.peer_url,
@@ -1082,7 +1082,7 @@ pub(super) async fn submit_event_value_with_context(
             .collect(),
     };
     if let Err(error) = state
-        .event_application()
+        .events()
         .commit_accepted_event(command)
         .await
     {
@@ -1250,3 +1250,4 @@ pub(super) async fn submit_event_value_with_context(
     .await;
     Ok(accepted_response)
 }
+

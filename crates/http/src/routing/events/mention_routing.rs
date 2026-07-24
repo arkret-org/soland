@@ -12,7 +12,7 @@ pub(crate) async fn effective_realm_mention_routing_hint(
     declared_hint: Option<&str>,
 ) -> MentionRoutingHint {
     let Some(record) = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()

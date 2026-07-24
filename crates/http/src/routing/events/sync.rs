@@ -36,13 +36,13 @@ pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
-pub(crate) use soland_application::delivery::PresenceState as PresenceRecord;
-pub(crate) use soland_application::events::{
+pub(crate) use soland_services::delivery::PresenceState as PresenceRecord;
+pub(crate) use soland_services::events::{
     ProjectedEvent as ProjectionEventRecord, RealmMetadata as RealmMetaRecord,
 };
-pub(crate) use soland_application::identity::SessionIdentityState as SessionRecord;
-pub(crate) use soland_application::projection::ProjectionSnapshot as ProjectionState;
-pub(crate) use soland_application::sync::CursorState as SyncCursorRecord;
+pub(crate) use soland_services::identity::SessionIdentityState as SessionRecord;
+pub(crate) use soland_services::projection::ProjectionSnapshot as ProjectionState;
+pub(crate) use soland_services::sync::CursorState as SyncCursorRecord;
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;
@@ -120,3 +120,4 @@ pub(crate) fn normalize_scope_selectors(
 #[cfg(test)]
 #[path = "sync_tests.rs"]
 mod tests;
+

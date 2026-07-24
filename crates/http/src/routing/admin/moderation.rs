@@ -187,7 +187,7 @@ async fn assign_queue_item(
     let session = aa.authenticated_session(state, req).await?;
     let session = require_admin_principal(state, session)?;
     let mut item = state
-        .governance_application()
+        .governance()
         .moderation_queue_item(&item_id)
         .await
         .ok()
@@ -202,7 +202,7 @@ async fn assign_queue_item(
         );
     }
     state
-        .governance_application()
+        .governance()
         .upsert_moderation_queue_item(item.clone())
         .await
         .map_err(|err| AppError::internal(err.to_string()))?;
@@ -247,7 +247,7 @@ async fn prioritise_queue_item(
         ));
     }
     let mut item = state
-        .governance_application()
+        .governance()
         .moderation_queue_item(&item_id)
         .await
         .ok()
@@ -261,7 +261,7 @@ async fn prioritise_queue_item(
         );
     }
     state
-        .governance_application()
+        .governance()
         .upsert_moderation_queue_item(item.clone())
         .await
         .map_err(|err| AppError::internal(err.to_string()))?;
@@ -292,7 +292,7 @@ async fn list_appeals(
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let items = state
-        .governance_application()
+        .governance()
         .moderation_appeals()
         .await
         .unwrap_or_default();
@@ -319,7 +319,7 @@ async fn get_appeal(
     let session = aa.authenticated_session(state, req).await?;
     let _ = require_admin_principal(state, session)?;
     let history = state
-        .governance_application()
+        .governance()
         .moderation_appeal_history(&appeal_id)
         .await
         .map_err(|err| AppError::internal(err.to_string()))?;

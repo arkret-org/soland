@@ -10,7 +10,7 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use soland_storage::RealmEventStats;
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 #[derive(Clone, Debug, Default)]
 pub struct RealmDirectoryQuery {
@@ -239,11 +239,11 @@ impl RealmDirectoryIndex {
 }
 
 #[derive(Clone)]
-pub struct RealmDirectoryApplicationService {
+pub struct RealmDirectoryService {
     index: Arc<parking_lot::Mutex<RealmDirectoryIndex>>,
 }
 
-impl RealmDirectoryApplicationService {
+impl RealmDirectoryService {
     pub fn new(index: RealmDirectoryIndex) -> Self {
         Self {
             index: Arc::new(parking_lot::Mutex::new(index)),
@@ -404,13 +404,13 @@ pub struct MessageState {
 
 #[async_trait::async_trait]
 pub trait MessagePort: Send + Sync {
-    async fn message(&self, event_id: &str) -> ApplicationResult<Option<MessageState>>;
-    async fn store_message(&self, message: MessageState) -> ApplicationResult<()>;
+    async fn message(&self, event_id: &str) -> ServiceResult<Option<MessageState>>;
+    async fn store_message(&self, message: MessageState) -> ServiceResult<()>;
     async fn messages_for_realm(
         &self,
         realm_id: &str,
         limit: usize,
-    ) -> ApplicationResult<Vec<MessageState>>;
+    ) -> ServiceResult<Vec<MessageState>>;
 }
 
 #[derive(Clone, Debug)]
@@ -432,19 +432,19 @@ pub enum AppletTransactionReplayResult {
 
 #[async_trait::async_trait]
 pub trait AppletPort: Send + Sync {
-    async fn applet(&self, applet_id: &str) -> ApplicationResult<Option<Value>>;
-    async fn applets(&self) -> ApplicationResult<Vec<Value>>;
-    async fn store_applet(&self, applet_id: &str, applet: Value) -> ApplicationResult<()>;
+    async fn applet(&self, applet_id: &str) -> ServiceResult<Option<Value>>;
+    async fn applets(&self) -> ServiceResult<Vec<Value>>;
+    async fn store_applet(&self, applet_id: &str, applet: Value) -> ServiceResult<()>;
     async fn begin_applet_transaction(
         &self,
         replay: AppletTransactionReplayState,
-    ) -> ApplicationResult<AppletTransactionReplayResult>;
+    ) -> ServiceResult<AppletTransactionReplayResult>;
     async fn complete_applet_transaction(
         &self,
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -541,11 +541,11 @@ pub struct IdentityAnchorCommitResult {
 
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
-    async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ApplicationResult<()>;
+    async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ServiceResult<()>;
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
@@ -553,54 +553,54 @@ pub trait EventReadPort: Send + Sync {
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
-    ) -> ApplicationResult<IdentityAnchorCommitResult>;
+    ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Option<CanonicalEventRecord>>;
-    async fn has_canonical_event(&self, event_id: &str) -> ApplicationResult<bool>;
-    async fn canonical_events(&self) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Option<CanonicalEventRecord>>;
+    async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
+    async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn canonical_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn canonical_events_for_realm_actor(
         &self,
         realm_id: &str,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Vec<EventBatchReceipt>>;
-    async fn realm_event_stats(&self, realm_id: &str) -> ApplicationResult<RealmEventStats>;
-    async fn peer_authz_state_records(&self) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Vec<EventBatchReceipt>>;
+    async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
+    async fn peer_authz_state_records(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn peer_events_query_page(
         &self,
         query: &PeerEventsPageQuery,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
+    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn realm_events_newest_first(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>>;
-    async fn accepted_event(&self, event_id: &str) -> ApplicationResult<Option<AcceptedEvent>>;
-    async fn accepted_events(&self) -> ApplicationResult<Vec<AcceptedEvent>>;
-    async fn projected_events(&self) -> ApplicationResult<Vec<ProjectedEvent>>;
+    ) -> ServiceResult<Vec<CanonicalEventRecord>>;
+    async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
+    async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn projected_events(&self) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn projected_events_capped(&self, limit: usize)
-    -> ApplicationResult<Vec<ProjectedEvent>>;
+    -> ServiceResult<Vec<ProjectedEvent>>;
     async fn append_projected_event(
         &self,
         event: ProjectedEvent,
-    ) -> ApplicationResult<ProjectedEventAppendResult>;
+    ) -> ServiceResult<ProjectedEventAppendResult>;
     async fn accepted_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<AcceptedEvent>>;
-    async fn max_actor_sequence(&self, actor_id: &str) -> ApplicationResult<Option<u64>>;
+    ) -> ServiceResult<Vec<AcceptedEvent>>;
+    async fn max_actor_sequence(&self, actor_id: &str) -> ServiceResult<Option<u64>>;
     async fn batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Vec<AcceptedBatchReceipt>>;
+    ) -> ServiceResult<Vec<AcceptedBatchReceipt>>;
 }
 
 #[async_trait::async_trait]
@@ -621,25 +621,25 @@ pub trait ProjectionWritePort: Send + Sync {
         &self,
         origin: &str,
         operation: &Operation,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn store_space_container_projection(
         &self,
         record: &SpaceContainerProjectionRecord,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn store_strand_projection(
         &self,
         record: &StrandProjectionRecord,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn store_morph_projection(&self, record: &MorphProjectionRecord)
-    -> ApplicationResult<()>;
+    -> ServiceResult<()>;
     async fn store_realm_organization_statement(
         &self,
         record: &RealmOrganizationStatementRecord,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct EventQueryApplicationService {
+pub struct EventQueryService {
     events: Arc<dyn EventReadPort>,
     messages: Arc<dyn MessagePort>,
     applets: Arc<dyn AppletPort>,
@@ -700,11 +700,11 @@ fn active_agent_accountability(
         && current_grant.is_some_and(|grant| grant.validate_lifecycle_at(query.accepted_at).is_ok())
 }
 
-impl EventQueryApplicationService {
+impl EventQueryService {
     pub async fn has_active_agent_accountability(
         &self,
         query: &ActiveAgentAccountabilityQuery,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         let Some(original_event) = self
             .events
             .canonical_event(&query.accountability_event_id)
@@ -720,7 +720,7 @@ impl EventQueryApplicationService {
         &self,
         origin: &str,
         operation: &Operation,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.projections
             .persist_projected_operation(origin, operation)
             .await
@@ -728,13 +728,13 @@ impl EventQueryApplicationService {
     pub async fn store_canonical_event(
         &self,
         record: CanonicalEventRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.events.store_canonical_event(record).await
     }
     pub async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.events.store_realm_bootstrap_batch(records).await
     }
     pub async fn store_identity_anchor_batch(
@@ -744,7 +744,7 @@ impl EventQueryApplicationService {
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
-    ) -> ApplicationResult<IdentityAnchorCommitResult> {
+    ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(records, receipt, device, frontier_cas, reanchor_slot)
             .await
@@ -752,26 +752,26 @@ impl EventQueryApplicationService {
     pub async fn canonical_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Option<CanonicalEventRecord>> {
+    ) -> ServiceResult<Option<CanonicalEventRecord>> {
         self.events.canonical_event(event_id).await
     }
-    pub async fn has_canonical_event(&self, event_id: &str) -> ApplicationResult<bool> {
+    pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
     }
-    pub async fn canonical_events(&self) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+    pub async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.canonical_events().await
     }
     pub async fn canonical_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.canonical_events_for_actor(actor_id).await
     }
     pub async fn canonical_events_for_realm_actor(
         &self,
         realm_id: &str,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events
             .canonical_events_for_realm_actor(realm_id, actor_id)
             .await
@@ -779,27 +779,27 @@ impl EventQueryApplicationService {
     pub async fn canonical_batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Vec<EventBatchReceipt>> {
+    ) -> ServiceResult<Vec<EventBatchReceipt>> {
         self.events
             .canonical_batch_receipts_for_event(event_id)
             .await
     }
-    pub async fn realm_event_stats(&self, realm_id: &str) -> ApplicationResult<RealmEventStats> {
+    pub async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats> {
         self.events.realm_event_stats(realm_id).await
     }
-    pub async fn peer_authz_state_records(&self) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+    pub async fn peer_authz_state_records(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.peer_authz_state_records().await
     }
     pub async fn peer_events_query_page(
         &self,
         query: &PeerEventsPageQuery,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.peer_events_query_page(query).await
     }
     pub async fn realm_events_newest_first(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<CanonicalEventRecord>> {
+    ) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.realm_events_newest_first(realm_id).await
     }
 
@@ -817,40 +817,40 @@ impl EventQueryApplicationService {
         }
     }
 
-    pub async fn accepted_event(&self, event_id: &str) -> ApplicationResult<Option<AcceptedEvent>> {
+    pub async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {
         self.events.accepted_event(event_id).await
     }
 
-    pub async fn accepted_events(&self) -> ApplicationResult<Vec<AcceptedEvent>> {
+    pub async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.accepted_events().await
     }
 
-    pub async fn projected_events(&self) -> ApplicationResult<Vec<ProjectedEvent>> {
+    pub async fn projected_events(&self) -> ServiceResult<Vec<ProjectedEvent>> {
         self.events.projected_events().await
     }
 
     pub async fn projected_events_capped(
         &self,
         limit: usize,
-    ) -> ApplicationResult<Vec<ProjectedEvent>> {
+    ) -> ServiceResult<Vec<ProjectedEvent>> {
         self.events.projected_events_capped(limit).await
     }
 
     pub async fn append_projected_event(
         &self,
         event: ProjectedEvent,
-    ) -> ApplicationResult<ProjectedEventAppendResult> {
+    ) -> ServiceResult<ProjectedEventAppendResult> {
         self.events.append_projected_event(event).await
     }
 
     pub async fn accepted_events_for_actor(
         &self,
         actor_id: &str,
-    ) -> ApplicationResult<Vec<AcceptedEvent>> {
+    ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.accepted_events_for_actor(actor_id).await
     }
 
-    pub async fn next_actor_sequence(&self, actor_id: &str) -> ApplicationResult<u64> {
+    pub async fn next_actor_sequence(&self, actor_id: &str) -> ServiceResult<u64> {
         Ok(self
             .events
             .max_actor_sequence(actor_id)
@@ -862,15 +862,15 @@ impl EventQueryApplicationService {
     pub async fn batch_receipts_for_event(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Vec<AcceptedBatchReceipt>> {
+    ) -> ServiceResult<Vec<AcceptedBatchReceipt>> {
         self.events.batch_receipts_for_event(event_id).await
     }
 
-    pub async fn message(&self, event_id: &str) -> ApplicationResult<Option<MessageState>> {
+    pub async fn message(&self, event_id: &str) -> ServiceResult<Option<MessageState>> {
         self.messages.message(event_id).await
     }
 
-    pub async fn store_message(&self, message: MessageState) -> ApplicationResult<()> {
+    pub async fn store_message(&self, message: MessageState) -> ServiceResult<()> {
         self.messages.store_message(message).await
     }
 
@@ -878,23 +878,23 @@ impl EventQueryApplicationService {
         &self,
         realm_id: &str,
         limit: usize,
-    ) -> ApplicationResult<Vec<MessageState>> {
+    ) -> ServiceResult<Vec<MessageState>> {
         self.messages.messages_for_realm(realm_id, limit).await
     }
 
-    pub async fn applet(&self, applet_id: &str) -> ApplicationResult<Option<Value>> {
+    pub async fn applet(&self, applet_id: &str) -> ServiceResult<Option<Value>> {
         self.applets.applet(applet_id).await
     }
-    pub async fn applets(&self) -> ApplicationResult<Vec<Value>> {
+    pub async fn applets(&self) -> ServiceResult<Vec<Value>> {
         self.applets.applets().await
     }
-    pub async fn store_applet(&self, applet_id: &str, applet: Value) -> ApplicationResult<()> {
+    pub async fn store_applet(&self, applet_id: &str, applet: Value) -> ServiceResult<()> {
         self.applets.store_applet(applet_id, applet).await
     }
     pub async fn begin_applet_transaction(
         &self,
         replay: AppletTransactionReplayState,
-    ) -> ApplicationResult<AppletTransactionReplayResult> {
+    ) -> ServiceResult<AppletTransactionReplayResult> {
         self.applets.begin_applet_transaction(replay).await
     }
     pub async fn complete_applet_transaction(
@@ -902,7 +902,7 @@ impl EventQueryApplicationService {
         source_service_id: &str,
         idempotency_key: &str,
         outcome: Value,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.applets
             .complete_applet_transaction(source_service_id, idempotency_key, outcome)
             .await
@@ -911,7 +911,7 @@ impl EventQueryApplicationService {
     pub async fn store_space_container_projection(
         &self,
         record: &SpaceContainerProjectionRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.projections
             .store_space_container_projection(record)
             .await
@@ -920,21 +920,21 @@ impl EventQueryApplicationService {
     pub async fn store_strand_projection(
         &self,
         record: &StrandProjectionRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.projections.store_strand_projection(record).await
     }
 
     pub async fn store_morph_projection(
         &self,
         record: &MorphProjectionRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.projections.store_morph_projection(record).await
     }
 
     pub async fn store_realm_organization_statement(
         &self,
         record: &RealmOrganizationStatementRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.projections
             .store_realm_organization_statement(record)
             .await
@@ -979,39 +979,39 @@ pub struct AdvanceMlsEpochCommand {
 
 #[async_trait::async_trait]
 pub trait MlsCommitReadPort: Send + Sync {
-    async fn commits(&self) -> ApplicationResult<Vec<MlsCommitState>>;
+    async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>>;
     async fn commit(
         &self,
         effective_scope: &Value,
         group_id: &str,
-    ) -> ApplicationResult<Option<MlsCommitState>>;
+    ) -> ServiceResult<Option<MlsCommitState>>;
     async fn initialize_group(
         &self,
         command: InitializeMlsGroupCommand,
-    ) -> ApplicationResult<Option<MlsCommitState>>;
+    ) -> ServiceResult<Option<MlsCommitState>>;
     async fn advance_epoch(
         &self,
         command: AdvanceMlsEpochCommand,
-    ) -> ApplicationResult<Option<MlsCommitState>>;
+    ) -> ServiceResult<Option<MlsCommitState>>;
     async fn mark_frontier_contested(
         &self,
         effective_scope: &Value,
         group_id: &str,
         epoch: u64,
-    ) -> ApplicationResult<Option<MlsCommitState>>;
+    ) -> ServiceResult<Option<MlsCommitState>>;
 }
 
 #[derive(Clone)]
-pub struct MlsCommitQueryApplicationService {
+pub struct MlsCommitQueryService {
     commits: Arc<dyn MlsCommitReadPort>,
 }
 
-impl MlsCommitQueryApplicationService {
+impl MlsCommitQueryService {
     pub fn new(commits: Arc<dyn MlsCommitReadPort>) -> Self {
         Self { commits }
     }
 
-    pub async fn commits(&self) -> ApplicationResult<Vec<MlsCommitState>> {
+    pub async fn commits(&self) -> ServiceResult<Vec<MlsCommitState>> {
         self.commits.commits().await
     }
 
@@ -1019,21 +1019,21 @@ impl MlsCommitQueryApplicationService {
         &self,
         effective_scope: &Value,
         group_id: &str,
-    ) -> ApplicationResult<Option<MlsCommitState>> {
+    ) -> ServiceResult<Option<MlsCommitState>> {
         self.commits.commit(effective_scope, group_id).await
     }
 
     pub async fn initialize_group(
         &self,
         command: InitializeMlsGroupCommand,
-    ) -> ApplicationResult<Option<MlsCommitState>> {
+    ) -> ServiceResult<Option<MlsCommitState>> {
         self.commits.initialize_group(command).await
     }
 
     pub async fn advance_epoch(
         &self,
         command: AdvanceMlsEpochCommand,
-    ) -> ApplicationResult<Option<MlsCommitState>> {
+    ) -> ServiceResult<Option<MlsCommitState>> {
         self.commits.advance_epoch(command).await
     }
 
@@ -1042,7 +1042,7 @@ impl MlsCommitQueryApplicationService {
         effective_scope: &Value,
         group_id: &str,
         epoch: u64,
-    ) -> ApplicationResult<Option<MlsCommitState>> {
+    ) -> ServiceResult<Option<MlsCommitState>> {
         self.commits
             .mark_frontier_contested(effective_scope, group_id, epoch)
             .await
@@ -1124,43 +1124,43 @@ pub enum PeerKeyPackageClaimLedgerWriteResult {
 
 #[async_trait::async_trait]
 pub trait MlsKeyPackageMaintenancePort: Send + Sync {
-    async fn store_key_package(&self, record: &MlsKeyPackageState) -> ApplicationResult<bool>;
-    async fn key_package(&self, id: &str) -> ApplicationResult<Option<MlsKeyPackageState>>;
+    async fn store_key_package(&self, record: &MlsKeyPackageState) -> ServiceResult<bool>;
+    async fn key_package(&self, id: &str) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn claim_key_package(
         &self,
         command: ClaimMlsKeyPackageCommand<'_>,
-    ) -> ApplicationResult<Option<MlsKeyPackageState>>;
+    ) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn consume_key_package_claim(
         &self,
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
-    ) -> ApplicationResult<Option<MlsKeyPackageState>>;
+    ) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn peer_claim(
         &self,
         source_service_id: &str,
         claim_request_id: &str,
-    ) -> ApplicationResult<Option<PeerKeyPackageClaimLedgerState>>;
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn claim_peer_key_package(
         &self,
         attempt: PeerKeyPackageClaimCommand<'_>,
-    ) -> ApplicationResult<PeerKeyPackageClaimResult>;
+    ) -> ServiceResult<PeerKeyPackageClaimResult>;
     async fn store_peer_claim_terminal(
         &self,
         record: &PeerKeyPackageClaimLedgerState,
-    ) -> ApplicationResult<PeerKeyPackageClaimLedgerWriteResult>;
-    async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ApplicationResult<Vec<String>>;
-    async fn key_packages(&self) -> ApplicationResult<Vec<MlsKeyPackageState>>;
+    ) -> ServiceResult<PeerKeyPackageClaimLedgerWriteResult>;
+    async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ServiceResult<Vec<String>>;
+    async fn key_packages(&self) -> ServiceResult<Vec<MlsKeyPackageState>>;
     async fn key_packages_claimed_by_group(
         &self,
         mls_group_id: &str,
-    ) -> ApplicationResult<Vec<MlsKeyPackageState>>;
+    ) -> ServiceResult<Vec<MlsKeyPackageState>>;
     async fn retire_actor_keypackages(
         &self,
         actor_id: &str,
         retired_at: i64,
-    ) -> ApplicationResult<usize>;
-    async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ApplicationResult<()>;
+    ) -> ServiceResult<usize>;
+    async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ServiceResult<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -1179,11 +1179,11 @@ pub struct MlsWelcomeState {
 }
 
 #[derive(Clone)]
-pub struct MlsKeyPackageApplicationService {
+pub struct MlsKeyPackageService {
     key_packages: Arc<dyn MlsKeyPackageMaintenancePort>,
 }
 
-impl MlsKeyPackageApplicationService {
+impl MlsKeyPackageService {
     pub fn new(key_packages: Arc<dyn MlsKeyPackageMaintenancePort>) -> Self {
         Self { key_packages }
     }
@@ -1192,22 +1192,22 @@ impl MlsKeyPackageApplicationService {
         &self,
         actor_id: &str,
         retired_at: i64,
-    ) -> ApplicationResult<usize> {
+    ) -> ServiceResult<usize> {
         self.key_packages
             .retire_actor_keypackages(actor_id, retired_at)
             .await
     }
 
-    pub async fn store_key_package(&self, record: &MlsKeyPackageState) -> ApplicationResult<bool> {
+    pub async fn store_key_package(&self, record: &MlsKeyPackageState) -> ServiceResult<bool> {
         self.key_packages.store_key_package(record).await
     }
-    pub async fn key_package(&self, id: &str) -> ApplicationResult<Option<MlsKeyPackageState>> {
+    pub async fn key_package(&self, id: &str) -> ServiceResult<Option<MlsKeyPackageState>> {
         self.key_packages.key_package(id).await
     }
     pub async fn claim_key_package(
         &self,
         command: ClaimMlsKeyPackageCommand<'_>,
-    ) -> ApplicationResult<Option<MlsKeyPackageState>> {
+    ) -> ServiceResult<Option<MlsKeyPackageState>> {
         self.key_packages.claim_key_package(command).await
     }
     pub async fn consume_key_package_claim(
@@ -1215,7 +1215,7 @@ impl MlsKeyPackageApplicationService {
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
-    ) -> ApplicationResult<Option<MlsKeyPackageState>> {
+    ) -> ServiceResult<Option<MlsKeyPackageState>> {
         self.key_packages
             .consume_key_package_claim(id, mls_group_id, consumed_at)
             .await
@@ -1224,7 +1224,7 @@ impl MlsKeyPackageApplicationService {
         &self,
         source_service_id: &str,
         claim_request_id: &str,
-    ) -> ApplicationResult<Option<PeerKeyPackageClaimLedgerState>> {
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
         self.key_packages
             .peer_claim(source_service_id, claim_request_id)
             .await
@@ -1232,36 +1232,36 @@ impl MlsKeyPackageApplicationService {
     pub async fn claim_peer_key_package(
         &self,
         attempt: PeerKeyPackageClaimCommand<'_>,
-    ) -> ApplicationResult<PeerKeyPackageClaimResult> {
+    ) -> ServiceResult<PeerKeyPackageClaimResult> {
         self.key_packages.claim_peer_key_package(attempt).await
     }
     pub async fn store_peer_claim_terminal(
         &self,
         record: &PeerKeyPackageClaimLedgerState,
-    ) -> ApplicationResult<PeerKeyPackageClaimLedgerWriteResult> {
+    ) -> ServiceResult<PeerKeyPackageClaimLedgerWriteResult> {
         self.key_packages.store_peer_claim_terminal(record).await
     }
     pub async fn revoke_expired_peer_claims(
         &self,
         now_unix_ms: i64,
-    ) -> ApplicationResult<Vec<String>> {
+    ) -> ServiceResult<Vec<String>> {
         self.key_packages
             .revoke_expired_peer_claims(now_unix_ms)
             .await
     }
-    pub async fn key_packages(&self) -> ApplicationResult<Vec<MlsKeyPackageState>> {
+    pub async fn key_packages(&self) -> ServiceResult<Vec<MlsKeyPackageState>> {
         self.key_packages.key_packages().await
     }
     pub async fn key_packages_claimed_by_group(
         &self,
         mls_group_id: &str,
-    ) -> ApplicationResult<Vec<MlsKeyPackageState>> {
+    ) -> ServiceResult<Vec<MlsKeyPackageState>> {
         self.key_packages
             .key_packages_claimed_by_group(mls_group_id)
             .await
     }
 
-    pub async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ApplicationResult<()> {
+    pub async fn enqueue_welcome(&self, welcome: MlsWelcomeState) -> ServiceResult<()> {
         self.key_packages.enqueue_welcome(welcome).await
     }
 }
@@ -1301,31 +1301,31 @@ impl RealmMetadata {
 
 #[async_trait::async_trait]
 pub trait RealmMetadataPort: Send + Sync {
-    async fn realm_metadata(&self, realm_id: &str) -> ApplicationResult<Option<RealmMetadata>>;
-    async fn realm_metadata_list(&self) -> ApplicationResult<Vec<(String, RealmMetadata)>>;
+    async fn realm_metadata(&self, realm_id: &str) -> ServiceResult<Option<RealmMetadata>>;
+    async fn realm_metadata_list(&self) -> ServiceResult<Vec<(String, RealmMetadata)>>;
     async fn store_realm_metadata(
         &self,
         realm_id: &str,
         metadata: RealmMetadata,
-    ) -> ApplicationResult<()>;
-    async fn delete_realm_metadata(&self, realm_id: &str) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
+    async fn delete_realm_metadata(&self, realm_id: &str) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
-pub struct RealmQueryApplicationService {
+pub struct RealmQueryService {
     realms: Arc<dyn RealmMetadataPort>,
 }
 
-impl RealmQueryApplicationService {
+impl RealmQueryService {
     pub fn new(realms: Arc<dyn RealmMetadataPort>) -> Self {
         Self { realms }
     }
 
-    pub async fn realm_metadata(&self, realm_id: &str) -> ApplicationResult<Option<RealmMetadata>> {
+    pub async fn realm_metadata(&self, realm_id: &str) -> ServiceResult<Option<RealmMetadata>> {
         self.realms.realm_metadata(realm_id).await
     }
 
-    pub async fn realm_metadata_list(&self) -> ApplicationResult<Vec<(String, RealmMetadata)>> {
+    pub async fn realm_metadata_list(&self) -> ServiceResult<Vec<(String, RealmMetadata)>> {
         self.realms.realm_metadata_list().await
     }
 
@@ -1333,19 +1333,19 @@ impl RealmQueryApplicationService {
         &self,
         realm_id: &str,
         metadata: RealmMetadata,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.realms.store_realm_metadata(realm_id, metadata).await
     }
-    pub async fn delete_realm_metadata(&self, realm_id: &str) -> ApplicationResult<()> {
+    pub async fn delete_realm_metadata(&self, realm_id: &str) -> ServiceResult<()> {
         self.realms.delete_realm_metadata(realm_id).await
     }
 }
 
 #[async_trait::async_trait]
 pub trait RealmInvitePort: Send + Sync {
-    async fn get(&self, invite_id: &str) -> ApplicationResult<Option<RealmInviteState>>;
-    async fn put(&self, record: RealmInviteState) -> ApplicationResult<()>;
-    async fn snapshot_all(&self) -> ApplicationResult<Vec<RealmInviteState>>;
+    async fn get(&self, invite_id: &str) -> ServiceResult<Option<RealmInviteState>>;
+    async fn put(&self, record: RealmInviteState) -> ServiceResult<()>;
+    async fn snapshot_all(&self) -> ServiceResult<Vec<RealmInviteState>>;
 }
 
 #[derive(Clone, Debug)]
@@ -1403,47 +1403,47 @@ pub trait InviteLocatorPort: Send + Sync {
         record: &InviteLocatorState,
         active_limit: usize,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<InviteLocatorInsertResult>;
+    ) -> ServiceResult<InviteLocatorInsertResult>;
     async fn resolve_and_consume(
         &self,
         token_digest: &str,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Option<InviteLocatorState>>;
+    ) -> ServiceResult<Option<InviteLocatorState>>;
     async fn rotate(
         &self,
         subject_id: &str,
         old_locator_id: &str,
         mutation: &InviteLocatorRotateCommand,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Option<InviteLocatorState>>;
+    ) -> ServiceResult<Option<InviteLocatorState>>;
     async fn revoke(
         &self,
         subject_id: &str,
         locator_id: &str,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Option<InviteLocatorState>>;
+    ) -> ServiceResult<Option<InviteLocatorState>>;
 }
 
 #[derive(Clone)]
-pub struct RealmInviteApplicationService {
+pub struct RealmInviteService {
     invites: Arc<dyn RealmInvitePort>,
     locators: Arc<dyn InviteLocatorPort>,
 }
 
-impl RealmInviteApplicationService {
+impl RealmInviteService {
     pub fn new(invites: Arc<dyn RealmInvitePort>, locators: Arc<dyn InviteLocatorPort>) -> Self {
         Self { invites, locators }
     }
 
-    pub async fn get(&self, invite_id: &str) -> ApplicationResult<Option<RealmInviteState>> {
+    pub async fn get(&self, invite_id: &str) -> ServiceResult<Option<RealmInviteState>> {
         self.invites.get(invite_id).await
     }
 
-    pub async fn put(&self, record: RealmInviteState) -> ApplicationResult<()> {
+    pub async fn put(&self, record: RealmInviteState) -> ServiceResult<()> {
         self.invites.put(record).await
     }
 
-    pub async fn snapshot_all(&self) -> ApplicationResult<Vec<RealmInviteState>> {
+    pub async fn snapshot_all(&self) -> ServiceResult<Vec<RealmInviteState>> {
         self.invites.snapshot_all().await
     }
 
@@ -1452,7 +1452,7 @@ impl RealmInviteApplicationService {
         record: &InviteLocatorState,
         active_limit: usize,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<InviteLocatorInsertResult> {
+    ) -> ServiceResult<InviteLocatorInsertResult> {
         self.locators.insert(record, active_limit, now).await
     }
 
@@ -1460,7 +1460,7 @@ impl RealmInviteApplicationService {
         &self,
         token_digest: &str,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Option<InviteLocatorState>> {
+    ) -> ServiceResult<Option<InviteLocatorState>> {
         self.locators.resolve_and_consume(token_digest, now).await
     }
 
@@ -1470,7 +1470,7 @@ impl RealmInviteApplicationService {
         old_locator_id: &str,
         mutation: &InviteLocatorRotateCommand,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Option<InviteLocatorState>> {
+    ) -> ServiceResult<Option<InviteLocatorState>> {
         self.locators
             .rotate(subject_id, old_locator_id, mutation, now)
             .await
@@ -1481,13 +1481,13 @@ impl RealmInviteApplicationService {
         subject_id: &str,
         locator_id: &str,
         now: DateTime<Utc>,
-    ) -> ApplicationResult<Option<InviteLocatorState>> {
+    ) -> ServiceResult<Option<InviteLocatorState>> {
         self.locators.revoke(subject_id, locator_id, now).await
     }
 }
 
 #[derive(Clone)]
-pub struct EventApplicationService {
+pub struct EventService {
     commits: Arc<dyn EventCommitPort>,
 }
 
@@ -1496,15 +1496,15 @@ pub trait EventCommitPort: Send + Sync {
     async fn commit_accepted_event(
         &self,
         command: CommitAcceptedEventCommand,
-    ) -> ApplicationResult<CommitAcceptedEventResult>;
+    ) -> ServiceResult<CommitAcceptedEventResult>;
 
     async fn commit_accepted_event_batch(
         &self,
         command: CommitAcceptedEventBatchCommand,
-    ) -> ApplicationResult<CommitAcceptedEventResult>;
+    ) -> ServiceResult<CommitAcceptedEventResult>;
 }
 
-impl EventApplicationService {
+impl EventService {
     pub fn new(commits: Arc<dyn EventCommitPort>) -> Self {
         Self { commits }
     }
@@ -1512,14 +1512,14 @@ impl EventApplicationService {
     pub async fn commit_accepted_event(
         &self,
         command: CommitAcceptedEventCommand,
-    ) -> ApplicationResult<CommitAcceptedEventResult> {
+    ) -> ServiceResult<CommitAcceptedEventResult> {
         self.commits.commit_accepted_event(command).await
     }
 
     pub async fn commit_accepted_event_batch(
         &self,
         command: CommitAcceptedEventBatchCommand,
-    ) -> ApplicationResult<CommitAcceptedEventResult> {
+    ) -> ServiceResult<CommitAcceptedEventResult> {
         self.commits.commit_accepted_event_batch(command).await
     }
 }
@@ -1537,7 +1537,7 @@ mod tests {
         async fn commit_accepted_event(
             &self,
             command: CommitAcceptedEventCommand,
-        ) -> ApplicationResult<CommitAcceptedEventResult> {
+        ) -> ServiceResult<CommitAcceptedEventResult> {
             assert_eq!(command.event.kind, "ak.message.create");
             assert_eq!(command.projections.len(), 1);
             assert_eq!(command.deliveries.len(), 1);
@@ -1550,7 +1550,7 @@ mod tests {
         async fn commit_accepted_event_batch(
             &self,
             command: CommitAcceptedEventBatchCommand,
-        ) -> ApplicationResult<CommitAcceptedEventResult> {
+        ) -> ServiceResult<CommitAcceptedEventResult> {
             assert_eq!(command.events.len(), 2);
             assert!(command.applet_ghosts.is_some());
             Ok(CommitAcceptedEventResult {
@@ -1565,7 +1565,7 @@ mod tests {
         let now = Utc::now();
         let event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
         let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
-        let service = EventApplicationService::new(Arc::new(RecordingCommitter));
+        let service = EventService::new(Arc::new(RecordingCommitter));
         let result = service
             .commit_accepted_event(CommitAcceptedEventCommand {
                 event: AcceptedEvent {
@@ -1693,3 +1693,4 @@ mod tests {
         ));
     }
 }
+

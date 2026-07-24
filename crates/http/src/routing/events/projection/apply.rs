@@ -1,9 +1,9 @@
 use arkret_event_draft::Operation;
 use serde_json::{Value, json};
-use soland_application::delivery::DeviceMessageState;
-use soland_application::events::MlsWelcomeState;
-use soland_application::operation_semantics as kinds;
-use soland_application::projection::{MlsProjectionEffect, ProjectionEffectView};
+use soland_services::delivery::DeviceMessageState;
+use soland_services::events::MlsWelcomeState;
+use soland_services::operation_semantics as kinds;
+use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
 
 use super::*;
 use crate::ids;
@@ -46,11 +46,11 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
     match effect {
         MlsProjectionEffect::KeyPackagePublished { keypackage_id } => {
             let record = state
-                .projection_application()
+                .projections()
                 .mls_key_package_record(keypackage_id);
             if let Some(record) = record
                 && let Err(error) = state
-                    .mls_key_package_application()
+                    .mls_key_packages()
                     .store_key_package(&record)
                     .await
             {
@@ -65,8 +65,8 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             ..
         } => {
             if let Err(error) = state
-                .mls_key_package_application()
-                .claim_key_package(soland_application::events::ClaimMlsKeyPackageCommand {
+                .mls_key_packages()
+                .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                     id: keypackage_id,
                     mls_group_id: group_id,
                     intended_realm_id: intended_realm_id.as_deref(),
@@ -90,14 +90,14 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             recipient_device_id,
             ..
         } => {
-            let record = state.projection_application().mls_welcome_record(
+            let record = state.projections().mls_welcome_record(
                 recipient_actor_id,
                 recipient_device_id,
                 welcome_id,
             );
             if let Some(record) = record {
                 if let Err(error) = state
-                    .mls_key_package_application()
+                    .mls_key_packages()
                     .enqueue_welcome(record.clone())
                     .await
                 {
@@ -130,8 +130,8 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .cloned()
                 .unwrap_or(Value::Null);
             if let Err(error) = state
-                .mls_commit_query_application()
-                .initialize_group(soland_application::events::InitializeMlsGroupCommand {
+                .mls_commits()
+                .initialize_group(soland_services::events::InitializeMlsGroupCommand {
                     effective_scope: effective_scope.clone(),
                     group_id: group_id.clone(),
                     leader_actor_id: creator_actor_id.clone(),
@@ -167,8 +167,8 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .cloned()
                 .unwrap_or(Value::Null);
             if let Err(error) = state
-                .mls_commit_query_application()
-                .advance_epoch(soland_application::events::AdvanceMlsEpochCommand {
+                .mls_commits()
+                .advance_epoch(soland_services::events::AdvanceMlsEpochCommand {
                     expected_previous_epoch: *previous_epoch,
                     effective_scope: effective_scope.clone(),
                     group_id: group_id.clone(),
@@ -199,7 +199,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             // group stays fail-closed (`decryption_pending`) across restarts
             // until a resolving commit advances the epoch.
             if let Err(error) = state
-                .mls_commit_query_application()
+                .mls_commits()
                 .mark_frontier_contested(effective_scope, group_id, *epoch)
                 .await
             {
@@ -215,7 +215,7 @@ fn bind_circle_mls_group(
     effective_scope: &Value,
     clear_pending_removals: bool,
 ) {
-    state.projection_application().bind_circle_mls_group(
+    state.projections().bind_circle_mls_group(
         group_id,
         effective_scope,
         clear_pending_removals,
@@ -235,10 +235,10 @@ fn bind_circle_mls_group(
 /// materialized, and the later create/snapshot write-through captures the
 /// converged projection.
 async fn write_through_projection(state: &AppState, operation: &Operation) {
-    use soland_application::projection::ProjectionWriteThroughRecord;
+    use soland_services::projection::ProjectionWriteThroughRecord;
 
     let Some(snapshot) = state
-        .projection_application()
+        .projections()
         .projection_write_through_record(operation)
     else {
         return;
@@ -246,19 +246,19 @@ async fn write_through_projection(state: &AppState, operation: &Operation) {
     let result = match snapshot {
         ProjectionWriteThroughRecord::SpaceContainer(record) => {
             state
-                .event_query_application()
+                .event_queries()
                 .store_space_container_projection(&record)
                 .await
         }
         ProjectionWriteThroughRecord::Strand(record) => {
             state
-                .event_query_application()
+                .event_queries()
                 .store_strand_projection(&record)
                 .await
         }
         ProjectionWriteThroughRecord::Morph(record) => {
             state
-                .event_query_application()
+                .event_queries()
                 .store_morph_projection(&record)
                 .await
         }
@@ -320,7 +320,7 @@ pub async fn mirror_join_authorisation_consumption(
         return;
     }
     match state
-        .join_application_service()
+        .join_applications()
         .consume_review_authorisations(
             operation.realm_id.as_str(),
             &refs,
@@ -366,7 +366,7 @@ async fn project_accepted_operations_inner(
 ) {
     for operation in operations {
         tracing::debug!(
-            kind = ?soland_application::operation_semantics::canonical_kind_for_operation(operation),
+            kind = ?soland_services::operation_semantics::canonical_kind_for_operation(operation),
             realm_id = %operation.realm_id,
             origin = %origin,
             "project_accepted_operations"
@@ -463,7 +463,7 @@ async fn project_accepted_operations_inner(
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
                 Some(
                     state
-                        .projection_application()
+                        .projections()
                         .apply_via_lattice_registry(reducer_operation, state.hlc()),
                 )
             } else {
@@ -527,7 +527,7 @@ async fn project_accepted_operations_inner(
         if let Some(record) =
             crate::routing::events::operations::agent_participation_ceiling_record(operation)
             && let Err(error) = state
-                .agent_participation_application()
+                .agent_participations()
                 .store_ceiling(record)
                 .await
         {
@@ -582,7 +582,7 @@ pub(crate) async fn mirror_moderation_effect_to_persistence(
         ))
     });
     if let Err(error) = state
-        .governance_application()
+        .governance()
         .append_moderation_appeal(Value::Object(record))
         .await
     {
@@ -621,13 +621,13 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         relationship.clone(),
     );
     let row = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.realm_organization_statements.get(&key).cloned()
     };
     let Some(row) = row else {
         return;
     };
-    let record = soland_application::events::RealmOrganizationStatementRecord {
+    let record = soland_services::events::RealmOrganizationStatementRecord {
         realm_id: row.realm_id,
         organization_id: row.organization_id,
         relationship: row.relationship,
@@ -646,7 +646,7 @@ pub(crate) async fn mirror_realm_organization_effect_to_persistence(
         updated_at: row.updated_at,
     };
     if let Err(error) = state
-        .event_query_application()
+        .event_queries()
         .store_realm_organization_statement(&record)
         .await
     {
@@ -728,7 +728,7 @@ async fn project_mls_welcome_to_device(
         "DIAG appending MLS Welcome to device_messages queue"
     );
     match state
-        .delivery_application()
+        .deliveries()
         .append_device_message(message)
         .await
     {
@@ -792,7 +792,7 @@ async fn project_realm_key_share_to_device(
         created_at: operation.created_at,
     };
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .append_device_message(record)
         .await
     {
@@ -831,7 +831,7 @@ fn realm_key_share_device_message_content(
 /// The `cross_signing_binding` was already verified at ingest
 /// (`validate_device_authorize_binding`).
 async fn project_device_authorize(state: &crate::state::AppState, operation: &Operation) {
-    use soland_application::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
+    use soland_services::identity::{DeviceIdentity, FindDeviceQuery, SaveDeviceCommand};
     let payload = &operation.payload;
     // Accepted device.authorize payloads already passed schema validation;
     // parse the wire shape (projection-injected envelope fields stripped)
@@ -853,7 +853,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         return;
     }
     let existing = state
-        .identity_application()
+        .identities()
         .find_device(FindDeviceQuery {
             actor_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
@@ -876,7 +876,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
     let operation_uuid = ids::typed_uuid_part_expect_internal(operation.operation_id.as_str());
     let authorize_event_id = ids::format_typed_uuid("event", &operation_uuid);
     let authorized_generation_ref = match state
-        .event_query_application()
+        .event_queries()
         .canonical_event(&authorize_event_id)
         .await
     {
@@ -968,7 +968,7 @@ async fn project_device_authorize(state: &crate::state::AppState, operation: &Op
         revoked_at,
     };
     if let Err(error) = state
-        .identity_application()
+        .identities()
         .save_device(SaveDeviceCommand {
             actor_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
@@ -1003,15 +1003,15 @@ pub(in crate::routing) fn refresh_authz_index_from_capability_grant_id(
     grant_id: &str,
 ) {
     match state
-        .projection_application()
+        .projections()
         .effective_engine_grant(grant_id)
     {
         Some(grant) => state
-            .authorization_application()
+            .authorization()
             .upsert_projected_grant(grant),
         // A revoke-before-grant tombstone has no resolvable body/actions.
         None => state
-            .authorization_application()
+            .authorization()
             .mark_projected_grant_revoked(grant_id),
     }
 }
@@ -1068,7 +1068,7 @@ mod tests {
         project_realm_key_share_to_device(&state, sender, sender_device, &operation).await;
 
         let queued = state
-            .delivery_application()
+            .deliveries()
             .device_messages_after(recipient, recipient_device, 0)
             .await
             .expect("queued device messages");
@@ -1188,3 +1188,4 @@ mod tests {
         assert_eq!(contextual.payload["manage_capability_verified"], true);
     }
 }
+

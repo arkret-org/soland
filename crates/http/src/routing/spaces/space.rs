@@ -32,8 +32,8 @@ use chrono::{DateTime, Utc};
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::Value;
-use soland_application::identity::SessionIdentityState as SessionRecord;
-use soland_application::operation_semantics::CHILD_ORDER_CELL_FAMILY;
+use soland_services::identity::SessionIdentityState as SessionRecord;
+use soland_services::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 use soland_http::error::{AppError, ErrorCode};
 
 use super::{AuthArgs, accept_local_operations};
@@ -312,7 +312,7 @@ async fn upsert_realm_moderation_policy(
     let realm_id = realm_id.into_inner();
     RealmId::new(realm_id.clone()).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let record = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(&realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -356,7 +356,7 @@ async fn get_space_cell(
     // Snapshot everything we need out of the projection under a short lock so
     // we never hold the (non-Send) guard across the async access check.
     let (realm_id, value) = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let realm_id = proj
             .space_containers
             .get(&space_id)
@@ -403,7 +403,7 @@ async fn export_realm(
         return Err(AppError::not_found("not found"));
     }
     let events = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .unwrap_or_default()
@@ -464,14 +464,14 @@ pub async fn realm_lifecycle_response(
     // Snapshot the member list off the realms lock before the async meta read
     // (the guard is not Send and must not cross the `.await`).
     let members: Vec<Did> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .get(&realm_id_value)
             .map(|realm| realm.members.iter().cloned().collect())
             .unwrap_or_default()
     };
     let (archived, frozen, terminal_state, successor_realm_id, freeze_expires_at) = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .realm_states
             .get(realm_id)
@@ -490,7 +490,7 @@ pub async fn realm_lifecycle_response(
             .unwrap_or((false, false, None, None, None))
     };
     let record = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -513,7 +513,7 @@ pub async fn realm_lifecycle_response(
 }
 
 pub async fn touch_realm_meta(state: &AppState, realm_id: &str) {
-    let service = state.realm_query_application();
+    let service = state.realms();
     if let Ok(Some(mut record)) = service.realm_metadata(realm_id).await {
         record.updated_at = now();
         if let Err(error) = service.store_realm_metadata(realm_id, record).await {
@@ -662,7 +662,7 @@ pub async fn realm_allows_plaintext_service_for_data_class(
 
 pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -672,7 +672,7 @@ pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
 
 pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> String {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -700,10 +700,10 @@ pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &st
         tracing::warn!(%realm_id, %actor, "realm_has_member_by_id: invalid actor DID shape");
         return false;
     };
-    if realm_id == soland_application::identity::principal_control_realm_for_did(actor) {
+    if realm_id == soland_services::identity::principal_control_realm_for_did(actor) {
         return true;
     }
-    let realms = state.realm_directory_application().snapshot();
+    let realms = state.realm_directory().snapshot();
     match realms.get(&realm_id_typed) {
         None => {
             let known: Vec<String> = realms
@@ -813,7 +813,7 @@ pub async fn invite_token_realm_id(state: &AppState, token: &str) -> Option<Stri
     }
     let now = now();
     state
-        .realm_invite_application()
+        .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -848,7 +848,7 @@ pub async fn realm_id_accessible_for_id(
     // Snapshot the membership/realm_id off the in-memory index before any
     // `.await` so we never hold the std::sync Mutex guard across a suspension.
     let (realm_id, members) = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         let Some(realm) = realms.get(&realm_id_typed) else {
             return false;
         };
@@ -901,7 +901,7 @@ pub async fn realm_recovery_recipient_principal(
         return false;
     };
     let durability = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.realm_durability_policy(&realm_id)
     };
     let Some(durability) = durability else {
@@ -933,7 +933,7 @@ pub fn realm_recovery_event_visible(
 /// `joined` when no meta record exists (matches the spec default).
 pub async fn realm_history_visibility_for_id(state: &AppState, realm_id: &str) -> String {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -947,7 +947,7 @@ fn directory_realm_is_public(state: &AppState, realm_id: &str) -> bool {
         return false;
     };
     state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .get(&realm_id)
         .is_some_and(|entry| entry.public)
@@ -965,7 +965,7 @@ pub async fn realm_member_joined_at_for_id(
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         if let Some(member) = projection.member(realm_id, actor)
             && member.state == "join"
         {
@@ -973,7 +973,7 @@ pub async fn realm_member_joined_at_for_id(
         }
     }
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -1001,7 +1001,7 @@ pub async fn realm_member_invited_or_joined_at_for_id(
     actor: &str,
 ) -> Option<DateTime<Utc>> {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         if let Some(member) = projection.member(realm_id, actor) {
             if let Some(invited_at) = member.invited_at {
                 return Some(invited_at);
@@ -1022,7 +1022,7 @@ async fn realm_active_member_at_read_time(
     match realm_scope_to_realm_id(realm_or_internal_id) {
         Some(realm_id) => {
             {
-                let projection = state.projection_application().snapshot();
+                let projection = state.projections().snapshot();
                 if let Some(member) = projection.member(&realm_id, actor) {
                     return member.state == "join";
                 }
@@ -1043,7 +1043,7 @@ async fn realm_restricted_history_policy_allows(
         return false;
     };
     let Some(meta) = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(&realm_id)
         .await
         .ok()
@@ -1109,7 +1109,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         return false;
     };
     let directory_realm_id = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .get(&realm_id_typed)
             .map(|realm| realm.realm_id.as_str().to_owned())
@@ -1120,7 +1120,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
         return true;
     }
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -1130,7 +1130,7 @@ pub async fn realm_allows_plaintext_service_for_data_class_id(
 
 async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
@@ -1147,7 +1147,7 @@ pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_ac
     let Ok(realm_id_value) = RealmId::new(realm_id.to_owned()) else {
         return 0;
     };
-    let realms = state.realm_directory_application().snapshot();
+    let realms = state.realm_directory().snapshot();
     realms
         .get(&realm_id_value)
         .map(|realm| {
@@ -1161,7 +1161,7 @@ pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_ac
 }
 
 pub async fn prune_expired_typing(state: &AppState) {
-    if let Err(error) = state.delivery_application().prune_expired_typing().await {
+    if let Err(error) = state.deliveries().prune_expired_typing().await {
         tracing::warn!(%error, "failed to prune expired typing entries");
     }
 }
@@ -1180,7 +1180,7 @@ pub(crate) async fn presence_visibility_for_actor(
     actor: &str,
 ) -> PresenceVisibilityPolicy {
     match state
-        .account_data_application()
+        .account_data()
         .entry(actor, ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY)
         .await
     {
@@ -1237,7 +1237,7 @@ async fn accepted_contact_between(state: &AppState, left: &str, right: &str) -> 
     }
     for (requester, target) in [(left, right), (right, left)] {
         match state
-            .contact_application()
+            .contacts()
             .contact_any(requester, target)
             .await
         {
@@ -1276,7 +1276,7 @@ pub async fn typing_scope_allows_actor(
             "ak.typing strand_id must name a visible ak:strand",
         ));
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let Some(strand) = projection.strands.get(strand_id) else {
         if strand_id == crate::routing::events::strand::strand_id_from_realm_id(realm_id) {
             return Ok(());
@@ -1326,7 +1326,7 @@ async fn personal_blocklist_allows_actor(
         return true;
     }
     match state
-        .account_data_application()
+        .account_data()
         .entry(&session.actor, ACCOUNT_DATA_TYPE_BLOCKLIST)
         .await
     {
@@ -1414,3 +1414,4 @@ mod tests {
         assert_eq!(error.top_level_reason, None);
     }
 }
+

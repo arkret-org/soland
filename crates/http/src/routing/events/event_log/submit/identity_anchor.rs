@@ -97,7 +97,7 @@ pub(super) async fn submit_identity_anchor_batch(
     validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
 
     let existing = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| {
@@ -225,7 +225,7 @@ pub(super) async fn submit_identity_anchor_batch(
             SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
         })?;
         let raw_leaves = state
-            .projection_application()
+            .projections()
             .realm_seal_leaves(&realm_id)
             .map_err(|error| {
                 SubmitOneError::new(
@@ -235,7 +235,7 @@ pub(super) async fn submit_identity_anchor_batch(
                 )
             })?;
         validate_pre_fence_basis(state, &first, payload.pre_fence_basis.as_ref()).await?;
-        Some(soland_application::events::IdentityAnchorFrontierState {
+        Some(soland_services::events::IdentityAnchorFrontierState {
             realm_id: first.realm_id.clone(),
             raw_leaves: raw_leaves
                 .into_iter()
@@ -247,7 +247,7 @@ pub(super) async fn submit_identity_anchor_batch(
     };
     let reanchor_slot = if is_reanchor {
         let payload = typed_device_reanchor_payload(&envelopes[0])?;
-        Some(soland_application::events::IdentityAnchorReanchorState {
+        Some(soland_services::events::IdentityAnchorReanchorState {
             actor_id: first.actor_id.clone(),
             version_number: payload.did_version_number(),
             did_version_id: payload.did_version_id.to_string(),
@@ -258,7 +258,7 @@ pub(super) async fn submit_identity_anchor_batch(
         None
     };
     let commit_outcome = state
-        .event_query_application()
+        .event_queries()
         .store_identity_anchor_batch(
             records.clone(),
             receipt,
@@ -289,7 +289,7 @@ pub(super) async fn submit_identity_anchor_batch(
     if commit_outcome.reanchor_conflict {
         reanchor_conflict = true;
         let committed = state
-            .event_query_application()
+            .event_queries()
             .canonical_events()
             .await
             .map_err(|error| {
@@ -425,7 +425,7 @@ pub(super) async fn identical_historical_retry(
     for id in &ids {
         existing.push(
             state
-                .event_query_application()
+                .event_queries()
                 .canonical_event(id)
                 .await
                 .map_err(|error| {
@@ -535,7 +535,7 @@ async fn validate_unit_relationships(
         ));
     }
     let expected_realm =
-        soland_application::identity::principal_control_realm_for_did(&first.actor_id);
+        soland_services::identity::principal_control_realm_for_did(&first.actor_id);
     if first.realm_id != expected_realm {
         return Err(SubmitOneError::new(
             StatusCode::CONFLICT,
@@ -645,7 +645,7 @@ async fn validate_reanchor_actor_frontier(
 ) -> Result<(), SubmitOneError> {
     let covered_digests = if let Some(basis) = basis {
         state
-            .projection_application()
+            .projections()
             .seal_leaf_union_proof(&basis.leaves)
             .map_err(|error| {
                 SubmitOneError::new(
@@ -662,7 +662,7 @@ async fn validate_reanchor_actor_frontier(
         std::collections::BTreeSet::new()
     };
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| {
@@ -814,7 +814,7 @@ async fn validate_reanchor_entry_delegation(
             )
         })?;
     let entries = state
-        .did_application()
+        .dids()
         .log_events(reanchor.principal_id.as_str())
         .await
         .map_err(|error| {
@@ -880,7 +880,7 @@ async fn validate_reanchor_recovery_session(
         )
     })?;
     let session = state
-        .recovery_session_application()
+        .recovery_sessions()
         .session(session_id.as_str())
         .await
         .map_err(|error| {
@@ -917,7 +917,7 @@ async fn validate_reanchor_recovery_session(
         ));
     }
     let mut entries = state
-        .did_application()
+        .dids()
         .log_events(reanchor.principal_id.as_str())
         .await
         .map_err(|error| {
@@ -991,7 +991,7 @@ async fn validate_pre_fence_basis(
         return Err(frontier_error());
     }
     let view = state
-        .projection_application()
+        .projections()
         .effective_seal_view(&leaves, &realm_id)
         .map_err(|_| frontier_error())?;
     if basis.control_event_set_root != view.control_event_set_root
@@ -1088,13 +1088,13 @@ async fn identity_anchor_device_projection(
     envelope: &Value,
     authorized_generation_ref: Option<String>,
     accepted_at: DateTime<Utc>,
-) -> Result<soland_application::events::IdentityAnchorDeviceState, SubmitOneError> {
+) -> Result<soland_services::events::IdentityAnchorDeviceState, SubmitOneError> {
     let typed = typed_device_authorize_payload(envelope)?;
     let principal_id = typed.principal_id.as_str();
     let device_id = typed.device_id.as_str();
     let existing = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: principal_id.to_owned(),
             device_id: device_id.to_owned(),
         })
@@ -1154,7 +1154,7 @@ async fn identity_anchor_device_projection(
     } else {
         payload_object.remove("cross_signing_binding");
     }
-    Ok(soland_application::events::IdentityAnchorDeviceState {
+    Ok(soland_services::events::IdentityAnchorDeviceState {
         actor: principal_id.to_owned(),
         device_id: device_id.to_owned(),
         display_name: existing
@@ -1179,7 +1179,7 @@ async fn build_reanchor_batch_receipt(
 ) -> Result<arkret_wire::EventBatchReceipt, SubmitOneError> {
     let payload = typed_device_reanchor_payload(reanchor_envelope)?;
     let registry_head = state
-        .did_application()
+        .dids()
         .log_events(&reanchor.actor_id)
         .await
         .map_err(|error| {
@@ -1445,7 +1445,7 @@ mod tests {
             arkret_identifiers::Did::new("did:webvh:z6mkfixture:users.example:alice".to_owned())
                 .unwrap();
         let realm_id = arkret_identifiers::RealmId::new(
-            soland_application::identity::principal_control_realm_for_did(principal.as_str()),
+            soland_services::identity::principal_control_realm_for_did(principal.as_str()),
         )
         .unwrap();
         let created_at = "2026-07-15T00:00:00.000Z".parse().unwrap();
@@ -1750,12 +1750,12 @@ mod tests {
             11,
         );
         state
-            .event_query_application()
+            .event_queries()
             .store_canonical_event(stored_record(&reanchor, 10))
             .await
             .unwrap();
         state
-            .event_query_application()
+            .event_queries()
             .store_canonical_event(stored_record(&authorize, 11))
             .await
             .unwrap();
@@ -1767,7 +1767,7 @@ mod tests {
             12,
         );
         state
-            .event_query_application()
+            .event_queries()
             .store_canonical_event(stored_record(&later, 12))
             .await
             .unwrap();
@@ -1784,3 +1784,4 @@ mod tests {
         assert_eq!(outcome.duplicate.len(), 2);
     }
 }
+

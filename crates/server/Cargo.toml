@@ -65,7 +65,7 @@ salvo = {workspace = true,default-features = false,features = ["cookie", "fix-ht
 serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}
 sha2 = {workspace = true}
-soland-application = {workspace = true}
+soland-services = {workspace = true}
 soland-http = {workspace = true}
 soland-storage-memory = {workspace = true}
 soland-storage-postgres = {workspace = true}
@@ -93,3 +93,4 @@ soland-test-support = {workspace = true}
 # (`#[tokio::test(start_paused = true)]`) used to assert the federation
 # auth-failure timing-bucket pad deterministically without a real sleep.
 tokio = {workspace = true,features = ["test-util"]}
+

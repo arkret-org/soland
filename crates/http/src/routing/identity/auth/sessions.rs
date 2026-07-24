@@ -73,7 +73,7 @@ pub async fn authenticated_session(
     }
     let token_hash = session_credential_hash(token, state.service_id());
     let session = state
-        .session_application()
+        .sessions()
         .session(&token_hash)
         .await
         .map_err(|_| {

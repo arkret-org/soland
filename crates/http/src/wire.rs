@@ -35,7 +35,7 @@ use arkret_wire::{
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::protocol_artifacts as artifacts;
+use soland_services::protocol_artifacts as artifacts;
 pub use soland_contracts::admin::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
     DeviceSigningKeyDirectoryQueryRequestBody,
@@ -1253,7 +1253,7 @@ pub fn describe(
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,
-                "daily_principal_download_limit": soland_application::runtime_guards::key_backup_daily_download_limit(),
+                "daily_principal_download_limit": soland_services::runtime_guards::key_backup_daily_download_limit(),
                 "max_to_device_page": 1000,
                 "max_to_device_queue_per_device": to_device_queue_capacity
             },
@@ -1624,7 +1624,8 @@ mod tests {
         );
         assert_eq!(
             value["limits"]["scalability_constraints"]["daily_principal_download_limit"],
-            json!(soland_application::runtime_guards::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
+            json!(soland_services::runtime_guards::KEY_BACKUP_DAILY_DOWNLOAD_LIMIT_DEFAULT)
         );
     }
 }
+

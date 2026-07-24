@@ -142,10 +142,10 @@ pub fn operation_policy_reason_code(message: &str) -> (salvo::http::StatusCode, 
             salvo::http::StatusCode::PRECONDITION_FAILED,
             arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
         )
-    } else if message == soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND {
+    } else if message == soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND {
         (
             salvo::http::StatusCode::PRECONDITION_FAILED,
-            soland_application::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND,
+            soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND,
         )
     } else if message == arkret_wire::ErrorCode::READ_RECEIPT_COMPLIANCE_FLOOR_VIOLATED {
         (
@@ -389,7 +389,7 @@ async fn validate_managed_agent_grant_ceiling(
         return Ok(());
     };
     let record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(subject)
         .await
         .map_err(|_| "agent_grant_ceiling_lookup_failed")?;
@@ -438,3 +438,4 @@ async fn validate_managed_agent_grant_ceiling(
         Err("agent_grant_exceeds_requested_scope")
     }
 }
+

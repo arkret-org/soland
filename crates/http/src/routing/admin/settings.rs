@@ -77,7 +77,7 @@ async fn put_settings(depot: &mut Depot, req: &mut Request) -> JsonResult<Runtim
             .key_value(key)
             .map_err(|error| AppError::internal(format!("encode setting `{key}`: {error}")))?;
         state
-            .governance_application()
+            .governance()
             .store_runtime_setting(key, &canonical, &session.actor)
             .await
             .map_err(|error| AppError::internal(format!("persist setting `{key}`: {error}")))?;

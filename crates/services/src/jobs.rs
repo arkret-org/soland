@@ -4,17 +4,17 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 #[async_trait]
 pub trait MaintenancePort: Send + Sync {
-    async fn prune_expired_idempotency(&self, now: DateTime<Utc>) -> ApplicationResult<usize>;
+    async fn prune_expired_idempotency(&self, now: DateTime<Utc>) -> ServiceResult<usize>;
     async fn idempotency_record(
         &self,
         principal_id: &str,
         key: &str,
-    ) -> ApplicationResult<Option<IdempotencyState>>;
-    async fn store_idempotency_record(&self, record: IdempotencyState) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<IdempotencyState>>;
+    async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()>;
 }
 
 #[async_trait]
@@ -39,12 +39,12 @@ pub struct IdempotencyState {
 }
 
 #[derive(Clone)]
-pub struct JobsApplicationService {
+pub struct JobsService {
     maintenance: Arc<dyn MaintenancePort>,
     runtime_health: Arc<dyn RuntimeHealthPort>,
 }
 
-impl JobsApplicationService {
+impl JobsService {
     pub fn new(
         maintenance: Arc<dyn MaintenancePort>,
         runtime_health: Arc<dyn RuntimeHealthPort>,
@@ -75,7 +75,7 @@ impl JobsApplicationService {
         self.runtime_health.database_pool_in_use()
     }
 
-    pub async fn prune_expired_idempotency(&self, now: DateTime<Utc>) -> ApplicationResult<usize> {
+    pub async fn prune_expired_idempotency(&self, now: DateTime<Utc>) -> ServiceResult<usize> {
         self.maintenance.prune_expired_idempotency(now).await
     }
 
@@ -83,13 +83,13 @@ impl JobsApplicationService {
         &self,
         principal_id: &str,
         key: &str,
-    ) -> ApplicationResult<Option<IdempotencyState>> {
+    ) -> ServiceResult<Option<IdempotencyState>> {
         self.maintenance.idempotency_record(principal_id, key).await
     }
     pub async fn store_idempotency_record(
         &self,
         record: IdempotencyState,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.maintenance.store_idempotency_record(record).await
     }
 }
@@ -127,20 +127,20 @@ mod tests {
 
     #[async_trait]
     impl MaintenancePort for StaticMaintenance {
-        async fn prune_expired_idempotency(&self, _now: DateTime<Utc>) -> ApplicationResult<usize> {
+        async fn prune_expired_idempotency(&self, _now: DateTime<Utc>) -> ServiceResult<usize> {
             Ok(3)
         }
         async fn idempotency_record(
             &self,
             _principal_id: &str,
             _key: &str,
-        ) -> ApplicationResult<Option<IdempotencyState>> {
+        ) -> ServiceResult<Option<IdempotencyState>> {
             Ok(None)
         }
         async fn store_idempotency_record(
             &self,
             _record: IdempotencyState,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }
@@ -148,7 +148,7 @@ mod tests {
     #[tokio::test]
     async fn maintenance_step_is_independent_from_the_scheduler() {
         let service =
-            JobsApplicationService::new(Arc::new(StaticMaintenance), Arc::new(StaticRuntimeHealth));
+            JobsService::new(Arc::new(StaticMaintenance), Arc::new(StaticRuntimeHealth));
         assert_eq!(
             service
                 .prune_expired_idempotency(Utc::now())
@@ -158,3 +158,4 @@ mod tests {
         );
     }
 }
+

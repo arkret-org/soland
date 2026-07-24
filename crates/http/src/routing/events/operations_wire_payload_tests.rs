@@ -38,7 +38,7 @@ fn consent_revoke_rejects_untyped_consent_id() {
 #[test]
 fn principal_control_realm_binding_enforced() {
     let principal = "did:web:alice.example";
-    let correct = soland_application::identity::principal_control_realm_for_did(principal);
+    let correct = soland_services::identity::principal_control_realm_for_did(principal);
     let payload = serde_json::json!({
         "principal_id": principal,
         "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
@@ -74,3 +74,4 @@ fn principal_control_realm_binding_enforced() {
         .is_ok()
     );
 }
+

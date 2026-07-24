@@ -1,4 +1,4 @@
-use soland_application::identity::{
+use soland_services::identity::{
     DeviceIdentity, FindAccountByActorQuery, RegisterAccountCommand, SaveDeviceCommand,
     SessionIdentityState,
 };
@@ -112,7 +112,7 @@ pub(super) async fn dev_login(
     // expires, without revealing whether the credential would otherwise
     // have been valid.
     let account = state
-        .identity_application()
+        .identities()
         .find_account_by_actor(FindAccountByActorQuery {
             actor_id: actor_str.to_owned(),
         })
@@ -136,7 +136,7 @@ pub(super) async fn dev_login(
             created_at: now(),
         };
         state
-            .identity_application()
+            .identities()
             .register_account(record)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -166,13 +166,13 @@ pub(super) async fn dev_login(
         revoked_at: None,
     };
     state
-        .session_application()
+        .sessions()
         .create_session(session)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let seen_at = now();
     let existing_devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(actor_str)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -184,7 +184,7 @@ pub(super) async fn dev_login(
         seen_at,
     );
     state
-        .identity_application()
+        .identities()
         .save_device(SaveDeviceCommand {
             actor_id: actor_str.to_owned(),
             device_id: device_id_str.to_owned(),
@@ -313,3 +313,4 @@ mod tests {
         );
     }
 }
+

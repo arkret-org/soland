@@ -129,7 +129,7 @@ pub async fn sync_token_for_client_sync_frontiers(
         to_device_position,
         notification_position,
     );
-    let handle = derive_cursor_handle(state.sync_application().cursor_hmac_key(), &binding);
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
@@ -170,7 +170,7 @@ pub(crate) async fn sync_token_for_events_query(
         filter_digest,
         &target,
     );
-    let handle = derive_cursor_handle(state.sync_application().cursor_hmac_key(), &binding);
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
@@ -205,7 +205,7 @@ async fn sync_token_for_state_positions(
 ) -> String {
     let issued_at = chrono::Utc::now();
     let binding = service_cursor_handle_binding(state.service_id(), &realms_positions);
-    let handle = derive_cursor_handle(state.sync_application().cursor_hmac_key(), &binding);
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
     let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
         .expect("one-hour stream cursor is valid")
         .with_stateful_handle(handle.clone());
@@ -356,7 +356,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
             ticker.tick().await;
             let now = chrono::Utc::now();
             let now_ms = now.timestamp_millis();
-            match state.sync_application().prune_expired_cursors(now_ms).await {
+            match state.sync().prune_expired_cursors(now_ms).await {
                 Ok(0) => {}
                 Ok(pruned) => tracing::debug!(
                     worker = "sync_cursor_ttl_sweep",
@@ -373,7 +373,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
             // this periodic sweep so its mapping table stays bounded by the
             // per-record TTL instead of growing with every keyed write.
             match state
-                .jobs_application()
+                .jobs()
                 .prune_expired_idempotency(now)
                 .await
             {
@@ -401,7 +401,7 @@ pub fn spawn_sync_cursor_ttl_sweeper(
 /// next `after=` presentation fails handle lookup and the client recovers
 /// through the spec's full-resync path (client-sync.md §12.3).
 async fn upsert_sync_cursor_record(state: &AppState, record: SyncCursorRecord) {
-    if let Err(error) = state.sync_application().upsert_cursor(&record).await {
+    if let Err(error) = state.sync().upsert_cursor(&record).await {
         tracing::warn!(%error, handle = %record.handle, "sync cursor handle upsert failed");
     }
 }
@@ -419,7 +419,7 @@ async fn stored_sync_cursor_record_by_handle(
     handle: &str,
 ) -> Result<SyncCursorRecord, SyncCursorError> {
     state
-        .sync_application()
+        .sync()
         .cursor(handle)
         .await
         .map_err(|error| {
@@ -510,7 +510,7 @@ pub async fn parse_and_validate_sync_cursor(
         .and_then(|expires_at| expires_at.as_i64())
         .is_none_or(|expires_at| expires_at <= now_ms)
     {
-        let _ = state.sync_application().delete_cursor(handle).await;
+        let _ = state.sync().delete_cursor(handle).await;
         return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
     }
     let ctx = stored
@@ -631,7 +631,7 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     let handle = cursor.h.as_str();
     let record = stored_sync_cursor_record_by_handle(state, handle).await?;
     if record.expires_at_ms <= now_ms {
-        let _ = state.sync_application().delete_cursor(handle).await;
+        let _ = state.sync().delete_cursor(handle).await;
         return Err(SyncCursorError::Integrity("sync cursor handle has expired"));
     }
     if record.purpose.as_str() != STREAM_CURSOR_PURPOSE {
@@ -821,7 +821,7 @@ pub(super) async fn account_cursor_revoke(
     } else {
         Some(session.device_id.clone())
     };
-    let application_record = soland_application::sync::CursorRevocationState {
+    let application_record = soland_services::sync::CursorRevocationState {
         cursor_digest: sha256_hex(cursor.as_bytes()),
         principal_id: session.actor.clone(),
         device_id,
@@ -836,14 +836,14 @@ pub(super) async fn account_cursor_revoke(
     // write succeeds do we update the in-memory cache that
     // `cursor_authority_revoked` consults.
     state
-        .sync_application()
+        .sync()
         .record_cursor_revocation(&application_record)
         .await
         .map_err(|error| {
             AppError::internal(format!("failed to persist cursor revocation: {error}"))
         })?;
     state
-        .sync_application()
+        .sync()
         .cache_cursor_revocation(application_record);
 
     crate::json_ok(
@@ -865,10 +865,11 @@ fn cursor_authority_revoked(
     now_ms: i64,
 ) -> bool {
     let digest = sha256_hex(token.as_bytes());
-    state.sync_application().cursor_authority_revoked(
+    state.sync().cursor_authority_revoked(
         &digest,
         session.map(|session| session.actor.as_str()),
         session.map(|session| session.device_id.as_str()),
         chrono::DateTime::from_timestamp_millis(now_ms).unwrap_or_else(chrono::Utc::now),
     )
 }
+

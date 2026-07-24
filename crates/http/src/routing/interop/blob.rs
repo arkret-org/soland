@@ -24,8 +24,8 @@ use ed25519_dalek::Signer;
 use salvo::http::{Method, ParseError, StatusCode};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::delivery::BlobState as BlobRecord;
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::delivery::BlobState as BlobRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use subtle::ConstantTimeEq as _;
@@ -292,9 +292,9 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         return;
     }
     let blob_ref = format!("ak:blob:sha256:{sha256}");
-    let storage_key = state.delivery_application().object_key_for_sha256(&sha256);
+    let storage_key = state.deliveries().object_key_for_sha256(&sha256);
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .put_object(&storage_key, bytes)
         .await
     {
@@ -310,7 +310,7 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let record = BlobRecord {
         sha256: sha256.clone(),
         size_bytes: size as i64,
-        storage_backend: state.delivery_application().object_storage_backend_name(),
+        storage_backend: state.deliveries().object_storage_backend_name(),
         storage_key: storage_key.clone(),
         media_type: media_type.clone(),
         filename: filename.clone(),
@@ -327,13 +327,13 @@ async fn blob_upload(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         created_at: received_at,
     };
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .store_blob(&blob_ref, record)
         .await
     {
         tracing::error!(%error, "failed to persist blob");
         if let Err(delete_error) = state
-            .delivery_application()
+            .deliveries()
             .delete_object(&storage_key)
             .await
         {
@@ -442,7 +442,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
         }
     };
     let mut blob = state
-        .delivery_application()
+        .deliveries()
         .blob(&blob_ref)
         .await
         .ok()
@@ -605,7 +605,7 @@ async fn blob_get(depot: &mut Depot, req: &mut Request, res: &mut Response) {
                     None => 0..total_len as u64,
                 };
                 let stream = match state
-                    .delivery_application()
+                    .deliveries()
                     .get_object_range_stream(&blob.storage_key, object_range)
                     .await
                 {
@@ -637,8 +637,8 @@ async fn try_recover_profile_avatar_blob(
     if !is_valid_sha256_hex(sha256) {
         return None;
     }
-    let storage_key = state.delivery_application().object_key_for_sha256(sha256);
-    let bytes = match state.delivery_application().get_object(&storage_key).await {
+    let storage_key = state.deliveries().object_key_for_sha256(sha256);
+    let bytes = match state.deliveries().get_object(&storage_key).await {
         Ok(bytes) => bytes,
         Err(error) => {
             tracing::debug!(%error, %blob_ref, %storage_key, "profile avatar blob metadata missing and object is unavailable");
@@ -658,7 +658,7 @@ async fn try_recover_profile_avatar_blob(
     let record = BlobRecord {
         sha256: sha256.to_owned(),
         size_bytes: bytes.len() as i64,
-        storage_backend: state.delivery_application().object_storage_backend_name(),
+        storage_backend: state.deliveries().object_storage_backend_name(),
         storage_key,
         media_type,
         filename: None,
@@ -671,7 +671,7 @@ async fn try_recover_profile_avatar_blob(
         created_at: now(),
     };
     if let Err(error) = state
-        .delivery_application()
+        .deliveries()
         .store_blob(blob_ref, record.clone())
         .await
     {
@@ -698,7 +698,7 @@ async fn blob_presign(
         return Err(AppError::invalid_param("invalid blob purpose"));
     }
     let blob = state
-        .delivery_application()
+        .deliveries()
         .blob(blob_ref)
         .await
         .ok()
@@ -1432,7 +1432,7 @@ pub(super) async fn enforce_blob_quota(
     size: usize,
 ) -> Result<(), &'static str> {
     let blobs = state
-        .delivery_application()
+        .deliveries()
         .blobs()
         .await
         .map_err(|_| "blob store unavailable")?;
@@ -1493,7 +1493,7 @@ async fn realm_presign_policy_block(
 ) -> Option<&'static str> {
     let realm_id = realm_id?;
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()??;
@@ -1854,3 +1854,4 @@ mod tests {
         assert_eq!(infer_profile_avatar_media_type(b"<svg></svg>"), None);
     }
 }
+

@@ -9,8 +9,8 @@ use arkret_models_collaboration::http_bodies::EphemeralSubmitOutcome;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::Value;
-use soland_application::delivery::{PresenceState as PresenceRecord, TypingState as TypingRecord};
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::delivery::{PresenceState as PresenceRecord, TypingState as TypingRecord};
+use soland_services::identity::SessionIdentityState as SessionRecord;
 
 use crate::routing::spaces::space::{
     PresenceVisibilityPolicy, presence_visibility_for_actor, realm_has_member,
@@ -127,7 +127,7 @@ async fn relay_ephemeral_call_signal(
     payload: &arkret_models_collaboration::events_payloads::ephemeral::CallSignalPayload,
     envelope: &arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
 ) -> Result<u64, soland_http::error::AppError> {
-    let record = soland_application::delivery::CallSignalState {
+    let record = soland_services::delivery::CallSignalState {
         realm_id: realm_id.to_owned(),
         sender_actor: session.actor.clone(),
         sender_device: session.device_id.clone(),
@@ -137,7 +137,7 @@ async fn relay_ephemeral_call_signal(
         // `append` assigns the monotonic per-Realm position.
         position: 0,
     };
-    if let Err(error) = state.delivery_application().store_call_signal(record).await {
+    if let Err(error) = state.deliveries().store_call_signal(record).await {
         tracing::error!(%error, "failed to relay ephemeral ak.call.signal");
         return Err(soland_http::error::AppError::internal(
             "failed to relay ak.call.signal for realm broadcast",
@@ -217,7 +217,7 @@ async fn persist_ephemeral_typing(
     if typing {
         if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
             state
-                .delivery_application()
+                .deliveries()
                 .remove_typing(actor, realm_id)
                 .await
                 .map_err(|error| {
@@ -237,7 +237,7 @@ async fn persist_ephemeral_typing(
             })?;
         typing_scope_allows_actor(state, realm_id, actor, Some(strand_id.as_str())).await?;
         state
-            .delivery_application()
+            .deliveries()
             .store_typing(TypingRecord {
                 actor: actor.to_owned(),
                 realm_id: realm_id.to_owned(),
@@ -261,7 +261,7 @@ async fn persist_ephemeral_typing(
         // active row outright would force receivers to wait for TTL expiry
         // because an empty snapshot cannot communicate `typing=false`.
         state
-            .delivery_application()
+            .deliveries()
             .store_typing(TypingRecord {
                 actor: actor.to_owned(),
                 realm_id: realm_id.to_owned(),
@@ -277,7 +277,7 @@ async fn persist_ephemeral_typing(
             })?;
     } else {
         state
-            .delivery_application()
+            .deliveries()
             .remove_typing(actor, realm_id)
             .await
             .map_err(|error| {
@@ -349,7 +349,7 @@ async fn persist_ephemeral_presence(
     };
     if presence_visibility_for_actor(state, actor).await == PresenceVisibilityPolicy::Nobody {
         state
-            .delivery_application()
+            .deliveries()
             .delete_presence(actor)
             .await
             .map_err(|error| {
@@ -362,7 +362,7 @@ async fn persist_ephemeral_presence(
     // proof-bound device_id is present.
     let device_id = envelope.device_id.as_str().to_owned();
     state
-        .delivery_application()
+        .deliveries()
         .store_presence(PresenceRecord {
             actor: actor.to_owned(),
             device_id,
@@ -648,3 +648,4 @@ mod tests {
         assert_eq!(error.http_status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 }
+

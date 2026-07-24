@@ -29,7 +29,7 @@ use arkret_models_identity::admin_grant::SessionGrantIntrospection;
 use parking_lot::Mutex;
 use salvo::http::StatusCode;
 use salvo::prelude::Request;
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::{AppError, ErrorCode};
 
 use crate::state::AppState;
@@ -318,3 +318,4 @@ pub(crate) async fn require_admin_scope(
     }
     Ok(grant)
 }
+

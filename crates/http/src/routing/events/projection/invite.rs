@@ -5,8 +5,8 @@ use arkret_identifiers::{Did, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_wire::PlaintextDataClassKind;
 use serde_json::Value;
-use soland_application::events::RealmInviteState as RealmInviteRecord;
-use soland_application::operation_semantics as kinds;
+use soland_services::events::RealmInviteState as RealmInviteRecord;
+use soland_services::operation_semantics as kinds;
 
 use super::*;
 use crate::ids;
@@ -46,7 +46,7 @@ pub(super) async fn project_invite_accept_operation(
         );
         return;
     };
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         tracing::warn!(invite_id = %invite_id, "ak.invite.accept references unknown invite");
         return;
@@ -99,7 +99,7 @@ pub(super) async fn project_invite_accept_operation(
         (RealmId::new(realm_id.clone()), Did::new(accepter.clone()))
     {
         state
-            .realm_directory_application()
+            .realm_directory()
             .add_member(&realm_id_typed, member_did);
     }
     project_invite_accept_membership(
@@ -132,7 +132,7 @@ fn project_invite_accept_membership(
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
         .map(ToOwned::to_owned);
-    state.projection_application().project_invite_acceptance(
+    state.projections().project_invite_acceptance(
         realm_id,
         member,
         invite_created_at,
@@ -182,7 +182,7 @@ async fn project_invite_terminal_operation(
         );
         return;
     };
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         tracing::warn!(invite_id = %invite_id, "invite terminal event references unknown invite");
         return;
@@ -297,7 +297,7 @@ pub(super) async fn project_invite_third_party_operation(state: &AppState, opera
     let join_rule_snapshot = invite_value_field(payload, invite, "join_rule_snapshot")
         .cloned()
         .unwrap_or_else(|| serde_json::json!({"join_rule": "invite"}));
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     if matches!(invites.get(&invite_id).await, Ok(Some(_))) {
         return;
     }
@@ -350,7 +350,7 @@ pub(super) async fn project_invite_claim_operation(state: &AppState, operation: 
     let Some(claim_nonce) = string_field(payload, "claim_nonce") else {
         return;
     };
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     let Ok(Some(mut record)) = invites.get(&invite_id).await else {
         return;
     };
@@ -463,7 +463,7 @@ pub(super) async fn project_invite_create_operation(
         return;
     }
 
-    let invites = state.realm_invite_application();
+    let invites = state.realm_invites();
     match invites.get(&invite_id).await {
         Ok(Some(existing)) => {
             tracing::debug!(
@@ -583,7 +583,7 @@ fn project_invited_delivery_binding(
         return;
     };
     state
-        .projection_application()
+        .projections()
         .project_invited_delivery_binding(operation, invitee, recipient_service_id.to_owned());
 }
 
@@ -898,7 +898,7 @@ pub(super) async fn project_plaintext_visible_services_operation(
     if services.is_empty() && service_classes.is_empty() {
         return;
     }
-    let service = state.realm_query_application();
+    let service = state.realms();
     let Ok(Some(mut record)) = service.realm_metadata(operation.realm_id.as_str()).await else {
         return;
     };
@@ -927,3 +927,4 @@ pub(super) async fn project_plaintext_visible_services_operation(
         tracing::warn!(%error, "failed to project plaintext visible services");
     }
 }
+

@@ -10,7 +10,7 @@ use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{CanonicalEventRecord, PersistenceResult, RealmMetaRecord};
 
-use crate::authorization::AuthorizationApplicationService;
+use crate::authorization::AuthorizationService;
 use crate::events::{RealmDirectoryEntry, RealmDirectoryIndex};
 use crate::identity::CrossSigningRegistry;
 
@@ -481,7 +481,7 @@ fn canonical_prev_refers_to(record: &soland_storage::CanonicalEventRecord, event
 async fn hydrate_canonical_realm_bootstraps(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
-    authz: &AuthorizationApplicationService,
+    authz: &AuthorizationService,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
@@ -690,7 +690,7 @@ pub async fn hydrate_canonical_realm_memberships(
 pub async fn hydrate_projections_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
-    authz: &AuthorizationApplicationService,
+    authz: &AuthorizationService,
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
@@ -1117,7 +1117,7 @@ pub async fn hydrate_projections_from_persistence(
 }
 
 pub fn hydrate_applet_install_grants(
-    authz: &AuthorizationApplicationService,
+    authz: &AuthorizationService,
     row: &Value,
     package: &AppletPackage,
     registered_at: chrono::DateTime<chrono::Utc>,
@@ -1487,3 +1487,4 @@ pub fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
 pub fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
 }
+

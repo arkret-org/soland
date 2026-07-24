@@ -100,7 +100,7 @@ pub(super) async fn require_controller_principal_control_realm(
     state: &AppState,
     session: &SessionRecord,
 ) -> Result<String, AppError> {
-    let realm_id = soland_application::identity::principal_control_realm_for_did(&session.actor);
+    let realm_id = soland_services::identity::principal_control_realm_for_did(&session.actor);
     if !crate::routing::events::event_log::realm_is_indexed(state, &realm_id) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -117,7 +117,7 @@ pub(super) async fn require_controller_principal_control_realm(
     // Startup hydration normally provides the same state, but correctness of
     // provisioning must not depend on a restart having rebuilt every cache.
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(&realm_id)
         .await
         .map_err(|err| AppError::internal(format!("self Realm metadata lookup failed: {err}")))?
@@ -137,7 +137,7 @@ fn reconcile_self_realm_owner_projection(
     state: &AppState,
     realm_id: &str,
     controller_id: &str,
-    meta: &soland_application::events::RealmMetadata,
+    meta: &soland_services::events::RealmMetadata,
 ) -> Result<(), AppError> {
     if meta.owner != controller_id {
         return Err(AppError::new(
@@ -148,7 +148,7 @@ fn reconcile_self_realm_owner_projection(
         .with_reason_code("self_realm_owner_mismatch"));
     }
 
-    if !state.projection_application().reconcile_realm_owner(
+    if !state.projections().reconcile_realm_owner(
         realm_id,
         controller_id,
         meta.deleted,
@@ -443,7 +443,7 @@ pub(super) async fn revoke_capability_grant(
     // same revoke into the in-memory authz read index before the HTTP command
     // returns so subsequent resource checks fail closed immediately.
     state
-        .authorization_application()
+        .authorization()
         .mark_projected_grant_revoked(grant_id);
     Ok(event_id)
 }
@@ -588,9 +588,9 @@ mod tests {
 
     use super::*;
 
-    fn realm_meta(owner: &str) -> soland_application::events::RealmMetadata {
+    fn realm_meta(owner: &str) -> soland_services::events::RealmMetadata {
         let now = chrono::Utc::now();
-        soland_application::events::RealmMetadata {
+        soland_services::events::RealmMetadata {
             owner: owner.to_owned(),
             deleted: false,
             discoverability: "invite_only".to_owned(),
@@ -644,7 +644,7 @@ mod tests {
         )
         .expect("durable owner should repair the missing projection");
 
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         assert!(projection.issuer_has_projected_capability(
             controller,
             realm_id,
@@ -673,7 +673,7 @@ mod tests {
 
     #[test]
     fn runtime_agent_key_scope_service_actions_are_registered() {
-        let registry = soland_application::protocol_artifacts::operation_ids();
+        let registry = soland_services::protocol_artifacts::operation_ids();
         for action in [
             SCOPE_EVENTS_STREAM_SUBSCRIBE,
             SCOPE_EVENTS_QUERY_SCAN,
@@ -688,7 +688,7 @@ mod tests {
 
     #[test]
     fn deprecated_self_events_scope_tokens_are_not_registered() {
-        let registry = soland_application::protocol_artifacts::operation_ids();
+        let registry = soland_services::protocol_artifacts::operation_ids();
         for action in [
             "events.subscribe",
             "ak.self.events.subscribe",
@@ -712,3 +712,4 @@ mod tests {
         assert!(created_at.ends_with('Z'));
     }
 }
+

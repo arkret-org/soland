@@ -42,7 +42,7 @@ pub(super) fn router() -> Router {
 /// Governance Seal frontier for a Realm: the live `SealStore` leaves.
 fn governance_seals_for_realm(state: &AppState, realm: &RealmId) -> Vec<String> {
     state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(realm)
         .unwrap_or_default()
         .into_iter()
@@ -53,7 +53,7 @@ fn governance_seals_for_realm(state: &AppState, realm: &RealmId) -> Vec<String> 
 /// Pick the highest-epoch MLS group row scoped to `realm_id` and return its
 /// `(epoch, covered_seals, committed_at_unix)`.
 fn covered_state_for_realm(state: &AppState, realm_id: &str) -> Option<(u64, Vec<String>, i64)> {
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     proj.mls_commit_epochs
         .values()
         .filter(|row| row.effective_scope.get("realm_id").and_then(Value::as_str) == Some(realm_id))
@@ -136,7 +136,7 @@ async fn advance_covered_seals(
     // this Realm (or-set merge — idempotent, dedup preserved). This is an
     // operator maintenance override, not an MLS commit, so no epoch bump.
     let lag_count = state
-        .projection_application()
+        .projections()
         .fold_realm_governance_seals(realm_id.as_str(), &governance_seals)
         .ok_or_else(|| {
             AppError::not_found(

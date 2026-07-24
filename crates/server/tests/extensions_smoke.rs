@@ -1238,7 +1238,7 @@ async fn ingest_applet_service_id_document(state: &AppState, package: &AppletPac
         .await
         .unwrap();
     state
-        .test_cache_resolved_webvh_record(soland_application::identity::DidDocumentState {
+        .test_cache_resolved_webvh_record(soland_services::identity::DidDocumentState {
             did: record.did,
             did_document: record.did_document,
             key_log_head: record.key_log_head,
@@ -1400,3 +1400,4 @@ async fn sovereign_deployment_audit_rejects_unauthenticated() {
         "deployment.audit must reject an unauthenticated caller"
     );
 }
+

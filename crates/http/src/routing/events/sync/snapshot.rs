@@ -22,7 +22,7 @@ pub(crate) async fn build_sync_snapshot(
     // the client SHOULD inline them via `identity_events[]` (gated on
     // `subject_id` disclosure).
     let candidate_realms: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -97,7 +97,7 @@ pub(crate) async fn build_sync_snapshot(
     // Clone the projection so the per-Realm loop below can `.await` async
     // visibility/timeline helpers without holding the (non-Send) lock guard
     // across a suspension point.
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let mut sync_realms = std::collections::BTreeMap::new();
     let mut timeline_positions = BTreeMap::new();
     let mut account_positions = BTreeMap::new();
@@ -107,7 +107,7 @@ pub(crate) async fn build_sync_snapshot(
         account_notification_delta(state, session, after_cursor, is_incremental).await;
     for (realm_id, title, summary, _tags, _category, join_rule, members) in visible_realms {
         let meta = state
-            .realm_query_application()
+            .realms()
             .realm_metadata(&realm_id)
             .await
             .ok()
@@ -269,7 +269,7 @@ pub(crate) async fn build_sync_snapshot(
             tracing::error!(%error, "failed to prune to-device messages during sync snapshot");
         }
         let lost_watermark = match state
-            .delivery_application()
+            .deliveries()
             .device_message_lost_watermark(&session.actor, &session.device_id)
             .await
         {
@@ -286,7 +286,7 @@ pub(crate) async fn build_sync_snapshot(
             }
         }
         let queued = state
-            .delivery_application()
+            .deliveries()
             .device_messages_after(&session.actor, &session.device_id, 0)
             .await
             .unwrap_or_default();
@@ -299,7 +299,7 @@ pub(crate) async fn build_sync_snapshot(
         if let Some(max_position) = page.iter().map(|message| message.position).max() {
             to_device_position = to_device_position.max(max_position);
             to_device_ack_token = state
-                .delivery_application()
+                .deliveries()
                 .issue_device_message_ack_token(&session.actor, &session.device_id, max_position)
                 .await
                 .ok()
@@ -391,8 +391,8 @@ async fn account_notification_delta(
         );
     };
     let Some(account) = state
-        .identity_application()
-        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+        .identities()
+        .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
             actor_id: session.actor.clone(),
         })
         .await
@@ -406,9 +406,9 @@ async fn account_notification_delta(
         );
     };
     let rows = state
-        .delivery_application()
+        .deliveries()
         .list_account_deltas(
-            soland_application::delivery::ListAccountNotificationDeltasQuery {
+            soland_services::delivery::ListAccountNotificationDeltasQuery {
                 controller_account_id: account.account_id,
                 recipient_service_id: state.service_id().clone(),
                 after_position: is_incremental.then_some(after_cursor.notification_position),
@@ -580,7 +580,7 @@ fn roster_membership_states_for_realm(
     realm_entry: &crate::state::RealmDirectoryEntry,
 ) -> BTreeMap<String, String> {
     let projected_states = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection
             .members
             .iter()
@@ -789,7 +789,7 @@ async fn timeline_events_for_realm(
     }
 
     for message in state
-        .event_query_application()
+        .event_queries()
         .messages_for_realm(realm_id, 100)
         .await
         .unwrap_or_default()
@@ -834,7 +834,7 @@ async fn timeline_events_for_realm(
     // timeline. They must remain raw Event envelopes in account sync; clients
     // derive the remove-wins reaction summary locally.
     for record in state
-        .event_query_application()
+        .event_queries()
         .realm_events_newest_first(realm_id)
         .await
         .unwrap_or_default()
@@ -897,7 +897,7 @@ async fn state_events_for_realm(
     include_current_security_baseline: bool,
 ) -> (Vec<arkret_wire::Event>, i64) {
     let events = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .unwrap_or_default()
@@ -971,7 +971,7 @@ pub(crate) fn required_security_baseline_kind(kind: &str) -> bool {
     matches!(kind, "ak.realm.create" | "ak.realm.policy_components")
 }
 
-fn projection_event_position(event: &soland_application::events::ProjectedEvent) -> i64 {
+fn projection_event_position(event: &soland_services::events::ProjectedEvent) -> i64 {
     timestamp_position_with_tie_breaker(event.received_at, &event.event_id)
 }
 
@@ -1004,7 +1004,7 @@ async fn device_lists_for_actors(
     let mut changed = BTreeSet::new();
     let mut left = BTreeSet::new();
     for actor in visible_actors {
-        let records = match state.identity_application().devices_for_actor(actor).await {
+        let records = match state.identities().devices_for_actor(actor).await {
             Ok(records) => records,
             Err(error) => {
                 tracing::error!(%error, actor, "failed to load device list for sync snapshot");
@@ -1057,7 +1057,7 @@ async fn device_lists_for_actors(
     )
 }
 
-fn device_inventory_position(record: &soland_application::identity::DeviceIdentity) -> i64 {
+fn device_inventory_position(record: &soland_services::identity::DeviceIdentity) -> i64 {
     let key = format!("{}\0{}", record.actor_id, record.device_id);
     record
         .updated_at
@@ -1073,7 +1073,7 @@ fn stable_position_tie_breaker(key: &str) -> i64 {
 
 async fn accepted_event(state: &AppState, event_id: &str) -> Option<arkret_wire::Event> {
     let record = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(event_id)
         .await
         .ok()
@@ -1096,7 +1096,7 @@ async fn account_data_events(
     };
     let mut latest = BTreeMap::<String, (DateTime<Utc>, arkret_wire::Event)>::new();
     for record in state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .unwrap_or_default()
@@ -1159,9 +1159,9 @@ async fn notification_account_data_events(
     session: &SessionRecord,
 ) -> Vec<arkret_wire::Event> {
     let rows = state
-        .delivery_application()
+        .deliveries()
         .list_recipient_notifications(
-            soland_application::delivery::ListRecipientNotificationsQuery {
+            soland_services::delivery::ListRecipientNotificationsQuery {
                 recipient_id: session.actor.clone(),
             },
         )
@@ -1265,7 +1265,7 @@ pub(super) async fn typing_envelopes_for_subscriber(
     let mut events = Vec::new();
     let mut newest_position = after_position;
     for record in state
-        .delivery_application()
+        .deliveries()
         .typing_for_realm(realm_id)
         .await
         .unwrap_or_default()
@@ -1303,18 +1303,18 @@ async fn pending_call_signal_records_for_subscriber(
     realm_id: &str,
     session: &SessionRecord,
     full_sync: bool,
-) -> Vec<soland_application::delivery::CallSignalState> {
+) -> Vec<soland_services::delivery::CallSignalState> {
     let watermark = if full_sync {
         0
     } else {
         state
-            .delivery_application()
+            .deliveries()
             .call_signal_watermark(&session.actor, &session.device_id, realm_id)
             .await
             .unwrap_or(0)
     };
     state
-        .delivery_application()
+        .deliveries()
         .call_signals_for_realm(realm_id)
         .await
         .unwrap_or_default()
@@ -1337,7 +1337,7 @@ async fn deliver_call_signal_envelopes_for_subscriber(
         pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync).await;
     if let Some(max_position) = records.iter().map(|record| record.position).max() {
         let _ = state
-            .delivery_application()
+            .deliveries()
             .advance_call_signal_watermark(
                 &session.actor,
                 &session.device_id,
@@ -1355,7 +1355,7 @@ async fn timeline_event_received_at(
     created_at: DateTime<Utc>,
 ) -> DateTime<Utc> {
     state
-        .event_query_application()
+        .event_queries()
         .canonical_event(event_id)
         .await
         .ok()
@@ -1404,7 +1404,7 @@ pub(crate) async fn projection_record_visible_to_session(
     {
         return false;
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let scope_circle_id = projection_event_scope_circle_id(&projection, event);
     circle_scope_visible_to_session(
         &projection,
@@ -1505,3 +1505,4 @@ fn circle_scope_visible_to_session(
     };
     projection.circle_scope_visible_to_actor_at(scope_circle_id, &session.actor, event_created_at)
 }
+

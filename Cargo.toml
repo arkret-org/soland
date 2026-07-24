@@ -4,7 +4,7 @@ members = [
     "xtask",
     "crates/contracts",
     "crates/domain",
-    "crates/application",
+    "crates/services",
     "crates/http",
     "crates/test-support",
     "crates/storage",
@@ -84,7 +84,7 @@ serde-saphyr = "0.0.29"
 sha2 = "0.11.0"
 soland-contracts = { version = "0.3.0", path = "crates/contracts" }
 soland-domain = { version = "0.3.0", path = "crates/domain" }
-soland-application = { version = "0.3.0", path = "crates/application" }
+soland-services = { version = "0.3.0", path = "crates/services" }
 soland-http = { version = "0.3.0", path = "crates/http" }
 soland-test-support = { version = "0.3.0", path = "crates/test-support" }
 soland-storage = { version = "0.3.0", path = "crates/storage" }
@@ -101,3 +101,4 @@ tracing-opentelemetry = { version = "0.33.0", default-features = false }
 tracing-subscriber = "0.3.23"
 uuid = "1.23.3"
 zeroize = "1.8.2"
+

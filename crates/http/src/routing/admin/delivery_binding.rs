@@ -121,7 +121,7 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
     // Locking the projection mirrors how the seal admin reads notary
     // cells in the same module.
     let value = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         {
             proj.realm_delivery_binding_policy_cell_value(&realm_id)
                 .cloned()
@@ -181,7 +181,7 @@ pub(super) async fn admin_list_member_routability(
     })?;
 
     let members: Vec<String> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .get(&realm_scope)
             .map(|realm| realm.members.iter().map(ToString::to_string).collect())
@@ -191,7 +191,7 @@ pub(super) async fn admin_list_member_routability(
     // Pull the allow-list + the per-actor recipient routes under one
     // projection lock so the view is internally consistent.
     let (allowed, routes_by_actor) = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let allowed: Vec<String> = proj
             .realm_delivery_binding_policy_cell_value(&realm_id)
             .and_then(|value| value.get("allowed_recipient_services").cloned())
@@ -311,7 +311,7 @@ pub(super) async fn admin_list_delivery_binding_handovers(
     }
 
     let entries = state
-        .governance_application()
+        .governance()
         .audit_entries()
         .await
         .unwrap_or_default();

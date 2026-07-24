@@ -11,7 +11,7 @@
 //! `append_audit_log` — internal helper used everywhere a side-effect needs
 //! to be recorded (auth, Realm lifecycle, message send, federation, etc.).
 //!
-//! All persistence access is mediated by `GovernanceApplicationService`.
+//! All persistence access is mediated by `GovernanceService`.
 
 use std::collections::BTreeMap;
 
@@ -168,7 +168,7 @@ async fn audit_erasure_receipts(
     // receipt list is the auditable surface (see method doc above).
     let _session = aa.authenticated_session(state, req).await?;
     let receipts: Vec<AuditErasureReceiptItem> = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.erasure_receipts
             .iter()
             .map(|r| {
@@ -292,7 +292,7 @@ async fn audit_events(
             return Err(AppError::not_found("audit realm not found"));
         }
         state
-            .governance_application()
+            .governance()
             .audit_entries()
             .await
             .map_err(|error| {
@@ -312,7 +312,7 @@ async fn audit_events(
             ));
         }
         state
-            .governance_application()
+            .governance()
             .audit_entries_for_actor(&actor)
             .await
             .map_err(|error| {
@@ -417,8 +417,8 @@ pub async fn append_audit_log(
         "created_at": now(),
     });
     if let Err(error) = state
-        .governance_application()
-        .append_audit_entry(soland_application::governance::AppendAuditEntryCommand { entry })
+        .governance()
+        .append_audit_entry(soland_services::governance::AppendAuditEntryCommand { entry })
         .await
     {
         // Spec: C.3.7 — every audit-append failure MUST surface to
@@ -430,3 +430,5 @@ pub async fn append_audit_log(
         crate::metrics::record_audit_append_failure();
     }
 }
+
+

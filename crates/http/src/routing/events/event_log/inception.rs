@@ -203,7 +203,7 @@ pub(super) async fn resolve_event_root_anchor_method(
     }
 
     let mut records = state
-        .did_application()
+        .dids()
         .log_events(actor_id)
         .await
         .map_err(|error| {

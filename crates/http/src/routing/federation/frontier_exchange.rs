@@ -6,8 +6,8 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::Signer as _;
 use reqwest::header::{HeaderMap, HeaderValue};
-use soland_application::events::CanonicalEventRecord;
-use soland_application::federation::FEDERATION_FRONTIER_STATUS_STALE_PEER;
+use soland_services::events::CanonicalEventRecord;
+use soland_services::federation::FEDERATION_FRONTIER_STATUS_STALE_PEER;
 
 use crate::state::AppState;
 
@@ -55,7 +55,7 @@ impl FrontierExchangeWorker {
         }
         let records = self
             .state
-            .event_query_application()
+            .event_queries()
             .canonical_events()
             .await
             .map_err(|error| error.to_string())?;
@@ -83,7 +83,7 @@ impl FrontierExchangeWorker {
                     Ok(remote_root) if remote_root == local_root => {
                         let record = self
                             .state
-                            .federation_application()
+                            .federation()
                             .record_frontier_success(&realm_id, &peer.did, &remote_root, now)
                             .await
                             .map_err(|error| error.to_string())?;
@@ -161,7 +161,7 @@ impl FrontierExchangeWorker {
     ) -> Result<(), String> {
         let record = self
             .state
-            .federation_application()
+            .federation()
             .record_frontier_failure(realm_id, peer_did, reason, observed_at)
             .await
             .map_err(|error| error.to_string())?;
@@ -337,7 +337,7 @@ pub async fn inbound_peer_is_stale(
     peer_service_id: &str,
 ) -> Result<bool, String> {
     state
-        .federation_application()
+        .federation()
         .frontier_exchange(realm_id, peer_service_id)
         .await
         .map(|record| {
@@ -381,3 +381,4 @@ mod tests {
         );
     }
 }
+

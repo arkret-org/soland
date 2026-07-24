@@ -1,7 +1,7 @@
 use arkret_event_draft::Operation;
 use serde_json::{Value, json};
-use soland_application::identity::AccountDataState;
-use soland_application::operation_semantics as kinds;
+use soland_services::identity::AccountDataState;
+use soland_services::operation_semantics as kinds;
 
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, BLOCKLIST_UPDATE_TYPE, READ_MARKER_UPDATE_TYPE,
@@ -44,7 +44,7 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
         Ok(value) => value,
         Err(_) => return,
     };
-    state.projection_application().cache_cell(cell_id, value);
+    state.projections().cache_cell(cell_id, value);
 }
 
 fn account_data_update_type(data_type: &str) -> &'static str {
@@ -124,7 +124,7 @@ pub(super) async fn project_account_data_set(
         .unwrap_or(false)
     {
         if let Err(error) = state
-            .account_data_application()
+            .account_data()
             .delete_entry(owner, data_type)
             .await
         {
@@ -163,7 +163,7 @@ pub(super) async fn project_account_data_set(
         updated_at: operation.created_at,
     };
     if let Err(error) = state
-        .account_data_application()
+        .account_data()
         .save_entry(record.clone())
         .await
     {
@@ -191,9 +191,9 @@ pub(super) async fn fanout_projection_effect_private_update(
     state: &AppState,
     origin: &str,
     source_device_id: &str,
-    effect: &soland_application::projection::ProjectionEffectView,
+    effect: &soland_services::projection::ProjectionEffectView,
 ) {
-    let soland_application::projection::ProjectionEffectView::ReadMarkerUpdated(marker) = effect
+    let soland_services::projection::ProjectionEffectView::ReadMarkerUpdated(marker) = effect
     else {
         return;
     };
@@ -222,3 +222,4 @@ pub(super) async fn fanout_projection_effect_private_update(
     )
     .await;
 }
+

@@ -33,7 +33,7 @@ fn event_digest_suite(
         realm_create_digest_algorithm(object)
     } else {
         state
-            .projection_application()
+            .projections()
             .snapshot()
             .realm_digest_algorithm(realm_id)
     }

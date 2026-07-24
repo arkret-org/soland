@@ -58,8 +58,8 @@ pub(crate) async fn contact_request(
         .is_some_and(|did| did != state.service_id());
     if !is_remote_target {
         let target_account = state
-            .identity_application()
-            .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+            .identities()
+            .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
                 actor_id: target.clone(),
             })
             .await
@@ -108,7 +108,7 @@ pub(crate) async fn contact_request(
     } else {
         message.clone()
     };
-    let contacts = state.contact_application();
+    let contacts = state.contacts();
     if let Some(mut existing) = contacts
         .contact(&session.actor, &target, &scope)
         .await
@@ -305,7 +305,7 @@ async fn has_accepted_contact_for_peer_any_scope(
     peer: &str,
 ) -> Result<bool, AppError> {
     let contacts = state
-        .contact_application()
+        .contacts()
         .contacts_for_actor(actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -369,7 +369,7 @@ async fn append_contact_fact_projection_event(
         state,
         ProjectionEventRecord {
             event_id: event_ref.to_string(),
-            realm_id: soland_application::identity::principal_control_realm_for_did(issuer),
+            realm_id: soland_services::identity::principal_control_realm_for_did(issuer),
             event_kind: event_kind.to_owned(),
             operation_type: "contact_fact".to_owned(),
             operation_id: None,
@@ -396,7 +396,7 @@ pub(crate) async fn contact_respond(
     if !matches!(body.action.as_str(), "accept" | "reject") {
         return Err(AppError::invalid_param("action must be accept or reject"));
     }
-    let contacts = state.contact_application();
+    let contacts = state.contacts();
     let Some(mut contact) = contacts
         .contact_any(body.requester.as_str(), &session.actor)
         .await
@@ -605,7 +605,7 @@ pub(crate) async fn contact_tombstone(
     // Flip every holder↔peer contact row this holder controls to
     // `tombstoned`. The holder's own outgoing rows are the authoritative
     // tombstone target.
-    let contacts = state.contact_application();
+    let contacts = state.contacts();
     let mut tombstoned_any = false;
     let tombstone_event_ref = synthetic_contact_event_ref();
     let mut requester_side_revoke_scopes = Vec::new();
@@ -670,7 +670,7 @@ pub(crate) async fn contact_tombstone(
         && let Some(policy) = blocked_invite_policy_update(state, &holder, &peer)
     {
         state
-                .contact_application()
+                .contacts()
                 .save_invite_policy(policy.clone())
                 .await
                 .map_err(|error| {
@@ -761,7 +761,7 @@ fn blocked_invite_policy_update(
 ) -> Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy> {
     let peer_did = Did::new(peer.to_owned()).ok()?;
     let mut policy = state
-        .contact_application()
+        .contacts()
         .invite_policy(holder)
         .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(holder));
     if policy.blocked_subjects.iter().any(|did| did == &peer_did) {
@@ -785,7 +785,7 @@ pub(crate) async fn get_invite_receive_policy(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy = state
-        .contact_application()
+        .contacts()
         .invite_policy(&session.actor)
         .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(&session.actor));
     json_ok(policy)
@@ -817,7 +817,7 @@ pub(crate) async fn set_invite_receive_policy(
     // Write through to durable storage so the override survives restarts
     // (hydrated back into the in-memory map by `AppState::hydrate`).
     state
-        .contact_application()
+        .contacts()
         .save_invite_policy(policy.clone())
         .await
         .map_err(|error| {
@@ -837,7 +837,7 @@ pub(crate) async fn list_contacts(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let records = state
-        .contact_application()
+        .contacts()
         .contacts_for_actor(&session.actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -1065,7 +1065,7 @@ async fn contact_list_rows(
             continue;
         }
         let Some(record) = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agent(row.peer.as_str())
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -1207,7 +1207,7 @@ pub(crate) async fn accepted_contact_for_pair(
 ) -> Result<Option<ContactRecord>, AppError> {
     for (requester, target) in [(actor, peer), (peer, actor)] {
         if let Some(contact) = state
-            .contact_application()
+            .contacts()
             .contact(requester, target, scope)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?
@@ -1309,3 +1309,4 @@ pub(crate) fn direct_resolve_response(
 
 #[cfg(test)]
 mod tests;
+

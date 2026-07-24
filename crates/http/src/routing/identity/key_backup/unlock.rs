@@ -54,8 +54,8 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     if let Some(event_id) = claimed_device_authorize_event_id {
         EventId::new(event_id.to_owned()).map_err(|_| key_backup_untrusted_signature())?;
         let record = state
-            .identity_application()
-            .find_device(soland_application::identity::FindDeviceQuery {
+            .identities()
+            .find_device(soland_services::identity::FindDeviceQuery {
                 actor_id: actor_id.to_owned(),
                 device_id: device_id.to_owned(),
             })
@@ -93,8 +93,8 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     // Resolve the device public key and confirm it is anchored under the actor's
     // current published SSK generation (cross-signing trust root).
     let device_record = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: actor_id.to_owned(),
             device_id: device_id.to_owned(),
         })
@@ -120,13 +120,13 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     .map_err(|_| key_backup_untrusted_signature())?;
     {
         if state
-            .identity_application()
+            .identities()
             .is_cross_signing_device_revoked(&principal, &device)
         {
             return Err(key_backup_untrusted_signature());
         }
         let published = state
-            .identity_application()
+            .identities()
             .current_cross_signing(&principal)
             .ok_or_else(key_backup_untrusted_signature)?;
         let published_generation = published.generation.get();
@@ -210,7 +210,7 @@ pub(super) fn key_backup_canonical_digest_without_signature(
 }
 
 pub(super) fn recovery_session_proof_summary(
-    record: &soland_application::identity::RecoverySessionState,
+    record: &soland_services::identity::RecoverySessionState,
 ) -> Option<(String, String)> {
     let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
     let kind = proof.get("kind").and_then(Value::as_str)?;
@@ -452,7 +452,7 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
 ) -> Result<(), AppError> {
     let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
     let Some(record) = state
-        .recovery_session_application()
+        .recovery_sessions()
         .session(recovery_session_id)
         .await
         .map_err(|error| AppError::internal(format!("recovery session lookup failed: {error}")))?
@@ -541,3 +541,4 @@ mod tests {
         // future closed-set widening cannot silently fail open here.
     }
 }
+

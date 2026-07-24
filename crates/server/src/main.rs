@@ -2,7 +2,7 @@ use anyhow::Context;
 use salvo::conn::Acceptor;
 use salvo::conn::rustls::{Keycert, RustlsConfig};
 use salvo::prelude::*;
-use soland_application::validate_embedded_artifacts;
+use soland_services::validate_embedded_artifacts;
 use soland_http::config::AppConfig;
 use soland_http::multisig_watchdog::{MultisigWatchdog, MultisigWatchdogConfig};
 use soland_http::service;
@@ -549,7 +549,7 @@ async fn service_identity_waiting(res: &mut Response) {
 
 fn spawn_service_identity_supervisor(
     state: AppState,
-    persistence: soland_application::persistence::PersistenceHandle,
+    persistence: soland_services::persistence::PersistenceHandle,
     key_store: Option<std::sync::Arc<dyn arkret_keystore::KeyStore>>,
 ) {
     if !matches!(
@@ -940,3 +940,4 @@ async fn run_healthcheck(args: &[String]) -> anyhow::Result<()> {
         }
     }
 }
+

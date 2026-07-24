@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 #[derive(Clone, Debug)]
 pub struct MultisigPendingRecord {
@@ -95,13 +95,13 @@ pub trait AdminSigningKeyPort: Send + Sync {
 
 #[async_trait]
 pub trait RuntimeSettingsPort: Send + Sync {
-    async fn load_overrides(&self) -> ApplicationResult<Vec<(String, Value)>>;
+    async fn load_overrides(&self) -> ServiceResult<Vec<(String, Value)>>;
     async fn store_override(
         &self,
         key: &str,
         value: &Value,
         updated_by: &str,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
 }
 
 #[derive(Clone, Debug)]
@@ -111,22 +111,22 @@ pub struct AppendAuditEntryCommand {
 
 #[async_trait]
 pub trait AuditLogPort: Send + Sync {
-    async fn append(&self, entry: Value) -> ApplicationResult<()>;
-    async fn entries(&self) -> ApplicationResult<Vec<Value>>;
-    async fn entries_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<Value>>;
+    async fn append(&self, entry: Value) -> ServiceResult<()>;
+    async fn entries(&self) -> ServiceResult<Vec<Value>>;
+    async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>>;
 }
 
 #[async_trait]
 pub trait ModerationPort: Send + Sync {
-    async fn append_report(&self, report: Value) -> ApplicationResult<()>;
-    async fn append_action(&self, action: Value) -> ApplicationResult<()>;
-    async fn reports(&self) -> ApplicationResult<Vec<Value>>;
-    async fn upsert_queue_item(&self, item: Value) -> ApplicationResult<()>;
-    async fn queue_items(&self) -> ApplicationResult<Vec<Value>>;
-    async fn queue_item(&self, id: &str) -> ApplicationResult<Option<Value>>;
-    async fn append_appeal(&self, appeal: Value) -> ApplicationResult<()>;
-    async fn appeals(&self) -> ApplicationResult<Vec<Value>>;
-    async fn appeal_history(&self, appeal_id: &str) -> ApplicationResult<Vec<Value>>;
+    async fn append_report(&self, report: Value) -> ServiceResult<()>;
+    async fn append_action(&self, action: Value) -> ServiceResult<()>;
+    async fn reports(&self) -> ServiceResult<Vec<Value>>;
+    async fn upsert_queue_item(&self, item: Value) -> ServiceResult<()>;
+    async fn queue_items(&self) -> ServiceResult<Vec<Value>>;
+    async fn queue_item(&self, id: &str) -> ServiceResult<Option<Value>>;
+    async fn append_appeal(&self, appeal: Value) -> ServiceResult<()>;
+    async fn appeals(&self) -> ServiceResult<Vec<Value>>;
+    async fn appeal_history(&self, appeal_id: &str) -> ServiceResult<Vec<Value>>;
 }
 
 #[async_trait]
@@ -134,93 +134,93 @@ pub trait GovernanceRecordsPort: Send + Sync {
     async fn organization(
         &self,
         organization_id: &str,
-    ) -> ApplicationResult<Option<OrganizationRecord>>;
-    async fn store_organization(&self, record: &OrganizationRecord) -> ApplicationResult<()>;
-    async fn organizations(&self) -> ApplicationResult<Vec<OrganizationRecord>>;
+    ) -> ServiceResult<Option<OrganizationRecord>>;
+    async fn store_organization(&self, record: &OrganizationRecord) -> ServiceResult<()>;
+    async fn organizations(&self) -> ServiceResult<Vec<OrganizationRecord>>;
     async fn organization_policy(
         &self,
         organization_id: &str,
-    ) -> ApplicationResult<Option<OrganizationPolicyRecord>>;
+    ) -> ServiceResult<Option<OrganizationPolicyRecord>>;
     async fn store_organization_policy(
         &self,
         record: &OrganizationPolicyRecord,
-    ) -> ApplicationResult<()>;
-    async fn organization_policies(&self) -> ApplicationResult<Vec<OrganizationPolicyRecord>>;
+    ) -> ServiceResult<()>;
+    async fn organization_policies(&self) -> ServiceResult<Vec<OrganizationPolicyRecord>>;
     async fn link_realm_organization(
         &self,
         realm_id: &str,
         organization_id: &str,
-    ) -> ApplicationResult<()>;
-    async fn realm_organization_links(&self) -> ApplicationResult<Vec<(String, BTreeSet<String>)>>;
+    ) -> ServiceResult<()>;
+    async fn realm_organization_links(&self) -> ServiceResult<Vec<(String, BTreeSet<String>)>>;
     async fn store_realm_moderation_policy(
         &self,
         record: &RealmModerationPolicyRecord,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn realm_moderation_policies(
         &self,
-    ) -> ApplicationResult<Vec<RealmModerationPolicyRecord>>;
+    ) -> ServiceResult<Vec<RealmModerationPolicyRecord>>;
     async fn policy_document(
         &self,
         policy_id: &str,
-    ) -> ApplicationResult<Option<PolicyDocumentRecord>>;
-    async fn store_policy_document(&self, record: PolicyDocumentRecord) -> ApplicationResult<()>;
-    async fn delete_policy_document(&self, policy_id: &str) -> ApplicationResult<bool>;
+    ) -> ServiceResult<Option<PolicyDocumentRecord>>;
+    async fn store_policy_document(&self, record: PolicyDocumentRecord) -> ServiceResult<()>;
+    async fn delete_policy_document(&self, policy_id: &str) -> ServiceResult<bool>;
     async fn policy_documents_for_owner(
         &self,
         owner: &str,
-    ) -> ApplicationResult<Vec<PolicyDocumentRecord>>;
-    async fn policy_documents(&self) -> ApplicationResult<Vec<PolicyDocumentRecord>>;
-    async fn active_policy_documents(&self) -> ApplicationResult<Vec<PolicyDocumentRecord>>;
+    ) -> ServiceResult<Vec<PolicyDocumentRecord>>;
+    async fn policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>>;
+    async fn active_policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>>;
     async fn retention_policy(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Option<RetentionPolicyRecord>>;
+    ) -> ServiceResult<Option<RetentionPolicyRecord>>;
     async fn store_retention_policy(&self, record: &RetentionPolicyRecord)
-    -> ApplicationResult<()>;
+    -> ServiceResult<()>;
     async fn retention_tombstone(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Option<RetentionTombstoneRecord>>;
-    async fn retention_tombstones(&self) -> ApplicationResult<Vec<RetentionTombstoneRecord>>;
+    ) -> ServiceResult<Option<RetentionTombstoneRecord>>;
+    async fn retention_tombstones(&self) -> ServiceResult<Vec<RetentionTombstoneRecord>>;
     async fn store_retention_tombstone(
         &self,
         record: &RetentionTombstoneRecord,
-    ) -> ApplicationResult<()>;
+    ) -> ServiceResult<()>;
     async fn multisig_pending(
         &self,
         seal_id: &str,
-    ) -> ApplicationResult<Option<MultisigPendingRecord>>;
-    async fn store_multisig_pending(&self, record: MultisigPendingRecord) -> ApplicationResult<()>;
+    ) -> ServiceResult<Option<MultisigPendingRecord>>;
+    async fn store_multisig_pending(&self, record: MultisigPendingRecord) -> ServiceResult<()>;
     async fn multisig_pending_for_realm(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<MultisigPendingRecord>>;
-    async fn multisig_pending_all(&self) -> ApplicationResult<Vec<MultisigPendingRecord>>;
+    ) -> ServiceResult<Vec<MultisigPendingRecord>>;
+    async fn multisig_pending_all(&self) -> ServiceResult<Vec<MultisigPendingRecord>>;
     async fn claim_multisig_pending(
         &self,
         seal_id: &str,
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<(bool, i64)>;
-    async fn release_multisig_claim(&self, seal_id: &str, node_id: &str) -> ApplicationResult<()>;
+    ) -> ServiceResult<(bool, i64)>;
+    async fn release_multisig_claim(&self, seal_id: &str, node_id: &str) -> ServiceResult<()>;
     async fn delete_multisig_with_fence(
         &self,
         seal_id: &str,
         node_id: &str,
         claim_seq: i64,
-    ) -> ApplicationResult<bool>;
+    ) -> ServiceResult<bool>;
     async fn renew_multisig_claim(
         &self,
         seal_id: &str,
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<bool>;
+    ) -> ServiceResult<bool>;
 }
 
 #[derive(Clone)]
-pub struct GovernanceApplicationService {
+pub struct GovernanceService {
     audit_log: Arc<dyn AuditLogPort>,
     moderation: Arc<dyn ModerationPort>,
     records: Arc<dyn GovernanceRecordsPort>,
@@ -234,8 +234,8 @@ pub struct GovernanceApplicationService {
     runtime_settings: Arc<dyn RuntimeSettingsPort>,
 }
 
-impl GovernanceApplicationService {
-    pub async fn hydrate_projections(&self) -> ApplicationResult<()> {
+impl GovernanceService {
+    pub async fn hydrate_projections(&self) -> ServiceResult<()> {
         let retention_tombstones = self.records.retention_tombstones().await?;
         let organizations = self.records.organizations().await?;
         let organization_policies = self.records.organization_policies().await?;
@@ -255,11 +255,11 @@ impl GovernanceApplicationService {
     pub async fn organization(
         &self,
         organization_id: &str,
-    ) -> ApplicationResult<Option<OrganizationRecord>> {
+    ) -> ServiceResult<Option<OrganizationRecord>> {
         self.records.organization(organization_id).await
     }
 
-    pub async fn store_organization(&self, record: &OrganizationRecord) -> ApplicationResult<()> {
+    pub async fn store_organization(&self, record: &OrganizationRecord) -> ServiceResult<()> {
         self.records.store_organization(record).await?;
         self.organizations
             .lock()
@@ -267,21 +267,21 @@ impl GovernanceApplicationService {
         Ok(())
     }
 
-    pub async fn organizations(&self) -> ApplicationResult<Vec<OrganizationRecord>> {
+    pub async fn organizations(&self) -> ServiceResult<Vec<OrganizationRecord>> {
         self.records.organizations().await
     }
 
     pub async fn organization_policy(
         &self,
         organization_id: &str,
-    ) -> ApplicationResult<Option<OrganizationPolicyRecord>> {
+    ) -> ServiceResult<Option<OrganizationPolicyRecord>> {
         self.records.organization_policy(organization_id).await
     }
 
     pub async fn store_organization_policy(
         &self,
         record: &OrganizationPolicyRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.store_organization_policy(record).await?;
         self.organization_policies
             .lock()
@@ -289,7 +289,7 @@ impl GovernanceApplicationService {
         Ok(())
     }
 
-    pub async fn organization_policies(&self) -> ApplicationResult<Vec<OrganizationPolicyRecord>> {
+    pub async fn organization_policies(&self) -> ServiceResult<Vec<OrganizationPolicyRecord>> {
         self.records.organization_policies().await
     }
 
@@ -297,7 +297,7 @@ impl GovernanceApplicationService {
         &self,
         realm_id: &str,
         organization_id: &str,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records
             .link_realm_organization(realm_id, organization_id)
             .await?;
@@ -316,14 +316,14 @@ impl GovernanceApplicationService {
 
     pub async fn realm_organization_links(
         &self,
-    ) -> ApplicationResult<Vec<(String, BTreeSet<String>)>> {
+    ) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
         self.records.realm_organization_links().await
     }
 
     pub async fn store_realm_moderation_policy(
         &self,
         record: &RealmModerationPolicyRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.store_realm_moderation_policy(record).await?;
         self.realm_moderation_policies
             .lock()
@@ -333,7 +333,7 @@ impl GovernanceApplicationService {
 
     pub async fn realm_moderation_policies(
         &self,
-    ) -> ApplicationResult<Vec<RealmModerationPolicyRecord>> {
+    ) -> ServiceResult<Vec<RealmModerationPolicyRecord>> {
         self.records.realm_moderation_policies().await
     }
 
@@ -366,7 +366,7 @@ impl GovernanceApplicationService {
         self.admin_signing_keys.load_admin_key(admin_did)
     }
 
-    pub async fn runtime_setting_overrides(&self) -> ApplicationResult<Vec<(String, Value)>> {
+    pub async fn runtime_setting_overrides(&self) -> ServiceResult<Vec<(String, Value)>> {
         self.runtime_settings.load_overrides().await
     }
 
@@ -375,7 +375,7 @@ impl GovernanceApplicationService {
         key: &str,
         value: &Value,
         updated_by: &str,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.runtime_settings
             .store_override(key, value, updated_by)
             .await
@@ -483,107 +483,107 @@ impl GovernanceApplicationService {
     pub async fn append_audit_entry(
         &self,
         command: AppendAuditEntryCommand,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.audit_log.append(command.entry).await
     }
 
-    pub async fn audit_entries_for_actor(&self, actor_id: &str) -> ApplicationResult<Vec<Value>> {
+    pub async fn audit_entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>> {
         self.audit_log.entries_for_actor(actor_id).await
     }
 
-    pub async fn audit_entries(&self) -> ApplicationResult<Vec<Value>> {
+    pub async fn audit_entries(&self) -> ServiceResult<Vec<Value>> {
         self.audit_log.entries().await
     }
 
-    pub async fn append_moderation_report(&self, report: Value) -> ApplicationResult<()> {
+    pub async fn append_moderation_report(&self, report: Value) -> ServiceResult<()> {
         self.moderation.append_report(report).await
     }
-    pub async fn append_moderation_action(&self, action: Value) -> ApplicationResult<()> {
+    pub async fn append_moderation_action(&self, action: Value) -> ServiceResult<()> {
         self.moderation.append_action(action).await
     }
-    pub async fn moderation_reports(&self) -> ApplicationResult<Vec<Value>> {
+    pub async fn moderation_reports(&self) -> ServiceResult<Vec<Value>> {
         self.moderation.reports().await
     }
-    pub async fn upsert_moderation_queue_item(&self, item: Value) -> ApplicationResult<()> {
+    pub async fn upsert_moderation_queue_item(&self, item: Value) -> ServiceResult<()> {
         self.moderation.upsert_queue_item(item).await
     }
-    pub async fn moderation_queue_items(&self) -> ApplicationResult<Vec<Value>> {
+    pub async fn moderation_queue_items(&self) -> ServiceResult<Vec<Value>> {
         self.moderation.queue_items().await
     }
-    pub async fn moderation_queue_item(&self, id: &str) -> ApplicationResult<Option<Value>> {
+    pub async fn moderation_queue_item(&self, id: &str) -> ServiceResult<Option<Value>> {
         self.moderation.queue_item(id).await
     }
-    pub async fn append_moderation_appeal(&self, appeal: Value) -> ApplicationResult<()> {
+    pub async fn append_moderation_appeal(&self, appeal: Value) -> ServiceResult<()> {
         self.moderation.append_appeal(appeal).await
     }
-    pub async fn moderation_appeals(&self) -> ApplicationResult<Vec<Value>> {
+    pub async fn moderation_appeals(&self) -> ServiceResult<Vec<Value>> {
         self.moderation.appeals().await
     }
     pub async fn moderation_appeal_history(
         &self,
         appeal_id: &str,
-    ) -> ApplicationResult<Vec<Value>> {
+    ) -> ServiceResult<Vec<Value>> {
         self.moderation.appeal_history(appeal_id).await
     }
 
     pub async fn retention_policy(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Option<RetentionPolicyRecord>> {
+    ) -> ServiceResult<Option<RetentionPolicyRecord>> {
         self.records.retention_policy(realm_id).await
     }
 
     pub async fn policy_document(
         &self,
         policy_id: &str,
-    ) -> ApplicationResult<Option<PolicyDocumentRecord>> {
+    ) -> ServiceResult<Option<PolicyDocumentRecord>> {
         self.records.policy_document(policy_id).await
     }
 
     pub async fn store_policy_document(
         &self,
         record: PolicyDocumentRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.store_policy_document(record).await
     }
 
-    pub async fn delete_policy_document(&self, policy_id: &str) -> ApplicationResult<bool> {
+    pub async fn delete_policy_document(&self, policy_id: &str) -> ServiceResult<bool> {
         self.records.delete_policy_document(policy_id).await
     }
 
     pub async fn policy_documents_for_owner(
         &self,
         owner: &str,
-    ) -> ApplicationResult<Vec<PolicyDocumentRecord>> {
+    ) -> ServiceResult<Vec<PolicyDocumentRecord>> {
         self.records.policy_documents_for_owner(owner).await
     }
 
-    pub async fn policy_documents(&self) -> ApplicationResult<Vec<PolicyDocumentRecord>> {
+    pub async fn policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
         self.records.policy_documents().await
     }
 
-    pub async fn active_policy_documents(&self) -> ApplicationResult<Vec<PolicyDocumentRecord>> {
+    pub async fn active_policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
         self.records.active_policy_documents().await
     }
 
     pub async fn store_retention_policy(
         &self,
         record: &RetentionPolicyRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.store_retention_policy(record).await
     }
 
     pub async fn retention_tombstone(
         &self,
         event_id: &str,
-    ) -> ApplicationResult<Option<RetentionTombstoneRecord>> {
+    ) -> ServiceResult<Option<RetentionTombstoneRecord>> {
         self.records.retention_tombstone(event_id).await
     }
 
     pub async fn store_retention_tombstone(
         &self,
         record: &RetentionTombstoneRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.store_retention_tombstone(record).await?;
         self.retention_tombstones
             .lock()
@@ -594,25 +594,25 @@ impl GovernanceApplicationService {
     pub async fn multisig_pending(
         &self,
         seal_id: &str,
-    ) -> ApplicationResult<Option<MultisigPendingRecord>> {
+    ) -> ServiceResult<Option<MultisigPendingRecord>> {
         self.records.multisig_pending(seal_id).await
     }
 
     pub async fn store_multisig_pending(
         &self,
         record: MultisigPendingRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.store_multisig_pending(record).await
     }
 
     pub async fn multisig_pending_for_realm(
         &self,
         realm_id: &str,
-    ) -> ApplicationResult<Vec<MultisigPendingRecord>> {
+    ) -> ServiceResult<Vec<MultisigPendingRecord>> {
         self.records.multisig_pending_for_realm(realm_id).await
     }
 
-    pub async fn multisig_pending_all(&self) -> ApplicationResult<Vec<MultisigPendingRecord>> {
+    pub async fn multisig_pending_all(&self) -> ServiceResult<Vec<MultisigPendingRecord>> {
         self.records.multisig_pending_all().await
     }
 
@@ -622,7 +622,7 @@ impl GovernanceApplicationService {
         node_id: &str,
         now: chrono::DateTime<chrono::Utc>,
         claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<(bool, i64)> {
+    ) -> ServiceResult<(bool, i64)> {
         self.records
             .claim_multisig_pending(seal_id, node_id, now, claimed_until)
             .await
@@ -632,7 +632,7 @@ impl GovernanceApplicationService {
         &self,
         seal_id: &str,
         node_id: &str,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.records.release_multisig_claim(seal_id, node_id).await
     }
 
@@ -641,7 +641,7 @@ impl GovernanceApplicationService {
         seal_id: &str,
         node_id: &str,
         claim_seq: i64,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         self.records
             .delete_multisig_with_fence(seal_id, node_id, claim_seq)
             .await
@@ -653,7 +653,7 @@ impl GovernanceApplicationService {
         node_id: &str,
         claim_seq: i64,
         new_claimed_until: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         self.records
             .renew_multisig_claim(seal_id, node_id, claim_seq, new_claimed_until)
             .await
@@ -682,7 +682,7 @@ mod tests {
 
     #[async_trait]
     impl RuntimeSettingsPort for NoRuntimeSettings {
-        async fn load_overrides(&self) -> ApplicationResult<Vec<(String, Value)>> {
+        async fn load_overrides(&self) -> ServiceResult<Vec<(String, Value)>> {
             Ok(Vec::new())
         }
 
@@ -691,7 +691,7 @@ mod tests {
             _key: &str,
             _value: &Value,
             _updated_by: &str,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }
@@ -702,126 +702,126 @@ mod tests {
         async fn organization(
             &self,
             _organization_id: &str,
-        ) -> ApplicationResult<Option<OrganizationRecord>> {
+        ) -> ServiceResult<Option<OrganizationRecord>> {
             Ok(None)
         }
-        async fn store_organization(&self, _record: &OrganizationRecord) -> ApplicationResult<()> {
+        async fn store_organization(&self, _record: &OrganizationRecord) -> ServiceResult<()> {
             Ok(())
         }
-        async fn organizations(&self) -> ApplicationResult<Vec<OrganizationRecord>> {
+        async fn organizations(&self) -> ServiceResult<Vec<OrganizationRecord>> {
             Ok(Vec::new())
         }
         async fn organization_policy(
             &self,
             _organization_id: &str,
-        ) -> ApplicationResult<Option<OrganizationPolicyRecord>> {
+        ) -> ServiceResult<Option<OrganizationPolicyRecord>> {
             Ok(None)
         }
         async fn store_organization_policy(
             &self,
             _record: &OrganizationPolicyRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn organization_policies(&self) -> ApplicationResult<Vec<OrganizationPolicyRecord>> {
+        async fn organization_policies(&self) -> ServiceResult<Vec<OrganizationPolicyRecord>> {
             Ok(Vec::new())
         }
         async fn link_realm_organization(
             &self,
             _realm_id: &str,
             _organization_id: &str,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn realm_organization_links(
             &self,
-        ) -> ApplicationResult<Vec<(String, BTreeSet<String>)>> {
+        ) -> ServiceResult<Vec<(String, BTreeSet<String>)>> {
             Ok(Vec::new())
         }
         async fn store_realm_moderation_policy(
             &self,
             _record: &RealmModerationPolicyRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn realm_moderation_policies(
             &self,
-        ) -> ApplicationResult<Vec<RealmModerationPolicyRecord>> {
+        ) -> ServiceResult<Vec<RealmModerationPolicyRecord>> {
             Ok(Vec::new())
         }
         async fn policy_document(
             &self,
             _policy_id: &str,
-        ) -> ApplicationResult<Option<PolicyDocumentRecord>> {
+        ) -> ServiceResult<Option<PolicyDocumentRecord>> {
             Ok(None)
         }
         async fn store_policy_document(
             &self,
             _record: PolicyDocumentRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn delete_policy_document(&self, _policy_id: &str) -> ApplicationResult<bool> {
+        async fn delete_policy_document(&self, _policy_id: &str) -> ServiceResult<bool> {
             Ok(false)
         }
         async fn policy_documents_for_owner(
             &self,
             _owner: &str,
-        ) -> ApplicationResult<Vec<PolicyDocumentRecord>> {
+        ) -> ServiceResult<Vec<PolicyDocumentRecord>> {
             Ok(Vec::new())
         }
-        async fn policy_documents(&self) -> ApplicationResult<Vec<PolicyDocumentRecord>> {
+        async fn policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
             Ok(Vec::new())
         }
-        async fn active_policy_documents(&self) -> ApplicationResult<Vec<PolicyDocumentRecord>> {
+        async fn active_policy_documents(&self) -> ServiceResult<Vec<PolicyDocumentRecord>> {
             Ok(Vec::new())
         }
         async fn retention_policy(
             &self,
             _realm_id: &str,
-        ) -> ApplicationResult<Option<RetentionPolicyRecord>> {
+        ) -> ServiceResult<Option<RetentionPolicyRecord>> {
             Ok(None)
         }
         async fn store_retention_policy(
             &self,
             _record: &RetentionPolicyRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn retention_tombstone(
             &self,
             _event_id: &str,
-        ) -> ApplicationResult<Option<RetentionTombstoneRecord>> {
+        ) -> ServiceResult<Option<RetentionTombstoneRecord>> {
             Ok(None)
         }
-        async fn retention_tombstones(&self) -> ApplicationResult<Vec<RetentionTombstoneRecord>> {
+        async fn retention_tombstones(&self) -> ServiceResult<Vec<RetentionTombstoneRecord>> {
             Ok(Vec::new())
         }
         async fn store_retention_tombstone(
             &self,
             _record: &RetentionTombstoneRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn multisig_pending(
             &self,
             _seal_id: &str,
-        ) -> ApplicationResult<Option<MultisigPendingRecord>> {
+        ) -> ServiceResult<Option<MultisigPendingRecord>> {
             Ok(None)
         }
         async fn store_multisig_pending(
             &self,
             _record: MultisigPendingRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn multisig_pending_for_realm(
             &self,
             _realm_id: &str,
-        ) -> ApplicationResult<Vec<MultisigPendingRecord>> {
+        ) -> ServiceResult<Vec<MultisigPendingRecord>> {
             Ok(Vec::new())
         }
-        async fn multisig_pending_all(&self) -> ApplicationResult<Vec<MultisigPendingRecord>> {
+        async fn multisig_pending_all(&self) -> ServiceResult<Vec<MultisigPendingRecord>> {
             Ok(Vec::new())
         }
         async fn claim_multisig_pending(
@@ -830,14 +830,14 @@ mod tests {
             _node_id: &str,
             _now: chrono::DateTime<chrono::Utc>,
             _claimed_until: chrono::DateTime<chrono::Utc>,
-        ) -> ApplicationResult<(bool, i64)> {
+        ) -> ServiceResult<(bool, i64)> {
             Ok((false, 0))
         }
         async fn release_multisig_claim(
             &self,
             _seal_id: &str,
             _node_id: &str,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
         async fn delete_multisig_with_fence(
@@ -845,7 +845,7 @@ mod tests {
             _seal_id: &str,
             _node_id: &str,
             _claim_seq: i64,
-        ) -> ApplicationResult<bool> {
+        ) -> ServiceResult<bool> {
             Ok(false)
         }
         async fn renew_multisig_claim(
@@ -854,54 +854,54 @@ mod tests {
             _node_id: &str,
             _claim_seq: i64,
             _new_claimed_until: chrono::DateTime<chrono::Utc>,
-        ) -> ApplicationResult<bool> {
+        ) -> ServiceResult<bool> {
             Ok(false)
         }
     }
 
     #[async_trait]
     impl ModerationPort for NoModeration {
-        async fn append_report(&self, _report: Value) -> ApplicationResult<()> {
+        async fn append_report(&self, _report: Value) -> ServiceResult<()> {
             Ok(())
         }
-        async fn append_action(&self, _action: Value) -> ApplicationResult<()> {
+        async fn append_action(&self, _action: Value) -> ServiceResult<()> {
             Ok(())
         }
-        async fn reports(&self) -> ApplicationResult<Vec<Value>> {
+        async fn reports(&self) -> ServiceResult<Vec<Value>> {
             Ok(Vec::new())
         }
-        async fn upsert_queue_item(&self, _item: Value) -> ApplicationResult<()> {
+        async fn upsert_queue_item(&self, _item: Value) -> ServiceResult<()> {
             Ok(())
         }
-        async fn queue_items(&self) -> ApplicationResult<Vec<Value>> {
+        async fn queue_items(&self) -> ServiceResult<Vec<Value>> {
             Ok(Vec::new())
         }
-        async fn queue_item(&self, _id: &str) -> ApplicationResult<Option<Value>> {
+        async fn queue_item(&self, _id: &str) -> ServiceResult<Option<Value>> {
             Ok(None)
         }
-        async fn append_appeal(&self, _appeal: Value) -> ApplicationResult<()> {
+        async fn append_appeal(&self, _appeal: Value) -> ServiceResult<()> {
             Ok(())
         }
-        async fn appeals(&self) -> ApplicationResult<Vec<Value>> {
+        async fn appeals(&self) -> ServiceResult<Vec<Value>> {
             Ok(Vec::new())
         }
-        async fn appeal_history(&self, _appeal_id: &str) -> ApplicationResult<Vec<Value>> {
+        async fn appeal_history(&self, _appeal_id: &str) -> ServiceResult<Vec<Value>> {
             Ok(Vec::new())
         }
     }
 
     #[async_trait]
     impl AuditLogPort for RecordingAuditLog {
-        async fn append(&self, entry: Value) -> ApplicationResult<()> {
+        async fn append(&self, entry: Value) -> ServiceResult<()> {
             self.0.lock().expect("audit lock").push(entry);
             Ok(())
         }
 
-        async fn entries(&self) -> ApplicationResult<Vec<Value>> {
+        async fn entries(&self) -> ServiceResult<Vec<Value>> {
             Ok(self.0.lock().expect("audit lock").clone())
         }
 
-        async fn entries_for_actor(&self, _actor_id: &str) -> ApplicationResult<Vec<Value>> {
+        async fn entries_for_actor(&self, _actor_id: &str) -> ServiceResult<Vec<Value>> {
             Ok(self.0.lock().expect("audit lock").clone())
         }
     }
@@ -909,7 +909,7 @@ mod tests {
     #[tokio::test]
     async fn audit_append_uses_only_the_audit_port() {
         let port = Arc::new(RecordingAuditLog::default());
-        let service = GovernanceApplicationService::new(
+        let service = GovernanceService::new(
             port.clone(),
             Arc::new(NoModeration),
             Arc::new(NoGovernanceRecords),
@@ -933,3 +933,4 @@ mod tests {
         );
     }
 }
+

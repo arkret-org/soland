@@ -485,7 +485,7 @@ pub(crate) fn reject_subscribe_reconnect(
     res: &mut Response,
 ) -> bool {
     let retry_after_ms = state
-        .sync_application()
+        .sync()
         .subscribe_retry_after_ms(subscribe_scope_key, Utc::now());
     if let Some(retry_after_ms) = retry_after_ms {
         render_subscribe_rate_limited(res, retry_after_ms);
@@ -499,7 +499,7 @@ pub(crate) fn arm_subscribe_reconnect(
     subscribe_scope_key: &str,
     reconnect_after_ms: u64,
 ) {
-    state.sync_application().arm_subscribe_reconnect(
+    state.sync().arm_subscribe_reconnect(
         subscribe_scope_key.to_owned(),
         Utc::now(),
         reconnect_after_ms,
@@ -1058,8 +1058,8 @@ async fn events_query_impl(
 /// else from the realm timeline.
 async fn events_query_event_visible(
     state: &AppState,
-    event: &soland_application::events::ProjectedEvent,
-    session: Option<&soland_application::identity::SessionIdentityState>,
+    event: &soland_services::events::ProjectedEvent,
+    session: Option<&soland_services::identity::SessionIdentityState>,
     recovery_only: bool,
     managed_agent_control: bool,
 ) -> bool {
@@ -1118,7 +1118,7 @@ async fn full_event_from_projection_json(
         return projection_only_event_from_row(state, row);
     }
     if let Ok(Some(record)) = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(event_id)
         .await
         && let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record)
@@ -1179,7 +1179,7 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
 
 #[cfg(test)]
 mod tests {
-    use soland_application::events::CanonicalEventRecord;
+    use soland_services::events::CanonicalEventRecord;
 
     use super::*;
 
@@ -1226,7 +1226,7 @@ mod tests {
     ) {
         let canonical_bytes = serde_json::to_vec(&envelope).unwrap();
         state
-            .event_query_application()
+            .event_queries()
             .store_canonical_event(CanonicalEventRecord {
                 event_id: event_id.to_owned(),
                 actor_id: TEST_ACTOR.to_owned(),
@@ -1400,7 +1400,7 @@ async fn durable_events_query_from_parts(
     let actors_set: BTreeSet<&str> = parts.actors.iter().map(String::as_str).collect();
     let realms_set: BTreeSet<&str> = parts.realms.iter().map(String::as_str).collect();
     let all_records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .unwrap_or_default();
@@ -1511,3 +1511,4 @@ pub(super) async fn snapshot_head(
         })?;
     soland_http::result::json_ok(manifest)
 }
+

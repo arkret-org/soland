@@ -99,7 +99,7 @@ pub(super) fn admin_signer_for(
 ) -> Result<Ed25519MoveSigner, AppError> {
     let admin_did = Did::new(admin_did_str.to_owned())
         .map_err(|e| app_error!(InvalidParam, "invalid admin DID `{admin_did_str}`: {e}"))?;
-    match state.governance_application().admin_signing_key(&admin_did) {
+    match state.governance().admin_signing_key(&admin_did) {
         Ok(bytes) if bytes.len() == 32 => {
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&bytes);
@@ -131,7 +131,7 @@ pub(super) fn pick_admin_seal_basis(
     realm_id: &RealmId,
 ) -> Result<arkret_wire::SealBasis, AppError> {
     let leaves = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(realm_id)
         .map_err(|e| {
             app_error!(
@@ -154,7 +154,7 @@ pub(super) fn pick_admin_seal_basis(
         });
     }
     let view = state
-        .projection_application()
+        .projections()
         .effective_seal_view(&leaves, realm_id)
         .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
     Ok(arkret_wire::SealBasis {

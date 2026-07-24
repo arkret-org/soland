@@ -77,7 +77,7 @@ pub(super) async fn set_agent_participation(
     let effective_value = serde_json::to_value(effective).unwrap_or(Value::Null);
     // Persist the controller selection (ak.agent.participation.v1).
     state
-        .agent_participation_application()
+        .agent_participations()
         .store_selection(json!({
             "agent_id": agent_id,
             "scope_kind": participation_scope_kind(&body.scope),
@@ -256,7 +256,7 @@ pub(super) async fn get_agent_participation(
     )
     .await?;
     let selections = state
-        .agent_participation_application()
+        .agent_participations()
         .selections(&agent_id)
         .await
         .map_err(|err| AppError::internal(format!("participation read failed: {err}")))?;

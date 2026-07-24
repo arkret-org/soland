@@ -239,7 +239,7 @@ pub(crate) async fn admin_get_notary(
     let realm_id = realm_id.into_inner();
     let cell = notary_cell_for(&realm_id)?;
     let value = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.cell_value(&cell).cloned()
     };
     json_ok(notary_value_from_cell(value.as_ref(), state.service_id())?)
@@ -366,7 +366,7 @@ pub(crate) async fn admin_reconfigure_notary(
 
     // Stash pending; if put_pending fails, that's a hard 500.
     state
-        .projection_application()
+        .projections()
         .put_pending_move(&signed_move)
         .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
 

@@ -61,7 +61,7 @@ use ed25519_dalek::Verifier as _;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::identity::{
+use soland_services::identity::{
     AgentPairingState as AgentPrincipalRecord, SessionIdentityState as SessionRecord,
 };
 use soland_http::error::{AppError, ErrorCode};
@@ -1142,3 +1142,4 @@ mod tests {
         assert_eq!(err.wire_code(), CONTROLLER_IN_ADDRESSED_AGENTS);
     }
 }
+

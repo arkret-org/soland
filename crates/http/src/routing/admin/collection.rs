@@ -24,10 +24,10 @@ use arkret_wire::JoinRule;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::events::{
+use soland_services::events::{
     RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
 };
-use soland_application::operation_semantics as kinds;
+use soland_services::operation_semantics as kinds;
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
@@ -347,7 +347,7 @@ pub(super) async fn admin_list_realm_members(
 
 async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     let meta: BTreeMap<String, _> = state
-        .realm_query_application()
+        .realms()
         .realm_metadata_list()
         .await
         .unwrap_or_default()
@@ -358,7 +358,7 @@ async fn admin_realm_items(state: &AppState) -> Vec<Value> {
     // reach back into `state.realms`, and `Mutex` is non-reentrant — holding
     // the guard across the map closure deadlocks on the second resource pass.
     let realm_snapshot: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -382,12 +382,12 @@ pub(super) async fn admin_get_realm_item(
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
     let realm = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms.get(&realm_id_value).cloned()
     }
     .ok_or_else(|| AppError::not_found("realm not found"))?;
     let realm_meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -401,7 +401,7 @@ pub(super) async fn admin_realm_member_items(
     let realm_id_value = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid realm_id: {error}")))?;
     let members = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms.get(&realm_id_value).map(|realm| {
             realm
                 .members
@@ -412,7 +412,7 @@ pub(super) async fn admin_realm_member_items(
     }
     .ok_or_else(|| AppError::not_found("realm not found"))?;
     let realm_meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -488,14 +488,14 @@ async fn admin_realm_item_value(
 
 fn admin_space_container_items(state: &AppState) -> Vec<Value> {
     let member_counts: BTreeMap<String, usize> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
             .map(|realm| (realm.realm_id.as_str().to_owned(), realm.members.len()))
             .collect()
     };
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     projection
         .space_containers
         .values()
@@ -516,7 +516,7 @@ fn admin_space_container_items(state: &AppState) -> Vec<Value> {
 
 async fn admin_federation_items(state: &AppState) -> Vec<Value> {
     state
-        .federation_application()
+        .federation()
         .operations()
         .await
         .unwrap_or_default()
@@ -548,7 +548,7 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
 /// `ak.applet.discovery`). Empty until a `ak.applet.registration` or
 /// `ak.applet.discovery` event has been accepted.
 fn admin_applet_items(state: &AppState) -> Vec<Value> {
-    let proj = state.projection_application().snapshot();
+    let proj = state.projections().snapshot();
     proj.applets
         .values()
         .map(|applet| {
@@ -572,7 +572,7 @@ pub(super) async fn admin_invite_items(
     state: &AppState,
 ) -> Vec<soland_contracts::admin::invite_tokens::AdminInviteTokenItem> {
     state
-        .realm_invite_application()
+        .realm_invites()
         .snapshot_all()
         .await
         .unwrap_or_default()
@@ -607,7 +607,7 @@ pub(super) fn admin_invite_item(
 
 async fn admin_policy_items(state: &AppState) -> Vec<Value> {
     state
-        .governance_application()
+        .governance()
         .policy_documents()
         .await
         .unwrap_or_default()
@@ -618,7 +618,7 @@ async fn admin_policy_items(state: &AppState) -> Vec<Value> {
 
 pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
     state
-        .delivery_application()
+        .deliveries()
         .blobs()
         .await
         .unwrap_or_default()
@@ -637,3 +637,4 @@ pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
         })
         .collect()
 }
+

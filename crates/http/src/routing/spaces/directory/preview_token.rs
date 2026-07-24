@@ -8,7 +8,7 @@ pub(super) async fn preview_token_matches_policy(
     session: Option<&SessionRecord>,
 ) -> bool {
     let Some(meta) = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()

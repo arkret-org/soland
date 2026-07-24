@@ -41,7 +41,7 @@ pub struct ModerationReportRateOutcome {
 }
 
 #[derive(Clone)]
-pub struct RuntimeGuardApplicationService {
+pub struct RuntimeGuardService {
     inner: Arc<RuntimeGuards>,
 }
 
@@ -66,7 +66,7 @@ struct ReplayRecord {
     last_seen_at: DateTime<Utc>,
 }
 
-impl Default for RuntimeGuardApplicationService {
+impl Default for RuntimeGuardService {
     fn default() -> Self {
         Self {
             inner: Arc::new(RuntimeGuards {
@@ -80,7 +80,7 @@ impl Default for RuntimeGuardApplicationService {
     }
 }
 
-impl RuntimeGuardApplicationService {
+impl RuntimeGuardService {
     pub fn peer_keypackage_claim_rate_limited(
         &self,
         source_service_id: &str,
@@ -329,11 +329,11 @@ fn evict_oldest_entries<K: Ord + Clone, V>(
 
 #[cfg(test)]
 mod tests {
-    use super::RuntimeGuardApplicationService;
+    use super::RuntimeGuardService;
 
     #[test]
     fn key_backup_download_quota_is_scoped_per_principal() {
-        let service = RuntimeGuardApplicationService::default();
+        let service = RuntimeGuardService::default();
         for count in 1..=4 {
             let outcome = service.record_key_backup_download("did:web:alice.example", 4);
             assert!(!outcome.rate_limited);
@@ -351,3 +351,4 @@ mod tests {
         );
     }
 }
+

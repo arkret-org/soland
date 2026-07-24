@@ -34,7 +34,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     }
 
     let record_value = state
-        .event_query_application()
+        .event_queries()
         .applet(&applet_id)
         .await
         .map_err(|error| {
@@ -101,7 +101,7 @@ pub(super) async fn validate_applet_delegated_authorization_chain(
     }
 
     let grants = state
-        .authorization_application()
+        .authorization()
         .grants_for_subject(&executed_by, realm_id);
     let grant = grants
         .iter()
@@ -292,7 +292,7 @@ pub(super) fn delegated_applet_resource_candidates(
     event_id: &str,
 ) -> Vec<String> {
     let mut resources = Vec::new();
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, realm_id);
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, actor_id);
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, event_id);

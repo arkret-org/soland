@@ -7,7 +7,7 @@ use arkret_identifiers::RealmId;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use salvo::prelude::*;
 use serde_json::json;
-use soland_application::events::RealmInviteState as RealmInviteRecord;
+use soland_services::events::RealmInviteState as RealmInviteRecord;
 use soland_contracts::admin::invite_tokens::{AdminInviteTokenItem, CreateInviteTokenRequest};
 use soland_http::error::AppError;
 
@@ -72,7 +72,7 @@ async fn create_invite_token(
         updated_at: None,
     };
     state
-        .realm_invite_application()
+        .realm_invites()
         .put(invite.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -106,14 +106,14 @@ async fn revoke_invite_token(
     let session = require_admin_principal(state, session)?;
     let invite_id = invite_id.into_inner();
     let mut invite = state
-        .realm_invite_application()
+        .realm_invites()
         .get(&invite_id)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::not_found("invite token not found"))?;
     invite.status = "revoked".to_owned();
     state
-        .realm_invite_application()
+        .realm_invites()
         .put(invite.clone())
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -134,7 +134,7 @@ async fn revoke_invite_token(
 }
 
 fn default_invite_realm_id(state: &AppState) -> Option<String> {
-    let realms = state.realm_directory_application().snapshot();
+    let realms = state.realm_directory().snapshot();
     realms
         .search(Default::default())
         .first()
@@ -145,7 +145,7 @@ fn ensure_realm_exists(state: &AppState, realm_id: &str) -> Result<(), AppError>
     let realm_id = RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
     let exists = state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .get(&realm_id)
         .is_some();
@@ -174,3 +174,4 @@ fn parse_expires_at(raw: Option<&str>) -> Result<Option<DateTime<Utc>>, AppError
         "expires_at must be RFC3339 or datetime-local format",
     ))
 }
+

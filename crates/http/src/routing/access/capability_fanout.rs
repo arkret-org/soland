@@ -386,7 +386,7 @@ async fn projection_event_duplicate(
     draft: &CapabilityFanoutDraft,
 ) -> Result<bool, AppError> {
     let existing = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .map_err(|error| AppError::internal(format!("projection event lookup failed: {error}")))?
@@ -408,11 +408,11 @@ fn authz_state_for_draft(
     draft: &CapabilityFanoutDraft,
 ) -> CapabilityFanoutAuthzState {
     let grant = state
-        .authorization_application()
+        .authorization()
         .get_grant(&draft.capability_grant_id);
     let effective = match draft.subject.as_deref() {
         Some(subject) => state
-            .authorization_application()
+            .authorization()
             .grants_for_subject(subject, &draft.realm_id)
             .iter()
             .any(|grant| grant.grant_id == draft.capability_grant_id),
@@ -434,7 +434,7 @@ fn projected_capability_cell_revoked(state: &AppState, grant_id: &str) -> bool {
     )) else {
         return false;
     };
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let Some(CellState::Value(Value::Array(items))) = projection.cells.get(&cell_ref) else {
         return false;
     };

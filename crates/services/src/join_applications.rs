@@ -6,14 +6,14 @@ pub use soland_storage::{
     JoinApplicationRecord,
 };
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 #[derive(Clone)]
-pub struct JoinApplicationApplicationService {
+pub struct JoinApplicationService {
     persistence: Arc<dyn PersistenceStore>,
 }
 
-impl JoinApplicationApplicationService {
+impl JoinApplicationService {
     pub(crate) fn new(persistence: Arc<dyn PersistenceStore>) -> Self {
         Self { persistence }
     }
@@ -21,7 +21,7 @@ impl JoinApplicationApplicationService {
     pub async fn execute(
         &self,
         command: JoinApplicationCommand,
-    ) -> ApplicationResult<JoinApplicationCommandOutcome> {
+    ) -> ServiceResult<JoinApplicationCommandOutcome> {
         Ok(self
             .persistence
             .join_applications()
@@ -34,7 +34,7 @@ impl JoinApplicationApplicationService {
         realm_id: &str,
         application_ref: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<Option<JoinApplicationRecord>> {
+    ) -> ServiceResult<Option<JoinApplicationRecord>> {
         Ok(self
             .persistence
             .join_applications()
@@ -46,7 +46,7 @@ impl JoinApplicationApplicationService {
         &self,
         realm_id: &str,
         now: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<Vec<JoinApplicationRecord>> {
+    ) -> ServiceResult<Vec<JoinApplicationRecord>> {
         Ok(self
             .persistence
             .join_applications()
@@ -60,7 +60,7 @@ impl JoinApplicationApplicationService {
         application_ref: &str,
         actor_id: &str,
         occurred_at: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         Ok(self
             .persistence
             .join_applications()
@@ -74,7 +74,7 @@ impl JoinApplicationApplicationService {
         review_receipt_digests: &[String],
         actor_id: &str,
         occurred_at: chrono::DateTime<chrono::Utc>,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         Ok(self
             .persistence
             .join_applications()
@@ -82,3 +82,4 @@ impl JoinApplicationApplicationService {
             .await?)
     }
 }
+

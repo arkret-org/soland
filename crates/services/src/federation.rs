@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use parking_lot::{Mutex, MutexGuard};
 use serde_json::Value;
 
-use crate::ApplicationResult;
+use crate::ServiceResult;
 
 pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "stale_peer";
 
@@ -161,20 +161,20 @@ pub struct EnqueueFederationDeliveryCommand {
 
 #[async_trait]
 pub trait FederationOutboxPort: Send + Sync {
-    async fn enqueue(&self, delivery: &FederationDeliveryRecord) -> ApplicationResult<bool>;
+    async fn enqueue(&self, delivery: &FederationDeliveryRecord) -> ServiceResult<bool>;
     async fn find(
         &self,
         peer_did: &str,
         idempotency_key: &str,
-    ) -> ApplicationResult<Option<FederationDeliveryRecord>>;
+    ) -> ServiceResult<Option<FederationDeliveryRecord>>;
     async fn pending_due(
         &self,
         now: i64,
         limit: usize,
-    ) -> ApplicationResult<Vec<PendingFederationDelivery>>;
-    async fn update(&self, delivery: &PendingFederationDelivery) -> ApplicationResult<()>;
-    async fn insert_dead_letter(&self, record: &FederationDeadLetter) -> ApplicationResult<()>;
-    async fn deliveries(&self) -> ApplicationResult<Vec<PendingFederationDelivery>>;
+    ) -> ServiceResult<Vec<PendingFederationDelivery>>;
+    async fn update(&self, delivery: &PendingFederationDelivery) -> ServiceResult<()>;
+    async fn insert_dead_letter(&self, record: &FederationDeadLetter) -> ServiceResult<()>;
+    async fn deliveries(&self) -> ServiceResult<Vec<PendingFederationDelivery>>;
 }
 
 #[async_trait]
@@ -183,49 +183,49 @@ pub trait FederationStatePort: Send + Sync {
         &self,
         origin: &str,
         txn_id: &str,
-    ) -> ApplicationResult<Option<FederationTransactionRecord>>;
+    ) -> ServiceResult<Option<FederationTransactionRecord>>;
     async fn begin_transaction(
         &self,
         record: &FederationTransactionRecord,
-    ) -> ApplicationResult<bool>;
+    ) -> ServiceResult<bool>;
     async fn store_transaction(
         &self,
         record: &FederationTransactionRecord,
-    ) -> ApplicationResult<()>;
-    async fn transactions(&self) -> ApplicationResult<Vec<FederationTransactionRecord>>;
-    async fn append_operation(&self, operation: Operation) -> ApplicationResult<()>;
-    async fn has_operation(&self, operation_id: &str) -> ApplicationResult<bool>;
-    async fn operations_for_realm(&self, realm_id: &str) -> ApplicationResult<Vec<Operation>>;
-    async fn operations(&self) -> ApplicationResult<Vec<Operation>>;
+    ) -> ServiceResult<()>;
+    async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>>;
+    async fn append_operation(&self, operation: Operation) -> ServiceResult<()>;
+    async fn has_operation(&self, operation_id: &str) -> ServiceResult<bool>;
+    async fn operations_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<Operation>>;
+    async fn operations(&self) -> ServiceResult<Vec<Operation>>;
     async fn frontier_exchange(
         &self,
         realm_id: &str,
         peer_service_id: &str,
-    ) -> ApplicationResult<Option<FederationFrontierExchangeRecord>>;
+    ) -> ServiceResult<Option<FederationFrontierExchangeRecord>>;
     async fn record_frontier_success(
         &self,
         realm_id: &str,
         peer_service_id: &str,
         frontier_root: &str,
         observed_at: i64,
-    ) -> ApplicationResult<FederationFrontierExchangeRecord>;
+    ) -> ServiceResult<FederationFrontierExchangeRecord>;
     async fn record_frontier_failure(
         &self,
         realm_id: &str,
         peer_service_id: &str,
         reason: &str,
         observed_at: i64,
-    ) -> ApplicationResult<FederationFrontierExchangeRecord>;
+    ) -> ServiceResult<FederationFrontierExchangeRecord>;
 }
 
 #[derive(Clone)]
-pub struct FederationApplicationService {
+pub struct FederationService {
     outbox: Arc<dyn FederationOutboxPort>,
     state: Arc<dyn FederationStatePort>,
     sovereign: Arc<Mutex<SovereignDeploymentState>>,
 }
 
-impl FederationApplicationService {
+impl FederationService {
     pub fn new(outbox: Arc<dyn FederationOutboxPort>, state: Arc<dyn FederationStatePort>) -> Self {
         Self {
             outbox,
@@ -245,7 +245,7 @@ impl FederationApplicationService {
     pub async fn enqueue_delivery(
         &self,
         command: EnqueueFederationDeliveryCommand,
-    ) -> ApplicationResult<FederationDeliveryRecord> {
+    ) -> ServiceResult<FederationDeliveryRecord> {
         if self.outbox.enqueue(&command.delivery).await? {
             return Ok(command.delivery);
         }
@@ -263,22 +263,22 @@ impl FederationApplicationService {
         &self,
         now: i64,
         limit: usize,
-    ) -> ApplicationResult<Vec<PendingFederationDelivery>> {
+    ) -> ServiceResult<Vec<PendingFederationDelivery>> {
         self.outbox.pending_due(now, limit).await
     }
 
     pub async fn record_delivery_attempt(
         &self,
         delivery: &PendingFederationDelivery,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.outbox.update(delivery).await
     }
 
-    pub async fn record_dead_letter(&self, record: &FederationDeadLetter) -> ApplicationResult<()> {
+    pub async fn record_dead_letter(&self, record: &FederationDeadLetter) -> ServiceResult<()> {
         self.outbox.insert_dead_letter(record).await
     }
 
-    pub async fn deliveries(&self) -> ApplicationResult<Vec<PendingFederationDelivery>> {
+    pub async fn deliveries(&self) -> ServiceResult<Vec<PendingFederationDelivery>> {
         self.outbox.deliveries().await
     }
 
@@ -286,41 +286,41 @@ impl FederationApplicationService {
         &self,
         origin: &str,
         txn_id: &str,
-    ) -> ApplicationResult<Option<FederationTransactionRecord>> {
+    ) -> ServiceResult<Option<FederationTransactionRecord>> {
         self.state.transaction(origin, txn_id).await
     }
     pub async fn begin_transaction(
         &self,
         record: &FederationTransactionRecord,
-    ) -> ApplicationResult<bool> {
+    ) -> ServiceResult<bool> {
         self.state.begin_transaction(record).await
     }
     pub async fn store_transaction(
         &self,
         record: &FederationTransactionRecord,
-    ) -> ApplicationResult<()> {
+    ) -> ServiceResult<()> {
         self.state.store_transaction(record).await
     }
-    pub async fn transactions(&self) -> ApplicationResult<Vec<FederationTransactionRecord>> {
+    pub async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>> {
         self.state.transactions().await
     }
-    pub async fn append_operation(&self, operation: Operation) -> ApplicationResult<()> {
+    pub async fn append_operation(&self, operation: Operation) -> ServiceResult<()> {
         self.state.append_operation(operation).await
     }
-    pub async fn has_operation(&self, operation_id: &str) -> ApplicationResult<bool> {
+    pub async fn has_operation(&self, operation_id: &str) -> ServiceResult<bool> {
         self.state.has_operation(operation_id).await
     }
-    pub async fn operations_for_realm(&self, realm_id: &str) -> ApplicationResult<Vec<Operation>> {
+    pub async fn operations_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<Operation>> {
         self.state.operations_for_realm(realm_id).await
     }
-    pub async fn operations(&self) -> ApplicationResult<Vec<Operation>> {
+    pub async fn operations(&self) -> ServiceResult<Vec<Operation>> {
         self.state.operations().await
     }
     pub async fn frontier_exchange(
         &self,
         realm_id: &str,
         peer_service_id: &str,
-    ) -> ApplicationResult<Option<FederationFrontierExchangeRecord>> {
+    ) -> ServiceResult<Option<FederationFrontierExchangeRecord>> {
         self.state
             .frontier_exchange(realm_id, peer_service_id)
             .await
@@ -331,7 +331,7 @@ impl FederationApplicationService {
         peer_service_id: &str,
         frontier_root: &str,
         observed_at: i64,
-    ) -> ApplicationResult<FederationFrontierExchangeRecord> {
+    ) -> ServiceResult<FederationFrontierExchangeRecord> {
         self.state
             .record_frontier_success(realm_id, peer_service_id, frontier_root, observed_at)
             .await
@@ -342,7 +342,7 @@ impl FederationApplicationService {
         peer_service_id: &str,
         reason: &str,
         observed_at: i64,
-    ) -> ApplicationResult<FederationFrontierExchangeRecord> {
+    ) -> ServiceResult<FederationFrontierExchangeRecord> {
         self.state
             .record_frontier_failure(realm_id, peer_service_id, reason, observed_at)
             .await
@@ -368,41 +368,41 @@ mod tests {
             &self,
             _origin: &str,
             _txn_id: &str,
-        ) -> ApplicationResult<Option<FederationTransactionRecord>> {
+        ) -> ServiceResult<Option<FederationTransactionRecord>> {
             Ok(None)
         }
         async fn begin_transaction(
             &self,
             _record: &FederationTransactionRecord,
-        ) -> ApplicationResult<bool> {
+        ) -> ServiceResult<bool> {
             Ok(false)
         }
         async fn store_transaction(
             &self,
             _record: &FederationTransactionRecord,
-        ) -> ApplicationResult<()> {
+        ) -> ServiceResult<()> {
             Ok(())
         }
-        async fn transactions(&self) -> ApplicationResult<Vec<FederationTransactionRecord>> {
+        async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>> {
             Ok(Vec::new())
         }
-        async fn append_operation(&self, _operation: Operation) -> ApplicationResult<()> {
+        async fn append_operation(&self, _operation: Operation) -> ServiceResult<()> {
             Ok(())
         }
-        async fn has_operation(&self, _operation_id: &str) -> ApplicationResult<bool> {
+        async fn has_operation(&self, _operation_id: &str) -> ServiceResult<bool> {
             Ok(false)
         }
-        async fn operations_for_realm(&self, _realm_id: &str) -> ApplicationResult<Vec<Operation>> {
+        async fn operations_for_realm(&self, _realm_id: &str) -> ServiceResult<Vec<Operation>> {
             Ok(Vec::new())
         }
-        async fn operations(&self) -> ApplicationResult<Vec<Operation>> {
+        async fn operations(&self) -> ServiceResult<Vec<Operation>> {
             Ok(Vec::new())
         }
         async fn frontier_exchange(
             &self,
             _realm_id: &str,
             _peer_service_id: &str,
-        ) -> ApplicationResult<Option<FederationFrontierExchangeRecord>> {
+        ) -> ServiceResult<Option<FederationFrontierExchangeRecord>> {
             Ok(None)
         }
         async fn record_frontier_success(
@@ -411,7 +411,7 @@ mod tests {
             _peer_service_id: &str,
             _frontier_root: &str,
             _observed_at: i64,
-        ) -> ApplicationResult<FederationFrontierExchangeRecord> {
+        ) -> ServiceResult<FederationFrontierExchangeRecord> {
             panic!("unused test port")
         }
         async fn record_frontier_failure(
@@ -420,14 +420,14 @@ mod tests {
             _peer_service_id: &str,
             _reason: &str,
             _observed_at: i64,
-        ) -> ApplicationResult<FederationFrontierExchangeRecord> {
+        ) -> ServiceResult<FederationFrontierExchangeRecord> {
             panic!("unused test port")
         }
     }
 
     #[async_trait]
     impl FederationOutboxPort for RecordingOutbox {
-        async fn enqueue(&self, delivery: &FederationDeliveryRecord) -> ApplicationResult<bool> {
+        async fn enqueue(&self, delivery: &FederationDeliveryRecord) -> ServiceResult<bool> {
             self.deliveries
                 .lock()
                 .expect("delivery lock")
@@ -446,7 +446,7 @@ mod tests {
             &self,
             peer_did: &str,
             idempotency_key: &str,
-        ) -> ApplicationResult<Option<FederationDeliveryRecord>> {
+        ) -> ServiceResult<Option<FederationDeliveryRecord>> {
             Ok(self
                 .deliveries
                 .lock()
@@ -463,7 +463,7 @@ mod tests {
             &self,
             now: i64,
             limit: usize,
-        ) -> ApplicationResult<Vec<PendingFederationDelivery>> {
+        ) -> ServiceResult<Vec<PendingFederationDelivery>> {
             Ok(self
                 .deliveries
                 .lock()
@@ -475,7 +475,7 @@ mod tests {
                 .collect())
         }
 
-        async fn update(&self, delivery: &PendingFederationDelivery) -> ApplicationResult<()> {
+        async fn update(&self, delivery: &PendingFederationDelivery) -> ServiceResult<()> {
             let mut deliveries = self.deliveries.lock().expect("delivery lock");
             if let Some(existing) = deliveries
                 .iter_mut()
@@ -486,7 +486,7 @@ mod tests {
             Ok(())
         }
 
-        async fn insert_dead_letter(&self, record: &FederationDeadLetter) -> ApplicationResult<()> {
+        async fn insert_dead_letter(&self, record: &FederationDeadLetter) -> ServiceResult<()> {
             self.dead_letters
                 .lock()
                 .expect("dead-letter lock")
@@ -494,7 +494,7 @@ mod tests {
             Ok(())
         }
 
-        async fn deliveries(&self) -> ApplicationResult<Vec<PendingFederationDelivery>> {
+        async fn deliveries(&self) -> ServiceResult<Vec<PendingFederationDelivery>> {
             Ok(self.deliveries.lock().expect("delivery lock").clone())
         }
     }
@@ -502,7 +502,7 @@ mod tests {
     #[tokio::test]
     async fn dispatcher_state_uses_only_the_outbox_port() {
         let port = Arc::new(RecordingOutbox::default());
-        let service = FederationApplicationService::new(port.clone(), Arc::new(NoFederationState));
+        let service = FederationService::new(port.clone(), Arc::new(NoFederationState));
         let delivery = service
             .enqueue_delivery(EnqueueFederationDeliveryCommand {
                 delivery: FederationDeliveryRecord {
@@ -526,3 +526,4 @@ mod tests {
         assert_eq!(pending[0].delivery.id, "delivery:1");
     }
 }
+

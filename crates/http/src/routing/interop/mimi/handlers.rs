@@ -607,7 +607,7 @@ async fn consume_mimi_consent_proof_replay(
     }))
     .map_err(|error| AppError::internal(format!("MIMI replay key failed: {error}")))?;
     let replay_key = format!("mimi-consent-proof:{replay_digest}");
-    let idempotency = state.jobs_application();
+    let idempotency = state.jobs();
     let current_time = now();
     if let Err(error) = idempotency.prune_expired_idempotency(current_time).await {
         tracing::warn!(%error, "MIMI consent replay ledger prune failed");
@@ -814,7 +814,7 @@ pub(super) async fn mimi_report_abuse(
     }
     report_fields.insert("created_at".to_owned(), json!(now()));
     if let Err(error) = state
-        .governance_application()
+        .governance()
         .append_moderation_report(Value::Object(report_fields))
         .await
     {
@@ -908,7 +908,7 @@ pub(super) async fn enforce_mimi_reporter_resolution(
     Did::new(reporter.to_owned())
         .map_err(|error| AppError::invalid_param(format!("invalid reporter DID: {error}")))?;
     if state
-        .identity_application()
+        .identities()
         .account(reporter)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -959,7 +959,7 @@ pub(super) async fn mimi_proxy_download(
         .and_then(|value| value.as_str())
         .unwrap_or("provider_proxy");
     let blob = state
-        .delivery_application()
+        .deliveries()
         .blob(asset_ref)
         .await
         .ok()

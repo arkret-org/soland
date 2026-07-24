@@ -229,7 +229,7 @@ async fn install_endpoint(
     // `ak.realm.admin`-scoped registration onto the effective_scope realm.
     // Authentication alone is insufficient â€” the actor MUST hold realm admin
     // over that realm. P1 projected capability grants into the authz index, so
-    // `state.authorization_application().check` is authoritative here. fail-closed.
+    // `state.authorization().check` is authoritative here. fail-closed.
     require_realm_admin(state, &session.actor, &commit.effective_scope).await?;
 
     let response = register_package_install(
@@ -292,7 +292,7 @@ async fn revoke_install_endpoint(
     ) {
         for grant_ref in &grant_refs {
             state
-                .authorization_application()
+                .authorization()
                 .mark_projected_grant_revoked(grant_ref);
             revoked_refs.push(grant_ref.clone());
         }
@@ -509,7 +509,7 @@ async fn provision_ghost_actor_endpoint(
         .map_err(|error| AppError::invalid_param(format!("provision request invalid: {error}")))?
         .to_string();
     if let Some(replay) = state
-        .jobs_application()
+        .jobs()
         .idempotency_record(&session.actor, &idempotency_key)
         .await
         .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
@@ -617,7 +617,7 @@ async fn provision_ghost_actor_endpoint(
         // receives replay semantics; a different body remains a conflict.
         if matches!(error.code.as_str(), "duplicate" | "duplicate_conflict")
             && let Some(replay) = state
-                .jobs_application()
+                .jobs()
                 .idempotency_record(&session.actor, &idempotency_key)
                 .await
                 .map_err(|lookup_error| {

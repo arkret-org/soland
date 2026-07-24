@@ -5016,9 +5016,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "soland-application",
  "soland-domain",
  "soland-http",
+ "soland-services",
  "soland-storage",
  "soland-storage-memory",
  "soland-storage-postgres",
@@ -5031,35 +5031,6 @@ dependencies = [
  "tracing-opentelemetry",
  "tracing-subscriber",
  "url",
- "uuid",
-]
-
-[[package]]
-name = "soland-application"
-version = "0.3.0"
-dependencies = [
- "arkret-canonical",
- "arkret-event-draft",
- "arkret-identifiers",
- "arkret-identity",
- "arkret-models-collaboration",
- "arkret-models-crypto",
- "arkret-models-identity",
- "arkret-models-integration",
- "arkret-policy",
- "arkret-state",
- "arkret-wire",
- "async-trait",
- "bytes",
- "chrono",
- "futures-util",
- "parking_lot",
- "serde_json",
- "soland-domain",
- "soland-storage",
- "thiserror",
- "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -5154,9 +5125,9 @@ dependencies = [
  "serde-saphyr",
  "serde_json",
  "sha2 0.11.0",
- "soland-application",
  "soland-contracts",
  "soland-domain",
+ "soland-services",
  "soland-storage",
  "soland-storage-memory",
  "soland-storage-postgres",
@@ -5167,6 +5138,35 @@ dependencies = [
  "url",
  "uuid",
  "zeroize",
+]
+
+[[package]]
+name = "soland-services"
+version = "0.3.0"
+dependencies = [
+ "arkret-canonical",
+ "arkret-event-draft",
+ "arkret-identifiers",
+ "arkret-identity",
+ "arkret-models-collaboration",
+ "arkret-models-crypto",
+ "arkret-models-identity",
+ "arkret-models-integration",
+ "arkret-policy",
+ "arkret-state",
+ "arkret-wire",
+ "async-trait",
+ "bytes",
+ "chrono",
+ "futures-util",
+ "parking_lot",
+ "serde_json",
+ "soland-domain",
+ "soland-storage",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -5256,8 +5256,8 @@ dependencies = [
  "parking_lot",
  "serde_json",
  "sha2 0.11.0",
- "soland-application",
  "soland-http",
+ "soland-services",
  "soland-storage",
  "soland-storage-memory",
 ]

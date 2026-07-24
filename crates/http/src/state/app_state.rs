@@ -18,41 +18,41 @@ use arkret_wire::ServiceType;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use soland_application::authorization::{
-    AuthorizationApplicationService, AuthorizationCheck, AuthorizationDecision, AuthorizationPort,
+use soland_services::authorization::{
+    AuthorizationService, AuthorizationCheck, AuthorizationDecision, AuthorizationPort,
 };
-use soland_application::delivery::{DeliveryApplicationService, ObjectStoragePort};
-use soland_application::events::{
-    EventApplicationService, EventQueryApplicationService, MlsCommitQueryApplicationService,
-    MlsKeyPackageApplicationService, RealmDirectoryApplicationService, RealmDirectoryEntry,
-    RealmDirectoryIndex, RealmInviteApplicationService, RealmQueryApplicationService,
+use soland_services::delivery::{DeliveryService, ObjectStoragePort};
+use soland_services::events::{
+    EventService, EventQueryService, MlsCommitQueryService,
+    MlsKeyPackageService, RealmDirectoryService, RealmDirectoryEntry,
+    RealmDirectoryIndex, RealmInviteService, RealmQueryService,
 };
-use soland_application::federation::{FederationApplicationService, SovereignDeploymentState};
-use soland_application::governance::{
-    AdminSigningKeyPort, GovernanceApplicationService, RuntimeSettingsPort,
+use soland_services::federation::{FederationService, SovereignDeploymentState};
+use soland_services::governance::{
+    AdminSigningKeyPort, GovernanceService, RuntimeSettingsPort,
 };
-use soland_application::hydration::HydrationProjectionAdapter;
-use soland_application::identity::{
-    AccountDataApplicationService, AgentPairingApplicationService,
-    AgentParticipationApplicationService, ConsentApplicationService, ContactApplicationService,
-    DidApplicationService, IdentityApplicationService, KeyBackupApplicationService,
-    KeyMaterialApplicationService, RecoveryPolicyApplicationService,
-    RecoveryReceiptApplicationService, RecoverySessionApplicationService,
-    SessionApplicationService,
+use soland_services::hydration::HydrationProjectionAdapter;
+use soland_services::identity::{
+    AccountDataService, AgentPairingService,
+    AgentParticipationService, ConsentService, ContactService,
+    DidService, IdentityService, KeyBackupService,
+    KeyMaterialService, RecoveryPolicyService,
+    RecoveryReceiptService, RecoverySessionService,
+    SessionService,
 };
-use soland_application::jobs::{JobsApplicationService, RuntimeHealthPort};
-use soland_application::join_applications::JoinApplicationApplicationService;
-use soland_application::persistence::PersistenceHandle;
-use soland_application::persistence_events::PersistenceEventApplications;
-use soland_application::persistence_identity::PersistenceIdentityApplications;
-use soland_application::persistence_operations::PersistenceOperationalApplications;
+use soland_services::jobs::{JobsService, RuntimeHealthPort};
+use soland_services::join_applications::JoinApplicationService;
+use soland_services::persistence::PersistenceHandle;
+use soland_services::persistence_events::PersistenceEventServices;
+use soland_services::persistence_identity::PersistenceIdentityServices;
+use soland_services::persistence_operations::PersistenceOperationalServices;
 #[cfg(test)]
-use soland_application::projection::ProjectionSnapshot as ProjectionState;
-use soland_application::projection::{ApplicationClock, ProjectionApplicationService};
-use soland_application::runtime_guards::{
-    KeyBackupDownloadOutcome, ModerationReportRateOutcome, RuntimeGuardApplicationService,
+use soland_services::projection::ProjectionSnapshot as ProjectionState;
+use soland_services::projection::{ServiceClock, ProjectionService};
+use soland_services::runtime_guards::{
+    KeyBackupDownloadOutcome, ModerationReportRateOutcome, RuntimeGuardService,
 };
-use soland_application::sync::SyncApplicationService;
+use soland_services::sync::SyncService;
 
 use super::did_resolver_chain;
 use super::member_identity::MemberIdentityRegistry;
@@ -83,39 +83,39 @@ pub struct AppState {
     settings: Arc<ArcSwap<crate::runtime_settings::RuntimeSettings>>,
     storage_mode: &'static str,
     persistence: PersistenceHandle,
-    event_application: EventApplicationService,
-    event_query_application: EventQueryApplicationService,
-    mls_commit_query_application: MlsCommitQueryApplicationService,
-    mls_key_package_application: MlsKeyPackageApplicationService,
-    realm_query_application: RealmQueryApplicationService,
-    realm_invite_application: RealmInviteApplicationService,
-    delivery_application: DeliveryApplicationService,
-    identity_application: IdentityApplicationService,
-    account_data_application: AccountDataApplicationService,
-    key_material_application: KeyMaterialApplicationService,
-    consent_application: ConsentApplicationService,
-    contact_application: ContactApplicationService,
-    agent_pairing_application: AgentPairingApplicationService,
-    agent_participation_application: AgentParticipationApplicationService,
-    key_backup_application: KeyBackupApplicationService,
-    session_application: SessionApplicationService,
-    recovery_policy_application: RecoveryPolicyApplicationService,
-    recovery_receipt_application: RecoveryReceiptApplicationService,
-    recovery_session_application: RecoverySessionApplicationService,
-    did_application: DidApplicationService,
-    federation_application: FederationApplicationService,
-    governance_application: GovernanceApplicationService,
-    sync_application: SyncApplicationService,
-    jobs_application: JobsApplicationService,
-    join_application_service: JoinApplicationApplicationService,
-    projection_application: ProjectionApplicationService,
-    authorization_application: AuthorizationApplicationService,
-    realm_directory_application: RealmDirectoryApplicationService,
+    events: EventService,
+    event_queries: EventQueryService,
+    mls_commits: MlsCommitQueryService,
+    mls_key_packages: MlsKeyPackageService,
+    realms: RealmQueryService,
+    realm_invites: RealmInviteService,
+    deliveries: DeliveryService,
+    identities: IdentityService,
+    account_data: AccountDataService,
+    key_material: KeyMaterialService,
+    consents: ConsentService,
+    contacts: ContactService,
+    agent_pairings: AgentPairingService,
+    agent_participations: AgentParticipationService,
+    key_backups: KeyBackupService,
+    sessions: SessionService,
+    recovery_policies: RecoveryPolicyService,
+    recovery_receipts: RecoveryReceiptService,
+    recovery_sessions: RecoverySessionService,
+    dids: DidService,
+    federation: FederationService,
+    governance: GovernanceService,
+    sync: SyncService,
+    jobs: JobsService,
+    join_applications: JoinApplicationService,
+    projections: ProjectionService,
+    authorization: AuthorizationService,
+    realm_directory: RealmDirectoryService,
     /// Deployment-local account registration policy. It uses the canonical
     /// account-operation DTO so the HTTP handler, audit payload, tests, and a
     /// future admin policy cell all speak the same wire vocabulary.
     account_registration_policy: Arc<Mutex<AccountRegistrationPolicy>>,
-    runtime_guards: RuntimeGuardApplicationService,
+    runtime_guards: RuntimeGuardService,
     /// Domain-separated HMAC key for the deterministic stateful sync-cursor
     /// handle (`routing/events/sync.rs::derive_cursor_handle`). The handle
     /// binding rows themselves live in the durable
@@ -201,10 +201,10 @@ pub struct AppState {
 
 pub struct AppStateRuntime {
     pub persistence: PersistenceHandle,
-    pub projection_application: ProjectionApplicationService,
-    pub realm_directory_application: RealmDirectoryApplicationService,
+    pub projections: ProjectionService,
+    pub realm_directory: RealmDirectoryService,
     pub projected_operation_persistence:
-        Arc<dyn soland_application::events::ProjectedOperationPersistencePort>,
+        Arc<dyn soland_services::events::ProjectedOperationPersistencePort>,
     pub object_storage: Arc<dyn ObjectStoragePort>,
     pub settings_persistence: Arc<dyn RuntimeSettingsPort>,
     pub runtime_health: Arc<dyn RuntimeHealthPort>,
@@ -212,7 +212,7 @@ pub struct AppStateRuntime {
     pub storage_mode: &'static str,
 }
 
-pub fn build_realm_directory_application(config: &AppConfig) -> RealmDirectoryApplicationService {
+pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
     let mut realms = RealmDirectoryIndex::new();
     if config.seed_demo_data {
         let demo_realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
@@ -228,7 +228,7 @@ pub fn build_realm_directory_application(config: &AppConfig) -> RealmDirectoryAp
         demo.category = Some("collaboration".to_owned());
         realms.upsert(demo);
     }
-    RealmDirectoryApplicationService::new(realms)
+    RealmDirectoryService::new(realms)
 }
 
 #[cfg(test)]
@@ -269,10 +269,10 @@ mod test_construction {
     use bytes::Bytes;
     use futures_util::stream::{self, BoxStream, StreamExt};
     use parking_lot::Mutex;
-    use soland_application::events::ProjectedOperationPersistencePort;
-    use soland_application::governance::RuntimeSettingsPort;
-    use soland_application::jobs::RuntimeHealthPort;
-    use soland_application::projection::EventSealCommitPort;
+    use soland_services::events::ProjectedOperationPersistencePort;
+    use soland_services::governance::RuntimeSettingsPort;
+    use soland_services::jobs::RuntimeHealthPort;
+    use soland_services::projection::EventSealCommitPort;
     use soland_storage::PersistenceStore;
     use soland_storage_memory::SolandMemoryPersistenceStore;
     use soland_storage_postgres::{Db, EventSealCommitStore, PgPersistenceStore};
@@ -310,7 +310,7 @@ mod test_construction {
             service_identity: ServiceIdentityState,
             resolved_signing_seed: [u8; 32],
         ) -> Self {
-            let cell_registry = ProjectionApplicationService::sdk_cell_registry();
+            let cell_registry = ProjectionService::sdk_cell_registry();
             let stores = soland_storage_postgres::build_state_resolution_stores(
                 db.pool.clone(),
                 cell_registry,
@@ -323,7 +323,7 @@ mod test_construction {
                 .expect("fixture has a serving identity")
                 .service_id
                 .to_string();
-            let projection_application = ProjectionApplicationService::new(
+            let projections = ProjectionService::new(
                 stores.move_store,
                 stores.seal_store,
                 stores.cell_store,
@@ -331,13 +331,13 @@ mod test_construction {
                 event_seal_committer,
                 &service_id,
             );
-            let realm_directory_application = build_realm_directory_application(&config);
+            let realm_directory = build_realm_directory(&config);
             Self::from_runtime(
                 config,
                 AppStateRuntime {
                     persistence: PersistenceHandle::from_shared(persistence),
-                    projection_application,
-                    realm_directory_application,
+                    projections,
+                    realm_directory,
                     projected_operation_persistence: Arc::new(NoProjectedOperationPersistence),
                     object_storage: Arc::new(MemoryObjectStorage::default()),
                     settings_persistence: Arc::new(NoRuntimeSettings),
@@ -461,7 +461,7 @@ mod test_construction {
     impl RuntimeSettingsPort for NoRuntimeSettings {
         async fn load_overrides(
             &self,
-        ) -> soland_application::ApplicationResult<Vec<(String, Value)>> {
+        ) -> soland_services::ServiceResult<Vec<(String, Value)>> {
             Ok(Vec::new())
         }
 
@@ -470,7 +470,7 @@ mod test_construction {
             _key: &str,
             _value: &Value,
             _updated_by: &str,
-        ) -> soland_application::ApplicationResult<()> {
+        ) -> soland_services::ServiceResult<()> {
             Ok(())
         }
     }
@@ -601,8 +601,8 @@ impl AppState {
     ) -> Self {
         let AppStateRuntime {
             persistence,
-            projection_application,
-            realm_directory_application,
+            projections,
+            realm_directory,
             projected_operation_persistence,
             object_storage,
             settings_persistence,
@@ -711,46 +711,46 @@ impl AppState {
             crate::runtime_settings::RuntimeSettings::from_config(&config),
         ));
 
-        let authorization_application =
-            AuthorizationApplicationService::new(Arc::new(SolandAuthzEngine::new()));
-        let PersistenceEventApplications {
-            events: event_application,
-            queries: event_query_application,
-            mls_commits: mls_commit_query_application,
-            mls_key_packages: mls_key_package_application,
-            realm_queries: realm_query_application,
-            realm_invites: realm_invite_application,
-        } = persistence.event_applications(projected_operation_persistence);
-        let delivery_application =
-            persistence.delivery_application(object_storage, push_target_hmac_key);
-        let PersistenceIdentityApplications {
-            identity: identity_application,
-            account_data: account_data_application,
-            key_material: key_material_application,
-            consent: consent_application,
-            contact: contact_application,
-            agent_pairing: agent_pairing_application,
-            agent_participation: agent_participation_application,
-            key_backup: key_backup_application,
-            session: session_application,
-            recovery_policy: recovery_policy_application,
-            recovery_receipt: recovery_receipt_application,
-            recovery_session: recovery_session_application,
-            did: did_application,
-        } = persistence.identity_applications(did_resolver.clone());
-        let PersistenceOperationalApplications {
-            federation: federation_application,
-            governance: governance_application,
-            sync: sync_application,
-            jobs: jobs_application,
-        } = persistence.operational_applications(
+        let authorization =
+            AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
+        let PersistenceEventServices {
+            events,
+            queries: event_queries,
+            mls_commits,
+            mls_key_packages,
+            realm_queries: realms,
+            realm_invites,
+        } = persistence.event_services(projected_operation_persistence);
+        let deliveries =
+            persistence.delivery_service(object_storage, push_target_hmac_key);
+        let PersistenceIdentityServices {
+            identity: identities,
+            account_data,
+            key_material,
+            consent: consents,
+            contact: contacts,
+            agent_pairing: agent_pairings,
+            agent_participation: agent_participations,
+            key_backup: key_backups,
+            session: sessions,
+            recovery_policy: recovery_policies,
+            recovery_receipt: recovery_receipts,
+            recovery_session: recovery_sessions,
+            did: dids,
+        } = persistence.identity_services(did_resolver.clone());
+        let PersistenceOperationalServices {
+            federation,
+            governance,
+            sync,
+            jobs,
+        } = persistence.operational_services(
             Arc::new(RuntimeAdminSigningKeys(admin_keystore)),
             settings_persistence,
             runtime_health,
             sync_cursor_hmac_key,
         );
-        let join_application_service = persistence.join_application_service();
-        federation_application.install_sovereign_state(SovereignDeploymentState {
+        let join_applications = persistence.join_application_service();
+        federation.install_sovereign_state(SovereignDeploymentState {
             upstream_available: true,
             ..Default::default()
         });
@@ -760,38 +760,38 @@ impl AppState {
             service_id: service_id.clone(),
             service_identity,
             settings: initial_settings,
-            authorization_application,
+            authorization,
             storage_mode,
             persistence,
-            event_application,
-            event_query_application,
-            mls_commit_query_application,
-            mls_key_package_application,
-            realm_query_application,
-            realm_invite_application,
-            delivery_application,
-            identity_application,
-            account_data_application,
-            key_material_application,
-            consent_application,
-            contact_application,
-            agent_pairing_application,
-            agent_participation_application,
-            key_backup_application,
-            session_application,
-            recovery_policy_application,
-            recovery_receipt_application,
-            recovery_session_application,
-            did_application,
-            federation_application,
-            governance_application,
-            sync_application,
-            jobs_application,
-            join_application_service,
-            projection_application,
-            realm_directory_application,
+            events,
+            event_queries,
+            mls_commits,
+            mls_key_packages,
+            realms,
+            realm_invites,
+            deliveries,
+            identities,
+            account_data,
+            key_material,
+            consents,
+            contacts,
+            agent_pairings,
+            agent_participations,
+            key_backups,
+            sessions,
+            recovery_policies,
+            recovery_receipts,
+            recovery_sessions,
+            dids,
+            federation,
+            governance,
+            sync,
+            jobs,
+            join_applications,
+            projections,
+            realm_directory,
             account_registration_policy: Arc::new(Mutex::new(AccountRegistrationPolicy::default())),
-            runtime_guards: RuntimeGuardApplicationService::default(),
+            runtime_guards: RuntimeGuardService::default(),
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             federation_peer_verifying_keys: Arc::new(ArcSwap::from_pointee(BTreeMap::new())),
             event_broadcast,
@@ -823,108 +823,108 @@ impl AppState {
         self.verified_profiles.as_ref()
     }
 
-    pub(crate) fn event_application(&self) -> &EventApplicationService {
-        &self.event_application
+    pub(crate) fn events(&self) -> &EventService {
+        &self.events
     }
 
-    pub(crate) fn event_query_application(&self) -> &EventQueryApplicationService {
-        &self.event_query_application
+    pub(crate) fn event_queries(&self) -> &EventQueryService {
+        &self.event_queries
     }
 
-    pub(crate) fn mls_commit_query_application(&self) -> &MlsCommitQueryApplicationService {
-        &self.mls_commit_query_application
+    pub(crate) fn mls_commits(&self) -> &MlsCommitQueryService {
+        &self.mls_commits
     }
 
-    pub(crate) fn mls_key_package_application(&self) -> &MlsKeyPackageApplicationService {
-        &self.mls_key_package_application
+    pub(crate) fn mls_key_packages(&self) -> &MlsKeyPackageService {
+        &self.mls_key_packages
     }
 
-    pub(crate) fn realm_query_application(&self) -> &RealmQueryApplicationService {
-        &self.realm_query_application
+    pub(crate) fn realms(&self) -> &RealmQueryService {
+        &self.realms
     }
 
-    pub(crate) fn realm_invite_application(&self) -> &RealmInviteApplicationService {
-        &self.realm_invite_application
+    pub(crate) fn realm_invites(&self) -> &RealmInviteService {
+        &self.realm_invites
     }
 
-    pub(crate) fn delivery_application(&self) -> &DeliveryApplicationService {
-        &self.delivery_application
+    pub(crate) fn deliveries(&self) -> &DeliveryService {
+        &self.deliveries
     }
 
-    pub(crate) fn identity_application(&self) -> &IdentityApplicationService {
-        &self.identity_application
+    pub(crate) fn identities(&self) -> &IdentityService {
+        &self.identities
     }
 
-    pub(crate) fn account_data_application(&self) -> &AccountDataApplicationService {
-        &self.account_data_application
+    pub(crate) fn account_data(&self) -> &AccountDataService {
+        &self.account_data
     }
 
-    pub(crate) fn key_material_application(&self) -> &KeyMaterialApplicationService {
-        &self.key_material_application
+    pub(crate) fn key_material(&self) -> &KeyMaterialService {
+        &self.key_material
     }
 
-    pub(crate) fn consent_application(&self) -> &ConsentApplicationService {
-        &self.consent_application
+    pub(crate) fn consents(&self) -> &ConsentService {
+        &self.consents
     }
 
-    pub(crate) fn contact_application(&self) -> &ContactApplicationService {
-        &self.contact_application
+    pub(crate) fn contacts(&self) -> &ContactService {
+        &self.contacts
     }
 
-    pub(crate) fn did_application(&self) -> &DidApplicationService {
-        &self.did_application
+    pub(crate) fn dids(&self) -> &DidService {
+        &self.dids
     }
 
-    pub(crate) fn agent_pairing_application(&self) -> &AgentPairingApplicationService {
-        &self.agent_pairing_application
+    pub(crate) fn agent_pairings(&self) -> &AgentPairingService {
+        &self.agent_pairings
     }
 
-    pub(crate) fn agent_participation_application(&self) -> &AgentParticipationApplicationService {
-        &self.agent_participation_application
+    pub(crate) fn agent_participations(&self) -> &AgentParticipationService {
+        &self.agent_participations
     }
 
-    pub(crate) fn key_backup_application(&self) -> &KeyBackupApplicationService {
-        &self.key_backup_application
+    pub(crate) fn key_backups(&self) -> &KeyBackupService {
+        &self.key_backups
     }
 
-    pub(crate) fn session_application(&self) -> &SessionApplicationService {
-        &self.session_application
+    pub(crate) fn sessions(&self) -> &SessionService {
+        &self.sessions
     }
 
-    pub(crate) fn recovery_policy_application(&self) -> &RecoveryPolicyApplicationService {
-        &self.recovery_policy_application
+    pub(crate) fn recovery_policies(&self) -> &RecoveryPolicyService {
+        &self.recovery_policies
     }
 
-    pub(crate) fn recovery_receipt_application(&self) -> &RecoveryReceiptApplicationService {
-        &self.recovery_receipt_application
+    pub(crate) fn recovery_receipts(&self) -> &RecoveryReceiptService {
+        &self.recovery_receipts
     }
 
-    pub(crate) fn recovery_session_application(&self) -> &RecoverySessionApplicationService {
-        &self.recovery_session_application
+    pub(crate) fn recovery_sessions(&self) -> &RecoverySessionService {
+        &self.recovery_sessions
     }
 
-    pub(crate) fn federation_application(&self) -> &FederationApplicationService {
-        &self.federation_application
+    pub(crate) fn federation(&self) -> &FederationService {
+        &self.federation
     }
 
-    pub(crate) fn governance_application(&self) -> &GovernanceApplicationService {
-        &self.governance_application
+    pub(crate) fn governance(&self) -> &GovernanceService {
+        &self.governance
     }
 
-    pub(crate) fn sync_application(&self) -> &SyncApplicationService {
-        &self.sync_application
+    pub(crate) fn sync(&self) -> &SyncService {
+        &self.sync
     }
 
-    pub(crate) fn jobs_application(&self) -> &JobsApplicationService {
-        &self.jobs_application
+    pub(crate) fn jobs(&self) -> &JobsService {
+        &self.jobs
     }
 
-    pub(crate) fn join_application_service(&self) -> &JoinApplicationApplicationService {
-        &self.join_application_service
+    pub(crate) fn join_applications(&self) -> &JoinApplicationService {
+        &self.join_applications
     }
 
-    pub(crate) fn projection_application(&self) -> &ProjectionApplicationService {
-        &self.projection_application
+    pub(crate) fn projections(&self) -> &ProjectionService {
+        &self.projections
     }
 
     /// Runtime-authoritative admin-allowlist check. Reads the live overlay,
@@ -957,14 +957,14 @@ impl AppState {
     /// in an async context (driven from `main`); see the diesel-async
     /// conversion. Safe to call in memory mode — every store read returns an
     /// empty snapshot, so this is a no-op there.
-    pub async fn hydrate(&self) -> soland_application::ApplicationResult<()> {
+    pub async fn hydrate(&self) -> soland_services::ServiceResult<()> {
         let now = chrono::Utc::now();
         // Overlay the persisted per-key operational settings on top of the
         // boot-config seed. Only overridden keys have rows; everything else
         // keeps its env default. Per-key decode failures are logged and
         // skipped so a corrupt row can never brick startup.
         match self
-            .governance_application
+            .governance
             .runtime_setting_overrides()
             .await
         {
@@ -995,7 +995,7 @@ impl AppState {
             .hydrate_realm_directory(&self.service_id)
             .await;
         for (_, entry) in realm_updates.entries_iter() {
-            self.realm_directory_application.upsert(entry.clone());
+            self.realm_directory.upsert(entry.clone());
         }
 
         // A-model active-series signatures are bound to the current accepted
@@ -1003,11 +1003,11 @@ impl AppState {
         // pointers; otherwise a restart makes every correctly hydrated
         // pointer appear stale because the generation cache is empty.
         let cross_signing = self.persistence.hydrate_cross_signing().await?;
-        self.identity_application
+        self.identities
             .install_cross_signing_registry(cross_signing);
 
         let hydrated_realm_ids: Vec<RealmId> = {
-            let realms = self.realm_directory_application.snapshot();
+            let realms = self.realm_directory.snapshot();
             realms
                 .search(Default::default())
                 .into_iter()
@@ -1020,18 +1020,18 @@ impl AppState {
         // history.
         for realm_id in &hydrated_realm_ids {
             for record in self
-                .join_application_service
+                .join_applications
                 .list(realm_id.as_str(), chrono::Utc::now())
                 .await?
             {
-                self.projection_application
+                self.projections
                     .install_join_application_record(&record);
             }
         }
         self.persistence
             .hydrate_projection(
-                &self.projection_application,
-                &self.authorization_application,
+                &self.projections,
+                &self.authorization,
                 &RuntimeHydrationProjectionAdapter,
                 hydrated_realm_ids.clone(),
             )
@@ -1039,7 +1039,7 @@ impl AppState {
         // Reconcile the durable consumed flag after a crash between Event
         // acceptance and the private-store mirror. The operation is
         // idempotent for records already marked consumed.
-        for record in self.event_query_application.canonical_events().await? {
+        for record in self.event_queries.canonical_events().await? {
             if record.kind != arkret_wire::events::EventKind::INVITE_CREATE {
                 continue;
             }
@@ -1060,14 +1060,14 @@ impl AppState {
 
         // Hydrate per-subject invite_receive_policy overrides into the
         // application-owned working projection.
-        self.contact_application.hydrate_runtime().await?;
+        self.contacts.hydrate_runtime().await?;
 
         // Hydrate the holder-private consent-cell working projection owned by
         // the application service.
-        self.consent_application.hydrate_runtime().await?;
+        self.consents.hydrate_runtime().await?;
 
         let mut direct_binding_records = self
-            .event_query_application()
+            .event_queries()
             .canonical_events()
             .await?
             .into_iter()
@@ -1104,20 +1104,20 @@ impl AppState {
             crate::routing::identity::project_canonical_direct_binding(self, &operation).await;
         }
 
-        self.identity_application
+        self.identities
             .hydrate_account_lifecycles()
             .await?;
 
-        self.governance_application.hydrate_projections().await?;
+        self.governance.hydrate_projections().await?;
         // Hydrate the cursor-revocation cache from the durable
         // `sync_cursor_revocations` ledger so a revoked cursor stays revoked
         // across restarts (spec `client-sync.md` cursor-revoke semantics —
         // a revoked cursor MUST keep returning `cursor_revoked` and MUST NOT
         // advance to-device ack / resume / wait-for / dropped-recovery
         // state). Built off-lock first; merge under a short critical section.
-        match self.sync_application().active_cursor_revocations(now).await {
+        match self.sync().active_cursor_revocations(now).await {
             Ok(revocations) => self
-                .sync_application()
+                .sync()
                 .replace_cursor_revocations(revocations),
             Err(error) => {
                 tracing::warn!(%error, "failed to hydrate cursor revocations from persistence store");
@@ -1217,11 +1217,11 @@ impl AppState {
     }
 
     pub fn account_lifecycle_status(&self, did: &str) -> AccountStatus {
-        self.identity_application.account_lifecycle_status(did)
+        self.identities.account_lifecycle_status(did)
     }
 
     pub fn account_lifecycle_state(&self, did: &str) -> String {
-        self.identity_application.account_lifecycle_state(did)
+        self.identities.account_lifecycle_state(did)
     }
 
     /// Record a new peer KeyPackage claim attempt. Duplicate deliveries are
@@ -1315,49 +1315,49 @@ impl AppState {
     #[cfg(test)]
     pub(crate) fn test_persistence(
         &self,
-    ) -> Arc<soland_application::persistence::TestPersistenceStore> {
+    ) -> Arc<soland_services::persistence::TestPersistenceStore> {
         self.persistence.shared_for_tests()
     }
 
     #[cfg(test)]
     pub(crate) fn test_projection(&self) -> &Arc<Mutex<ProjectionState>> {
-        self.projection_application.test_state()
+        self.projections.test_state()
     }
 
-    pub(crate) fn realm_directory_application(&self) -> &RealmDirectoryApplicationService {
-        &self.realm_directory_application
+    pub(crate) fn realm_directory(&self) -> &RealmDirectoryService {
+        &self.realm_directory
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_hlc(&self) -> &ApplicationClock {
+    pub fn test_hlc(&self) -> &ServiceClock {
         self.hlc()
     }
 
-    pub(crate) fn hlc(&self) -> &ApplicationClock {
-        self.projection_application.clock()
+    pub(crate) fn hlc(&self) -> &ServiceClock {
+        self.projections.clock()
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_authz(&self) -> &AuthorizationApplicationService {
-        &self.authorization_application
+    pub fn test_authz(&self) -> &AuthorizationService {
+        &self.authorization
     }
 
-    pub(crate) fn authorization_application(&self) -> &AuthorizationApplicationService {
-        &self.authorization_application
+    pub(crate) fn authorization(&self) -> &AuthorizationService {
+        &self.authorization
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_object_key_for_sha256(&self, sha256: &str) -> String {
-        self.delivery_application.object_key_for_sha256(sha256)
+        self.deliveries.object_key_for_sha256(sha256)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub async fn test_put_object(&self, key: &str, bytes: Vec<u8>) -> Result<(), String> {
-        self.delivery_application.put_object(key, bytes).await
+        self.deliveries.put_object(key, bytes).await
     }
 
     pub(crate) fn subscribe_event_notifications(
@@ -1394,9 +1394,9 @@ impl AppState {
     #[doc(hidden)]
     pub fn test_cache_resolved_webvh_record(
         &self,
-        record: soland_application::identity::DidDocumentState,
+        record: soland_services::identity::DidDocumentState,
     ) -> Result<arkret_identity::DidDocument, String> {
-        self.did_application.cache_resolved_document_state(record)
+        self.dids.cache_resolved_document_state(record)
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1407,14 +1407,14 @@ impl AppState {
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
-    pub fn test_install_consent_cell(&self, cell: soland_application::identity::ConsentCellRecord) {
-        self.consent_application.install_runtime_cell(cell);
+    pub fn test_install_consent_cell(&self, cell: soland_services::identity::ConsentCellRecord) {
+        self.consents.install_runtime_cell(cell);
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_direct_conversation_binding_count(&self) -> usize {
-        self.contact_application.runtime_direct_binding_count()
+        self.contacts.runtime_direct_binding_count()
     }
 
     #[cfg(any(test, feature = "test-support"))]
@@ -1423,7 +1423,7 @@ impl AppState {
         &self,
         publish: arkret_models_identity::CrossSigningPublish,
     ) -> arkret_identity::Result<()> {
-        self.identity_application
+        self.identities
             .record_cross_signing_publish(publish)
     }
 
@@ -1433,13 +1433,13 @@ impl AppState {
         &self,
         reset: &arkret_models_identity::CrossSigningResetPayload,
     ) -> arkret_identity::Result<()> {
-        self.identity_application.record_cross_signing_reset(reset)
+        self.identities.record_cross_signing_reset(reset)
     }
 
     #[cfg(any(test, feature = "test-support"))]
     #[doc(hidden)]
     pub fn test_has_current_cross_signing(&self, principal: &arkret_identifiers::Did) -> bool {
-        self.identity_application
+        self.identities
             .current_cross_signing(principal)
             .is_some()
     }
@@ -1452,7 +1452,7 @@ struct RuntimeHydrationProjectionAdapter;
 impl HydrationProjectionAdapter for RuntimeHydrationProjectionAdapter {
     fn operation_from_canonical_record(
         &self,
-        record: &soland_application::events::CanonicalEventRecord,
+        record: &soland_services::events::CanonicalEventRecord,
     ) -> Option<arkret_event_draft::Operation> {
         crate::routing::events::event_log::projection_operation_from_canonical_record(record)
     }
@@ -1553,7 +1553,7 @@ pub fn getrandom_seed(out: &mut [u8; 32]) {
 #[cfg(test)]
 mod membership_hydration_tests {
     use arkret_identifiers::{Did, RealmId};
-    use soland_application::hydration::{
+    use soland_services::hydration::{
         hydrate_projections_from_persistence, hydrate_realm_member_state_event,
     };
     use soland_storage::{
@@ -1565,8 +1565,8 @@ mod membership_hydration_tests {
 
     use super::*;
 
-    fn test_authorization_application() -> AuthorizationApplicationService {
-        AuthorizationApplicationService::new(Arc::new(SolandAuthzEngine::new()))
+    fn test_authorization() -> AuthorizationService {
+        AuthorizationService::new(Arc::new(SolandAuthzEngine::new()))
     }
 
     #[test]
@@ -1617,7 +1617,7 @@ mod membership_hydration_tests {
 
         assert!(
             state
-                .contact_application()
+                .contacts()
                 .direct_binding("sha256:stale-private-row")
                 .is_none(),
             "active bindings must be rebuilt from accepted signed Events, not private rows"
@@ -1782,7 +1782,7 @@ mod membership_hydration_tests {
                 active_profiles: Vec::new(),
             },
         );
-        soland_application::hydration::hydrate_canonical_realm_memberships(
+        soland_services::hydration::hydrate_canonical_realm_memberships(
             &store,
             &mut projection,
             &RuntimeHydrationProjectionAdapter,
@@ -1856,7 +1856,7 @@ mod membership_hydration_tests {
             .expect("init genesis");
 
         let mut proj = ProjectionState::new();
-        let authz = test_authorization_application();
+        let authz = test_authorization();
         hydrate_projections_from_persistence(
             &store,
             &mut proj,
@@ -1896,11 +1896,11 @@ mod membership_hydration_tests {
     fn child_scope_policy_hydration_uses_the_sdk_wire_type_and_fails_closed() {
         let circle_id = "ak:circle:0196419b-0000-7000-8000-000000000003";
         assert_eq!(
-            soland_application::hydration::parse_child_scope_policy(None, None).unwrap(),
+            soland_services::hydration::parse_child_scope_policy(None, None).unwrap(),
             None
         );
         assert_eq!(
-            soland_application::hydration::parse_child_scope_policy(
+            soland_services::hydration::parse_child_scope_policy(
                 Some("require_scope_circle_id"),
                 Some(circle_id),
             )
@@ -1910,25 +1910,25 @@ mod membership_hydration_tests {
             })
         );
         assert!(
-            soland_application::hydration::parse_child_scope_policy(
+            soland_services::hydration::parse_child_scope_policy(
                 Some("allow_any"),
                 Some(circle_id)
             )
             .is_err()
         );
         assert!(
-            soland_application::hydration::parse_child_scope_policy(
+            soland_services::hydration::parse_child_scope_policy(
                 Some("require_scope_circle_id"),
                 None
             )
             .is_err()
         );
         assert!(
-            soland_application::hydration::parse_child_scope_policy(Some("legacy_policy"), None)
+            soland_services::hydration::parse_child_scope_policy(Some("legacy_policy"), None)
                 .is_err()
         );
         assert!(
-            soland_application::hydration::parse_child_scope_policy(None, Some(circle_id)).is_err()
+            soland_services::hydration::parse_child_scope_policy(None, Some(circle_id)).is_err()
         );
     }
 
@@ -1993,7 +1993,7 @@ mod membership_hydration_tests {
         hydrate_projections_from_persistence(
             &store,
             &mut proj,
-            &test_authorization_application(),
+            &test_authorization(),
             &RuntimeHydrationProjectionAdapter,
         )
         .await
@@ -2050,7 +2050,7 @@ mod membership_hydration_tests {
             hydrate_projections_from_persistence(
                 &store,
                 &mut poisoned,
-                &test_authorization_application(),
+                &test_authorization(),
                 &RuntimeHydrationProjectionAdapter,
             )
             .await
@@ -2135,7 +2135,7 @@ mod membership_hydration_tests {
         hydrate_projections_from_persistence(
             &store,
             &mut proj,
-            &test_authorization_application(),
+            &test_authorization(),
             &RuntimeHydrationProjectionAdapter,
         )
         .await
@@ -2186,7 +2186,7 @@ mod membership_hydration_tests {
         hydrate_projections_from_persistence(
             &store,
             &mut proj,
-            &test_authorization_application(),
+            &test_authorization(),
             &RuntimeHydrationProjectionAdapter,
         )
         .await
@@ -2202,3 +2202,5 @@ mod membership_hydration_tests {
         ));
     }
 }
+
+

@@ -18,7 +18,7 @@ pub(super) async fn search_realms(
     };
     let session = authenticated_session(state, req).await.ok();
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms.search(query).into_iter().cloned().collect()
     };
     let mut results = Vec::new();
@@ -66,7 +66,7 @@ pub(super) async fn resolve_realm(
         None => None,
     };
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -206,7 +206,7 @@ pub(super) async fn resolve_target(
     let realm_preview = realm_preview_for_policy_typed(state, &realm_entry).await?;
     let policy_revision = if parsed.link_type == LinkType::Preview
         && let Some(meta) = state
-            .realm_query_application()
+            .realms()
             .realm_metadata(realm_entry.realm_id.as_str())
             .await
             .ok()
@@ -296,7 +296,7 @@ pub(super) async fn resolve_realm_for_address(
     parsed: &arkret_wire::object_address::ParsedAddress,
 ) -> Option<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -358,7 +358,7 @@ pub(super) fn default_join_rule() -> &'static str {
 }
 
 pub(super) fn realm_join_rule(state: &AppState, realm_id: &str) -> String {
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     projection
         .realm_join_policy_cell_value(realm_id)
         .and_then(join_rule_from_value)
@@ -560,7 +560,7 @@ pub(super) async fn realm_preview_for_policy(
     realm_entry: &RealmDirectoryEntry,
 ) -> Value {
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_entry.realm_id.as_str())
         .await
         .ok()

@@ -49,7 +49,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use parking_lot::Mutex;
 use serde::Serialize;
 use serde_json::Value;
-use soland_application::authorization::RealmPolicyServerConfig;
+use soland_services::authorization::RealmPolicyServerConfig;
 use subtle::ConstantTimeEq as _;
 
 type VerificationKeyResolver =
@@ -1090,3 +1090,4 @@ mod tests {
         }
     }
 }
+

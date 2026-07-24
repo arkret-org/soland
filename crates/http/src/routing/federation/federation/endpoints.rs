@@ -6,7 +6,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::federation::FederationTransactionRecord;
+use soland_services::federation::FederationTransactionRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -140,7 +140,7 @@ pub(crate) async fn federation_transaction(
     // a worker that crashed between `try_begin` and the finalising `put`.
     let mut stale_claim_takeover = false;
     match state
-        .federation_application()
+        .federation()
         .transaction(body.origin.as_str(), &txn_id)
         .await
     {
@@ -270,7 +270,7 @@ pub(crate) async fn federation_transaction(
             processed_at: None,
         };
         let claimed = state
-            .federation_application()
+            .federation()
             .begin_transaction(&placeholder)
             .await
             .map_err(|error| AppError::internal(error.to_string()))?;
@@ -310,7 +310,7 @@ pub(crate) async fn federation_transaction(
         processed_at: Some(now),
     };
     state
-        .federation_application()
+        .federation()
         .store_transaction(&record)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -332,7 +332,7 @@ fn local_peer_policy_digest_for_transaction(
         .map(|operation| operation.realm_id.as_str().to_owned())
         .collect::<BTreeSet<_>>();
     let realm_policies = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         realm_ids
             .iter()
             .map(|realm_id| {
@@ -349,7 +349,7 @@ fn local_peer_policy_digest_for_transaction(
         .iter()
         .filter_map(|realm_id| {
             state
-                .governance_application()
+                .governance()
                 .cached_realm_moderation_policy(realm_id)
                 .map(|record| {
                     json!({
@@ -446,7 +446,7 @@ pub(crate) async fn federation_actor_events(
     // cannot full-scan an arbitrarily large projection table into memory.
     const FEDERATION_ACTOR_EVENTS_SCAN_CAP: usize = 10_000;
     let mut events = state
-        .event_query_application()
+        .event_queries()
         .projected_events_capped(FEDERATION_ACTOR_EVENTS_SCAN_CAP)
         .await
         .unwrap_or_default()
@@ -460,7 +460,7 @@ pub(crate) async fn federation_actor_events(
     });
 
     let erasure_receipts = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         for event in &mut events {
             crate::routing::events::projection::tombstone_projection_event_for_erased_actor(
                 &projection,
@@ -486,7 +486,7 @@ pub(crate) async fn federation_actor_events(
 }
 
 fn projection_event_matches_actor(
-    event: &soland_application::events::ProjectedEvent,
+    event: &soland_services::events::ProjectedEvent,
     actor: &str,
 ) -> bool {
     crate::routing::events::projection::projection_event_actor(event) == Some(actor)
@@ -518,7 +518,7 @@ pub(crate) async fn federation_pull_operations(
     let limit = limit.into_inner().unwrap_or(100).min(100);
     let _want_snapshot_bootstrap = snapshot_bootstrap.into_inner().unwrap_or(false);
     let realm_operations = state
-        .federation_application()
+        .federation()
         .operations_for_realm(&realm_id)
         .await
         .unwrap_or_default();
@@ -654,7 +654,7 @@ async fn operation_history_visible_for_federation_pull(
     operation: &arkret_event_draft::Operation,
 ) -> bool {
     state
-        .realm_query_application()
+        .realms()
         .realm_metadata(operation.realm_id.as_str())
         .await
         .ok()
@@ -697,7 +697,7 @@ pub(crate) async fn federation_realm_members(
     let realm_id_value = RealmId::new(realm_id.into_inner())
         .map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let members = state
-        .realm_directory_application()
+        .realm_directory()
         .snapshot()
         .get(&realm_id_value)
         .map(|realm| {
@@ -820,12 +820,12 @@ pub(crate) async fn federation_seals_pull(
     }
     let realm = RealmId::new(realm_id).map_err(|_| AppError::invalid_param("invalid realm_id"))?;
     let leaves = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(&realm)
         .unwrap_or_default();
     let mut seals: Vec<arkret_wire::Seal> = Vec::with_capacity(leaves.len());
     for leaf in &leaves {
-        if let Ok(Some(a)) = state.projection_application().seal_by_id(leaf) {
+        if let Ok(Some(a)) = state.projections().seal_by_id(leaf) {
             seals.push(a);
         }
     }
@@ -890,7 +890,7 @@ pub(crate) async fn federation_seals_push(
             }
         }
         let realm_events = match state
-            .event_query_application()
+            .event_queries()
             .realm_events_newest_first(seal.realm_id.as_str())
             .await
         {
@@ -905,7 +905,7 @@ pub(crate) async fn federation_seals_push(
             }
         };
         for move_id in &seal.delta {
-            let issuer = match state.projection_application().move_by_id(move_id) {
+            let issuer = match state.projections().move_by_id(move_id) {
                 Ok(Some(enclosed_move)) => enclosed_move.issuer.as_str().to_owned(),
                 Ok(None) => match realm_events
                     .iter()
@@ -958,3 +958,4 @@ pub(crate) async fn federation_seals_push(
     }
     json_ok(FederationSealsPushOutcome { accepted, rejected })
 }
+

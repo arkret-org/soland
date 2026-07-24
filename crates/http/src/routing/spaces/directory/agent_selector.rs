@@ -170,7 +170,7 @@ pub(super) async fn resolve_agent_selector(
     }
 
     let records = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agents_for_controller(controller_subject)
         .await
         .map_err(|err| AppError::internal(format!("agent selector lookup failed: {err}")))?;

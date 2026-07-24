@@ -145,7 +145,7 @@ async fn mesh_policy_broadcasts_to_every_peer() {
     let move_hash = sha256_hex("sha256:01".as_bytes());
     let txn_id = format!("outbound_move:{}:{}", &peer_hash[..16], &move_hash[..16]);
     let transcript = state
-        .federation_application()
+        .federation()
         .transaction(state.service_id(), &txn_id)
         .await
         .unwrap()
@@ -273,7 +273,7 @@ async fn local_invite_membership_and_message_operations_project_invite() {
     .await;
 
     let projected_invite = state
-        .realm_invite_application()
+        .realm_invites()
         .get("ak:invite:01904100-0000-7000-8000-000000000056")
         .await
         .unwrap()
@@ -318,14 +318,14 @@ async fn operation_frontier_tracks_persisted_operation_ids() {
         json!({"content": {"kind": "ak.content.text", "body": "two"}}),
     );
     state
-        .federation_application()
+        .federation()
         .append_operation(first.clone())
         .await
         .unwrap();
     let before =
         operation_frontier_value(&state, "ak:realm:01904100-0000-7000-8000-000000000061").await;
     state
-        .federation_application()
+        .federation()
         .append_operation(second.clone())
         .await
         .unwrap();
@@ -362,7 +362,7 @@ async fn seal_fanout_records_seal_target_and_retry_metadata() {
     let seal_hash = sha256_hex("ak:seal:sha256:02".as_bytes());
     let txn_id = format!("outbound_seal:{}:{}", &peer_hash[..16], &seal_hash[..16]);
     let transcript = state
-        .federation_application()
+        .federation()
         .transaction(state.service_id(), &txn_id)
         .await
         .unwrap()
@@ -389,7 +389,7 @@ async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     let move_hash = sha256_hex("sha256:retry".as_bytes());
     let txn_id = format!("outbound_move:{}:{}", &peer_hash[..16], &move_hash[..16]);
     let before = state
-        .federation_application()
+        .federation()
         .transaction(state.service_id(), &txn_id)
         .await
         .unwrap()
@@ -405,7 +405,7 @@ async fn retry_pass_claims_due_outbound_transcript_and_reschedules() {
     assert_eq!(report.dead_lettered, 0);
 
     let after = state
-        .federation_application()
+        .federation()
         .transaction(state.service_id(), &txn_id)
         .await
         .unwrap()

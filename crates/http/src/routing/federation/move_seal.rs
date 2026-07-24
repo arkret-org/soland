@@ -38,7 +38,7 @@ use crate::{JsonResult, json_ok};
 struct DeviceGenerationEventSealContext {
     principal_id: String,
     current_generation_ref: Option<String>,
-    records: Vec<soland_application::events::CanonicalEventRecord>,
+    records: Vec<soland_services::events::CanonicalEventRecord>,
     accepted_frontier_refs: Vec<SealId>,
     cas_frontier_refs: Vec<SealId>,
     generation_fence: Option<crate::notary::FirstGenerationEventSealRequirement>,
@@ -126,7 +126,7 @@ async fn device_generation_event_seal_context(
     realm_id: &RealmId,
 ) -> Result<Option<DeviceGenerationEventSealContext>, AppError> {
     let records = state
-        .event_query_application()
+        .event_queries()
         .realm_events_newest_first(realm_id.as_str())
         .await
         .map_err(|error| {
@@ -157,7 +157,7 @@ async fn device_generation_event_seal_context(
     let bootstrap = bootstrap[0];
     let principal_id = bootstrap.actor_id.clone();
     let expected_realm =
-        soland_application::identity::principal_control_realm_for_did(&principal_id);
+        soland_services::identity::principal_control_realm_for_did(&principal_id);
     if expected_realm != realm_id.as_str() {
         return Err(seal_admission_error(
             "principal-control bootstrap is stored under a non-deterministic Realm",
@@ -248,7 +248,7 @@ async fn device_generation_event_seal_context(
         ));
     }
     let cas_frontier_refs = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(realm_id)
         .map_err(|error| {
             AppError::new(
@@ -360,7 +360,7 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
 }
 
 fn ordinary_event_device_id(
-    record: &soland_application::events::CanonicalEventRecord,
+    record: &soland_services::events::CanonicalEventRecord,
 ) -> Option<String> {
     let verification_method = record
         .envelope
@@ -401,7 +401,7 @@ async fn try_apply_device_generation_event_seal(
         );
     let _guard = generation_lock.lock().await;
     if let Some(existing) = state
-        .projection_application()
+        .projections()
         .seal_by_id(&seal.id)
         .map_err(|error| {
             AppError::new(
@@ -429,7 +429,7 @@ async fn try_apply_device_generation_event_seal(
         ));
     };
     if !state
-        .projection_application()
+        .projections()
         .seal_predecessors_known(&seal.predecessor_refs)
         .map_err(|error| {
             AppError::new(
@@ -450,7 +450,7 @@ async fn try_apply_device_generation_event_seal(
         ));
     }
     let predecessor_coverage = state
-        .projection_application()
+        .projections()
         .predecessor_covered_events(&seal.predecessor_refs)
         .map_err(app_error_from_seal_reject)?;
     if seal
@@ -489,7 +489,7 @@ async fn try_apply_device_generation_event_seal(
         let mut maximum = None;
         for predecessor in &seal.predecessor_refs {
             let value = state
-                .projection_application()
+                .projections()
                 .seal_by_id(predecessor)
                 .map_err(|error| {
                     AppError::new(
@@ -549,7 +549,7 @@ async fn try_apply_device_generation_event_seal(
     };
 
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(&context.principal_id)
         .await
         .map_err(|error| {
@@ -792,7 +792,7 @@ async fn try_apply_device_generation_event_seal(
     }
 
     match state
-        .projection_application()
+        .projections()
         .commit_event_seal_if_frontier(seal, &context.cas_frontier_refs, &new_ops, &target)
     {
         Ok(true) => {}
@@ -820,7 +820,7 @@ async fn try_apply_device_generation_event_seal(
 pub(crate) async fn apply_managed_agent_event_seal(
     state: &AppState,
     seal: &Seal,
-    agent_record: &soland_application::identity::AgentPairingState,
+    agent_record: &soland_services::identity::AgentPairingState,
     session_device_id: &str,
 ) -> Result<SealEffect, AppError> {
     seal.validate_id()
@@ -858,7 +858,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         );
     let _guard = admission_lock.lock().await;
     if let Some(mut existing) = state
-        .projection_application()
+        .projections()
         .seal_by_id(&seal.id)
         .map_err(|error| {
             AppError::new(
@@ -882,7 +882,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
     }
 
     let mut leaves = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(&seal.realm_id)
         .map_err(|error| {
             AppError::new(
@@ -897,12 +897,12 @@ pub(crate) async fn apply_managed_agent_event_seal(
         ));
     }
     let current = state
-        .projection_application()
+        .projections()
         .predecessor_covered_events(&leaves)
         .map_err(app_error_from_seal_reject)?;
 
     let records = state
-        .event_query_application()
+        .event_queries()
         .realm_events_newest_first(seal.realm_id.as_str())
         .await
         .map_err(|error| {
@@ -991,7 +991,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .iter()
         .map(|leaf| {
             state
-                .projection_application()
+                .projections()
                 .seal_by_id(leaf)
                 .map_err(|error| {
                     AppError::new(
@@ -1028,8 +1028,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
         ));
     }
     let device = state
-        .identity_application()
-        .find_device(soland_application::identity::FindDeviceQuery {
+        .identities()
+        .find_device(soland_services::identity::FindDeviceQuery {
             actor_id: agent_record.controller_id.clone(),
             device_id: session_device_id.to_owned(),
         })
@@ -1083,7 +1083,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
         .cloned()
         .collect::<Vec<_>>();
     match state
-        .projection_application()
+        .projections()
         .commit_event_seal_if_frontier(seal, &leaves, &new_ops, &target)
     {
         Ok(true) => {}
@@ -1133,7 +1133,7 @@ pub(crate) async fn apply_inbound_seal(
     }
     let verifier = select_jws_verifier(state);
     state
-        .projection_application()
+        .projections()
         .apply_seal(seal, verifier)
         .map_err(app_error_from_seal_reject)
 }
@@ -1173,7 +1173,7 @@ async fn submit_move(
     let pre_state = std::collections::BTreeMap::new();
     let verifier = select_jws_verifier(state);
     if let Err(reject) = state
-        .projection_application()
+        .projections()
         .verify_move(&move_obj, &pre_state, verifier)
     {
         return Ok(salvo::writing::Json(SubmitMoveOutcome {
@@ -1200,7 +1200,7 @@ async fn submit_move(
     }
 
     state
-        .projection_application()
+        .projections()
         .put_pending_move(&move_obj)
         .map_err(|e| {
             AppError::new(ErrorCode::InternalError, e.to_string())
@@ -1273,9 +1273,9 @@ async fn submit_seal(
     .ok();
     let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
         .as_ref()
-        .and_then(|cell_id| state.projection_application().cell_value(cell_id));
+        .and_then(|cell_id| state.projections().cell_value(cell_id));
     if let Err(error) = state
-        .projection_application()
+        .projections()
         .reload_cells_from_store(&seal.realm_id)
     {
         tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
@@ -1290,7 +1290,7 @@ async fn submit_seal(
     // 2. EpochRotation — only if mls.epoch cell value changed.
     if let Some(cell_id) = mls_epoch_cell {
         let new_epoch_value: Option<serde_json::Value> = {
-            let proj = state.projection_application().snapshot();
+            let proj = state.projections().snapshot();
             proj.cell_value(&cell_id).cloned()
         };
         if let Some(new_epoch) = new_epoch_value
@@ -1640,3 +1640,4 @@ mod tests {
         assert_eq!(v["reason"], json!("payload_digest mismatch"));
     }
 }
+

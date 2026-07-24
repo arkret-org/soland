@@ -230,7 +230,7 @@ async fn session_signing_key_jwk(
     }
     let token_hash = session_credential_hash(token, state.service_id());
     let session = state
-        .session_application()
+        .sessions()
         .session(&token_hash)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?

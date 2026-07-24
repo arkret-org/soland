@@ -12,7 +12,7 @@
 //! check; rate limiting comes from the global RateLimiter middleware.
 //!
 //! The lattice + bottom_policy resolution is delegated to
-//! `state.projection_application().resolve_cell(realm_id, &cell)`. Both single-cell and
+//! `state.projections().resolve_cell(realm_id, &cell)`. Both single-cell and
 //! list reads require an explicit Realm scope so product Space subjects are
 //! never mistaken for security boundaries.
 
@@ -162,7 +162,7 @@ async fn admin_get_cell(
     let realm = required_realm_scope(req)?;
 
     let binding = state
-        .projection_application()
+        .projections()
         .resolve_cell(&realm, &cell_ref)
         .map_err(|e| {
             AppError::new(
@@ -178,7 +178,7 @@ async fn admin_get_cell(
     };
 
     let cell_state_opt = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         proj.cell(&cell_ref).cloned()
     };
 
@@ -239,7 +239,7 @@ async fn admin_list_cells(
         .unwrap_or(0);
 
     let all_cells = state
-        .projection_application()
+        .projections()
         .realm_cells(&realm)
         .map_err(|e| {
             AppError::new(
@@ -268,7 +268,7 @@ async fn admin_list_cells(
     // (in-memory hash lookup), but we want one lock acquisition for the
     // whole page rather than per-cell.
     let cell_states: Vec<(CellRef, Option<CellState>)> = {
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         page.into_iter()
             .map(|cell| {
                 let st = proj.cell(&cell).cloned();
@@ -279,7 +279,7 @@ async fn admin_list_cells(
 
     let mut cells_out = Vec::with_capacity(cell_states.len());
     for (cell, cell_state) in cell_states {
-        let binding = match state.projection_application().resolve_cell(&realm, &cell) {
+        let binding = match state.projections().resolve_cell(&realm, &cell) {
             Ok(b) => b,
             Err(e) => {
                 tracing::warn!(cell = %cell.as_str(), error = %e, "cell_registry.resolve failed during list; skipping");

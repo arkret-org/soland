@@ -29,7 +29,7 @@ pub(super) async fn export_account(
     let actor = session.actor.clone();
 
     let account = state
-        .identity_application()
+        .identities()
         .account(&actor)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
@@ -41,7 +41,7 @@ pub(super) async fn export_account(
     let account_payload = account.map(|account| account_response(account, state));
 
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(&actor)
         .await
         .unwrap_or_default()
@@ -58,7 +58,7 @@ pub(super) async fn export_account(
         .collect::<Vec<_>>();
 
     let realms = state
-        .realm_query_application()
+        .realms()
         .realm_metadata_list()
         .await
         .unwrap_or_default()
@@ -85,7 +85,7 @@ pub(super) async fn export_account(
     )
     .await;
     let audit_log = state
-        .governance_application()
+        .governance()
         .audit_entries_for_actor(&actor)
         .await
         .unwrap_or_default();
@@ -187,7 +187,7 @@ pub(crate) async fn set_account_lifecycle_state(
     let next_status = parse_account_lifecycle_target_state(next_state)?;
     let next_state = next_status.as_str();
     if state
-        .identity_application()
+        .identities()
         .account(did)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
@@ -345,7 +345,7 @@ async fn run_account_deactivation_fanout(
     let keypackages_retired = retire_actor_keypackages(state, did).await?;
     let identity_link_cache_invalidated = state.invalidate_cached_handle_claims_for_subject(did);
     let capability_cache_invalidated = state
-        .authorization_application()
+        .authorization()
         .mark_projected_grants_revoked_for_subject(did);
     Ok(AccountDeactivationFanout {
         sessions_revoked,
@@ -364,7 +364,7 @@ async fn purge_delivery_state_for_actor(
     did: &str,
 ) -> Result<(usize, usize), AppError> {
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(did)
         .await
         .map_err(|error| AppError::internal(format!("device inventory lookup failed: {error}")))?;
@@ -380,7 +380,7 @@ async fn purge_delivery_state_for_actor(
 
 async fn retire_actor_keypackages(state: &AppState, did: &str) -> Result<usize, AppError> {
     state
-        .mls_key_package_application()
+        .mls_key_packages()
         .retire_actor_keypackages(did, now().timestamp())
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage retirement failed: {error}")))
@@ -516,9 +516,9 @@ async fn append_account_deactivation_propagation_state(
     });
     let _ = crate::routing::events::projection::append_projection_event(
         state,
-        soland_application::events::ProjectedEvent {
+        soland_services::events::ProjectedEvent {
             event_id: crate::ids::generate_event_id(),
-            realm_id: soland_application::identity::principal_control_realm_for_did(did),
+            realm_id: soland_services::identity::principal_control_realm_for_did(did),
             event_kind: "ak.account.status".to_owned(),
             operation_type: "account_status_deactivation_propagation".to_owned(),
             operation_id: None,
@@ -561,7 +561,7 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
     state: &AppState,
     actor: &str,
 ) -> Vec<Value> {
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let actor_realms = projection
         .members
         .values()
@@ -694,14 +694,14 @@ pub(super) async fn erase_account(
     // Pseudonymize the account record (replace display_name / bio /
     // avatar_blob_ref with placeholders; retain DID + a release-marked
     // handle so foreign references resolve cleanly).
-    if let Ok(Some(mut account)) = state.identity_application().account(&actor).await {
+    if let Ok(Some(mut account)) = state.identities().account(&actor).await {
         let previous_localpart = account.localpart.clone();
         account.display_name = Some("[user erased]".to_owned());
         account.bio = None;
         account.avatar_blob_ref = None;
         account.localpart = String::new();
-        let _ = state.identity_application().save_account(account).await;
-        let _ = state.identity_application().clear_localparts(&actor).await;
+        let _ = state.identities().save_account(account).await;
+        let _ = state.identities().clear_localparts(&actor).await;
         if !previous_localpart.is_empty() {
             let _ = record_handle_release(state, &previous_localpart).await;
         }
@@ -711,7 +711,7 @@ pub(super) async fn erase_account(
     // device lookup) can treat the actor as a fully revoked principal.
     let mut devices_revoked = 0usize;
     let devices = state
-        .identity_application()
+        .identities()
         .devices_for_actor(&actor)
         .await
         .unwrap_or_default();
@@ -722,8 +722,8 @@ pub(super) async fn erase_account(
         device.revoked_at = Some(now());
         device.updated_at = now();
         let _ = state
-            .identity_application()
-            .save_device(soland_application::identity::SaveDeviceCommand {
+            .identities()
+            .save_device(soland_services::identity::SaveDeviceCommand {
                 actor_id: actor.clone(),
                 device_id: device.device_id.clone(),
                 display_name: device.display_name.clone(),
@@ -825,7 +825,7 @@ pub(super) async fn erase_account(
     // authenticated reads will 401 with `account_erased`, making this
     // the spec-compliant exit-point for the audit chain.
     let audit_log = state
-        .governance_application()
+        .governance()
         .audit_entries_for_actor(&actor)
         .await
         .unwrap_or_default();
@@ -870,7 +870,7 @@ fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
         Err(_) => return 0,
     };
     state
-        .realm_directory_application()
+        .realm_directory()
         .remove_member_from_all(&actor_id)
 }
 
@@ -878,7 +878,7 @@ fn remove_realm_memberships_for_actor(state: &AppState, actor: &str) -> usize {
 /// `redacted` while preserving timestamps + audit_ids. Spec: A.3.
 async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     let prior = state
-        .governance_application()
+        .governance()
         .audit_entries_for_actor(actor)
         .await
         .unwrap_or_default();
@@ -910,7 +910,7 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
 async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {
     let mut realms = std::collections::BTreeSet::new();
     for event in state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .unwrap_or_default()
@@ -920,7 +920,7 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
         }
     }
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         for message in projection.messages.values() {
             if message.sender == actor {
                 realms.insert(message.realm_id.clone());
@@ -931,7 +931,7 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
 }
 
 fn projection_event_belongs_to_actor(
-    event: &soland_application::events::ProjectedEvent,
+    event: &soland_services::events::ProjectedEvent,
     actor: &str,
 ) -> bool {
     event.sender.as_deref() == Some(actor)
@@ -1111,13 +1111,13 @@ async fn persist_account_lifecycle_record(
 ) -> Result<(), AppError> {
     if record.state == "active" {
         state
-            .identity_application()
+            .identities()
             .delete_account_lifecycle(did)
             .await
             .map_err(|error| AppError::internal(error.to_string()))
     } else {
         state
-            .identity_application()
+            .identities()
             .save_account_lifecycle(did, record.clone())
             .await
             .map_err(|error| AppError::internal(error.to_string()))
@@ -1165,3 +1165,4 @@ mod tests {
         assert!(parse_account_lifecycle_target_state("pending_deletion").is_err());
     }
 }
+

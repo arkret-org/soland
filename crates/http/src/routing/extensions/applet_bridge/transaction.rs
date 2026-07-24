@@ -5,8 +5,8 @@ use arkret_models_integration::{
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
-use soland_application::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::events::{AppletTransactionReplayResult, AppletTransactionReplayState};
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_http::error::AppError;
 
 use super::signature::VerifiedInboundTransactionSignature;
@@ -22,7 +22,7 @@ pub(super) async fn process_verified_transaction(
 ) -> Result<AppletTransactionOutcome, AppError> {
     let source_service_id = transaction.source_service_id.to_string();
     let begin = state
-        .event_query_application()
+        .event_queries()
         .begin_applet_transaction(AppletTransactionReplayState {
             source_service_id: source_service_id.clone(),
             idempotency_key: idempotency_key.to_owned(),
@@ -95,7 +95,7 @@ pub(super) async fn process_verified_transaction(
         AppError::internal(format!("applet transaction outcome serialize: {error}"))
     })?;
     state
-        .event_query_application()
+        .event_queries()
         .complete_applet_transaction(&source_service_id, idempotency_key, outcome_value)
         .await
         .map_err(|error| {
@@ -218,3 +218,4 @@ fn rejected_event_with_detail(
     let _detail = detail.into();
     rejected_event(event_id, reason_code)
 }
+

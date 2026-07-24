@@ -23,7 +23,7 @@ pub(super) async fn run_webvh_resolution_checks(
     did: &str,
 ) -> Result<(), AppError> {
     let events = state
-        .did_application()
+        .dids()
         .log_events(did)
         .await
         .map_err(|error| {
@@ -83,7 +83,7 @@ pub(in crate::routing) async fn identity_document_record(
         };
     }
     let record = state
-        .did_application()
+        .dids()
         .document(did)
         .await
         .ok()

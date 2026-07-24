@@ -13,7 +13,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
 use serde_json::{Value, json};
-use soland_application::events::{
+use soland_services::events::{
     CanonicalEventRecord, PeerEventsPageQuery, RealmMetadata as RealmMetaRecord,
 };
 use soland_http::error::AppError;
@@ -204,7 +204,7 @@ async fn peer_events_resolve(
         .map(|digest| digest.as_str())
         .collect::<BTreeSet<_>>();
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| AppError::internal(format!("peer events resolve: {error}")))?;
@@ -264,7 +264,7 @@ async fn peer_events_frontier(
         return Err(AppError::not_found("not found"));
     }
     let records = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| AppError::internal(format!("peer frontier: {error}")))?;
@@ -575,14 +575,14 @@ impl PeerReadAuthz {
         records: &[CanonicalEventRecord],
     ) -> Result<Self, AppError> {
         let realm_meta = state
-            .realm_query_application()
+            .realms()
             .realm_metadata_list()
             .await
             .map_err(|error| AppError::internal(format!("peer realm metadata: {error}")))?
             .into_iter()
             .collect::<BTreeMap<_, _>>();
         let circles = state
-            .projection_application()
+            .projections()
             .snapshot()
             .circles
             .iter()
@@ -1144,7 +1144,7 @@ async fn peer_events_query_response(
     let cursor_event_id =
         peer_events_query_cursor_event_id(state, parts.active_cursor(), &filter_digest).await?;
     let authz_records = state
-        .event_query_application()
+        .event_queries()
         .peer_authz_state_records()
         .await
         .map_err(|error| AppError::internal(format!("peer events query: {error}")))?;
@@ -1170,7 +1170,7 @@ async fn peer_events_query_response(
     let mut visible = Vec::new();
     loop {
         let candidates = state
-            .event_query_application()
+            .event_queries()
             .peer_events_query_page(&PeerEventsPageQuery {
                 realms: query_realms.clone(),
                 actors: parts.actors.clone(),
@@ -1469,3 +1469,4 @@ pub(in crate::routing) fn cross_domain_replay(message: impl Into<String>) -> App
 fn render_app_error(res: &mut Response, error: AppError) {
     render_error(res, error.http_status(), error.wire_code(), &error.message);
 }
+

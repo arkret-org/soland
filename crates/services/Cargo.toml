@@ -1,5 +1,5 @@
 [package]
-name = "soland-application"
+name = "soland-services"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -39,3 +39,4 @@ uuid = { workspace = true, features = ["v7"] }
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+

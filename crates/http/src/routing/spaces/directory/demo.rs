@@ -6,7 +6,7 @@ use super::*;
 /// collect candidates first, drop the guard, then filter with `.await`.
 pub(super) async fn live_realm_entries(state: &AppState) -> Vec<RealmDirectoryEntry> {
     let candidates: Vec<RealmDirectoryEntry> = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         realms
             .search(Default::default())
             .into_iter()
@@ -52,7 +52,7 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> V
 /// project as `offline`.
 pub(super) async fn directory_presence_for_actor(state: &AppState, did: &str) -> Value {
     let records = state
-        .delivery_application()
+        .deliveries()
         .presence_for_actor(did)
         .await
         .unwrap_or_default();
@@ -75,7 +75,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     })];
 
     let accounts = state
-        .identity_application()
+        .identities()
         .accounts()
         .await
         .unwrap_or_default();
@@ -107,7 +107,7 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     }
 
     let devices = state
-        .identity_application()
+        .identities()
         .devices()
         .await
         .map(|devices| {

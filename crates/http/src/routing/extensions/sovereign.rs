@@ -29,7 +29,7 @@ use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use soland_application::federation::{
+use soland_services::federation::{
     SovereignAuditRecord, SovereignEnclaveRecord, SovereignExternalAccountRecord,
     SovereignExternalInviteRecord, SovereignRealmRecord, SovereignStoreForwardRecord,
 };
@@ -419,7 +419,7 @@ async fn deployment_info(
 ) -> JsonResult<DeploymentInfoResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     aa.authenticated_session(state, req).await?;
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     let trusted_enclaves = guard
         .trusted_enclaves
         .values()
@@ -462,7 +462,7 @@ async fn configure_deployment(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let body = body.into_inner();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     if let Some(profile) = body.profile {
         if !matches!(profile.as_str(), "sovereign_main" | "enclave") {
             return Err(AppError::invalid_param(
@@ -517,7 +517,7 @@ async fn register_enclave(
         trust_chain: body.trust_chain.clone(),
         registered_at: now,
     };
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     guard
         .trusted_enclaves
         .insert(body.server_id.clone(), record);
@@ -550,7 +550,7 @@ async fn realm_create(
     let body = body.into_inner();
     let realm_id = body.realm_id.unwrap_or_else(ids::generate_realm_id);
     let now = chrono::Utc::now();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     if !guard.trusted_enclaves.contains_key(&body.hosted_on)
         && deployment_profile(state, &guard) == "sovereign_main"
     {
@@ -600,7 +600,7 @@ async fn realm_info(
     let state = depot.get_typed::<AppState>().expect("state injected");
     aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     let Some(record) = guard.enclave_realms.get(&realm_id) else {
         return Err(AppError::not_found("realm not found"));
     };
@@ -632,7 +632,7 @@ async fn external_invite(
     require_admin_principal(state, session)?;
     let body = body.into_inner();
     validate_did_against_roots(state, &body.invitee, Some("enclave"))?;
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     let Some(realm) = guard.enclave_realms.get(&body.target_realm).cloned() else {
         return Err(AppError::not_found("target enclave realm not found"));
     };
@@ -693,7 +693,7 @@ async fn accept_external_invite(
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor_id, Some("enclave"))?;
     let now = chrono::Utc::now();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     let invite = guard.external_invites.get_mut(&body.invite_token);
     let target_realm = invite
         .as_ref()
@@ -756,7 +756,7 @@ async fn external_account_status(
     let state = depot.get_typed::<AppState>().expect("state injected");
     aa.authenticated_session(state, req).await?;
     let did = did.into_inner();
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     let Some(record) = guard.external_accounts.get(&did) else {
         return Err(AppError::not_found("account not found"));
     };
@@ -783,7 +783,7 @@ async fn guard_realm_access(
     aa.authenticated_session(state, req).await?;
     let actor = actor.into_inner().unwrap_or_default();
     let realm_id = realm_id.into_inner();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     if guard.external_accounts.contains_key(&actor) {
         audit(
             &mut guard,
@@ -816,7 +816,7 @@ async fn directory_realms(
     aa.authenticated_session(state, req).await?;
     let actor = actor.into_inner().unwrap_or_default();
     let q = q.into_inner().unwrap_or_default();
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     if guard.external_accounts.contains_key(&actor) {
         return json_ok(DirectoryRealmsResponseBody {
             results: Vec::new(),
@@ -852,7 +852,7 @@ async fn enclave_proxy(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let body = body.into_inner();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     if deployment_profile(state, &guard) == "enclave" {
         let actor = body.actor.unwrap_or_else(|| "unknown".to_owned());
         audit(
@@ -886,7 +886,7 @@ async fn set_network_link(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let body = body.into_inner();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     guard.upstream_available = body.upstream_available;
     json_ok(NetworkLinkResponseBody {
         ok: true,
@@ -908,7 +908,7 @@ async fn store_forward_message(
     require_admin_principal(state, session)?;
     let body = body.into_inner();
     validate_did_against_roots(state, &body.actor, Some("enclave"))?;
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     let id = ids::generate("operation");
     let record = SovereignStoreForwardRecord {
         id: id.clone(),
@@ -965,7 +965,7 @@ async fn drain_store_forward(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     if !guard.upstream_available {
         return Err(AppError::capability_denied("upstream_unavailable")
             .with_status(StatusCode::PRECONDITION_FAILED)
@@ -1002,7 +1002,7 @@ async fn ingest_store_forward(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let body = body.into_inner();
-    let mut guard = state.federation_application().sovereign_state();
+    let mut guard = state.federation().sovereign_state();
     let mut ingested = 0_i64;
     for operation in body.operations {
         if operation.realm_id.is_empty() {
@@ -1056,7 +1056,7 @@ async fn enclave_frontier(
     let state = depot.get_typed::<AppState>().expect("state injected");
     aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     let (main_frontier, enclave_pos) = guard
         .enclave_realms
         .get(&realm_id)
@@ -1094,7 +1094,7 @@ async fn deployment_audit(
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let subject = subject.into_inner();
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     let entries = guard
         .audit_log
         .iter()
@@ -1124,7 +1124,7 @@ fn validate_did_against_roots(
     did: &str,
     expected_profile: Option<&str>,
 ) -> Result<(), AppError> {
-    let guard = state.federation_application().sovereign_state();
+    let guard = state.federation().sovereign_state();
     let profile = deployment_profile(state, &guard);
     if let Some(expected) = expected_profile
         && profile != expected
@@ -1146,7 +1146,7 @@ fn validate_did_against_roots(
 
 fn deployment_profile(
     state: &AppState,
-    guard: &soland_application::federation::SovereignDeploymentState,
+    guard: &soland_services::federation::SovereignDeploymentState,
 ) -> String {
     guard.profile_override.clone().unwrap_or_else(|| {
         if state.config().sovereign_enclave_enabled {
@@ -1182,7 +1182,7 @@ fn did_matches_trust_root(did: &str, root: &str) -> bool {
 }
 
 fn audit(
-    guard: &mut soland_application::federation::SovereignDeploymentState,
+    guard: &mut soland_services::federation::SovereignDeploymentState,
     subject: &str,
     action: &str,
     realm_id: Option<&str>,
@@ -1270,3 +1270,4 @@ mod tests {
         );
     }
 }
+

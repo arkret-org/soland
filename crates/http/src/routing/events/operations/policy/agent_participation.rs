@@ -138,7 +138,7 @@ pub(super) fn agent_participation_parent_scope_keys(
                         .and_then(Value::as_str)
                 })?;
             {
-                let projection = state.projection_application().snapshot();
+                let projection = state.projections().snapshot();
                 projection.strand_scope_circle_id(strand_id)
             }
         });
@@ -171,7 +171,7 @@ pub async fn validate_agent_participation_ceiling(
         let mut parent = AgentParticipation::ALL;
         if !parent_keys.is_empty() {
             let rows = state
-                .agent_participation_application()
+                .agent_participations()
                 .ceilings(&parent_keys)
                 .await
                 .unwrap_or_default();
@@ -234,7 +234,7 @@ pub(super) async fn native_agent_exists(
     principal_id: &str,
 ) -> Result<bool, &'static str> {
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(principal_id)
         .await
         .map(|record| record.is_some())
@@ -246,7 +246,7 @@ pub(super) async fn agent_lifecycle_rejection_reason(
     agent_id: &str,
 ) -> Result<Option<&'static str>, &'static str> {
     let record_state = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(agent_id)
         .await
         .map_err(|_| "agent_principal_lookup_unavailable")?
@@ -258,7 +258,7 @@ pub(super) async fn agent_lifecycle_rejection_reason(
     }
 
     let projected = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         projection.agent_lifecycles.get(agent_id).copied()
     };
     Ok(match projected {
@@ -298,7 +298,7 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
     let grants = state
-        .authorization_application()
+        .authorization()
         .grants_for_subject(agent_id, operation.realm_id.as_str());
     let Some(grant) = grants
         .iter()
@@ -308,7 +308,7 @@ pub(super) fn validate_agent_act_on_behalf_authorization_ref(
     };
     let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
     let resource_expr = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
     }
     .unwrap_or_else(|| resource.to_owned());
@@ -340,7 +340,7 @@ pub(super) fn validate_agent_act_on_behalf_approval(
     let action = agent_participation_action(operation)
         .ok_or("agent_act_on_behalf_approval_action_unsupported")?;
     let approval = state
-        .projection_application()
+        .projections()
         .validate_agent_action_approval(
             operation,
             agent_id,
@@ -465,7 +465,7 @@ async fn operation_agent_write_context(
         (actor_id.as_deref(), executed_by, authorization_ref)
     {
         let managed = state
-            .agent_pairing_application()
+            .agent_pairings()
             .agent(actor_id)
             .await
             .map_err(|_| "agent_principal_lookup_unavailable")?
@@ -533,7 +533,7 @@ pub(super) fn validate_agent_context_authorization_ref(
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str());
     let grants = state
-        .authorization_application()
+        .authorization()
         .grants_for_subject(agent_id, operation.realm_id.as_str());
     let Some(grant) = grants
         .iter()
@@ -543,7 +543,7 @@ pub(super) fn validate_agent_context_authorization_ref(
     };
     let action_allowed = grant.actions.iter().any(|candidate| candidate == action);
     let resource_expr = {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         Some(projection.authz_resource_expr(operation.realm_id.as_str(), resource))
     }
     .unwrap_or_else(|| resource.to_owned());

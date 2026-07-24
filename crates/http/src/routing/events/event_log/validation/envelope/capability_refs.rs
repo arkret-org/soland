@@ -204,7 +204,7 @@ pub(super) fn validate_data_event_joined_capability_view(
         )
     })?;
     let leaves = state
-        .projection_application()
+        .projections()
         .realm_seal_leaves(&realm)
         .map_err(|error| {
             event_validation_error(
@@ -215,7 +215,7 @@ pub(super) fn validate_data_event_joined_capability_view(
         })?;
     if !leaves.is_empty() {
         let joined_state = state
-            .projection_application()
+            .projections()
             .effective_state_at(&leaves, &realm)
             .map_err(|error| {
                 event_validation_error(
@@ -235,7 +235,7 @@ pub(super) fn validate_data_event_joined_capability_view(
             Some(cell_state) => {
                 let joined_grants = data_event_grants_from_state_at_ref(&joined_state);
                 let current =
-                    soland_application::projection::engine_grant_from_capability_cell_state(
+                    soland_services::projection::engine_grant_from_capability_cell_state(
                         grant_id, cell_state,
                     )
                     .or_else(|| joined_grants.get(grant_id).cloned());
@@ -290,7 +290,7 @@ pub(super) fn data_event_state_at_seal_ref(
     EventValidationError,
 > {
     let seal = state
-        .projection_application()
+        .projections()
         .seal_by_id(seal_id)
         .map_err(|error| {
             event_validation_error(
@@ -315,7 +315,7 @@ pub(super) fn data_event_state_at_seal_ref(
     }
 
     let state_at_ref = state
-        .projection_application()
+        .projections()
         .effective_state_at(std::slice::from_ref(seal_id), realm)
         .map_err(|error| {
             event_validation_error(
@@ -343,7 +343,7 @@ pub(super) fn data_event_grants_from_state_at_ref(
         if crate::ids::parse_typed_uuid(grant_id, "grant").is_none() {
             continue;
         }
-        if let Some(grant) = soland_application::projection::engine_grant_from_capability_cell_state(
+        if let Some(grant) = soland_services::projection::engine_grant_from_capability_cell_state(
             grant_id, cell_state,
         ) {
             grants.insert(grant_id.to_owned(), grant);
@@ -532,7 +532,7 @@ pub(super) fn effect_resource_candidates(
     realm_id: &str,
 ) -> Vec<String> {
     let mut resources = Vec::new();
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, realm_id);
     append_authz_resource_candidates(&mut resources, Some(&projection), realm_id, cell);
     let mut parts = cell.splitn(4, ':');
@@ -551,7 +551,7 @@ pub(super) fn effect_resource_candidates(
 
 pub(super) fn append_authz_resource_candidates(
     resources: &mut Vec<String>,
-    projection: Option<&soland_application::projection::ProjectionSnapshot>,
+    projection: Option<&soland_services::projection::ProjectionSnapshot>,
     realm_id: &str,
     resource: &str,
 ) {
@@ -568,3 +568,4 @@ pub(super) fn append_authz_resource_candidates(
         }
     }
 }
+

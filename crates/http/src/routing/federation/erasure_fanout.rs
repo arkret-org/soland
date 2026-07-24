@@ -35,7 +35,7 @@ use arkret_identifiers::{Did, OperationId, RealmId};
 use chrono::Utc;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
-use soland_application::projection::ErasurePeerDeliveryStatus;
+use soland_services::projection::ErasurePeerDeliveryStatus;
 
 use crate::state::AppState;
 
@@ -65,7 +65,7 @@ struct ErasurePeerTarget {
 /// conservative super-set; per-Realm peer-set tracking ships when
 /// the federation membership projection grows that surface.
 pub async fn fanout_erasure_receipt(state: &AppState, receipt_id: &str) {
-    let receipt_snapshot = state.projection_application().erasure_receipt(receipt_id);
+    let receipt_snapshot = state.projections().erasure_receipt(receipt_id);
     let Some(receipt) = receipt_snapshot else {
         tracing::debug!(
             target = "erasure_fanout",
@@ -114,7 +114,7 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
     // pushed; we re-lock once below to write the seeded statuses
     // back, releasing in between so the outbox enqueue (which may
     // hit persistence) does not stall the projection lock.
-    let receipt_snapshot = state.projection_application().erasure_receipt(receipt_id);
+    let receipt_snapshot = state.projections().erasure_receipt(receipt_id);
     let Some(receipt) = receipt_snapshot else {
         tracing::debug!(
             target = "erasure_fanout",
@@ -215,7 +215,7 @@ pub async fn fanout_erasure_receipt_operation(state: &AppState, operation: &Oper
 
     // Write the seeded peer_status back onto the receipt record.
     state
-        .projection_application()
+        .projections()
         .update_erasure_peer_status(receipt_id, sent_statuses);
 }
 
@@ -245,7 +245,7 @@ fn erasure_push_payload(
 }
 
 async fn persist_erasure_operation_for_pull(state: &AppState, operation: &Operation) {
-    let service = state.federation_application();
+    let service = state.federation();
     match service.has_operation(operation.operation_id.as_str()).await {
         Ok(true) => {}
         Ok(false) => {
@@ -320,7 +320,7 @@ pub fn sweep_erasure_fanout_timeouts(state: &AppState) -> usize {
     let window_ms = state.config().erasure_propagation_window_ms;
     let window = chrono::Duration::milliseconds(window_ms as i64);
     state
-        .projection_application()
+        .projections()
         .sweep_erasure_fanout_timeouts(Utc::now(), window)
 }
 
@@ -405,7 +405,7 @@ mod tests {
         }
         fanout_erasure_receipt(&state, "r1").await;
         let (peer_status_len, peer_sent, peer_unacked) = {
-            let proj = state.projection_application().snapshot();
+            let proj = state.projections().snapshot();
             let record = proj
                 .erasure_receipts
                 .iter()
@@ -421,7 +421,7 @@ mod tests {
         assert_eq!(peer_status_len, 1);
         assert!(peer_sent, "sent_at must be stamped on enqueue");
         assert!(peer_unacked);
-        let outbox = state.federation_application().deliveries().await.unwrap();
+        let outbox = state.federation().deliveries().await.unwrap();
         assert_eq!(outbox.len(), 1);
         assert_eq!(outbox[0].delivery.peer_url, "http://127.0.0.1:9");
         assert_eq!(outbox[0].delivery.peer_did, "did:web:peer1.example");
@@ -467,7 +467,7 @@ mod tests {
         }
         let flipped = sweep_erasure_fanout_timeouts(&state);
         assert_eq!(flipped, 1);
-        let proj = state.projection_application().snapshot();
+        let proj = state.projections().snapshot();
         let record = proj
             .erasure_receipts
             .iter()
@@ -476,3 +476,4 @@ mod tests {
         assert_eq!(record.fanout_status, "incomplete");
     }
 }
+

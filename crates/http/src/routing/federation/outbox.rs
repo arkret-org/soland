@@ -88,7 +88,7 @@ fn now_unix_secs() -> i64 {
 }
 
 fn persistence_delivery(
-    record: soland_application::federation::PendingFederationDelivery,
+    record: soland_services::federation::PendingFederationDelivery,
 ) -> FederationDispatchState {
     FederationDispatchState {
         id: record.delivery.id,
@@ -108,9 +108,9 @@ fn persistence_delivery(
 
 fn application_delivery(
     record: &FederationDispatchState,
-) -> soland_application::federation::PendingFederationDelivery {
-    soland_application::federation::PendingFederationDelivery {
-        delivery: soland_application::federation::FederationDeliveryRecord {
+) -> soland_services::federation::PendingFederationDelivery {
+    soland_services::federation::PendingFederationDelivery {
+        delivery: soland_services::federation::FederationDeliveryRecord {
             id: record.id.clone(),
             peer_did: record.peer_did.clone(),
             peer_url: record.peer_url.clone(),
@@ -144,14 +144,14 @@ pub async fn enqueue_outbound(
     endpoint: &str,
     idempotency_key: &str,
     payload_json: &str,
-) -> soland_application::ApplicationResult<soland_application::federation::FederationDeliveryRecord>
+) -> soland_services::ServiceResult<soland_services::federation::FederationDeliveryRecord>
 {
     let now = now_unix_secs();
     let result = state
-        .federation_application()
+        .federation()
         .enqueue_delivery(
-            soland_application::federation::EnqueueFederationDeliveryCommand {
-                delivery: soland_application::federation::FederationDeliveryRecord {
+            soland_services::federation::EnqueueFederationDeliveryCommand {
+                delivery: soland_services::federation::FederationDeliveryRecord {
                     id: Uuid::new_v4().to_string(),
                     peer_did: peer_did.to_owned(),
                     peer_url: peer_url.trim_end_matches('/').to_owned(),
@@ -337,7 +337,7 @@ impl FederationDispatcher {
         let now = now_unix_secs();
         let rows = self
             .state
-            .federation_application()
+            .federation()
             .pending_deliveries(now, POLL_BATCH_LIMIT)
             .await
             .map_err(|e| e.to_string())?;
@@ -380,7 +380,7 @@ impl FederationDispatcher {
                     );
                     if let Err(error) = self
                         .state
-                        .federation_application()
+                        .federation()
                         .record_delivery_attempt(&application_delivery(&row))
                         .await
                     {
@@ -465,7 +465,7 @@ impl FederationDispatcher {
 
         if let Err(error) = self
             .state
-            .federation_application()
+            .federation()
             .record_delivery_attempt(&application_delivery(&row))
             .await
         {
@@ -528,7 +528,7 @@ impl FederationDispatcher {
         reason: &str,
     ) {
         let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
-        let record = soland_application::federation::FederationDeadLetter {
+        let record = soland_services::federation::FederationDeadLetter {
             id: Uuid::new_v4().to_string(),
             outbox_id: row.id.clone(),
             peer_did: row.peer_did.clone(),
@@ -547,7 +547,7 @@ impl FederationDispatcher {
         crate::metrics::record_federation_outbox_dead_letter();
         if let Err(error) = self
             .state
-            .federation_application()
+            .federation()
             .record_dead_letter(&record)
             .await
         {
@@ -621,3 +621,4 @@ mod tests {
         assert_eq!(trimmed.len(), RESPONSE_EXCERPT_BYTES);
     }
 }
+

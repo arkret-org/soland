@@ -66,7 +66,7 @@ pub(crate) async fn list_realm_organizations(
     // from the declared-hint list so a hint never duplicates a verified row.
     let mut verified_org_ids: BTreeSet<String> = BTreeSet::new();
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         for row in projection.realm_organization_statements_for_realm(&realm_id) {
             let lifecycle_phase = if row.is_effective_active(now) {
                 verified_org_ids.insert(row.organization_id.clone());

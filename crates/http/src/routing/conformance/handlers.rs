@@ -38,7 +38,7 @@ use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
-use soland_application::events::{CanonicalEventRecord, ProjectedEvent as ProjectionEventRecord};
+use soland_services::events::{CanonicalEventRecord, ProjectedEvent as ProjectionEventRecord};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
 
@@ -809,14 +809,14 @@ pub async fn chaos_operation(
     }
 
     let canonical_event = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
         .into_iter()
         .find(|record| canonical_event_operation_id(record).as_deref() == Some(&operation_id));
     let projection_event = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
@@ -1339,3 +1339,4 @@ mod tests {
         );
     }
 }
+

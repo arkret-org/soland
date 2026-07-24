@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
-use soland_application::delivery::BlobState as BlobRecord;
-use soland_application::events::CanonicalEventRecord;
+use soland_services::delivery::BlobState as BlobRecord;
+use soland_services::events::CanonicalEventRecord;
 
 use super::*;
 use crate::state::AppState;
@@ -13,14 +13,14 @@ pub(crate) async fn snapshot_manifest_for_realm(
     let realm_id_value = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|_| soland_http::error::AppError::invalid_param("invalid realm_id"))?;
     {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         if realms.get(&realm_id_value).is_none() {
             return Err(soland_http::error::AppError::not_found("not found"));
         }
     }
 
     let mut events = state
-        .event_query_application()
+        .event_queries()
         .canonical_events()
         .await
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?
@@ -149,16 +149,16 @@ async fn persist_snapshot_chunk_blobs(
                 "snapshot chunk digest is not sha256",
             ));
         };
-        let storage_key = state.delivery_application().object_key_for_sha256(sha256);
+        let storage_key = state.deliveries().object_key_for_sha256(sha256);
         state
-            .delivery_application()
+            .deliveries()
             .put_object(&storage_key, chunk.canonical_bytes.clone())
             .await
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
         let record = BlobRecord {
             sha256: sha256.to_owned(),
             size_bytes: chunk.canonical_bytes.len() as i64,
-            storage_backend: state.delivery_application().object_storage_backend_name(),
+            storage_backend: state.deliveries().object_storage_backend_name(),
             storage_key,
             media_type: "application/json".to_owned(),
             filename: None,
@@ -171,7 +171,7 @@ async fn persist_snapshot_chunk_blobs(
             created_at: now(),
         };
         state
-            .delivery_application()
+            .deliveries()
             .store_blob(blob_ref, record)
             .await
             .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
@@ -299,7 +299,7 @@ fn snapshot_auth_state_digest(
 }
 
 pub(crate) fn device_inventory_to_json(
-    device: &soland_application::identity::DeviceIdentity,
+    device: &soland_services::identity::DeviceIdentity,
 ) -> serde_json::Value {
     json!({
         "actor": device.actor_id,
@@ -320,3 +320,4 @@ pub(crate) fn generate_invite_token(invite_id: &str, realm_id: &str, invitee: &s
         sha256_hex(format!("{invite_id}:{realm_id}:{invitee}").as_bytes())
     )
 }
+

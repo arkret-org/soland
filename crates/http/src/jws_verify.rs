@@ -27,7 +27,7 @@ use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
 use ed25519_dalek::{SigningKey, VerifyingKey};
-use soland_application::identity::{
+use soland_services::identity::{
     DID_DOCUMENT_HIGH_RISK_TTL_SECS, DidDocumentFreshness, evaluate_did_document_freshness,
 };
 
@@ -141,7 +141,7 @@ pub fn verify_jws_ed25519(
         jws,
         verification_method,
         issuer,
-        state.did_application().resolver(),
+        state.dids().resolver(),
     )
     .map_err(|error| error.to_string())
 }
@@ -301,7 +301,7 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
     {
         if state.config().development_mode {
             let ingested = state
-                .did_application()
+                .dids()
                 .document(method_did.as_str())
                 .await
                 .map_err(|error| {
@@ -407,7 +407,7 @@ pub async fn federated_device_signing_key_evidence(
         .device_authorize_event_id
         .ok_or_else(|| "device signer has no accepted authorization Event".to_owned())?;
     let device_authorize_record = state
-        .event_query_application()
+        .event_queries()
         .canonical_event(device_authorize_event_id.as_str())
         .await
         .map_err(|error| format!("device authorization Event lookup failed: {error}"))?
@@ -448,7 +448,7 @@ pub fn resolve_ed25519_pubkey(
     verification_method: &str,
 ) -> Result<VerifyingKey, String> {
     arkret_identity::jws::resolve_ed25519_pubkey(
-        state.did_application().resolver(),
+        state.dids().resolver(),
         verification_method,
     )
     .map_err(|error| error.to_string())
@@ -517,7 +517,7 @@ pub fn validate_verification_method_controller(
 
 pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, String> {
     let document = state
-        .did_application()
+        .dids()
         .resolver()
         .resolve_did(did)
         .map_err(|error| format!("DID resolution failed: {error}"))?;
@@ -532,7 +532,7 @@ pub async fn resolve_did_document_async(
     did: &Did,
 ) -> Result<DidDocument, String> {
     let document = state
-        .did_application()
+        .dids()
         .resolve_did(did)
         .await
         .map_err(|error| format!("DID resolution failed: {error}"))?;
@@ -583,7 +583,7 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
 pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Result<(), String> {
     let max_age = chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
     let record = state
-        .did_application()
+        .dids()
         .document(did.as_str())
         .await
         .map_err(|error| format!("DID freshness lookup failed: {error}"))?;
@@ -597,7 +597,7 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
     match evaluate_did_document_freshness(&record, chrono::Utc::now(), max_age) {
         DidDocumentFreshness::Fresh => {
             state
-                .did_application()
+                .dids()
                 .cache_resolved_document_state(record)
                 .map_err(|error| format!("DID freshness cache failed: {error}"))?;
             Ok(())
@@ -623,7 +623,7 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
 
 fn is_embedded_webvh_document(
     did: &Did,
-    record: &soland_application::identity::DidDocumentState,
+    record: &soland_services::identity::DidDocumentState,
 ) -> bool {
     did.as_str().starts_with("did:webvh:")
         && record
@@ -636,14 +636,14 @@ fn is_embedded_webvh_document(
 async fn refresh_embedded_webvh_document_for_high_risk(
     state: &AppState,
     did: &Did,
-    record: &soland_application::identity::DidDocumentState,
+    record: &soland_services::identity::DidDocumentState,
 ) -> Result<(), String> {
     if !is_embedded_webvh_document(did, record) {
         return Err("document is not a local embedded did:webvh record".to_owned());
     }
 
     let events = state
-        .did_application()
+        .dids()
         .log_events(did.as_str())
         .await
         .map_err(|error| format!("DID log lookup failed: {error}"))?;
@@ -670,12 +670,12 @@ async fn refresh_embedded_webvh_document_for_high_risk(
         .map_err(|error| error.to_string())?;
 
     state
-        .did_application()
+        .dids()
         .store_document(record.clone())
         .await
         .map_err(|error| format!("DID document refresh write failed: {error}"))?;
     state
-        .did_application()
+        .dids()
         .cache_resolved_document_state(record.clone())
         .map_err(|error| format!("DID document refresh cache failed: {error}"))?;
     Ok(())
@@ -721,7 +721,7 @@ async fn did_document_key_log_head(
     did: &Did,
     document: &DidDocument,
 ) -> Result<Hash, String> {
-    if let Ok(Some(record)) = state.did_application().document(did.as_str()).await
+    if let Ok(Some(record)) = state.dids().document(did.as_str()).await
         && let Some(head) = record.key_log_head
         && let Ok(hash) = Hash::new(head)
     {
@@ -733,3 +733,4 @@ async fn did_document_key_log_head(
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
 }
+

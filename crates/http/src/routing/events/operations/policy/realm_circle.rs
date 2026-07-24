@@ -17,7 +17,7 @@ pub(super) fn validate_realm_lifecycle_write_gate(
 ) -> Result<(), &'static str> {
     let kind = kinds::canonical_kind_string(operation);
     let realm_id = operation.realm_id.as_str();
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     if projection.realm_is_in_terminal_state(realm_id)
         && !arkret_wire::events::kinds::is_audit_kind(&kind)
     {
@@ -50,8 +50,8 @@ pub(super) async fn validate_morph_schema_migrate_authz(
         return Ok(());
     }
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
             resource: realm_id,
@@ -89,8 +89,8 @@ pub(super) async fn validate_circle_create_policy(
         }
         let realm_id = operation.realm_id.as_str();
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
-        let verdict = state.authorization_application().check(
-            soland_application::authorization::AuthorizationCheck {
+        let verdict = state.authorization().check(
+            soland_services::authorization::AuthorizationCheck {
                 actor,
                 action: arkret_wire::CapabilityActionId::SELF_AGENT_SIDECAR_COMMAND_ENSURE,
                 resource: realm_id,
@@ -127,8 +127,8 @@ pub(super) async fn validate_circle_create_policy(
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: arkret_wire::CapabilityActionId::CIRCLE_CREATE,
             resource: realm_id,
@@ -175,7 +175,7 @@ pub(super) async fn validate_circle_management_policy(
         return Ok(());
     };
     if state
-        .projection_application()
+        .projections()
         .snapshot()
         .circle(circle_id)
         .is_some_and(|circle| {
@@ -192,8 +192,8 @@ pub(super) async fn validate_circle_management_policy(
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action,
             resource: circle_id,
@@ -228,7 +228,7 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
     };
     let realm_id = operation.realm_id.as_str();
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         let Some(circle) = projection.circle(circle_id) else {
             return false;
         };
@@ -252,7 +252,7 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
         return true;
     }
     let Ok(records) = state
-        .agent_pairing_application()
+        .agent_pairings()
         .agents_for_controller(controller)
         .await
     else {
@@ -264,7 +264,7 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
     if !record_matches {
         return false;
     }
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     !matches!(
         projection.agent_lifecycles.get(target),
         Some(
@@ -332,7 +332,7 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
                 return false;
             };
             {
-                let projection = state.projection_application().snapshot();
+                let projection = state.projections().snapshot();
                 {
                     projection
                         .circle(circle_id)
@@ -347,7 +347,7 @@ pub(super) fn circle_member_manage_required(state: &AppState, operation: &Operat
 
 pub(super) fn policy_realm_member_joined(state: &AppState, realm_id: &str, actor: &str) -> bool {
     {
-        let projection = state.projection_application().snapshot();
+        let projection = state.projections().snapshot();
         {
             projection
                 .member(realm_id, actor)
@@ -422,3 +422,4 @@ pub(super) fn sidecar_circle_object_shape_is_constrained(
             .and_then(Value::as_str)
             == Some("lock")
 }
+

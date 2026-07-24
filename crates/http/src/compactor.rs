@@ -104,7 +104,7 @@ pub fn spawn(state: AppState) -> Option<Arc<tokio::task::JoinHandle<()>>> {
 pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> CompactorPassReport {
     let mut report = CompactorPassReport::default();
     let realms: Vec<RealmId> = {
-        let registry = state.realm_directory_application().snapshot();
+        let registry = state.realm_directory().snapshot();
         registry
             .search(Default::default())
             .into_iter()
@@ -113,7 +113,7 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
     };
     report.realms_scanned = realms.len();
     let policy = state.config().compaction_policy();
-    let projections = state.projection_application();
+    let projections = state.projections();
     let now_ms = chrono::Utc::now().timestamp_millis();
 
     for realm_id in &realms {
@@ -181,7 +181,7 @@ pub fn run_compactor_pass(state: &AppState, per_realm_limit: usize) -> Compactor
 /// Returns seal ids in BFS order from the leaves; that's a stable
 /// traversal that doesn't favor any particular fork.
 fn collect_candidate_seals(
-    projections: &soland_application::projection::ProjectionApplicationService,
+    projections: &soland_services::projection::ProjectionService,
     realm_id: &RealmId,
     per_realm_limit: usize,
 ) -> Result<Vec<SealId>, String> {
@@ -233,7 +233,7 @@ struct CandidateDiagnostics {
 }
 
 fn evaluate_candidate(
-    projections: &soland_application::projection::ProjectionApplicationService,
+    projections: &soland_services::projection::ProjectionService,
     realm_id: &RealmId,
     candidate: &Seal,
     now_ms: i64,
@@ -332,3 +332,5 @@ mod tests {
         assert!(spawn(state).is_none());
     }
 }
+
+

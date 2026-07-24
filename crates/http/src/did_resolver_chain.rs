@@ -147,7 +147,7 @@ impl SolandDidResolver {
 
     pub(crate) fn cache_application_webvh_record(
         &self,
-        record: soland_application::identity::DidDocumentState,
+        record: soland_services::identity::DidDocumentState,
     ) -> Result<DidDocument, IdentityError> {
         let did = Did::new(record.did).map_err(IdentityError::from)?;
         self.document_from_parts(&did, record.did_document, record.seq)
@@ -178,7 +178,7 @@ impl DidResolver for SolandDidResolver {
 }
 
 #[async_trait::async_trait]
-impl soland_application::identity::DidResolverPort for SolandDidResolver {
+impl soland_services::identity::DidResolverPort for SolandDidResolver {
     async fn resolve_did_async(&self, did: &Did) -> Result<DidDocument, String> {
         SolandDidResolver::resolve_did_async(self, did)
             .await
@@ -187,7 +187,7 @@ impl soland_application::identity::DidResolverPort for SolandDidResolver {
 
     fn cache_document_state(
         &self,
-        document: soland_application::identity::DidDocumentState,
+        document: soland_services::identity::DidDocumentState,
     ) -> Result<DidDocument, String> {
         self.cache_application_webvh_record(document)
             .map_err(|error| error.to_string())
@@ -337,7 +337,7 @@ mod tests {
     use arkret_identifiers::Did;
     use arkret_identity::DidResolver;
     use serde_json::json;
-    use soland_application::identity::DidDocumentState;
+    use soland_services::identity::DidDocumentState;
 
     use super::*;
     use crate::config::ObjectStorageConfig;
@@ -591,3 +591,4 @@ mod tests {
         assert!(err.contains("development_mode"), "{err}");
     }
 }
+

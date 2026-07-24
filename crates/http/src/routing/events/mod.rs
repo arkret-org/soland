@@ -1,5 +1,5 @@
 use salvo::prelude::*;
-use soland_application::identity::SessionIdentityState as SessionRecord;
+use soland_services::identity::SessionIdentityState as SessionRecord;
 
 pub(crate) mod event_log;
 pub(super) mod frontier;
@@ -84,7 +84,7 @@ pub fn peer_router() -> Router {
 mod tests {
     use arkret_wire::FreshnessState;
     use chrono::Utc;
-    use soland_application::identity::AgentSessionState as AgentSessionRecord;
+    use soland_services::identity::AgentSessionState as AgentSessionRecord;
 
     use super::*;
 
@@ -206,3 +206,4 @@ mod tests {
         );
     }
 }
+

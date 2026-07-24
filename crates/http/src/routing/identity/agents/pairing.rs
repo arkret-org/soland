@@ -123,8 +123,8 @@ pub(super) async fn submit_agent_runtime_key_request(
 
     let controller_id = agent_record.controller_id.clone();
     let account = state
-        .identity_application()
-        .find_account_by_actor(soland_application::identity::FindAccountByActorQuery {
+        .identities()
+        .find_account_by_actor(soland_services::identity::FindAccountByActorQuery {
             actor_id: controller_id.clone(),
         })
         .await
@@ -143,7 +143,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         .unwrap_or_else(chrono::Utc::now);
     let expires_at =
         arkret_canonical::format_timestamp_canonical(required_pairing_expires_at(&agent_record)?);
-    let write = soland_application::identity::StoreAgentRuntimeApprovalCommand {
+    let write = soland_services::identity::StoreAgentRuntimeApprovalCommand {
         agent_id: agent_id.to_owned(),
         pairing_request_id: body.pairing_request_id.to_string(),
         approval_request_id: proposed_approval_request_id.clone(),
@@ -157,7 +157,7 @@ pub(super) async fn submit_agent_runtime_key_request(
         runtime_key_request: runtime_key_request_for_controller(&body),
     };
     let stored = state
-        .agent_pairing_application()
+        .agent_pairings()
         .store_runtime_approval(&write)
         .await
         .map_err(|err| AppError::internal(format!("runtime approval request save failed: {err}")))?
@@ -195,9 +195,9 @@ pub(super) async fn submit_agent_runtime_key_request(
         "update"
     };
     state
-        .delivery_application()
+        .deliveries()
         .store_account_delta(
-            soland_application::delivery::StoreAccountNotificationDeltaCommand {
+            soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: json!({
                     "notification_id": notification_id.clone(),
                     "recipient_id": controller_id,
@@ -272,7 +272,7 @@ async fn lookup_pairing_record(
         return Err(agent_pairing_not_found());
     }
     let record = state
-        .agent_pairing_application()
+        .agent_pairings()
         .pairing_record(pairing_request_id)
         .await
         .map_err(|err| AppError::internal(format!("agent pairing lookup failed: {err}")))?
@@ -326,7 +326,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         state.service_id(),
     )?;
     let events = state
-        .event_query_application()
+        .event_queries()
         .accepted_events_for_actor(&agent_id)
         .await
         .map_err(|error| {
@@ -379,7 +379,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         paired_request_digest_from_record_event(&agent_record, &accepted.envelope)?;
 
     let terminal_notification = account_notification_context(&agent_record);
-    let activation = soland_application::identity::ActivateAgentRuntimeCommand {
+    let activation = soland_services::identity::ActivateAgentRuntimeCommand {
         agent_id: agent_id.clone(),
         approval_request_id: approval_request_id.clone(),
         runtime_key_binding_digest: agent_record
@@ -394,7 +394,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         authorized_at: accepted.received_at,
     };
     let activated = state
-        .agent_pairing_application()
+        .agent_pairings()
         .activate_runtime(&activation)
         .await
         .map_err(|error| {
@@ -404,7 +404,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         })?;
     if !activated {
         return state
-            .agent_pairing_application()
+            .agent_pairings()
             .agent(&agent_id)
             .await
             .map_err(|error| {
@@ -425,7 +425,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         "reconciled accepted Agent authorization into activation projection"
     );
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .agent(&agent_id)
         .await
         .map_err(|error| {
@@ -610,7 +610,7 @@ pub(super) async fn agent_key_pair(
     // accepted (a failed submit above propagates via `?` and MUST NOT leave
     // the agent flipped to active).
     let terminal_notification = account_notification_context(&agent_record);
-    let activation = soland_application::identity::ActivateAgentRuntimeCommand {
+    let activation = soland_services::identity::ActivateAgentRuntimeCommand {
         agent_id: agent_id.to_owned(),
         approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
             pairing_failed_precondition("agent pairing approval metadata is incomplete")
@@ -629,7 +629,7 @@ pub(super) async fn agent_key_pair(
     // open status poll and consumes this approval for the current pairing
     // request atomically (including runtime replacement re-pairing, §3.6.1).
     let activated = state
-        .agent_pairing_application()
+        .agent_pairings()
         .activate_runtime(&activation)
         .await
         .map_err(|err| AppError::internal(format!("agent state activation failed: {err}")))?;
@@ -847,9 +847,9 @@ pub(super) async fn persist_terminal_account_notification(
     reason: &str,
 ) -> Result<(), AppError> {
     state
-        .delivery_application()
+        .deliveries()
         .store_account_delta(
-            soland_application::delivery::StoreAccountNotificationDeltaCommand {
+            soland_services::delivery::StoreAccountNotificationDeltaCommand {
                 record: json!({
                     "notification_id": context.notification_id,
                     "recipient_id": context.recipient_id,
@@ -891,7 +891,7 @@ async fn finalize_terminal_account_notification(
     let approval_request_id = context.approval_request_id.clone();
     persist_terminal_account_notification(state, context, reason).await?;
     state
-        .agent_pairing_application()
+        .agent_pairings()
         .clear_approval_notification(agent_id, &approval_request_id)
         .await
         .map_err(|error| {
@@ -1667,3 +1667,4 @@ mod requested_scope_tests {
         assert!(ensure_agent_resume_pairing_closed(&record, now).is_ok());
     }
 }
+

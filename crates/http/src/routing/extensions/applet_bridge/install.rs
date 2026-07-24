@@ -16,7 +16,7 @@ use arkret_wire::EffectiveScope;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::events::{MessageState, ProjectedEvent as ProjectionEventRecord};
+use soland_services::events::{MessageState, ProjectedEvent as ProjectionEventRecord};
 use soland_http::error::AppError;
 
 use super::super::applet_manifest::{AppletManifest, VerifiedAppletManifest};
@@ -245,7 +245,7 @@ async fn ensure_applet_e2ee_authorization_projections(
         return Ok(());
     }
     let existing = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .map_err(|error| {
@@ -269,7 +269,7 @@ async fn ensure_applet_registration_projection(
     event_id: &str,
 ) -> Result<(), AppError> {
     let exists = state
-        .event_query_application()
+        .event_queries()
         .projected_events()
         .await
         .map_err(|error| {
@@ -295,7 +295,7 @@ fn project_applet_install_grants(state: &AppState, record: &AppletRecord, grant_
     };
     for (grant_id, action) in grant_ids.iter().zip(record.capabilities.iter()) {
         state
-            .authorization_application()
+            .authorization()
             .upsert_projected_grant(applet_install_grant(
                 record,
                 package,
@@ -547,7 +547,7 @@ pub(super) fn update_applet_projection(state: &AppState, record: &AppletRecord) 
         return;
     };
     let now = chrono::Utc::now();
-    state.projection_application().cache_applet(
+    state.projections().cache_applet(
         package.service_id.to_string(),
         record.applet_id.clone(),
         record.namespace.clone(),
@@ -672,7 +672,7 @@ pub(super) async fn append_portal_message(
         created_at,
     };
     if let Err(error) = state
-        .event_query_application()
+        .event_queries()
         .store_message(message_record.clone())
         .await
     {
@@ -1304,8 +1304,8 @@ pub(super) async fn require_realm_admin(
     let realm_id = effective_scope_realm_id(scope);
     let (owner, members) = realm_owner_and_members(state, &realm_id).await;
     if state
-        .authorization_application()
-        .check(soland_application::authorization::AuthorizationCheck {
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
             actor,
             action: "ak.realm.admin",
             resource: &realm_id,
@@ -1332,14 +1332,14 @@ async fn realm_owner_and_members(
     realm_id: &str,
 ) -> (Option<String>, Vec<String>) {
     let owner = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
         .flatten()
         .map(|meta| meta.owner);
     let members = {
-        let realms = state.realm_directory_application().snapshot();
+        let realms = state.realm_directory().snapshot();
         RealmId::new(realm_id.to_owned())
             .ok()
             .and_then(|id| realms.get(&id))
@@ -1850,3 +1850,4 @@ mod tests {
         );
     }
 }
+

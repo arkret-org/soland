@@ -34,7 +34,7 @@ use chrono::{DateTime, Utc};
 use ed25519_dalek::Signer;
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_application::governance::PolicyDocumentRecord;
+use soland_services::governance::PolicyDocumentRecord;
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
@@ -95,7 +95,7 @@ async fn list_policy_documents(
     let subject_ref = subject_ref.into_inner();
     let include_inactive = include_inactive.into_inner().unwrap_or(false);
     let policies = state
-        .governance_application()
+        .governance()
         .policy_documents_for_owner(&session.actor)
         .await
         .unwrap_or_default()
@@ -130,7 +130,7 @@ async fn get_policy_document(
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
     state
-        .governance_application()
+        .governance()
         .policy_document(&policy_id)
         .await
         .ok()
@@ -186,7 +186,7 @@ async fn upsert_policy_document(
     if !is_valid_generated_or_custom_id(&policy_id, "policy") {
         return Err(AppError::invalid_param("invalid policy_id"));
     }
-    let service = state.governance_application();
+    let service = state.governance();
     if let Ok(Some(existing)) = service.policy_document(&policy_id).await
         && existing.owner != session.actor
     {
@@ -230,7 +230,7 @@ async fn delete_policy_document(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let policy_id = policy_id.into_inner();
-    let service = state.governance_application();
+    let service = state.governance();
     let Ok(Some(policy)) = service.policy_document(&policy_id).await else {
         return Err(AppError::not_found("policy not found"));
     };
@@ -273,7 +273,7 @@ async fn policy_check(
         return Err(AppError::capability_denied("request not authorized"));
     }
     let active_policy_documents = state
-        .governance_application()
+        .governance()
         .active_policy_documents()
         .await
         .unwrap_or_default()
@@ -440,7 +440,7 @@ fn collect_realm_member_dids(state: &AppState, realm_id: &str) -> Vec<String> {
     let Ok(realm_id_typed) = RealmId::new(realm_id.to_owned()) else {
         return Vec::new();
     };
-    let realms = state.realm_directory_application().snapshot();
+    let realms = state.realm_directory().snapshot();
     match realms.get(&realm_id_typed) {
         Some(space) => space
             .members
@@ -472,12 +472,12 @@ async fn policy_control_frontier_updated_at(
     active_policy_documents: &[PolicyDocumentRecord],
 ) -> Option<DateTime<Utc>> {
     let meta = state
-        .realm_query_application()
+        .realms()
         .realm_metadata(realm_id)
         .await
         .ok()
         .flatten()?;
-    let projection = state.projection_application().snapshot();
+    let projection = state.projections().snapshot();
     let realm_state = projection.realm_states.get(realm_id)?;
     let member_updated_at = projection
         .members
@@ -851,3 +851,4 @@ mod tests {
         ));
     }
 }
+
