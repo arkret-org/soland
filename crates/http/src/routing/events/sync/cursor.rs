@@ -783,7 +783,7 @@ pub fn sync_filter_digest(filter: Option<&serde_json::Value>) -> String {
 /// account-subscribe resume position, wait-for barrier state, or dropped
 /// recovery state. `revoke_scope` controls breadth (`this_cursor` default,
 /// `same_device`, `same_session`).
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.account.command.revoke_cursor", summary = "Revoke an account read cursor", tags("account"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.revoke_cursor"))]
 pub(super) async fn account_cursor_revoke(
     aa: crate::routing::system::extract::AuthArgs,

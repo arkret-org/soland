@@ -1,6 +1,6 @@
 use super::*;
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.pair_device", summary = "Pair an account device", tags("account"))]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_device"))]
 pub(super) async fn account_device_pair(
     aa: super::super::AuthArgs,

@@ -169,19 +169,16 @@ impl AgentStore for MemoryAgentStore {
             return Ok(false);
         };
         if record.approval_request_id.as_deref() != Some(&activation.approval_request_id)
-            || !matches!(
-                record.state.as_str(),
-                "pending_runtime_key" | "active" | "paused"
-            )
+            || !matches!(record.state.as_str(), "active" | "paused")
             || record.runtime_key_binding_digest.as_deref()
                 != Some(&activation.runtime_key_binding_digest)
             || record.pairing_request_id.as_deref() != Some(&activation.pairing_request_id)
         {
             return Ok(false);
         }
-        if record.state != "paused" {
-            record.state = "active".to_owned();
-        }
+        // Runtime key activation records the authorization; it is not a
+        // lifecycle transition, so the lifecycle `state` is left untouched
+        // (key-management.md §3.6.1). runtime_state derives to ready.
         record.updated_at = activation.authorized_at;
         record.authorized_event_ref = Some(activation.authorized_event_ref.clone());
         record.authorized_verification_method =
@@ -233,10 +230,7 @@ impl AgentStore for MemoryAgentStore {
             record.paired_pairing_request_id.as_deref() == Some(&write.pairing_request_id);
         if record.pairing_request_id.as_deref() != Some(&write.pairing_request_id)
             || pairing_handle_was_consumed
-            || !matches!(
-                record.state.as_str(),
-                "pending_runtime_key" | "active" | "paused"
-            )
+            || !matches!(record.state.as_str(), "active" | "paused")
             || record
                 .runtime_key_binding_digest
                 .as_deref()

@@ -320,7 +320,7 @@ impl AgentStore for PgAgentStore {
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&activation.agent_id))
-                .filter(agent_principals::state.eq_any(["pending_runtime_key", "active", "paused"]))
+                .filter(agent_principals::state.eq_any(["active", "paused"]))
                 .filter(agent_principals::approval_request_id.eq(&activation.approval_request_id))
                 .filter(
                     agent_principals::runtime_key_binding_digest
@@ -329,11 +329,9 @@ impl AgentStore for PgAgentStore {
                 .filter(agent_principals::pairing_request_id.eq(&activation.pairing_request_id)),
         )
         .set((
-            agent_principals::state.eq(case_when::<_, _, Text>(
-                agent_principals::state.eq("paused"),
-                "paused",
-            )
-            .otherwise("active")),
+            // Runtime key activation records the authorization; it is not a
+            // lifecycle transition, so the lifecycle `state` is left untouched
+            // (key-management.md §3.6.1). runtime_state derives to ready.
             agent_principals::updated_at.eq(activation.authorized_at),
             agent_principals::authorized_event_ref.eq(&activation.authorized_event_ref),
             agent_principals::authorized_verification_method
@@ -393,7 +391,7 @@ impl AgentStore for PgAgentStore {
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&write.agent_id))
-                .filter(agent_principals::state.eq_any(["pending_runtime_key", "active", "paused"]))
+                .filter(agent_principals::state.eq_any(["active", "paused"]))
                 .filter(agent_principals::pairing_request_id.eq(&write.pairing_request_id))
                 .filter(
                     agent_principals::paired_pairing_request_id

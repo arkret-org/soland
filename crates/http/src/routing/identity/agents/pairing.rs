@@ -237,7 +237,7 @@ pub(super) async fn submit_agent_runtime_key_request(
     json_ok(AgentRuntimeApprovalOutcome {
         ok: true,
         approval_request_id,
-        status: agent_projection_from_record(&stored).status,
+        status: agent_lifecycle_from_record(&stored),
     })
 }
 
@@ -471,24 +471,18 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     if agent_record.id != body.agent_id.as_str() {
         return Err(agent_pairing_not_found());
     }
-    let status = match agent_record.state.as_str() {
-        "pending_runtime_key" => {
-            let expired = agent_record
-                .pairing_expires_at
-                .is_none_or(|expires_at| expires_at <= now);
-            if expired {
-                AgentStatus::PairingExpired
-            } else {
-                AgentStatus::PendingRuntimeKey
-            }
-        }
-        "active" => AgentStatus::Active,
-        "paused" => AgentStatus::Paused,
-        "deactivated" => AgentStatus::Deactivated,
-        "pairing_expired" => AgentStatus::PairingExpired,
-        _ => return Err(agent_pairing_not_found()),
-    };
-    let approval_request_id = if status == AgentStatus::PendingRuntimeKey {
+    // Two orthogonal axes (key-management.md §3.6.1): the lifecycle intent and
+    // the derived runtime readiness. An expired bootstrap handle projects
+    // pairing_expired; an expired replacement handle projects ready with no
+    // authorized fields for this request, which the runtime treats as expired.
+    let status = agent_lifecycle_from_record(agent_record);
+    let has_active_authorization = agent_record.authorized_event_ref.is_some();
+    let handle_live = agent_pairing_handle_is_open(agent_record)
+        && agent_record
+            .pairing_expires_at
+            .is_some_and(|expires_at| expires_at > now);
+    let runtime_state = AgentRuntimeState::derive(has_active_authorization, handle_live);
+    let approval_request_id = if runtime_state == AgentRuntimeState::PendingRuntimeKey {
         agent_record.approval_request_id.clone()
     } else {
         None
@@ -502,6 +496,7 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     Ok(AgentRuntimeApprovalStatusOutcome {
         ok: true,
         status,
+        runtime_state,
         approval_request_id,
         authorized_event_ref,
         authorized_verification_method: agent_record.authorized_verification_method.clone(),
@@ -1133,41 +1128,22 @@ fn paired_request_digest_from_record_event(
 pub(super) fn ensure_pairing_request_open(
     agent_record: &AgentPrincipalRecord,
 ) -> Result<(), AppError> {
-    match agent_record.state.as_str() {
-        "pending_runtime_key" => {}
-        "pairing_expired" => {
-            return Err(pairing_failed_precondition("pairing request has expired"));
-        }
-        "paused" => {
-            // Runtime replacement re-pairing (key-management.md §3.6.1): a
-            // paused agent may complete the fresh handle and atomically
-            // supersede every old active key. renew_pairing rotates
-            // `pairing_request_id` while leaving the last consumed handle in
-            // `paired_pairing_request_id`, so a live replacement handle exists
-            // iff the current handle has not yet been consumed. Without one,
-            // there is nothing to complete.
-            if !agent_pairing_handle_is_open(agent_record) {
-                return Err(pairing_failed_precondition(
-                    "agent runtime key is already active",
-                ));
-            }
-        }
-        "active" => {
-            return Err(pairing_failed_precondition(
-                "pause the agent before completing runtime replacement pairing",
-            )
-            .with_reason_detail("agent_pause_required"));
-        }
-        "deactivated" => {
-            return Err(pairing_failed_precondition(
-                "agent is not accepting runtime key pairing",
-            ));
-        }
-        _ => {
-            return Err(pairing_failed_precondition(
-                "agent pairing state is not pending_runtime_key",
-            ));
-        }
+    // Only the terminal lifecycle intent forbids completing a pairing
+    // (key-management.md §3.6.1). Both active and paused agents may complete a
+    // bootstrap or replacement handle; completion atomically supersedes any
+    // prior active key with no forced pause. renew_pairing rotates
+    // `pairing_request_id` while leaving the last consumed handle in
+    // `paired_pairing_request_id`, so a live handle exists iff the current one
+    // has not yet been consumed.
+    if agent_record.state == "deactivated" {
+        return Err(pairing_failed_precondition(
+            "agent is not accepting runtime key pairing",
+        ));
+    }
+    if !agent_pairing_handle_is_open(agent_record) {
+        return Err(pairing_failed_precondition(
+            "agent has no open runtime key pairing handle",
+        ));
     }
     let expires_at = required_pairing_expires_at(agent_record)?;
     if expires_at <= chrono::Utc::now() {
@@ -1187,36 +1163,25 @@ pub(super) fn agent_pairing_handle_is_open(agent_record: &AgentPrincipalRecord) 
     current.is_some() && current != consumed
 }
 
-pub(super) fn ensure_agent_resume_pairing_closed(
-    agent_record: &AgentPrincipalRecord,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Result<(), AppError> {
-    if agent_pairing_handle_is_open(agent_record)
-        && agent_record
-            .pairing_expires_at
-            .is_some_and(|expires_at| expires_at > now)
-    {
-        return Err(pairing_failed_precondition(
-            "complete or let the open runtime replacement pairing expire before resuming the agent",
-        )
-        .with_reason_detail("agent_replacement_pairing_open"));
-    }
-    Ok(())
-}
-
 pub(super) fn agent_record_reserves_selector_slug(
     agent_record: &AgentPrincipalRecord,
     now: &chrono::DateTime<chrono::Utc>,
 ) -> bool {
-    match agent_record.state.as_str() {
-        "active" | "paused" => true,
-        "pending_runtime_key" => agent_record
+    // A deactivated agent releases its slug. A keyed agent (ever completed a
+    // first pairing) always reserves it. A never-keyed agent reserves the slug
+    // only while its bootstrap window is still live; once it lapses the slug is
+    // released for a fresh provision (key-management.md §3.6.1).
+    if agent_record.state == "deactivated" {
+        return false;
+    }
+    if agent_record.authorized_event_ref.is_some() {
+        return true;
+    }
+    agent_pairing_handle_is_open(agent_record)
+        && agent_record
             .pairing_expires_at
             .map(|expires_at| expires_at > *now)
-            .unwrap_or(true),
-        "pairing_expired" | "deactivated" => false,
-        _ => true,
-    }
+            .unwrap_or(false)
 }
 
 pub(super) fn ensure_pairing_request_id_matches(
@@ -1546,7 +1511,7 @@ mod requested_scope_tests {
             "did:webvh:controller.example:users:test".to_owned(),
             "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
             "did:webvh:agent.example:agents:test#controller".to_owned(),
-            "pending_runtime_key".to_owned(),
+            "active".to_owned(),
             chrono::Utc::now(),
         );
         record.requested_scope = requested_scope;
@@ -1663,25 +1628,33 @@ mod requested_scope_tests {
     }
 
     #[test]
-    fn replacement_pair_commit_requires_paused_and_resume_requires_closed_handle() {
+    fn active_and_paused_agents_complete_pairing_without_forced_pause() {
         let now = chrono::Utc::now();
         let mut record = agent_record(None);
         record.pairing_request_id = Some("agent_pairing_request:open".to_owned());
         record.pairing_expires_at = Some(now + chrono::Duration::minutes(5));
 
+        // Both active and paused agents may complete an open bootstrap or
+        // replacement handle; there is no forced pause (key-management.md
+        // §3.6.1) and resume never interlocks with an open handle.
         record.state = "active".to_owned();
-        assert!(ensure_pairing_request_open(&record).is_err());
-
+        assert!(ensure_pairing_request_open(&record).is_ok());
         record.state = "paused".to_owned();
         assert!(ensure_pairing_request_open(&record).is_ok());
-        assert!(ensure_agent_resume_pairing_closed(&record, now).is_err());
 
+        // Deactivation is terminal.
+        record.state = "deactivated".to_owned();
+        assert!(ensure_pairing_request_open(&record).is_err());
+
+        // A consumed handle is no longer open.
+        record.state = "active".to_owned();
         record.paired_pairing_request_id = record.pairing_request_id.clone();
-        assert!(ensure_agent_resume_pairing_closed(&record, now).is_ok());
+        assert!(ensure_pairing_request_open(&record).is_err());
 
+        // An expired handle is rejected.
         record.paired_pairing_request_id = None;
         record.pairing_expires_at = Some(now - chrono::Duration::seconds(1));
-        assert!(ensure_agent_resume_pairing_closed(&record, now).is_ok());
+        assert!(ensure_pairing_request_open(&record).is_err());
     }
 }
 

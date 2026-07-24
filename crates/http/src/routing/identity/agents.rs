@@ -41,7 +41,7 @@ use arkret_models_collaboration::agent_operations::{
     AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentRenewPairingOutcome,
     AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
     AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
-    AgentRuntimeApprovalStatusRequestBody, AgentStatus, AgentView, KeyState,
+    AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
 };
 #[cfg(test)]
 use arkret_models_collaboration::agent_operations::{
@@ -195,7 +195,10 @@ mod tests {
         pairing_expires_at: &str,
     ) -> AgentPrincipalRecord {
         let mut record = agent_record(agent_id, controller_id);
-        record.state = "pending_runtime_key".to_owned();
+        // Lifecycle intent is active from provisioning; the open bootstrap
+        // handle drives runtime_state to pending_runtime_key (key-management.md
+        // §3.6.1).
+        record.state = "active".to_owned();
         record.requested_scope = Some(requested_scope);
         record.pairing_request_id =
             Some("agent_pairing_request:01999999-0000-7000-8000-00000000feed".to_owned());
@@ -419,16 +422,19 @@ mod tests {
         record.display_name = Some("Summary Assistant".to_owned());
         record.agent_slug = Some("summary".to_owned());
         let view = AgentView {
-            agent: agent_projection_from_record(&record),
-            status: AgentStatus::Active,
+            agent: agent_projection_from_record(&record, AgentRuntimeState::Ready),
+            status: AgentLifecycleState::Active,
+            runtime_state: AgentRuntimeState::Ready,
             grants: Vec::new(),
             key_state: None,
         };
-        // spec `agent_view` = `{agent: <agent_projection>, status, ...}`.
-        assert_eq!(view.status, AgentStatus::Active);
+        // spec `agent_view` = `{agent: <agent_projection>, status, runtime_state, ...}`.
+        assert_eq!(view.status, AgentLifecycleState::Active);
+        assert_eq!(view.runtime_state, AgentRuntimeState::Ready);
         let agent = serde_json::to_value(&view).expect("view serializes");
         assert_eq!(agent["agent"]["slug"], "summary");
         assert_eq!(agent["agent"]["status"], "active");
+        assert_eq!(agent["agent"]["runtime_state"], "ready");
         assert_eq!(
             agent["agent"]["agent_id"],
             "did:webvh:z6mkfixture:agent.example"
@@ -442,14 +448,20 @@ mod tests {
         let now = chrono::DateTime::parse_from_rfc3339("2026-07-07T00:00:00.000Z")
             .unwrap()
             .with_timezone(&chrono::Utc);
+        // A keyed agent (authorized_event_ref set) reserves its slug for any
+        // non-terminal lifecycle intent (key-management.md §3.6.1).
         let mut active = agent_record("did:web:agent.example", "did:web:controller.example");
         active.state = "active".to_owned();
+        active.authorized_event_ref =
+            Some("ak:event:01964137-0000-7000-8000-000000000001".to_owned());
         assert!(agent_record_reserves_selector_slug(&active, &now));
 
         let mut paused = active.clone();
         paused.state = "paused".to_owned();
         assert!(agent_record_reserves_selector_slug(&paused, &now));
 
+        // A never-keyed agent reserves the slug only while its bootstrap handle
+        // is still live.
         let pending_future = pending_pairing_record(
             "did:web:agent.example",
             "did:web:controller.example",
@@ -468,10 +480,14 @@ mod tests {
         );
         assert!(!agent_record_reserves_selector_slug(&pending_expired, &now));
 
-        let mut pairing_expired = active.clone();
-        pairing_expired.state = "pairing_expired".to_owned();
-        assert!(!agent_record_reserves_selector_slug(&pairing_expired, &now));
+        // A never-keyed agent whose bootstrap window lapsed (active intent, no
+        // key, no live handle) releases the slug for a fresh provision.
+        let mut bootstrap_lapsed =
+            agent_record("did:web:agent.example", "did:web:controller.example");
+        bootstrap_lapsed.state = "active".to_owned();
+        assert!(!agent_record_reserves_selector_slug(&bootstrap_lapsed, &now));
 
+        // Deactivation is terminal.
         let mut deactivated = active;
         deactivated.state = "deactivated".to_owned();
         assert!(!agent_record_reserves_selector_slug(&deactivated, &now));
@@ -657,6 +673,7 @@ mod tests {
             &record,
             arkret_models_collaboration::agent_operations::AgentPcrRecoveryState::Pending,
             Vec::new(),
+            AgentRuntimeState::PendingRuntimeKey,
         )
         .expect("key state projection");
 
@@ -714,7 +731,8 @@ mod tests {
         )
         .expect("pending status must resolve");
 
-        assert_eq!(outcome.status, AgentStatus::PendingRuntimeKey);
+        assert_eq!(outcome.status, AgentLifecycleState::Active);
+        assert_eq!(outcome.runtime_state, AgentRuntimeState::PendingRuntimeKey);
         assert_eq!(
             outcome.approval_request_id.as_deref(),
             Some("agent_runtime_approval:01999999")
@@ -733,6 +751,9 @@ mod tests {
             "2999-01-01T00:00:00.000Z",
         );
         record.state = "active".to_owned();
+        // Approval consumes the pairing handle (activation stamps
+        // paired_pairing_request_id), so runtime_state derives to ready.
+        record.paired_pairing_request_id = record.pairing_request_id.clone();
         record.authorized_event_ref =
             Some("ak:event:01999999-0000-7000-8000-000000000001".to_owned());
         record.authorized_verification_method = Some("did:web:agent.example#runtime-1".to_owned());
@@ -747,7 +768,8 @@ mod tests {
         )
         .expect("approved status must resolve");
 
-        assert_eq!(outcome.status, AgentStatus::Active);
+        assert_eq!(outcome.status, AgentLifecycleState::Active);
+        assert_eq!(outcome.runtime_state, AgentRuntimeState::Ready);
         assert!(outcome.approval_request_id.is_none());
         assert_eq!(
             outcome.authorized_event_ref.as_ref().map(|id| id.as_str()),
@@ -781,7 +803,8 @@ mod tests {
         )
         .expect("expired status must resolve");
 
-        assert_eq!(outcome.status, AgentStatus::PairingExpired);
+        assert_eq!(outcome.status, AgentLifecycleState::Active);
+        assert_eq!(outcome.runtime_state, AgentRuntimeState::PairingExpired);
         assert!(outcome.approval_request_id.is_none());
         assert!(outcome.authorized_event_ref.is_none());
     }

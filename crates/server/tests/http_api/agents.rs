@@ -854,7 +854,11 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     assert_eq!(agents[0]["agent_id"], agent_id);
     assert_eq!(agents[0]["display_name"], "Summary Assistant");
     assert_eq!(agents[0]["slug"], "summary");
-    assert_eq!(agents[0]["status"], "pending_runtime_key");
+    // Two orthogonal axes (key-management.md §3.6.1): a freshly provisioned
+    // agent's lifecycle intent is active; its derived runtime_state is
+    // pending_runtime_key until first pairing completes.
+    assert_eq!(agents[0]["status"], "active");
+    assert_eq!(agents[0]["runtime_state"], "pending_runtime_key");
 
     let mut service_view = TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))
         .add_header("authorization", "Bearer agent-lifecycle-s2s", true)
@@ -862,7 +866,13 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         .await;
     assert_eq!(service_view.status_code.unwrap(), StatusCode::OK);
     let service_body: Value = service_view.take_json().await.unwrap();
-    assert_eq!(service_body["status"], "pending_runtime_key");
+    assert_eq!(service_body["status"], "active");
+    assert_eq!(service_body["runtime_state"], "pending_runtime_key");
+    assert_eq!(service_body["key_state"]["status"], "active");
+    assert_eq!(
+        service_body["key_state"]["runtime_state"],
+        "pending_runtime_key"
+    );
     assert_eq!(
         service_body["key_state"]["pairing_request_id"],
         created_body["pairing_request_id"]

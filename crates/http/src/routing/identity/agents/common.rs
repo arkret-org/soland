@@ -599,14 +599,62 @@ mod requested_scope_tests {
 /// Soland-internal columns (`controller_id`, `pairing_*`) are NOT
 /// part of the protocol projection and are dropped at the wire boundary; the
 /// persistence `state` column carries the `agent_status` enum value verbatim.
-pub(super) fn agent_projection_from_record(record: &AgentPrincipalRecord) -> AgentProjection {
-    let status = match record.state.as_str() {
-        "pending_runtime_key" => AgentStatus::PendingRuntimeKey,
-        "pairing_expired" => AgentStatus::PairingExpired,
-        "paused" => AgentStatus::Paused,
-        "deactivated" => AgentStatus::Deactivated,
-        _ => AgentStatus::Active,
-    };
+/// The controller lifecycle intent axis (`status`, key-management.md §3.6.1).
+/// The persisted `state` column carries only the closed lifecycle enum
+/// (`active | paused | deactivated`); pairing progress lives on the orthogonal
+/// derived `runtime_state` axis and is never stored here.
+pub(super) fn agent_lifecycle_from_record(record: &AgentPrincipalRecord) -> AgentLifecycleState {
+    match record.state.as_str() {
+        "paused" => AgentLifecycleState::Paused,
+        "deactivated" => AgentLifecycleState::Deactivated,
+        // `active` and any provisioning-default intent both project running.
+        _ => AgentLifecycleState::Active,
+    }
+}
+
+/// Whether the record carries a live (unconsumed, unexpired) pairing handle for
+/// a non-terminal agent.
+pub(super) fn agent_pairing_handle_live(
+    record: &AgentPrincipalRecord,
+    now: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    agent_lifecycle_from_record(record) != AgentLifecycleState::Deactivated
+        && agent_pairing_handle_is_open(record)
+        && record
+            .pairing_expires_at
+            .is_some_and(|expires_at| expires_at > now)
+}
+
+/// The sole derivation of the read-only runtime readiness axis for a persisted
+/// agent (key-management.md §3.6.1). `has_active_authorization` is whether the
+/// reducer projection currently holds an active accepted `ak.agent.key.authorize`
+/// for the agent; the open-handle fact comes from the record. Both server and
+/// clients route every projection through `AgentRuntimeState::derive`.
+pub(super) fn agent_runtime_state_from_record(
+    record: &AgentPrincipalRecord,
+    has_active_authorization: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> AgentRuntimeState {
+    AgentRuntimeState::derive(has_active_authorization, agent_pairing_handle_live(record, now))
+}
+
+/// Whether the reducer projection holds any active accepted key authorization
+/// for the agent — the `has_active_authorization` input to the runtime_state
+/// derivation.
+pub(super) fn agent_has_active_authorization(state: &AppState, agent_id: &str) -> bool {
+    state
+        .projections()
+        .snapshot()
+        .active_agent_key_authorizations(agent_id)
+        .into_iter()
+        .next()
+        .is_some()
+}
+
+pub(super) fn agent_projection_from_record(
+    record: &AgentPrincipalRecord,
+    runtime_state: AgentRuntimeState,
+) -> AgentProjection {
     AgentProjection {
         agent_id: Did::new(record.id.clone())
             .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
@@ -620,7 +668,8 @@ pub(super) fn agent_projection_from_record(record: &AgentPrincipalRecord) -> Age
             .as_ref()
             .filter(|value| !value.is_empty())
             .and_then(|value| BlobRef::new(value.clone()).ok()),
-        status,
+        status: agent_lifecycle_from_record(record),
+        runtime_state,
         created_at: Some(record.created_at),
         updated_at: Some(record.updated_at),
     }
@@ -635,14 +684,21 @@ pub(super) async fn agent_view_from_record(
     state: &AppState,
     record: &AgentPrincipalRecord,
 ) -> Result<AgentView, AppError> {
-    let agent = agent_projection_from_record(record);
     let active_authorizations = active_agent_key_authorizations(state, &record.id)?;
+    let runtime_state = agent_runtime_state_from_record(
+        record,
+        !active_authorizations.is_empty(),
+        chrono::Utc::now(),
+    );
+    let agent = agent_projection_from_record(record, runtime_state);
     let pcr_recovery =
         crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(state, record)
             .await?;
-    let key_state = agent_key_state_from_record(record, pcr_recovery, active_authorizations)?;
+    let key_state =
+        agent_key_state_from_record(record, pcr_recovery, active_authorizations, runtime_state)?;
     Ok(AgentView {
         status: agent.status,
+        runtime_state,
         agent,
         grants: Vec::new(),
         key_state: Some(key_state),
@@ -655,6 +711,7 @@ pub(super) fn agent_key_state_from_record(
     active_authorizations: Vec<
         arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState,
     >,
+    runtime_state: AgentRuntimeState,
 ) -> Result<KeyState, AppError> {
     let requested_scope = record
         .requested_scope
@@ -688,15 +745,14 @@ pub(super) fn agent_key_state_from_record(
     .map_err(|error| {
         AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
     })?;
-    let pairing_is_open = matches!(record.state.as_str(), "pending_runtime_key" | "paused")
-        && agent_pairing_handle_is_open(record)
-        && record
-            .pairing_expires_at
-            .is_some_and(|expires_at| expires_at > chrono::Utc::now());
-    let pairing_mode = pairing_is_open.then_some(match record.state.as_str() {
-        "paused" => AgentPairingMode::Replacement,
-        _ => AgentPairingMode::Bootstrap,
-    });
+    // pairing handle presence and its branch are a projection of the single
+    // derived runtime_state (key-management.md §3.6.1): an open handle appears
+    // exactly for pending_runtime_key (bootstrap) and replacing (replacement).
+    let (pairing_is_open, pairing_mode) = match runtime_state {
+        AgentRuntimeState::PendingRuntimeKey => (true, Some(AgentPairingMode::Bootstrap)),
+        AgentRuntimeState::Replacing => (true, Some(AgentPairingMode::Replacement)),
+        AgentRuntimeState::Ready | AgentRuntimeState::PairingExpired => (false, None),
+    };
     Ok(KeyState {
         agent_id,
         controller_id,
@@ -705,7 +761,8 @@ pub(super) fn agent_key_state_from_record(
                 AppError::internal(format!("persisted Agent PCR is invalid: {error}"))
             })?,
         controller_authorization_ref: record.controller_authorization_ref.clone(),
-        status: agent_projection_from_record(record).status,
+        status: agent_lifecycle_from_record(record),
+        runtime_state,
         pcr_recovery,
         requested_scope,
         requested_scope_digest,

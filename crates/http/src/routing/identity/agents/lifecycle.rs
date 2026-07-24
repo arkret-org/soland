@@ -398,7 +398,10 @@ pub(super) async fn provision_agent(
         controller_id.clone(),
         principal_control_realm_id.as_str().to_owned(),
         controller_authorization_ref.clone(),
-        "pending_runtime_key".to_owned(),
+        // Lifecycle intent axis only (key-management.md §3.6.1). A freshly
+        // provisioned agent's intent is "active" (run it); the derived
+        // runtime_state projects pending_runtime_key until first pairing.
+        "active".to_owned(),
         provisioned_at,
     );
     principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
@@ -452,19 +455,24 @@ pub(super) async fn provision_agent(
     })
 }
 
-/// `ak.self.agent.command.renew_pairing` — re-open pairing for bootstrap or
-/// for an explicitly paused agent (key-management.md §3.6.1). Two branches share the
-/// one-time-handle invariant (the fresh `pairing_request_id` + `pairing_code`
-/// replace the old tuple, which becomes permanently unresolvable through the
-/// same anti-enumeration lookup; the PRINCIPAL is not one-time):
+/// `ak.self.agent.command.renew_pairing` — re-open pairing for a bootstrap or
+/// a runtime-replacement agent (key-management.md §3.6.1). Both branches share
+/// the one-time-handle invariant (the fresh `pairing_request_id` +
+/// `pairing_code` replace the old tuple, which becomes permanently unresolvable
+/// through the same anti-enumeration lookup; the PRINCIPAL is not one-time):
 ///
-/// - Bootstrap re-open (`pending_runtime_key` / `pairing_expired`): status returns to
-///   `pending_runtime_key` without changing Realm grants.
-/// - Runtime replacement (`paused`): Agent status, existing keys, sessions, and grants all stay
-///   untouched; completing the new pairing supersedes every old active key
-///   (reason=`superseded_by_repairing`) in the pair transaction. The controller resumes explicitly.
+/// - Bootstrap re-open (never-keyed agent): the derived runtime_state returns
+///   to `pending_runtime_key` without changing the lifecycle intent or Realm
+///   grants.
+/// - Runtime replacement (agent already holds an active key, lifecycle `active`
+///   or `paused`): the lifecycle intent, existing keys, sessions, and grants
+///   all stay untouched and runtime_state projects `replacing`; completing the
+///   new pairing supersedes every old active key (reason=`superseded_by_repairing`)
+///   in the pair transaction, preserving the lifecycle intent — an `active`
+///   agent needs no resume.
 ///
-/// `active` must transition to `paused` first; `deactivated` is terminal.
+/// Re-opening is never a lifecycle transition and never requires a forced
+/// pause; `deactivated` is terminal.
 #[endpoint(
     operation_id = "ak.self.agent.command.renew_pairing",
     summary = "Renew an agent's pairing",
@@ -492,27 +500,18 @@ pub(super) async fn renew_agent_pairing(
         chrono::Utc::now(),
     )
     .await?;
-    let bootstrap_reopen = match record.state.as_str() {
-        "pending_runtime_key" | "pairing_expired" => true,
-        "paused" => false,
-        "active" => {
-            return Err(pairing_failed_precondition(
-                "pause the agent before replacing its runtime",
-            )
-            .with_reason_detail("agent_pause_required"));
-        }
-        "deactivated" => {
-            return Err(pairing_failed_precondition(
-                "agent is deactivated; deactivation is terminal",
-            )
-            .with_reason_detail("agent_deactivated"));
-        }
-        _ => {
-            return Err(pairing_failed_precondition(
-                "agent state does not permit pairing renewal",
-            ));
-        }
-    };
+    if record.state == "deactivated" {
+        return Err(pairing_failed_precondition(
+            "agent is deactivated; deactivation is terminal",
+        )
+        .with_reason_detail("agent_deactivated"));
+    }
+    // Bootstrap re-open for a never-keyed agent; runtime replacement for one
+    // that already holds an active authorized key (key-management.md §3.6.1).
+    // Both active and paused agents replace in place with no forced pause — the
+    // lifecycle intent is preserved and completing the pairing atomically
+    // supersedes the old key.
+    let bootstrap_reopen = record.authorized_event_ref.is_none();
     if !state.config().development_mode {
         return Err(AppError::unsupported_feature(
             "production agent pairing renewal requires protocol-valid delegated fan-out",
@@ -523,9 +522,10 @@ pub(super) async fn renew_agent_pairing(
         chrono::Utc::now().timestamp_millis(),
     )
     .ok_or_else(|| AppError::internal("current agent pairing timestamp is out of range"))?;
-    // `pairing_expired` does not reserve the slug, so a replacement agent may
-    // have claimed it since. Renewing would then produce two open agents with
-    // the same selector slug for one controller — reject like provision does.
+    // A never-keyed agent whose bootstrap window lapsed does not reserve the
+    // slug, so a replacement agent may have claimed it since. Renewing would
+    // then produce two open agents with the same selector slug for one
+    // controller — reject like provision does.
     let agent_slug = record.agent_slug.clone().unwrap_or_default();
     if !agent_slug.is_empty() {
         let siblings = state
@@ -554,12 +554,10 @@ pub(super) async fn renew_agent_pairing(
     let expires_at = now_utc + chrono::Duration::milliseconds(pairing_ttl_ms as i64);
     let terminal_notification = account_notification_context(&record);
     let mut record = record;
-    if bootstrap_reopen {
-        record.state = "pending_runtime_key".to_owned();
-        record.state_changed_at = Some(now_utc);
-    }
-    // Runtime replacement is not a state transition: the Agent stays paused
-    // while the fresh handle is open and after it is consumed.
+    // Re-opening pairing is never a lifecycle transition (key-management.md
+    // §3.6.1): the lifecycle intent stays exactly as it was and only the
+    // derived runtime_state moves (to pending_runtime_key for bootstrap, or
+    // replacing for runtime replacement) while the fresh handle is open.
     record.pairing_request_id = Some(pairing_request_id.clone());
     record.pairing_code = Some(pairing_code.clone());
     record.pairing_expires_at = Some(expires_at);
@@ -643,12 +641,18 @@ pub(super) async fn list_agents(
         .into_iter()
         .collect::<Vec<_>>();
     // Lazily expire any agent past its pairing window before projecting, so
-    // list reflects `pairing_expired` without changing Realm grants.
+    // the derived runtime_state reflects `pairing_expired` without changing the
+    // lifecycle intent or Realm grants.
     let mut agents = Vec::with_capacity(records.len());
     for record in records {
         let record = reconcile_accepted_agent_authorization(state, record).await?;
         let record = lazily_expire_pairing(state, record).await?;
-        agents.push(agent_projection_from_record(&record));
+        let runtime_state = agent_runtime_state_from_record(
+            &record,
+            agent_has_active_authorization(state, &record.id),
+            chrono::Utc::now(),
+        );
+        agents.push(agent_projection_from_record(&record, runtime_state));
     }
     // spec `agent_list` = `{agents: [agent_projection], next_cursor?, has_more}`.
     json_ok(AgentList {
@@ -722,9 +726,11 @@ pub(super) async fn get_agent(
     json_ok(view)
 }
 
-/// Lazily expire a `pending_runtime_key` agent whose pairing window has
-/// elapsed. Pairing state is independent from Realm grants, so expiry never
-/// creates, revokes, or rewrites a grant.
+/// Lazily clean up an agent whose open pairing window has elapsed. Pairing is
+/// independent from the lifecycle intent and from Realm grants, so expiry never
+/// changes the lifecycle, creates, revokes, or rewrites a grant; the derived
+/// runtime_state simply falls to `pairing_expired` (never-keyed) or `ready`
+/// (keyed) once the handle lapses (key-management.md §3.6.1).
 pub(super) async fn lazily_expire_pairing(
     state: &AppState,
     mut record: AgentPrincipalRecord,
@@ -740,13 +746,12 @@ pub(super) async fn lazily_expire_pairing(
         return Ok(record);
     }
     let agent_id = record.id.clone();
-    let bootstrap_expired = record.state == "pending_runtime_key";
     let terminal_notification = account_notification_context(&record);
     let now = chrono::Utc::now();
-    if bootstrap_expired {
-        record.state = "pairing_expired".to_owned();
-        record.state_changed_at = Some(now);
-    }
+    // Pairing expiry is not a lifecycle transition (key-management.md §3.6.1):
+    // the lifecycle intent is untouched, and the derived runtime_state falls to
+    // pairing_expired (never-keyed) or ready (keyed) once the handle lapses.
+    // Only the dead pending runtime-key request is cleaned up here.
     record.approval_request_id = None;
     record.runtime_key_request = None;
     record.approval_requested_at = None;
@@ -809,7 +814,10 @@ pub(super) async fn lifecycle_transition(
     // eligibility set on resume, so the controller MUST explicitly
     // re-acknowledge them; silent resume is forbidden.
     if event_kind == "ak.self.agent.resume" {
-        ensure_agent_resume_pairing_closed(&record, chrono::Utc::now())?;
+        // Resume is a pure lifecycle-intent write and MUST NOT interlock with an
+        // open pairing handle (key-management.md §3.6.1): an in-flight
+        // replacement handle keeps running across resume and closes only on
+        // consumption or expiry.
         let paused_at = Some(record.updated_at);
         let new_sidecar_ids = controller_sidecar_circles_since(state, &session.actor, paused_at);
         if !new_sidecar_ids.is_empty() {
@@ -892,24 +900,9 @@ pub(super) async fn lifecycle_transition(
     updated_record.state = new_state.as_wire_str().to_owned();
     updated_record.state_changed_at = Some(status_changed_at);
     updated_record.updated_at = status_changed_at;
-    if event_kind == "ak.self.agent.pause"
-        && previous_status == "active"
-        && agent_pairing_handle_is_open(&updated_record)
-    {
-        // Invalidate any legacy replacement handle that was issued while the
-        // Agent was active by an older deployment. The compliant flow pauses
-        // first and only then calls renew_pairing, so a handle present at the
-        // pause transition can never be part of the new flow.
-        updated_record.paired_pairing_request_id = updated_record.pairing_request_id.clone();
-        updated_record.pairing_code = None;
-        updated_record.runtime_key_request = None;
-        updated_record.approval_request_id = None;
-        updated_record.approval_requested_at = None;
-        updated_record.runtime_key_binding_digest = None;
-        updated_record.runtime_public_key_digest = None;
-        updated_record.runtime_attestation_digest = None;
-        updated_record.approval_notification_id = None;
-    }
+    // Pause is a pure lifecycle-intent write and MUST NOT touch an open pairing
+    // handle (key-management.md §3.6.1): pausing mid-replacement leaves the
+    // handle live so the controller can still complete or let it expire.
     if event_kind == "ak.self.agent.deactivate" {
         updated_record.approval_request_id = None;
         updated_record.runtime_key_request = None;

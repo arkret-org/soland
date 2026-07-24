@@ -115,7 +115,7 @@ CREATE TABLE public.agent_principals (
     CONSTRAINT agent_principals_pcr_id_check CHECK ((principal_control_realm_id ~ '^ak:realm:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$'::text)),
     CONSTRAINT agent_principals_controller_authorization_ref_check CHECK ((controller_authorization_ref ~~ (id || '#%'::text))),
     CONSTRAINT agent_principals_agent_slug_check CHECK ((agent_slug IS NULL) OR ((char_length(agent_slug) BETWEEN 1 AND 64) AND (octet_length(agent_slug) <= 256) AND (agent_slug !~ '[[:space:][:cntrl:]]'::text) AND (strpos(agent_slug, ':'::text) = 0) AND (strpos(agent_slug, '@'::text) = 0) AND (strpos(agent_slug, '/'::text) = 0) AND (strpos(agent_slug, '#'::text) = 0) AND (strpos(agent_slug, '?'::text) = 0) AND (strpos(agent_slug, E'\\') = 0))),
-    CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['pending_runtime_key'::text, 'active'::text, 'paused'::text, 'deactivated'::text, 'pairing_expired'::text])))
+    CONSTRAINT agent_principals_state_check CHECK ((state = ANY (ARRAY['active'::text, 'paused'::text, 'deactivated'::text])))
 );
 
 CREATE TABLE public.agent_sidecars (
@@ -882,10 +882,11 @@ BEGIN
           AND NEW.approval_request_id IS NULL THEN
         terminal_reason := CASE
             WHEN NEW.state = 'deactivated' THEN 'deactivated'
-            WHEN NEW.state = 'pairing_expired' THEN 'expired'
             WHEN NEW.authorized_event_ref IS DISTINCT FROM OLD.authorized_event_ref
                  AND NEW.authorized_event_ref IS NOT NULL THEN 'approved'
             WHEN NEW.pairing_request_id IS DISTINCT FROM OLD.pairing_request_id THEN 'renewed'
+            WHEN NEW.pairing_expires_at IS NOT NULL
+                 AND NEW.pairing_expires_at <= NEW.updated_at THEN 'expired'
             ELSE 'superseded'
         END;
         delta_action := 'remove';
