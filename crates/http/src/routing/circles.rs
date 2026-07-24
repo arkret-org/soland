@@ -38,6 +38,7 @@ use arkret_models_collaboration::governance::circle::{
     CircleScopeRotateRequestBody, CircleState, CircleSymbol, CircleView, EncryptionFloor,
 };
 use arkret_wire::{EncryptionProfile, Event, HistoryVisibility};
+use salvo::oapi::endpoint;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde::Serialize;
@@ -401,7 +402,7 @@ fn mls_event_group_ref(payload: &std::collections::BTreeMap<String, Value>) -> O
 
 // ── Handlers ────────────────────────────────────────────────────────────
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.query.list", summary = "List circles", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.query.list"))]
 async fn list_circles(
     aa: AuthArgs,
@@ -424,7 +425,7 @@ async fn list_circles(
     json_ok(CircleList { realm_id, circles })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.resource.get", summary = "Get one circle", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.resource.get"))]
 async fn get_circle(
     aa: AuthArgs,
@@ -451,7 +452,7 @@ async fn get_circle(
     )?)
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.command.create", summary = "Create a circle", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.create"))]
 async fn post_circle(
     aa: AuthArgs,
@@ -492,7 +493,7 @@ async fn post_circle(
     )?)
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.member.command.add", summary = "Add a circle member", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.command.add"))]
 async fn post_circle_member(
     aa: AuthArgs,
@@ -599,7 +600,7 @@ async fn post_circle_member(
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.member.resource.delete", summary = "Remove a circle member", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.member.resource.delete"))]
 async fn delete_circle_member(
     aa: AuthArgs,
@@ -651,7 +652,7 @@ async fn delete_circle_member(
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.command.rotate_scope", summary = "Rotate a circle's scope", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.rotate_scope"))]
 async fn post_scope_rotate(
     aa: AuthArgs,
@@ -732,7 +733,7 @@ async fn post_scope_rotate(
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.command.archive", summary = "Archive a circle", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.archive"))]
 async fn post_circle_archive(
     aa: AuthArgs,
@@ -750,7 +751,7 @@ async fn post_circle_archive(
     .await
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.command.restore", summary = "Restore a circle", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.restore"))]
 async fn post_circle_restore(
     aa: AuthArgs,
@@ -768,7 +769,7 @@ async fn post_circle_restore(
     .await
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.circle.command.tombstone", summary = "Tombstone a circle", tags("circles"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.circle.command.tombstone"))]
 async fn post_circle_tombstone(
     aa: AuthArgs,
