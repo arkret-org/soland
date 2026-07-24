@@ -22,6 +22,7 @@ use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::ids;
 use crate::state::AppState;
@@ -35,7 +36,7 @@ pub(crate) fn router() -> Router {
     )
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RealmPolicyServerOutcome {
     pub realm_id: String,
     pub policy_server_did: String,
@@ -49,7 +50,7 @@ pub struct RealmPolicyServerOutcome {
     pub from_org_fallback: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct PutRealmPolicyServerRequestBody {
     pub policy_server_did: String,
     pub policy_server_url: String,
@@ -62,7 +63,7 @@ pub struct PutRealmPolicyServerRequestBody {
     pub on_timeout: Option<String>,
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.realm_policy_server.resource.get", summary = "Get a realm's policy server config", tags("realm_policy_server"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.get"))]
 async fn get_realm_policy_server(
     aa: AuthArgs,
@@ -91,7 +92,7 @@ async fn get_realm_policy_server(
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.realm_policy_server.resource.replace", summary = "Replace a realm's policy server config", tags("realm_policy_server"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.replace"))]
 async fn put_realm_policy_server(
     aa: AuthArgs,
@@ -156,7 +157,7 @@ async fn put_realm_policy_server(
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.realm_policy_server.resource.delete", summary = "Delete a realm's policy server config", tags("realm_policy_server"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_policy_server.resource.delete"))]
 async fn delete_realm_policy_server(
     aa: AuthArgs,

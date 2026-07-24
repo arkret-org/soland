@@ -25,5 +25,5 @@ pub fn empty_ok() -> EmptyResult {
 }
 
 /// Marker response type used by [`empty_ok`].
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct EmptyOutcome {}
