@@ -422,6 +422,7 @@ dependencies = [
  "arkret-canonical",
  "arkret-wire",
  "chrono",
+ "salvo-oapi",
  "serde",
  "serde_json",
  "sha2 0.11.0",

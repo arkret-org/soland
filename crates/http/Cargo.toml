@@ -38,7 +38,7 @@ arkret-models-collaboration = { workspace = true, features = ["openapi"] }
 arkret-models-discovery.workspace = true
 arkret-models-integration.workspace = true
 arkret-models-crypto.workspace = true
-arkret-models-identity.workspace = true
+arkret-models-identity = { workspace = true, features = ["openapi"] }
 arkret-policy.workspace = true
 arkret-push-policy.workspace = true
 arkret-rate-limit.workspace = true
