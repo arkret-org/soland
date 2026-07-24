@@ -1,4 +1,5 @@
 use super::*;
+use salvo::oapi::endpoint;
 
 const AGENT_PROVISION_ALLOCATION_TTL_HOURS: i64 = 24;
 
@@ -83,7 +84,11 @@ async fn require_agent_provision_allocation(
     Ok(allocation)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.command.provision",
+    summary = "Provision an agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.provision"))]
 pub(super) async fn provision_agent(
     aa: AuthArgs,
@@ -460,7 +465,11 @@ pub(super) async fn provision_agent(
 ///   (reason=`superseded_by_repairing`) in the pair transaction. The controller resumes explicitly.
 ///
 /// `active` must transition to `paused` first; `deactivated` is terminal.
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.command.renew_pairing",
+    summary = "Renew an agent's pairing",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.renew_pairing"))]
 pub(super) async fn renew_agent_pairing(
     aa: AuthArgs,
@@ -613,7 +622,11 @@ pub(super) async fn renew_agent_pairing(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.query.list",
+    summary = "List agents",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.query.list"))]
 pub(super) async fn list_agents(
     aa: AuthArgs,
@@ -645,7 +658,11 @@ pub(super) async fn list_agents(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.resource.get",
+    summary = "Get one agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.resource.get"))]
 pub(super) async fn get_agent(
     aa: AuthArgs,
@@ -946,7 +963,11 @@ fn controller_sidecar_circles_since(
         .collect()
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.command.pause",
+    summary = "Pause an agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.pause"))]
 pub(super) async fn pause_agent(
     aa: AuthArgs,
@@ -973,7 +994,11 @@ pub(super) async fn pause_agent(
     )
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.command.resume",
+    summary = "Resume an agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.resume"))]
 pub(super) async fn resume_agent(
     aa: AuthArgs,
@@ -1005,7 +1030,11 @@ pub(super) async fn resume_agent(
     )
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.command.deactivate",
+    summary = "Deactivate an agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.command.deactivate"))]
 pub(super) async fn deactivate_agent(
     aa: AuthArgs,
@@ -1032,7 +1061,11 @@ pub(super) async fn deactivate_agent(
     )
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.grant.command.attach",
+    summary = "Attach a grant to an agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.command.attach"))]
 pub(super) async fn attach_agent_grant(
     aa: AuthArgs,
@@ -1091,7 +1124,11 @@ pub(super) async fn attach_agent_grant(
     json_ok(AgentGrantAttachOutcome { ok: true, grant_id })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.grant.resource.delete",
+    summary = "Detach a grant from an agent",
+    tags("agents")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.grant.resource.delete"))]
 pub(super) async fn detach_agent_grant(
     aa: AuthArgs,

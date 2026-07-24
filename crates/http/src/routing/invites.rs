@@ -44,6 +44,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_http::util::sha256_hex;
 
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
@@ -128,7 +129,7 @@ fn locator_issue_outcome(
     })
 }
 
-#[handler]
+#[endpoint(summary = "Issue an invite locator", tags("invites"))]
 async fn issue_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -158,7 +159,7 @@ async fn issue_invite_locator(
     }
 }
 
-#[handler]
+#[endpoint(summary = "Rotate an invite locator", tags("invites"))]
 async fn rotate_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -192,7 +193,7 @@ async fn rotate_invite_locator(
     json_ok(locator_issue_outcome(&record, token)?)
 }
 
-#[handler]
+#[endpoint(summary = "Revoke an invite locator", tags("invites"))]
 async fn revoke_invite_locator(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -221,7 +222,11 @@ async fn revoke_invite_locator(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.peer.invites.command.submit",
+    summary = "Submit a peer invite delivery",
+    tags("invites")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.invites.command.submit"))]
 async fn peer_invites_submit(
     depot: &mut Depot,
@@ -389,7 +394,11 @@ async fn peer_invites_submit(
     json_ok(outcome)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.open.invite_locator.query.resolve",
+    summary = "Resolve an invite locator",
+    tags("invites")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.open.invite_locator.query.resolve"))]
 async fn resolve_invite_locator(
     depot: &mut Depot,

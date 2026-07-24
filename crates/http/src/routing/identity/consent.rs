@@ -22,6 +22,7 @@ use soland_services::identity::{AccountDataState, ConsentCellRecord, FindAccount
 use soland_http::error::AppError;
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
@@ -102,7 +103,11 @@ async fn project_consent_revoke_operation(
     Ok(())
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.consent.query.list",
+    summary = "List consent cells",
+    tags("consent")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.query.list"))]
 async fn list_consent_cells(
     aa: AuthArgs,
@@ -127,7 +132,11 @@ async fn list_consent_cells(
     json_ok(ConsentCellList { ok: true, cells })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.consent.resource.get",
+    summary = "Get one consent cell",
+    tags("consent")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.resource.get"))]
 async fn get_consent_cell(
     aa: AuthArgs,
@@ -158,7 +167,11 @@ async fn get_consent_cell(
     json_ok(consent_response(&cell, now())?)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.consent.command.grant",
+    summary = "Grant a consent cell",
+    tags("consent")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.grant"))]
 async fn grant_consent_cell(
     aa: AuthArgs,
@@ -199,7 +212,11 @@ async fn grant_consent_cell(
     json_ok(consent_response(&updated, now())?)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.consent.command.revoke",
+    summary = "Revoke a consent cell",
+    tags("consent")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.revoke"))]
 async fn revoke_consent_cell(
     aa: AuthArgs,
@@ -249,7 +266,11 @@ async fn revoke_consent_cell(
     json_ok(consent_response(&updated, now())?)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.consent.command.request",
+    summary = "Request consent from a peer",
+    tags("consent")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.consent.command.request"))]
 async fn request_consent_cell(
     aa: AuthArgs,

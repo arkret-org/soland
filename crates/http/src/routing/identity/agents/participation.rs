@@ -1,4 +1,5 @@
 use super::*;
+use salvo::oapi::endpoint;
 
 pub(super) fn participation_scope_kind(scope: &AgentParticipationScope) -> &'static str {
     match scope {
@@ -40,7 +41,11 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
         .with_wire_code(reason)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.participation.resource.replace",
+    summary = "Replace an agent's participation policy",
+    tags("agent_participation")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.replace"))]
 pub(super) async fn set_agent_participation(
     aa: AuthArgs,
@@ -237,7 +242,11 @@ pub(super) fn normalize_sidecar_exposure_ack(
         .map_err(|err| AppError::internal(format!("sidecar_exposure_ack serialize failed: {err}")))
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.agent.participation.resource.get",
+    summary = "Get an agent's participation policy",
+    tags("agent_participation")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.get"))]
 pub(super) async fn get_agent_participation(
     aa: AuthArgs,

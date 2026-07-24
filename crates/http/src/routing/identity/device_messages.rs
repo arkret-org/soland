@@ -22,6 +22,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{SyncCursorError, now, parse_and_validate_sync_cursor, sync_token_for_client_sync};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
@@ -62,7 +63,11 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("device_messages/ack").post(ack_device_messages))
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.device_messages.command.send",
+    summary = "Send device-to-device messages",
+    tags("device_messages")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.send"))]
 async fn send_device_messages(
     aa: AuthArgs,
@@ -365,7 +370,11 @@ pub(crate) async fn fanout_actor_private_update(
     delivered
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.device_messages.query.list",
+    summary = "List pending device messages",
+    tags("device_messages")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.query.list"))]
 async fn get_device_messages(
     aa: AuthArgs,
@@ -494,7 +503,11 @@ async fn get_device_messages(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.device_messages.command.ack",
+    summary = "Acknowledge received device messages",
+    tags("device_messages")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.device_messages.command.ack"))]
 async fn ack_device_messages(
     aa: AuthArgs,

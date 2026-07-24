@@ -1,6 +1,7 @@
 use base64::Engine as _;
 
 use super::*;
+use salvo::oapi::endpoint;
 
 const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]";
 const CONTACT_CONSENT_ACTION_SCOPES: &[&str] = &[
@@ -28,7 +29,11 @@ pub(crate) use direct::{
     validate_direct_binding_operation,
 };
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.contact.command.request",
+    summary = "Send a contact request",
+    tags("contacts")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.request"))]
 pub(crate) async fn contact_request(
     aa: AuthArgs,
@@ -382,7 +387,11 @@ async fn append_contact_fact_projection_event(
     .await;
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.contact.command.respond",
+    summary = "Respond to a contact request",
+    tags("contacts")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.respond"))]
 pub(crate) async fn contact_respond(
     aa: AuthArgs,
@@ -553,7 +562,11 @@ pub(crate) async fn contact_respond(
     json_ok(contact_respond_outcome(&contact, consent_grant_refs)?)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.contact.command.tombstone",
+    summary = "Tombstone a contact",
+    tags("contacts")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.command.tombstone"))]
 pub(crate) async fn contact_tombstone(
     aa: AuthArgs,
@@ -771,7 +784,11 @@ fn blocked_invite_policy_update(
     Some(policy)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.invite_receive_policy.resource.get",
+    summary = "Get the invite receive policy",
+    tags("contacts")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.invite_receive_policy.resource.get"))]
 pub(crate) async fn get_invite_receive_policy(
     aa: AuthArgs,
@@ -791,7 +808,11 @@ pub(crate) async fn get_invite_receive_policy(
     json_ok(policy)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.invite_receive_policy.resource.replace",
+    summary = "Replace the invite receive policy",
+    tags("contacts")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.self.invite_receive_policy.resource.replace")
@@ -827,7 +848,11 @@ pub(crate) async fn set_invite_receive_policy(
     json_ok(policy)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.contact.query.list",
+    summary = "List contacts",
+    tags("contacts")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.contact.query.list"))]
 pub(crate) async fn list_contacts(
     aa: AuthArgs,

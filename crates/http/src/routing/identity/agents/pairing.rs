@@ -1,6 +1,11 @@
 use super::*;
+use salvo::oapi::endpoint;
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.open.agent_pairing.query.resolve",
+    summary = "Resolve an agent pairing bootstrap",
+    tags("agent_pairing")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.open.agent_pairing.query.resolve"))]
 pub(super) async fn resolve_agent_pairing(
     depot: &mut Depot,
@@ -57,7 +62,11 @@ pub(super) async fn resolve_agent_pairing(
     json_ok(bootstrap)
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.open.agent_pairing.command.submit_runtime_key_request",
+    summary = "Submit an agent runtime key request",
+    tags("agent_pairing")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.open.agent_pairing.command.submit_runtime_key_request")
@@ -232,7 +241,11 @@ pub(super) async fn submit_agent_runtime_key_request(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.open.agent_pairing.query.runtime_key_request_status",
+    summary = "Get an agent runtime key request status",
+    tags("agent_pairing")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.open.agent_pairing.query.runtime_key_request_status")
@@ -496,7 +509,11 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.gate.account.command.pair_agent_key",
+    summary = "Pair an agent device key",
+    tags("agent_pairing")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.pair_agent_key"))]
 pub(super) async fn agent_key_pair(
     aa: AuthArgs,

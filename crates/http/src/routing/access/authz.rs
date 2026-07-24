@@ -30,6 +30,7 @@ use soland_http::result::{JsonResult, json_ok};
 
 use super::{now, query_param};
 use crate::authz::{Constraint, GrantDecisionVerdict};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use crate::routing::spaces::space::realm_has_member_by_id;
 use crate::routing::system::extract::AuthArgs;
@@ -43,7 +44,11 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("authz/invites").get(invites))
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.authz.query.check",
+    summary = "Evaluate an authorization decision",
+    tags("authz")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.query.check"))]
 async fn authz_check(
     aa: AuthArgs,
