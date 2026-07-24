@@ -275,7 +275,10 @@ async fn materialize_realm_control(
         );
     }
 
-    for record in &realm_records {
+    // The query is newest-first, while FSM transitions across distinct Seal
+    // bases must be reduced in causal acceptance order. Move digests are
+    // content hashes and therefore cannot be used as transition ordering.
+    for record in realm_records.iter().rev() {
         if quarantined_digests.contains(&record.canonical_digest) {
             continue;
         }
@@ -375,8 +378,7 @@ async fn materialize_realm_control(
     }
 
     let mut joined = BTreeMap::new();
-    for (cell, mut ops) in ops_by_cell {
-        ops.sort_by(|left, right| right.move_id.as_str().cmp(left.move_id.as_str()));
+    for (cell, ops) in ops_by_cell {
         let binding = state
             .projections()
             .resolve_cell(realm_id, &cell)

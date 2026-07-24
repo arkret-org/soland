@@ -22,7 +22,44 @@ async fn authorize_account_device_pair(
     session: &SessionRecord,
     body: AccountDevicePairRequestBody,
 ) -> Result<AccountDevicePairOutcome, AppError> {
-    ensure_authorizing_device_verified(state, session).await?;
+    let authorizing_device = ensure_authorizing_device_verified(state, session).await?;
+    let active_generation = crate::routing::identity::device_generation::current_device_generation(
+        state,
+        &session.actor,
+    )
+    .await
+    .map_err(|error| AppError::internal(error.to_string()))?
+    .filter(|generation| {
+        generation.status
+            == crate::routing::identity::device_generation::DeviceGenerationStatus::Active
+    });
+    let generation_projection = active_generation
+        .as_ref()
+        .map(|generation| {
+            let authorizer_generation = authorizing_device
+                .payload
+                .get("authorized_generation_ref")
+                .and_then(Value::as_str);
+            if authorizer_generation != Some(generation.current_ref.as_str()) {
+                return Err(AppError::capability_denied(
+                    "authorizing device is outside the active device generation",
+                )
+                .with_wire_code("device_not_authorized"));
+            }
+            let binding = authorizing_device
+                .payload
+                .get("enrollment_authority_binding")
+                .filter(|binding| binding.is_object())
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::capability_denied(
+                        "authorizing device has no enrollment authority binding",
+                    )
+                    .with_wire_code("device_not_authorized")
+                })?;
+            Ok((generation.current_ref.clone(), binding))
+        })
+        .transpose()?;
     let pairing_code = body.pairing_code.as_str().trim();
     if pairing_code.is_empty() {
         return Err(AppError::missing_param("pairing_code is required"));
@@ -74,6 +111,35 @@ async fn authorize_account_device_pair(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
+    let mut device_payload = json!({
+        "device_id": device_id.clone(),
+        "device_public_key": pair_pubkey.device_public_key.clone(),
+        "device_authorize_projected": true,
+        "device_authorize_event_id": authorized_event_ref.clone(),
+        "authorization": {
+            "event_kind": "ak.device.authorize",
+            "authorized_event_ref": authorized_event_ref.clone(),
+            "authorized_by_device_id": session.device_id.clone(),
+            "authorized_at": authorized_at,
+            "pairing_code": pairing_code,
+            "challenge_signature": body.challenge_signature,
+            "new_device_pubkey": body.new_device_pubkey,
+            "device_public_key": pair_pubkey.device_public_key,
+            "device_metadata": body.device_metadata,
+        }
+    });
+    if let Some((generation_ref, enrollment_binding)) = generation_projection
+        && let Some(payload) = device_payload.as_object_mut()
+    {
+        payload.insert(
+            "authorized_generation_ref".to_owned(),
+            Value::String(generation_ref),
+        );
+        payload.insert(
+            "enrollment_authority_binding".to_owned(),
+            enrollment_binding,
+        );
+    }
     let device = soland_services::identity::SaveDeviceCommand {
         actor_id: session.actor.clone(),
         device_id: device_id.clone(),
@@ -83,23 +149,7 @@ async fn authorize_account_device_pair(
             device_id: device_id.clone(),
             display_name: display_name.clone(),
             verification_state: "verified".to_owned(),
-            payload: json!({
-                "device_id": device_id.clone(),
-                "device_public_key": pair_pubkey.device_public_key.clone(),
-                "device_authorize_projected": true,
-                "device_authorize_event_id": authorized_event_ref.clone(),
-                "authorization": {
-                    "event_kind": "ak.device.authorize",
-                    "authorized_event_ref": authorized_event_ref.clone(),
-                    "authorized_by_device_id": session.device_id.clone(),
-                    "authorized_at": authorized_at,
-                    "pairing_code": pairing_code,
-                    "challenge_signature": body.challenge_signature,
-                    "new_device_pubkey": body.new_device_pubkey,
-                    "device_public_key": pair_pubkey.device_public_key,
-                    "device_metadata": body.device_metadata,
-                }
-            }),
+            payload: device_payload,
             created_at: authorized_at,
             updated_at: authorized_at,
             revoked_at: None,
@@ -176,7 +226,7 @@ pub(crate) fn initial_session_device_verification_state<'a>(
 async fn ensure_authorizing_device_verified(
     state: &AppState,
     session: &SessionRecord,
-) -> Result<(), AppError> {
+) -> Result<soland_services::identity::DeviceIdentity, AppError> {
     let device = state
         .identities()
         .find_device(soland_services::identity::FindDeviceQuery {
@@ -195,7 +245,7 @@ async fn ensure_authorizing_device_verified(
                 .with_wire_code("device_not_authorized"),
         );
     }
-    Ok(())
+    Ok(device)
 }
 
 struct PairPubkeyMaterial {
