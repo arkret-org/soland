@@ -42,6 +42,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::{AuthArgs, accept_local_operations};
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use crate::ids;
 use crate::routing::organizations;
@@ -90,7 +91,11 @@ fn realm_link_entry_from(row: &RealmLinkState) -> Result<RealmLinkEntry, AppErro
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm_link.query.list",
+    summary = "List typed cross-Realm links",
+    tags("realm_links")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.list"))]
 pub(crate) async fn list_realm_links(
     aa: AuthArgs,
@@ -147,7 +152,11 @@ pub(crate) async fn list_realm_links(
 /// `arkret_wire::events::EventKind::REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (FSM, kind validation, self-reference rejection) all run.
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm_link.command.create",
+    summary = "Create a cross-Realm link",
+    tags("realm_links")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.command.create"))]
 async fn post_realm_link(
     aa: AuthArgs,
@@ -226,7 +235,11 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 /// `link_kind` is sourced from the `link_kind` query param; defaults
 /// to `governed_by` (the most common case — admin tooling cleaning up
 /// a governance link).
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm_link.resource.delete",
+    summary = "Tombstone a cross-Realm link",
+    tags("realm_links")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.resource.delete"))]
 async fn delete_realm_link(
     aa: AuthArgs,
@@ -310,7 +323,11 @@ async fn delete_realm_link(
 /// realm has not projected a `ak.realm.inheritance_policy` — the
 /// `effective_policy` collapses to the realm's own local policy in
 /// that case.
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm_link.query.effective_policy",
+    summary = "Get a realm's merged effective policy",
+    tags("realm_links")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_link.query.effective_policy"))]
 async fn get_effective_policy(
     aa: AuthArgs,

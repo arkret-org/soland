@@ -29,6 +29,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::AuthArgs;
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::PathParam;
 use crate::state::AppState;
 
@@ -45,7 +46,11 @@ fn de_str<T: DeserializeOwned>(field: &str, value: &str) -> Result<T, AppError> 
         .map_err(|e| AppError::internal(format!("invalid projected {field} '{value}': {e}")))
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "ak.self.realm_organization.query.list",
+    summary = "List a realm's organization relationships",
+    tags("realm_organizations")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm_organization.query.list"))]
 pub(crate) async fn list_realm_organizations(
     aa: AuthArgs,
