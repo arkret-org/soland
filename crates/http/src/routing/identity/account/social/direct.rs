@@ -2069,9 +2069,22 @@ pub(super) async fn claim_direct_keypackage(
             ),
             _ => error,
         })?;
+    // Surface the underlying claim reason (notably `mls_keypackage_not_found`)
+    // instead of collapsing every empty-pool case to an opaque detail. This is
+    // the actionable signal that the peer Agent's runtime has not published an
+    // E2EE KeyPackage pool yet — the direct-conversation counterpart of the
+    // `mls_keypackage_not_found` readiness diagnostic. Extract before consuming
+    // `claims` so the closure does not borrow a partially-moved `outcome`.
+    let reason = outcome
+        .failures
+        .first()
+        .map(|failure| failure.reason_code.clone())
+        .unwrap_or_else(|| "no_claim".to_owned());
+    let available = outcome.available_count.unwrap_or(0);
     outcome.claims.into_iter().next().ok_or_else(|| {
-        direct_conversation_unavailable()
-            .with_private_detail("local KeyPackage claim returned no usable claim")
+        direct_conversation_unavailable().with_private_detail(format!(
+            "local KeyPackage claim returned no usable claim (reason={reason}, available={available})"
+        ))
     })
 }
 

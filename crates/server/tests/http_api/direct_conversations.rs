@@ -816,9 +816,19 @@ async fn direct_resolve_create_requires_claimable_keypackage() {
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
-    assert_eq!(
-        body["error"]["details"]["reason_detail"],
-        "local KeyPackage claim returned no usable claim"
+    let reason_detail = body["error"]["details"]["reason_detail"]
+        .as_str()
+        .expect("reason_detail is a string");
+    assert!(
+        reason_detail.starts_with("local KeyPackage claim returned no usable claim"),
+        "unexpected reason_detail: {reason_detail}"
+    );
+    // The empty local pool must be reported with its underlying claim reason so
+    // the peer-runtime-not-ready case is diagnosable, not collapsed to an opaque
+    // detail.
+    assert!(
+        reason_detail.contains("reason="),
+        "reason_detail should carry the claim reason: {reason_detail}"
     );
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
