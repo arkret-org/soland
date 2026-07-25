@@ -1951,7 +1951,15 @@ async fn revoke_keypackages(
                     })
                     .await
                 {
-                    Ok(Some(_)) => revoked.push(keypackage_id),
+                    Ok(Some(_)) => {
+                        state.projections().mark_key_package_claimed(
+                            &keypackage_id,
+                            "revoked".to_owned(),
+                            revoked_at,
+                            None,
+                        );
+                        revoked.push(keypackage_id);
+                    }
                     Ok(None) => {
                         failures.push(keypackage_ref_failure(
                             keypackage_id,
@@ -2556,6 +2564,7 @@ fn available_keypackage_count(
         .filter(|kp| kp.actor_id == actor_id)
         .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
         .filter(|kp| trust_selector.is_none_or(|selector| selector.matches_keypackage(kp)))
+        .filter(|kp| kp.consumed_at.is_none())
         .filter(|kp| {
             if kp.last_resort {
                 intended_realm_id
@@ -2624,6 +2633,7 @@ fn keypackage_matches_claim(
 ) -> bool {
     kp.actor_id == actor_id
         && (target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str()))
+        && kp.consumed_at.is_none()
         && kp.claimed_by_mls_group_id.as_deref() != Some("revoked")
         && trust_selector.matches_keypackage(kp)
         && kp.lifetime_not_after > now_secs
