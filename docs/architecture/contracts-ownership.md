@@ -7,6 +7,12 @@
 
 | 模块 | 类型 | 所有权 | 已确认消费者 | spec/SDK 对照结论 |
 | --- | --- | --- | --- | --- |
+| `admin::account_localparts` | `AccountLocalpartView` | local contract | Soland、Sodmin | `/_soland/admin` 本地账号映射投影；未命中 spec wire 类型 |
+| `admin::account_localparts` | `AccountLocalpartListOutcome` | local contract | Soland、Sodmin | 部署本地列表 envelope；未命中 spec wire 类型 |
+| `admin::account_localparts` | `AccountLocalpartAddRequestBody` | local contract | Soland、Sodmin | 部署本地管理命令；未命中 spec wire 类型 |
+| `admin::account_localparts` | `AccountLocalpartUpdateRequestBody` | local contract | Soland、Sodmin | 部署本地管理命令；未命中 spec wire 类型 |
+| `admin::account_localparts` | `AccountLocalpartMutationOutcome` | local contract | Soland、Sodmin | 部署本地变更结果；未命中 spec wire 类型 |
+| `admin::account_localparts` | `AccountLocalpartDeleteOutcome` | local contract | Soland、Sodmin | 部署本地删除结果；未命中 spec wire 类型 |
 | `admin::covered_seals` | `CoveredSealsSnapshot` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::covered_seals` | `CoveredSealsAdvanceOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::handles` | `AdminHandleRecord` | local contract | Soland、Sodmin | 部署本地 handle 管理投影；未命中 spec wire 类型 |
@@ -30,6 +36,8 @@
 | `admin::queries` | `AdminDevice` | local contract | Soland、Sodmin | `/_soland/admin` 操作面投影；字段复用 SDK 类型，整体未命中 spec wire 类型 |
 | `admin::queries` | `AdminDeviceList` | local contract | Soland、Sodmin | `/_soland/admin` 操作面列表 envelope；未命中 spec wire 类型 |
 | `admin::seal` | `NotaryKind` | local contract | Soland、Sodmin | SDK 有领域 notary 值，但无此管理面投影视图 |
+| `admin::seal` | `BottomKind` | SDK re-export | Soland、Sodmin | 直接复用 `arkret-wire` 的规范枚举，不在本 crate 重复定义 |
+| `admin::seal` | `BottomKindExt` | local pure helper | Soland、Sodmin | 仅提供产品管理 UI 标签/解析辅助，不改变 SDK wire 枚举 |
 | `admin::seal` | `AdminNotaryValue` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `SelfSignViolation` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `NotaryReconfigRequestBody` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
