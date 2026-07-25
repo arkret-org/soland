@@ -14,29 +14,15 @@ use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use soland_contracts::admin::seal::{MultisigPendingEntry, MultisigPendingOutcome};
+use soland_contracts::admin::seal::{
+    MultisigPendingEntry, MultisigPendingOutcome, PartialSignatureBody, PartialSubmitOutcome,
+    PartialSubmitStatus,
+};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PartialSignatureBody {
-    pub signer_did: String,
-    pub signature_b64: String,
-    pub kid: String,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PartialSubmitOutcome {
-    pub seal_id: String,
-    pub collected: u32,
-    pub threshold: u32,
-    pub status: String, // "collecting" | "aggregated" | "rejected"
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub aggregated_seal_id: Option<String>,
-}
 
 /// `POST /_soland/admin/realms/{realm_id}/multisig/{seal_id}/partial`.
 ///
@@ -138,11 +124,10 @@ pub(crate) async fn admin_submit_multisig_partial(
     let collected = record.partials.len() as u32;
     let threshold = record.threshold_k;
     let status = if collected >= threshold {
-        "aggregated"
+        PartialSubmitStatus::Aggregated
     } else {
-        "collecting"
-    }
-    .to_owned();
+        PartialSubmitStatus::Collecting
+    };
 
     // Best-effort eager aggregation: when threshold is met AND we have the
     // canonical bytes recorded, build a ThresholdAggregator and run

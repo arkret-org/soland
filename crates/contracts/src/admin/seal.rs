@@ -367,6 +367,33 @@ pub struct SealPruneDiagnostics {
     pub kind: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
+pub struct PartialSignatureBody {
+    pub signer_did: String,
+    pub signature_b64: String,
+    pub kid: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
+#[serde(rename_all = "snake_case")]
+pub enum PartialSubmitStatus {
+    Collecting,
+    Aggregated,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
+pub struct PartialSubmitOutcome {
+    pub seal_id: String,
+    pub collected: u32,
+    pub threshold: u32,
+    pub status: PartialSubmitStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aggregated_seal_id: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct MultisigPendingEntry {
@@ -426,4 +453,46 @@ impl BottomKindExt for BottomKind {
 
 pub fn bottom_kind_from_wire(value: &str) -> Option<BottomKind> {
     serde_json::from_value(Value::String(value.to_owned())).ok()
+}
+
+#[cfg(test)]
+mod partial_submit_tests {
+    use super::*;
+
+    #[test]
+    fn partial_submit_contract_uses_closed_status_values() {
+        let outcome = PartialSubmitOutcome {
+            seal_id: "ak:seal:1".to_owned(),
+            collected: 2,
+            threshold: 2,
+            status: PartialSubmitStatus::Aggregated,
+            aggregated_seal_id: Some("ak:seal:2".to_owned()),
+        };
+
+        let value = serde_json::to_value(outcome).unwrap();
+        assert_eq!(value["status"], "aggregated");
+        assert!(
+            serde_json::from_value::<PartialSubmitOutcome>(serde_json::json!({
+                "seal_id": "ak:seal:1",
+                "collected": 1,
+                "threshold": 2,
+                "status": "rejected"
+            }))
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn partial_signature_body_matches_handler_wire_names() {
+        let body = PartialSignatureBody {
+            signer_did: "did:web:admin.example".to_owned(),
+            signature_b64: "abc".to_owned(),
+            kid: "did:web:admin.example#key-1".to_owned(),
+        };
+
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"signer_did":"did:web:admin.example","signature_b64":"abc","kid":"did:web:admin.example#key-1"}"#
+        );
+    }
 }

@@ -53,6 +53,9 @@
 | `admin::seal` | `SealPruneRequestBody` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `SealPruneOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `SealPruneDiagnostics` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
+| `admin::seal` | `PartialSignatureBody` | local contract | Soland、Sodmin | 部署本地 multisig partial 提交命令；未命中 spec wire 类型 |
+| `admin::seal` | `PartialSubmitStatus` | local contract | Soland、Sodmin | 部署本地 multisig partial 聚合状态；未命中 spec wire 类型 |
+| `admin::seal` | `PartialSubmitOutcome` | local contract | Soland、Sodmin | 部署本地 multisig partial 提交结果；未命中 spec wire 类型 |
 | `admin::seal` | `MultisigPendingEntry` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `admin::seal` | `MultisigPendingOutcome` | local contract | Soland、Sodmin | 未命中 spec wire 类型 |
 | `integration::capability_fanout` | `CapabilityFanoutBody` | local contract | Coauth、Soland | 未命中 spec wire 类型 |

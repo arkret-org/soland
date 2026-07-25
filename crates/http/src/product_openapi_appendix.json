@@ -7955,7 +7955,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/soland_http.routing.admin.seal.multisig.PartialSignatureBody"
+                "$ref": "#/components/schemas/soland_contracts.admin.seal.PartialSignatureBody"
               }
             }
           },
@@ -7966,7 +7966,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/soland_http.routing.admin.seal.multisig.PartialSubmitOutcome"
+                  "$ref": "#/components/schemas/soland_contracts.admin.seal.PartialSubmitOutcome"
                 }
               }
             },
@@ -23845,7 +23845,7 @@
         ],
         "type": "object"
       },
-      "soland_http.routing.admin.seal.multisig.PartialSignatureBody": {
+      "soland_contracts.admin.seal.PartialSignatureBody": {
         "properties": {
           "kid": {
             "type": "string"
@@ -23864,7 +23864,7 @@
         ],
         "type": "object"
       },
-      "soland_http.routing.admin.seal.multisig.PartialSubmitOutcome": {
+      "soland_contracts.admin.seal.PartialSubmitOutcome": {
         "properties": {
           "aggregated_seal_id": {
             "type": [
@@ -23881,7 +23881,7 @@
             "type": "string"
           },
           "status": {
-            "type": "string"
+            "$ref": "#/components/schemas/soland_contracts.admin.seal.PartialSubmitStatus"
           },
           "threshold": {
             "format": "uint32",
@@ -23896,6 +23896,13 @@
           "status"
         ],
         "type": "object"
+      },
+      "soland_contracts.admin.seal.PartialSubmitStatus": {
+        "enum": [
+          "collecting",
+          "aggregated"
+        ],
+        "type": "string"
       },
       "soland_http.routing.admin.seal.multisig.RotateSigningKeyOutcome": {
         "description": "This route currently fails closed. Rotating the service signing key is a\nservice-identity transition: the KeyStore write, WebVH update, DID\ndocument, persisted `StoredServiceIdentity`, and recovery bundle must\ncommit as one recoverable operation. The current persistence API cannot\nprovide that transaction, so an in-process or KeyStore-only swap would\npublish a signer that no longer matches the authoritative DID document.",
