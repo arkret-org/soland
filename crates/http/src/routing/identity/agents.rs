@@ -80,7 +80,7 @@ mod dev_fanout;
 use dev_fanout::{
     attach_agent_grant_event, fanout_provision_subevents, materialize_capability_grant,
     require_controller_principal_control_realm, revoke_capability_grant,
-    submit_durable_agent_lifecycle, submit_revoke_agent_grants, submit_revoke_agent_keys,
+    submit_durable_agent_lifecycle, submit_signed_agent_event, validate_durable_agent_lifecycle,
 };
 
 mod common;

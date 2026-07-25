@@ -716,6 +716,7 @@ pub(super) async fn get_agent(
         .filter_map(|grant| {
             Some(GrantSnapshot {
                 grant_id: GrantId::new(grant.grant_id).ok()?,
+                realm_id: RealmId::new(grant.realm_id).ok()?,
                 status: Some("active".to_owned()),
                 grant_digest: None,
                 expires_at: grant.expires_at,
@@ -852,11 +853,10 @@ pub(super) async fn lifecycle_transition(
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
     let previous_status = record.state.clone();
-    // AKP-0008 §4.11 (dev option B): drive the FSM reducer with the durable
-    // `ak.self.agent.{pause,resume,deactivate}` event authored as the Agent
-    // and executed/signed by its controller, and on deactivate fan-out the revocation chain
-    // (`ak.agent.key.revoke` + `ak.capability.revoke` for every grant the
-    // agent holds). Production fails closed above.
+    // Drive the FSM reducer with the exact durable
+    // `ak.self.agent.{pause,resume,deactivate}` Event authored as the Agent and
+    // executed/signed by its controller. Deactivate revocations are admitted
+    // and rechecked by the endpoint before it calls this transition.
     let realm = record.principal_control_realm_id.clone();
     let authorization_ref = record.controller_authorization_ref.clone();
     submit_durable_agent_lifecycle(
@@ -872,26 +872,6 @@ pub(super) async fn lifecycle_transition(
         lifecycle_event,
     )
     .await?;
-    if event_kind == "ak.self.agent.deactivate" {
-        let (key_ids, grant_locations) = {
-            let proj = state.projections().snapshot();
-            (
-                proj.authorized_key_ids_for(&agent_id),
-                proj.unrevoked_grant_locations_for_subject(&agent_id),
-            )
-        };
-        submit_revoke_agent_keys(
-            state,
-            &session,
-            &realm,
-            &agent_id,
-            &authorization_ref,
-            &key_ids,
-            None,
-        )
-        .await?;
-        submit_revoke_agent_grants(state, &session, &grant_locations).await?;
-    }
     // Persist the lifecycle state transition on the agent_principal row so
     // list/get reflect the new status (the durable event drives the reducer
     // FSM; this row is the read-side projection consumed by the HTTP API).
@@ -1036,21 +1016,215 @@ pub(super) async fn deactivate_agent(
     req: &mut Request,
 ) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let agent_id = agent_id.into_inner();
+    let record = require_agent_controller(state, &session, &agent_id).await?;
     let body = body.into_inner();
+    let reason = body.reason.as_deref();
+
+    validate_durable_agent_lifecycle(
+        &session,
+        &record.principal_control_realm_id,
+        &agent_id,
+        &record.controller_authorization_ref,
+        "ak.self.agent.deactivate",
+        &record.state,
+        reason,
+        None,
+        &body.lifecycle_event,
+    )?;
+
+    let (active_key_ids, active_grant_locations, all_grant_locations) = {
+        let projection = state.projections().snapshot();
+        (
+            projection
+                .authorized_key_ids_for(&agent_id)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            projection
+                .unrevoked_grant_locations_for_subject(&agent_id)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+            projection
+                .grant_locations_for_subject(&agent_id)
+                .into_iter()
+                .collect::<BTreeSet<_>>(),
+        )
+    };
+
+    let mut supplied_key_ids = BTreeSet::new();
+    for event in &body.key_revocation_events {
+        let key_id =
+            validate_agent_key_revocation_event(&session, &record, &agent_id, reason, event)?;
+        if !supplied_key_ids.insert(key_id) {
+            return Err(AppError::invalid_param(
+                "key_revocation_events contains a duplicate key_id",
+            ));
+        }
+    }
+    let mut supplied_grant_locations = BTreeSet::new();
+    for event in &body.capability_revocation_events {
+        let location = validate_agent_capability_revocation_event(&session, reason, event)?;
+        if !all_grant_locations.contains(&location) {
+            return Err(AppError::capability_denied(
+                "capability_revocation_events contains a grant not held by the Agent",
+            ));
+        }
+        if !supplied_grant_locations.insert(location) {
+            return Err(AppError::invalid_param(
+                "capability_revocation_events contains a duplicate grant",
+            ));
+        }
+    }
+    require_deactivation_revocation_coverage(
+        &active_key_ids,
+        &supplied_key_ids,
+        &active_grant_locations,
+        &supplied_grant_locations,
+    )?;
+
+    for event in body.key_revocation_events {
+        submit_signed_agent_event(state, &session, event).await?;
+    }
+    for event in body.capability_revocation_events {
+        submit_signed_agent_event(state, &session, event).await?;
+    }
+
+    let (remaining_key_ids, remaining_grant_locations) = {
+        let projection = state.projections().snapshot();
+        (
+            projection.authorized_key_ids_for(&agent_id),
+            projection.unrevoked_grant_locations_for_subject(&agent_id),
+        )
+    };
+    if !remaining_key_ids.is_empty() || !remaining_grant_locations.is_empty() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "Agent revocations were not fully projected; deactivation remains non-terminal",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("agent_deactivation_revocations_incomplete"));
+    }
+
     json_ok(
         lifecycle_transition(
             state,
             &aa,
             req,
-            agent_id.into_inner(),
+            agent_id,
             AgentLifecycleState::Deactivated,
             "ak.self.agent.deactivate",
             body.reason,
             None,
-            None,
+            Some(body.lifecycle_event),
         )
         .await?,
     )
+}
+
+fn validate_agent_key_revocation_event(
+    session: &SessionRecord,
+    record: &AgentPrincipalRecord,
+    agent_id: &str,
+    reason: Option<&str>,
+    event: &arkret_wire::Event,
+) -> Result<String, AppError> {
+    if event.kind.as_str() != "ak.agent.key.revoke"
+        || event.realm_id.as_str() != record.principal_control_realm_id
+        || event.actor_id.as_str() != agent_id
+        || event
+            .executed_by
+            .as_ref()
+            .map(arkret_identifiers::Did::as_str)
+            != Some(session.actor.as_str())
+        || event.authorization_ref.as_deref() != Some(record.controller_authorization_ref.as_str())
+    {
+        return Err(AppError::capability_denied(
+            "key_revocation_events does not match the managed Agent controller binding",
+        ));
+    }
+    if event.proofs.is_empty() {
+        return Err(
+            AppError::invalid_param("key_revocation_events must carry a controller proof")
+                .with_wire_code("controller_signed_event_required"),
+        );
+    }
+    if event.payload.get("agent_id").and_then(Value::as_str) != Some(agent_id)
+        || event.payload.get("revoked_by").and_then(Value::as_str) != Some(session.actor.as_str())
+        || event.payload.get("reason").and_then(Value::as_str) != reason
+    {
+        return Err(AppError::invalid_param(
+            "key_revocation_events payload does not match the requested deactivation",
+        ));
+    }
+    event
+        .payload
+        .get("key_id")
+        .and_then(Value::as_str)
+        .filter(|key_id| !key_id.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| AppError::invalid_param("key_revocation_events key_id is required"))
+}
+
+fn validate_agent_capability_revocation_event(
+    session: &SessionRecord,
+    reason: Option<&str>,
+    event: &arkret_wire::Event,
+) -> Result<(String, String), AppError> {
+    if event.kind.as_str() != "ak.capability.revoke"
+        || event.actor_id.as_str() != session.actor
+        || event.executed_by.is_some()
+        || event.authorization_ref.is_some()
+    {
+        return Err(AppError::capability_denied(
+            "capability_revocation_events must be authored by the authenticated controller",
+        ));
+    }
+    if event.proofs.is_empty() {
+        return Err(AppError::invalid_param(
+            "capability_revocation_events must carry a controller proof",
+        )
+        .with_wire_code("controller_signed_event_required"));
+    }
+    if event.payload.get("reason").and_then(Value::as_str) != reason {
+        return Err(AppError::invalid_param(
+            "capability_revocation_events reason does not match the deactivation request",
+        ));
+    }
+    let grant_id = event
+        .payload
+        .get("grant_id")
+        .and_then(Value::as_str)
+        .filter(|grant_id| !grant_id.is_empty())
+        .ok_or_else(|| {
+            AppError::invalid_param("capability_revocation_events grant_id is required")
+        })?;
+    Ok((grant_id.to_owned(), event.realm_id.to_string()))
+}
+
+fn require_deactivation_revocation_coverage(
+    active_key_ids: &BTreeSet<String>,
+    supplied_key_ids: &BTreeSet<String>,
+    active_grant_locations: &BTreeSet<(String, String)>,
+    supplied_grant_locations: &BTreeSet<(String, String)>,
+) -> Result<(), AppError> {
+    if !active_key_ids.is_subset(supplied_key_ids) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "key_revocation_events does not cover every active Agent key",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("agent_deactivation_revocations_incomplete"));
+    }
+    if !active_grant_locations.is_subset(supplied_grant_locations) {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "capability_revocation_events does not cover every unrevoked Agent grant",
+        )
+        .with_status(StatusCode::PRECONDITION_FAILED)
+        .with_reason_code("agent_deactivation_revocations_incomplete"));
+    }
+    Ok(())
 }
 
 #[endpoint(
@@ -1172,4 +1346,64 @@ pub(super) async fn detach_agent_grant(
         ok: true,
         revoked_at,
     })
+}
+
+#[cfg(test)]
+mod deactivation_tests {
+    use super::*;
+
+    #[test]
+    fn revocation_coverage_rejects_missing_active_key() {
+        let active_keys = BTreeSet::from(["runtime-key-1".to_owned()]);
+        let error = require_deactivation_revocation_coverage(
+            &active_keys,
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.wire_code(), "failed_precondition");
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some("agent_deactivation_revocations_incomplete")
+        );
+    }
+
+    #[test]
+    fn revocation_coverage_rejects_missing_unrevoked_grant() {
+        let location = (
+            "ak:grant:019f9700-0000-7000-8000-000000000001".to_owned(),
+            "ak:realm:019f9700-0000-7000-8000-000000000002".to_owned(),
+        );
+        let error = require_deactivation_revocation_coverage(
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+            &BTreeSet::from([location]),
+            &BTreeSet::new(),
+        )
+        .unwrap_err();
+
+        assert_eq!(error.wire_code(), "failed_precondition");
+    }
+
+    #[test]
+    fn revocation_coverage_accepts_complete_or_replayed_superset() {
+        let active_keys = BTreeSet::from(["runtime-key-1".to_owned()]);
+        let supplied_keys =
+            BTreeSet::from(["runtime-key-1".to_owned(), "already-revoked-key".to_owned()]);
+        let active_grants = BTreeSet::from([(
+            "ak:grant:019f9700-0000-7000-8000-000000000001".to_owned(),
+            "ak:realm:019f9700-0000-7000-8000-000000000002".to_owned(),
+        )]);
+        let supplied_grants = active_grants.clone();
+
+        require_deactivation_revocation_coverage(
+            &active_keys,
+            &supplied_keys,
+            &active_grants,
+            &supplied_grants,
+        )
+        .unwrap();
+    }
 }

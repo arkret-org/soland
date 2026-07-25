@@ -46,24 +46,6 @@ pub(super) async fn submit_agent_fanout_event(
     )
 }
 
-/// Development-only delegated authoring for control facts that belong to the
-/// Agent principal. The controller is the proof signer/executor; the Agent is
-/// the principal of record and therefore owns actor_seq and the PCR stream.
-async fn submit_managed_agent_control_event(
-    _state: &AppState,
-    _session: &SessionRecord,
-    _realm_id: &str,
-    _agent_id: &str,
-    _authorization_ref: &str,
-    _kind: &str,
-    _payload: Value,
-) -> Result<String, AppError> {
-    Err(
-        AppError::unsupported_feature("operation requires a controller-signed delegated SDK Event")
-            .with_wire_code("controller_signed_event_required"),
-    )
-}
-
 fn agent_fanout_submit_error(
     kind: &str,
     status: salvo::http::StatusCode,
@@ -448,8 +430,8 @@ pub(super) async fn revoke_capability_grant(
 
 /// AKP-0008 §4.11 — submit a durable lifecycle transition event
 /// (`ak.self.agent.{pause,resume,deactivate}`) driving the FSM reducer.
-pub(super) async fn submit_durable_agent_lifecycle(
-    state: &AppState,
+#[allow(clippy::too_many_arguments)]
+pub(super) fn validate_durable_agent_lifecycle(
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
@@ -458,8 +440,8 @@ pub(super) async fn submit_durable_agent_lifecycle(
     previous_status: &str,
     reason: Option<&str>,
     sidecar_exposure_ack: Option<&Value>,
-    event: Event,
-) -> Result<String, AppError> {
+    event: &Event,
+) -> Result<(), AppError> {
     let (transition, next_status) = match event_kind {
         "ak.self.agent.pause" => ("pause", "paused"),
         "ak.self.agent.resume" => ("resume", "active"),
@@ -517,67 +499,54 @@ pub(super) async fn submit_durable_agent_lifecycle(
             "lifecycle_event must carry the exact Agent status transition effect",
         ));
     }
+    Ok(())
+}
+
+/// Submit an already validated, controller-signed Event through ordinary Event
+/// admission while preserving the reducer's wire error.
+pub(super) async fn submit_signed_agent_event(
+    state: &AppState,
+    session: &SessionRecord,
+    event: Event,
+) -> Result<String, AppError> {
+    let event_kind = event.kind.as_str().to_owned();
     let envelope = serde_json::to_value(&event)
-        .map_err(|error| AppError::invalid_param(format!("lifecycle_event invalid: {error}")))?;
+        .map_err(|error| AppError::invalid_param(format!("signed Event invalid: {error}")))?;
     submit_event_value(state, session, envelope)
         .await
         .map_err(|error| {
-            agent_fanout_submit_error(event_kind, error.status, error.code, error.message)
+            agent_fanout_submit_error(&event_kind, error.status, error.code, error.message)
         })?;
     Ok(event.event_id.to_string())
 }
 
-/// AKP-0008 §4.11 — fan-out `ak.agent.key.revoke` for the agent's authorized
-/// key(s) on deactivate. An Agent with no accepted key needs no synthetic
-/// tombstone for an invented key id.
-pub(super) async fn submit_revoke_agent_keys(
+/// AKP-0008 §4.11 — submit a durable lifecycle transition event
+/// (`ak.self.agent.{pause,resume,deactivate}`) driving the FSM reducer.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn submit_durable_agent_lifecycle(
     state: &AppState,
     session: &SessionRecord,
     realm_id: &str,
     agent_id: &str,
     authorization_ref: &str,
-    key_ids: &[String],
+    event_kind: &str,
+    previous_status: &str,
     reason: Option<&str>,
-) -> Result<(), AppError> {
-    let revoked_at = arkret_canonical::format_timestamp_canonical(Utc::now());
-    for key_id in key_ids {
-        let mut payload = json!({
-            "agent_id": agent_id,
-            "key_id": key_id,
-            "revoked_by": session.actor.clone(),
-            "revoked_at": revoked_at,
-        });
-        if let Some(reason) = reason {
-            payload
-                .as_object_mut()
-                .expect("payload object")
-                .insert("reason".to_owned(), json!(reason));
-        }
-        submit_managed_agent_control_event(
-            state,
-            session,
-            realm_id,
-            agent_id,
-            authorization_ref,
-            "ak.agent.key.revoke",
-            payload,
-        )
-        .await?;
-    }
-    Ok(())
-}
-
-/// AKP-0008 §4.11 — on deactivate, fan-out `ak.capability.revoke` for every
-/// grant id held by the agent.
-pub(super) async fn submit_revoke_agent_grants(
-    state: &AppState,
-    session: &SessionRecord,
-    grant_locations: &[(String, String)],
-) -> Result<(), AppError> {
-    for (grant_id, realm_id) in grant_locations {
-        revoke_capability_grant(state, session, realm_id, grant_id).await?;
-    }
-    Ok(())
+    sidecar_exposure_ack: Option<&Value>,
+    event: Event,
+) -> Result<String, AppError> {
+    validate_durable_agent_lifecycle(
+        session,
+        realm_id,
+        agent_id,
+        authorization_ref,
+        event_kind,
+        previous_status,
+        reason,
+        sidecar_exposure_ack,
+        &event,
+    )?;
+    submit_signed_agent_event(state, session, event).await
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
-use super::*;
 use serde_json::Value;
+
+use super::*;
 
 #[salvo::oapi::endpoint(
     operation_id = "ak.gate.account.command.pair_device",
