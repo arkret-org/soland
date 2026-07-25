@@ -792,7 +792,7 @@ pub(super) fn plaintext_services_from_operation(operation: &Operation) -> Vec<St
 pub(super) fn plaintext_service_classes_from_operation(
     operation: &Operation,
 ) -> BTreeMap<String, BTreeSet<PlaintextDataClassKind>> {
-    let mut by_service = BTreeMap::new();
+    let mut by_service: BTreeMap<String, BTreeSet<PlaintextDataClassKind>> = BTreeMap::new();
     if let Some(payload) = plaintext_visible_services_payload(operation) {
         for service in payload.services {
             let classes = by_service
