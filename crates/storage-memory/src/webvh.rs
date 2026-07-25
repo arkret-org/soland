@@ -46,32 +46,12 @@ impl WebvhStore for MemoryWebvhStore {
         &self,
         local_id: &str,
     ) -> PersistenceResult<Option<WebvhDocumentRecord>> {
-        // A did:webvh document hosted by this provider MUST be resolvable at its
-        // canonical `/webvh/{local_id}/did.json` URL regardless of *how* the
-        // record was written. Embedded-provider registrations carry the
-        // `local_id` in `method_evidence`; documents provisioned through
-        // `submit_did_operation` (e.g. coauth account registration) do not, but
-        // their DID still ends with `:webvh:{local_id}`. Match on that canonical
-        // suffix so both provisioning paths resolve, falling back to the legacy
-        // embedded-provider evidence match.
         let suffix = format!(":webvh:{local_id}");
         Ok(self
             .documents
             .lock()
             .values()
-            .find(|record| {
-                record.did.ends_with(&suffix)
-                    || (record
-                        .method_evidence
-                        .get("mode")
-                        .and_then(serde_json::Value::as_str)
-                        == Some("embedded_webvh_provider")
-                        && record
-                            .method_evidence
-                            .get("local_id")
-                            .and_then(serde_json::Value::as_str)
-                            == Some(local_id))
-            })
+            .find(|record| record.did.ends_with(&suffix))
             .cloned())
     }
 

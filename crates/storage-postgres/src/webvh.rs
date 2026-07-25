@@ -107,21 +107,11 @@ impl WebvhStore for PgWebvhStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        // Resolve by the DID's canonical `:webvh:{local_id}` suffix so documents
-        // written through *any* provisioning path resolve at the public
-        // `/webvh/{local_id}/did.json` URL — embedded-provider registrations as
-        // well as `submit_did_operation` documents (coauth account registration),
-        // which carry no `local_id` in `method_evidence`. `:webvh:` is 7 chars;
-        // an exact `right(...)` suffix comparison avoids LIKE wildcard pitfalls
-        // (normalized local_ids may contain `_`). The legacy embedded-provider
-        // evidence match is kept as a fallback.
         sql_query(
             "SELECT id AS did, did_document, key_log_head, seq, method_evidence, \
              fetched_at, expires_at, updated_at \
              FROM webvh_documents \
              WHERE right(id, char_length($1) + 7) = ':webvh:' || $1 \
-                OR (method_evidence->>'mode' = 'embedded_webvh_provider' \
-                    AND method_evidence->>'local_id' = $1) \
              ORDER BY updated_at DESC \
              LIMIT 1",
         )
