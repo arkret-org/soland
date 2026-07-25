@@ -39,7 +39,6 @@ mod timeline;
 pub use account_data::*;
 pub use apply::*;
 pub use event_json::*;
-pub(crate) use invite::plaintext_service_classes_from_value;
 use invite::*;
 pub use message::*;
 pub use operation_fields::*;
@@ -136,36 +135,38 @@ mod tests {
         let service =
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let operation = op(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
-                "object": {
-                    "id": REALM_ID,
-                    "title": "Private Room",
-                    "services": [{
-                        "service_id": service,
-                        "service_type": "principal_server",
-                        "data_classes": ["message_content", "notification_summary"],
-                        "purposes": ["projection"],
-                        "visibility": "private_plaintext"
-                    }],
-                    "plaintext_visible_services": ["did:web:legacy.local"]
-                }
+                "services": [{
+                    "service_id": service,
+                    "service_type": "principal_server",
+                    "data_classes": ["message_content", "notification_summary"],
+                    "purposes": ["projection"],
+                    "visibility": "private_plaintext"
+                }]
             }),
         );
 
         let classes = plaintext_service_classes_from_operation(&operation);
         let services = plaintext_services_from_operation(&operation);
         assert!(services.iter().any(|candidate| candidate == service));
-        assert!(
-            services
-                .iter()
-                .any(|candidate| candidate == "did:web:legacy.local")
-        );
         assert!(classes[service].contains(&arkret_wire::PlaintextDataClassKind::MessageContent));
         assert!(
             classes[service].contains(&arkret_wire::PlaintextDataClassKind::NotificationSummary)
         );
-        assert!(!classes.contains_key("did:web:legacy.local"));
+    }
+
+    #[test]
+    fn plaintext_visible_services_projection_rejects_legacy_string_list() {
+        let operation = op(
+            arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
+            json!({
+                "plaintext_visible_services": ["did:web:legacy.local"]
+            }),
+        );
+
+        assert!(plaintext_services_from_operation(&operation).is_empty());
+        assert!(plaintext_service_classes_from_operation(&operation).is_empty());
     }
 
     #[test]

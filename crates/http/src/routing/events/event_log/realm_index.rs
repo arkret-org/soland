@@ -312,42 +312,8 @@ pub(super) async fn bootstrap_realm_member_index(
     let asset_privacy_policy_digest = asset_privacy_policy
         .as_ref()
         .and_then(canonical_value_digest);
-    let mut plaintext_visible_services: std::collections::BTreeSet<String> = object
-        .get("payload")
-        .and_then(|payload| payload.get("plaintext_visible_services"))
-        .or_else(|| {
-            payload_object.and_then(|create_object| create_object.get("plaintext_visible_services"))
-        })
-        .and_then(Value::as_array)
-        .map(|services| {
-            services
-                .iter()
-                .filter_map(|service| service.as_str().map(ToOwned::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
-    let mut plaintext_visible_service_classes = object
-        .get("payload")
-        .map(crate::routing::events::projection::plaintext_service_classes_from_value)
-        .unwrap_or_default();
-    if let Some(create_object) = payload_object {
-        for (service, classes) in
-            crate::routing::events::projection::plaintext_service_classes_from_value(create_object)
-        {
-            plaintext_visible_service_classes
-                .entry(service)
-                .or_default()
-                .extend(classes);
-        }
-    }
-    // Maintain the `plaintext_visible_services ⊇ keys(plaintext_visible_service_classes)`
-    // invariant the dedicated `ak.realm.plaintext_visible_services` projection
-    // upholds: spec-canonical declarations carry structured `{service_id,
-    // data_classes, …}` entries (event-payload.schema.json
-    // `plaintext_visible_services_payload`) with no bare-string form, so the
-    // service-DID set must be derived from the typed map, not only from
-    // (legacy) string array entries.
-    plaintext_visible_services.extend(plaintext_visible_service_classes.keys().cloned());
+    let plaintext_visible_services = std::collections::BTreeSet::new();
+    let plaintext_visible_service_classes = std::collections::BTreeMap::new();
     let minimal_metadata_realm = payload_object
         .is_some_and(soland_services::operation_semantics::payload_declares_minimal_metadata_realm);
     let mut entry = crate::state::RealmDirectoryEntry::new(realm_id_typed.clone(), title);
