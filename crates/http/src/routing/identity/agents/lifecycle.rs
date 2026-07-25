@@ -706,20 +706,34 @@ pub(super) async fn get_agent(
     if service_authorized && let Some(key_state) = view.key_state.as_mut() {
         key_state.pairing_code = None;
     }
-    // Surface the agent's effective capability grants from the authz
-    // projection so the controller UI can list and revoke them; the
-    // persisted record itself never carries grants.
-    view.grants = state
+    // Surface every durable, unrevoked grant so terminal deactivation can
+    // author complete revocation coverage. The effective authz index supplies
+    // optional display metadata, but pending or expired grants must not
+    // disappear from the controller's revocation surface.
+    let effective_grants = state
         .authorization()
         .grants_for_subject_all_realms(&agent_id)
         .into_iter()
-        .filter_map(|grant| {
+        .map(|grant| {
+            (
+                (grant.grant_id, grant.realm_id),
+                (grant.expires_at, "active".to_owned()),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    view.grants = state
+        .projections()
+        .snapshot()
+        .unrevoked_grant_locations_for_subject(&agent_id)
+        .into_iter()
+        .filter_map(|(grant_id, realm_id)| {
+            let display = effective_grants.get(&(grant_id.clone(), realm_id.clone()));
             Some(GrantSnapshot {
-                grant_id: GrantId::new(grant.grant_id).ok()?,
-                realm_id: RealmId::new(grant.realm_id).ok()?,
-                status: Some("active".to_owned()),
+                grant_id: GrantId::new(grant_id).ok()?,
+                realm_id: RealmId::new(realm_id).ok()?,
+                status: display.map(|(_, status)| status.clone()),
                 grant_digest: None,
-                expires_at: grant.expires_at,
+                expires_at: display.and_then(|(expires_at, _)| *expires_at),
             })
         })
         .collect();

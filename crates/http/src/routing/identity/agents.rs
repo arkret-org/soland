@@ -27,7 +27,7 @@
 //! audit-log row matching the canonical event-kind name so the existing admin /
 //! federation projections stay in sync ahead of the reducer rewrite.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{
