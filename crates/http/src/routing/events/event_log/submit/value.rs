@@ -704,6 +704,16 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
+            if let Some(reason) = state
+                .projections()
+                .preflight_realm_policy_rejection(operation)
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    reason.clone(),
+                    reason,
+                ));
+            }
             if let Some(reason) = state.projections().preflight_calendar_rejection(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

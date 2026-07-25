@@ -1223,6 +1223,13 @@ impl ProjectionService {
         )
     }
 
+    pub fn preflight_realm_policy_rejection(&self, operation: &Operation) -> Option<String> {
+        self.preflight_apply_rejection(
+            operation,
+            &[arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS],
+        )
+    }
+
     pub fn preflight_mls_rejection(&self, operation: &Operation) -> Option<String> {
         let kind = soland_domain::kinds::canonical_kind_string(operation);
         let mut state = self.state.lock().clone();

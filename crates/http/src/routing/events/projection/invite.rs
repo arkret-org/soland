@@ -807,7 +807,16 @@ pub(super) fn plaintext_service_classes_from_operation(
 fn plaintext_visible_services_payload(
     operation: &Operation,
 ) -> Option<PlaintextVisibleServicesPayload> {
-    serde_json::from_value(operation.payload.clone()).ok()
+    let payload = if operation.payload.get("services").is_some() {
+        operation.payload.clone()
+    } else {
+        let services = operation
+            .payload
+            .pointer("/object/plaintext_visible_services")?
+            .clone();
+        serde_json::json!({ "services": services })
+    };
+    serde_json::from_value(payload).ok()
 }
 
 pub(super) async fn project_plaintext_visible_services_operation(

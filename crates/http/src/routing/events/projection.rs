@@ -157,6 +157,33 @@ mod tests {
     }
 
     #[test]
+    fn realm_create_projects_nested_plaintext_visible_services() {
+        let service =
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
+        let operation = op(
+            arkret_wire::events::EventKind::REALM_CREATE,
+            json!({
+                "object": {
+                    "id": REALM_ID,
+                    "title": "Plaintext Realm",
+                    "plaintext_visible_services": [{
+                        "service_id": service,
+                        "service_type": "principal_server",
+                        "data_classes": ["message_content"],
+                        "purposes": ["message_index"],
+                        "visibility": "private_plaintext"
+                    }]
+                }
+            }),
+        );
+
+        let classes = plaintext_service_classes_from_operation(&operation);
+        let services = plaintext_services_from_operation(&operation);
+        assert_eq!(services, vec![service]);
+        assert!(classes[service].contains(&arkret_wire::PlaintextDataClassKind::MessageContent));
+    }
+
+    #[test]
     fn plaintext_visible_services_projection_rejects_legacy_string_list() {
         let operation = op(
             arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
