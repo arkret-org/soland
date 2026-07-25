@@ -8,15 +8,10 @@ pub(super) struct HandleLookup {
 }
 
 pub(super) fn service_handle_domain(state: &AppState) -> String {
-    // Local account names are delegated by the configured Account Authority.
-    // Its public host therefore owns the canonical handle namespace even when
-    // the Principal Server itself is served from a different host.
-    state
-        .config()
-        .account_authority_url
-        .as_deref()
-        .and_then(handle_domain_from_url)
-        .or_else(|| handle_domain_from_url(&state.config().public_base_url))
+    // Public handles are issued by the Principal Server. The Account
+    // Authority's service-account handle is a separate unsigned UX hint and
+    // must never select this namespace.
+    handle_domain_from_url(&state.config().public_base_url)
         .or_else(|| service_id_handle_domain(state.service_id()))
         .unwrap_or_else(|| "soland.local".to_owned())
 }
@@ -1136,10 +1131,10 @@ mod tests {
     }
 
     #[test]
-    fn handle_domain_uses_configured_account_authority_host() {
+    fn handle_domain_normalizes_public_principal_server_host() {
         assert_eq!(
-            handle_domain_from_url("https://Auth.Example.test/base").as_deref(),
-            Some("auth.example.test")
+            handle_domain_from_url("https://Principal.Example.test/base").as_deref(),
+            Some("principal.example.test")
         );
     }
 
