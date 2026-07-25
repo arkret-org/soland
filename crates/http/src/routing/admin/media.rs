@@ -67,7 +67,7 @@ pub(super) fn router() -> Router {
 /// for sodmin. Mirrors the projected media_service epoch shape: the service
 /// DID plus the declared multi-focus set (`bindings/livekit.md` §2 /
 /// `media-service-binding.md` §2).
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct RealmMediaServiceOutcome {
     realm_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,23 +76,21 @@ struct RealmMediaServiceOutcome {
     e2ee_key_sources_allowed: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     foci: Vec<Value>,
-    /// Raw projected cell value (null when the Realm has no committed epoch).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    raw: Option<Value>,
 }
 
 fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMediaServiceOutcome {
     let Some(value) = value else {
         return RealmMediaServiceOutcome {
             realm_id: realm_id.to_owned(),
-            ..Default::default()
+            service_id: None,
+            e2ee_key_sources_allowed: Vec::new(),
+            foci: Vec::new(),
         };
     };
     // The reducer stores the epoch either bare or wrapped in `media_service`.
     let config = value.get("media_service").unwrap_or(value);
     let service_id = config
         .get("service_id")
-        .or_else(|| config.get("service_id"))
         .and_then(Value::as_str)
         .map(str::to_owned);
     let e2ee_key_sources_allowed = config
@@ -115,7 +113,6 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
         service_id,
         e2ee_key_sources_allowed,
         foci,
-        raw: Some(value.clone()),
     }
 }
 

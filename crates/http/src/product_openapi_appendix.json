@@ -23424,9 +23424,6 @@
             "items": {},
             "type": "array"
           },
-          "raw": {
-            "description": "Raw projected cell value (null when the Realm has no committed epoch)."
-          },
           "realm_id": {
             "type": "string"
           },
