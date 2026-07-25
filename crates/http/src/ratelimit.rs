@@ -326,7 +326,6 @@ impl RateLimiterMiddleware {
 
 fn forwarded_for_trusted() -> bool {
     std::env::var("SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR")
-        .or_else(|_| std::env::var("SOLAND_TRUST_X_FORWARDED_FOR"))
         .map(|value| {
             matches!(
                 value.trim().to_ascii_lowercase().as_str(),

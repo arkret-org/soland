@@ -1159,10 +1159,11 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
         "ak:cell:ak.component.realm.media_service.v1:{DEMO_REALM_ID}"
     ))
     .unwrap();
-    state.test_projection().lock().cells.insert(
-        cell_id,
-        CellState::Value(serde_json::json!({ "media_service": media_service })),
-    );
+    state
+        .test_projection()
+        .lock()
+        .cells
+        .insert(cell_id, CellState::Value(media_service));
 }
 
 fn good_media_service_epoch() -> Value {

@@ -77,13 +77,11 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
             foci: Vec::new(),
         };
     };
-    // The reducer stores the epoch either bare or wrapped in `media_service`.
-    let config = value.get("media_service").unwrap_or(value);
-    let service_id = config
+    let service_id = value
         .get("service_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let foci = config
+    let foci = value
         .get("foci")
         .and_then(Value::as_array)
         .cloned()
