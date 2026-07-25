@@ -386,7 +386,6 @@ mod tests {
     use std::collections::BTreeMap;
 
     use arkret_identity::DidDocument;
-    use base64::Engine as _;
     use ed25519_dalek::{Signer as _, SigningKey};
     use serde_json::json;
 

@@ -751,7 +751,7 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
             "service_id": "did:web:media.example",
             "foci": [{
                 "focus_id": "ak:focus:mediasoup:blue",
-                "backend": "mediasoup",
+                "type": "mediasoup",
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:rogue.example#kid-1",
                 "audience": "mediasoup-demo"
@@ -1172,7 +1172,7 @@ fn good_media_service_epoch() -> Value {
         "foci": [
             {
                 "focus_id": "ak:focus:livekit:green",
-                "backend": "livekit",
+                "type": "livekit",
                 "connect_url": "wss://media.example/livekit",
                 "issuer_kid": "did:web:media.example#livekit-2026-05",
                 "audience": "livekit-demo",
@@ -1181,7 +1181,7 @@ fn good_media_service_epoch() -> Value {
             },
             {
                 "focus_id": "ak:focus:mediasoup:blue",
-                "backend": "mediasoup",
+                "type": "mediasoup",
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:media.example#mediasoup-2026-05",
                 "audience": "mediasoup-demo",

@@ -379,7 +379,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "arkret-native" | "arkret_native" => Ok(Self::ArkretNative),
+            "arkret-native" => Ok(Self::ArkretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -1028,25 +1028,18 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
     let config = value.get("media_service").unwrap_or(value);
     let service_id = config
         .get("service_id")
-        .or_else(|| config.get("service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let foci_value = normalized_media_foci(realm_id, config)?;
+    let foci_value = normalized_media_foci(config)?;
     let mut foci = Vec::new();
     for focus_value in foci_value {
         let focus_id = required_json_string(&focus_value, "focus_id")?;
-        if !focus_id.starts_with("ak:focus:") {
-            return Err(AppError::invalid_param(
-                "media focus_id must start with ak:focus:",
-            ));
-        }
         let provider = focus_value
             .get("type")
-            .or_else(|| focus_value.get("backend"))
             .and_then(Value::as_str)
-            .ok_or_else(|| AppError::invalid_param("media focus backend/type is required"))
+            .ok_or_else(|| AppError::invalid_param("media focus type is required"))
             .and_then(MediaProviderKind::parse)?;
         let issuer_kid = focus_value
             .get("issuer_kid")
@@ -1068,7 +1061,6 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .unwrap_or_else(|| format!("arkret:media:{realm_id}:{focus_id}"));
         let ttl_seconds = focus_value
             .get("ttl_seconds")
-            .or_else(|| focus_value.get("token_ttl_seconds"))
             .or_else(|| config.get("ttl_seconds"))
             .and_then(Value::as_u64)
             .unwrap_or(arkret_wire::constants::MEDIA_TOKEN_TTL_SHOULD_SECS);
@@ -1130,8 +1122,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
     })
 }
 
-fn normalized_media_foci(realm_id: &str, config: &Value) -> Result<Vec<Value>, AppError> {
-    let _ = realm_id;
+fn normalized_media_foci(config: &Value) -> Result<Vec<Value>, AppError> {
     if let Some(foci) = config.get("foci").and_then(Value::as_array) {
         return Ok(foci.clone());
     }
@@ -1434,6 +1425,30 @@ mod tests {
         };
 
         assert_eq!(token_media_permissions(&request), (false, true, false));
+    }
+
+    #[test]
+    fn media_provider_kind_rejects_legacy_alias() {
+        assert!(MediaProviderKind::parse("arkret_native").is_err());
+    }
+
+    #[test]
+    fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
+        let epoch = parse_media_service_epoch(
+            "ak:realm:01904100-0000-7000-8000-cfc039892063",
+            &json!({
+                "service_id": "did:web:media.example",
+                "foci": [{
+                    "focus_id": "fra-1",
+                    "type": "livekit",
+                    "issuer_kid": "did:web:media.example#key-1",
+                    "connect_url": "wss://media.example"
+                }]
+            }),
+        )
+        .expect("spec focus ids are not required to use a private prefix");
+
+        assert_eq!(epoch.foci[0].focus_id, "fra-1");
     }
 }
 
