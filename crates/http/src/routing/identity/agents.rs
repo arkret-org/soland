@@ -355,6 +355,38 @@ mod tests {
             }]
         }))
         .unwrap();
+        let authorize_event = arkret_wire::Event::new(
+            "ak.agent.key.authorize",
+            arkret_identifiers::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed")
+                .unwrap(),
+            arkret_identifiers::Did::new("did:web:agent.example").unwrap(),
+            1,
+            arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+            json!({}),
+        )
+        .unwrap();
+        let public_key_digest =
+            arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value).unwrap();
+        let signing_key_binding = serde_json::from_value(json!({
+            "schema": "ak.schema.agent_signing_key_binding.v1",
+            "agent_id": agent_id,
+            "verification_method": verification_method,
+            "public_key": {
+                "kty": "OKP",
+                "alg": "Ed25519",
+                "key": public_key.key
+            },
+            "public_key_digest": public_key_digest,
+            "agent_key_authorize_event_id": authorize_event.event_id,
+            "issued_at": "2026-07-06T00:00:00.000Z",
+            "controller_id": controller_id,
+            "controller_proof": {
+                "kind": "detached_jws",
+                "verification_method": "did:web:controller.example#key-1",
+                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+            }
+        }))
+        .unwrap();
         AgentKeyPairRequestBody {
             pairing_request_id: arkret_wire::NonEmptyString::new(pairing_request_id).unwrap(),
             agent_id,
@@ -384,16 +416,8 @@ mod tests {
             .unwrap(),
             requested_scope_disclosure,
             runtime_attestation: None,
-            authorize_event: arkret_wire::Event::new(
-                "ak.agent.key.authorize",
-                arkret_identifiers::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed")
-                    .unwrap(),
-                arkret_identifiers::Did::new("did:web:agent.example").unwrap(),
-                1,
-                arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
-                json!({}),
-            )
-            .unwrap(),
+            authorize_event,
+            signing_key_binding,
         }
     }
 
@@ -763,6 +787,14 @@ mod tests {
         record.authorized_public_key_digest = Some(
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
         );
+        let signing_key_binding = key_pair_request_body(
+            "did:web:agent.example",
+            "did:web:agent.example#runtime-1",
+            "did:web:soland.example",
+        )
+        .signing_key_binding;
+        record.authorized_signing_key_binding =
+            Some(serde_json::to_value(&signing_key_binding).unwrap());
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -785,6 +817,10 @@ mod tests {
         assert_eq!(
             outcome.authorized_public_key_digest.as_deref(),
             Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+        );
+        assert_eq!(
+            outcome.authorized_signing_key_binding,
+            Some(signing_key_binding)
         );
     }
 

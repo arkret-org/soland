@@ -45,6 +45,7 @@ pub struct AgentRuntimeActivation {
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
+    pub authorized_signing_key_binding: Value,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]

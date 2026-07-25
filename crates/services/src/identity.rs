@@ -1021,6 +1021,7 @@ pub struct ActivateAgentRuntimeCommand {
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
+    pub authorized_signing_key_binding: Value,
     pub authorized_at: DateTime<Utc>,
 }
 
@@ -1054,6 +1055,7 @@ pub struct AgentPairingState {
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
+    pub authorized_signing_key_binding: Option<Value>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -1097,6 +1099,7 @@ impl AgentPairingState {
             authorized_event_ref: None,
             authorized_verification_method: None,
             authorized_public_key_digest: None,
+            authorized_signing_key_binding: None,
             state_changed_at: Some(created_at),
             created_at,
             updated_at: created_at,
@@ -2718,6 +2721,9 @@ mod tests {
             authorized_event_ref: "ak:event:1".to_owned(),
             authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
             authorized_public_key_digest: "sha256:key".to_owned(),
+            authorized_signing_key_binding: serde_json::json!({
+                "schema": "ak.schema.agent_signing_key_binding.v1"
+            }),
             authorized_at: Utc::now(),
         };
         assert!(

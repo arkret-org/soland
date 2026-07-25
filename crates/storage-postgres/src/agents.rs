@@ -338,6 +338,8 @@ impl AgentStore for PgAgentStore {
                 .eq(&activation.authorized_verification_method),
             agent_principals::authorized_public_key_digest
                 .eq(&activation.authorized_public_key_digest),
+            agent_principals::authorized_signing_key_binding
+                .eq(&activation.authorized_signing_key_binding),
             agent_principals::paired_pairing_request_id.eq(&activation.pairing_request_id),
             agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
             agent_principals::runtime_key_request.eq(None::<Value>),

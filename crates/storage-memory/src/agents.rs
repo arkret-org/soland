@@ -184,6 +184,8 @@ impl AgentStore for MemoryAgentStore {
         record.authorized_verification_method =
             Some(activation.authorized_verification_method.clone());
         record.authorized_public_key_digest = Some(activation.authorized_public_key_digest.clone());
+        record.authorized_signing_key_binding =
+            Some(activation.authorized_signing_key_binding.clone());
         record.paired_pairing_request_id = Some(activation.pairing_request_id.clone());
         record.paired_request_digest = Some(activation.paired_request_digest.clone());
         // Keep the approval and notification ids until the terminal account

@@ -391,6 +391,44 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     };
     let paired_request_digest =
         paired_request_digest_from_record_event(&agent_record, &accepted.envelope)?;
+    let signing_key_binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding =
+        accepted
+            .envelope
+            .get("unsigned")
+            .and_then(|unsigned| unsigned.get("agent_signing_key_binding"))
+            .cloned()
+            .ok_or_else(|| {
+                pairing_failed_precondition(
+                    "accepted authorization is missing its controller signing-key binding",
+                )
+            })
+            .and_then(|value| {
+                serde_json::from_value(value).map_err(|_| {
+                    pairing_failed_precondition(
+                        "accepted authorization signing-key binding is invalid",
+                    )
+                })
+            })?;
+    let authorize_event: arkret_wire::Event = serde_json::from_value(accepted.envelope.clone())
+        .map_err(|error| {
+            AppError::internal(format!(
+                "accepted Agent authorization Event is invalid: {error}"
+            ))
+        })?;
+    let typed_agent_id = Did::new(agent_id.clone())
+        .map_err(|error| AppError::internal(format!("stored Agent DID is invalid: {error}")))?;
+    let typed_verification_method =
+        arkret_wire::DidUrl::new(verification_method.clone()).map_err(AppError::internal)?;
+    validate_agent_signing_key_binding_parts(
+        &signing_key_binding,
+        &authorize_event,
+        &typed_agent_id,
+        &typed_verification_method,
+        &controller_id,
+        &public_key_digest,
+        state,
+    )
+    .await?;
 
     let terminal_notification = account_notification_context(&agent_record);
     let activation = soland_services::identity::ActivateAgentRuntimeCommand {
@@ -405,6 +443,9 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         authorized_event_ref: accepted.event_id,
         authorized_verification_method: verification_method,
         authorized_public_key_digest: public_key_digest,
+        authorized_signing_key_binding: serde_json::to_value(signing_key_binding).map_err(
+            |error| AppError::internal(format!("signing-key binding encode failed: {error}")),
+        )?,
         authorized_at: accepted.received_at,
     };
     let activated = state
@@ -494,6 +535,14 @@ pub(super) fn agent_runtime_key_request_status_outcome(
         .map(EventId::new)
         .transpose()
         .map_err(|err| AppError::internal(format!("authorized event ref invalid: {err}")))?;
+    let authorized_signing_key_binding = agent_record
+        .authorized_signing_key_binding
+        .clone()
+        .map(serde_json::from_value)
+        .transpose()
+        .map_err(|error| {
+            AppError::internal(format!("authorized signing-key binding invalid: {error}"))
+        })?;
     Ok(AgentRuntimeApprovalStatusOutcome {
         ok: true,
         status,
@@ -502,6 +551,7 @@ pub(super) fn agent_runtime_key_request_status_outcome(
         authorized_event_ref,
         authorized_verification_method: agent_record.authorized_verification_method.clone(),
         authorized_public_key_digest: agent_record.authorized_public_key_digest.clone(),
+        authorized_signing_key_binding,
     })
 }
 
@@ -573,6 +623,7 @@ pub(super) async fn agent_key_pair(
         return json_ok(AgentKeyPairOutcome {
             ok: true,
             authorized_event_ref: body.authorize_event.event_id.clone(),
+            signing_key_binding: body.signing_key_binding,
         });
     }
     ensure_pairing_request_open(&agent_record)?;
@@ -580,6 +631,13 @@ pub(super) async fn agent_key_pair(
     let runtime_public_key_digest =
         runtime_public_key_digest(&body.public_key, &body.verification_method)?;
     verify_runtime_key_pair_proof_of_possession(&body, agent_id, state.service_id())?;
+    validate_agent_signing_key_binding(
+        &body,
+        &agent_record.controller_id,
+        &runtime_public_key_digest,
+        state,
+    )
+    .await?;
     ensure_current_runtime_key_request_matches(&agent_record, &body)?;
     let pcr_recovery = crate::routing::identity::managed_agent_pcr::project_agent_pcr_recovery(
         state,
@@ -636,6 +694,9 @@ pub(super) async fn agent_key_pair(
         authorized_event_ref: authorized_event_ref.as_str().to_owned(),
         authorized_verification_method: body.verification_method.to_string(),
         authorized_public_key_digest: runtime_public_key_digest.clone(),
+        authorized_signing_key_binding: serde_json::to_value(&body.signing_key_binding).map_err(
+            |error| AppError::invalid_param(format!("signing_key_binding invalid: {error}")),
+        )?,
         authorized_at,
     };
     // The compare-and-set below records the authorized binding fields for the
@@ -657,6 +718,120 @@ pub(super) async fn agent_key_pair(
     json_ok(AgentKeyPairOutcome {
         ok: true,
         authorized_event_ref,
+        signing_key_binding: body.signing_key_binding,
+    })
+}
+
+async fn validate_agent_signing_key_binding(
+    body: &AgentKeyPairRequestBody,
+    controller_id: &str,
+    runtime_public_key_digest: &str,
+    state: &AppState,
+) -> Result<(), AppError> {
+    validate_agent_signing_key_binding_parts(
+        &body.signing_key_binding,
+        &body.authorize_event,
+        &body.agent_id,
+        &body.verification_method,
+        controller_id,
+        runtime_public_key_digest,
+        state,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn validate_agent_signing_key_binding_parts(
+    binding: &arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+    authorize_event: &arkret_wire::Event,
+    agent_id: &Did,
+    verification_method: &arkret_wire::DidUrl,
+    controller_id: &str,
+    runtime_public_key_digest: &str,
+    state: &AppState,
+) -> Result<(), AppError> {
+    let payload = &authorize_event.payload;
+    let expected_binding_digest = payload
+        .get("signing_key_binding_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::invalid_param(
+                "authorize_event.payload.signing_key_binding_digest is required",
+            )
+        })?;
+    let actual_binding_digest =
+        arkret_signatures::agent_evidence::agent_signing_key_binding_digest(binding)
+            .map_err(|reason| AppError::invalid_param(reason.as_str()))?;
+    if actual_binding_digest.as_str() != expected_binding_digest {
+        return Err(AppError::invalid_param(
+            "authorize_event.payload.signing_key_binding_digest must bind signing_key_binding",
+        ));
+    }
+    if binding.agent_id != *agent_id
+        || binding.verification_method != *verification_method
+        || binding.agent_key_authorize_event_id != authorize_event.event_id
+        || binding.public_key_digest.as_str() != runtime_public_key_digest
+        || binding.controller_id.as_str() != controller_id
+    {
+        return Err(AppError::invalid_param(
+            "signing_key_binding does not match the pairing request",
+        ));
+    }
+    let reconstructed_public_key = serde_json::json!({
+        "kty": binding.public_key.kty,
+        "kid": verification_method,
+        "alg": binding.public_key.alg,
+        "key": binding.public_key.key,
+    });
+    let reconstructed_digest =
+        arkret_signatures::agent::agent_runtime_public_key_digest(&reconstructed_public_key)
+            .map_err(|error| {
+                AppError::invalid_param(format!("signing_key_binding public key invalid: {error}"))
+            })?;
+    if reconstructed_digest != binding.public_key_digest {
+        return Err(AppError::invalid_param(
+            "signing_key_binding public key digest mismatch",
+        ));
+    }
+    let issued_at = payload
+        .get("issued_at")
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::invalid_param("authorize_event.payload.issued_at is required"))?;
+    if arkret_canonical::format_timestamp_canonical(binding.issued_at) != issued_at {
+        return Err(AppError::invalid_param(
+            "signing_key_binding.issued_at must match authorize_event.payload.issued_at",
+        ));
+    }
+    let payload_expires_at = payload.get("expires_at").and_then(Value::as_str);
+    let binding_expires_at = binding
+        .expires_at
+        .map(arkret_canonical::format_timestamp_canonical);
+    if binding_expires_at.as_deref() != payload_expires_at {
+        return Err(AppError::invalid_param(
+            "signing_key_binding.expires_at must match authorize_event.payload.expires_at",
+        ));
+    }
+    crate::jws_verify::validate_verification_method_controller(
+        controller_id,
+        binding.controller_proof.verification_method.as_str(),
+    )
+    .map_err(AppError::invalid_param)?;
+    let signing_bytes =
+        arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(binding)
+            .map_err(|reason| AppError::invalid_param(reason.as_str()))?;
+    let verification = crate::jws_verify::verify_jws_ed25519_async(
+        &signing_bytes,
+        binding.controller_proof.jws.as_str(),
+        binding.controller_proof.verification_method.as_str(),
+        controller_id,
+        state,
+    )
+    .await;
+    verification.map_err(|error| {
+        AppError::invalid_param(format!(
+            "signing_key_binding controller proof invalid: {error}"
+        ))
+        .with_wire_code("agent_signing_key_mismatch")
     })
 }
 

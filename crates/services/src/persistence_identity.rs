@@ -865,6 +865,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             authorized_event_ref: command.authorized_event_ref.clone(),
             authorized_verification_method: command.authorized_verification_method.clone(),
             authorized_public_key_digest: command.authorized_public_key_digest.clone(),
+            authorized_signing_key_binding: command.authorized_signing_key_binding.clone(),
             authorized_at: command.authorized_at,
         };
         Ok(self
@@ -1025,6 +1026,7 @@ fn application_agent_pairing(
         authorized_event_ref: record.authorized_event_ref,
         authorized_verification_method: record.authorized_verification_method,
         authorized_public_key_digest: record.authorized_public_key_digest,
+        authorized_signing_key_binding: record.authorized_signing_key_binding,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
         updated_at: record.updated_at,
@@ -1063,6 +1065,7 @@ fn persistence_agent_pairing(
         authorized_event_ref: record.authorized_event_ref,
         authorized_verification_method: record.authorized_verification_method,
         authorized_public_key_digest: record.authorized_public_key_digest,
+        authorized_signing_key_binding: record.authorized_signing_key_binding,
         state_changed_at: record.state_changed_at,
         created_at: record.created_at,
         updated_at: record.updated_at,

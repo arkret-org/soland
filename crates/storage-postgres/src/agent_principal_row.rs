@@ -44,6 +44,7 @@ pub(crate) struct AgentPrincipalRow {
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
+    pub authorized_signing_key_binding: Option<Value>,
     pub state_changed_at: Option<DateTime<Utc>>,
     #[diesel(skip_update)]
     pub created_at: DateTime<Utc>,
@@ -82,6 +83,7 @@ macro_rules! convert_agent_principal {
             authorized_event_ref: source.authorized_event_ref,
             authorized_verification_method: source.authorized_verification_method,
             authorized_public_key_digest: source.authorized_public_key_digest,
+            authorized_signing_key_binding: source.authorized_signing_key_binding,
             state_changed_at: source.state_changed_at,
             created_at: source.created_at,
             updated_at: source.updated_at,

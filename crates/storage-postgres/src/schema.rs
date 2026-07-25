@@ -40,6 +40,7 @@ diesel::table! {
         authorized_event_ref -> Nullable<Text>,
         authorized_verification_method -> Nullable<Text>,
         authorized_public_key_digest -> Nullable<Text>,
+        authorized_signing_key_binding -> Nullable<Jsonb>,
         state_changed_at -> Nullable<Timestamptz>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
