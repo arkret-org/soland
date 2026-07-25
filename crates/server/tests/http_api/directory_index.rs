@@ -188,6 +188,7 @@ async fn directory_product_endpoints_return_demo_projection_shapes() {
 async fn account_primary_handle_claim_is_listed_for_webvh_service_id() {
     let mut config = test_config();
     config.public_base_url = "https://local.host".to_owned();
+    config.account_authority_url = Some("https://auth.local.host".to_owned());
     let service_id = "did:webvh:zqmsolandlocal".to_owned();
     config.trust_domain = trust_domain_from_service_id(&service_id);
     let mut state = soland_test_support::app_state(config);
