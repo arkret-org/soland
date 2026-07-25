@@ -6,8 +6,9 @@
 #   1. `pg_dump` of the soland database (custom `Fc` format).
 #   2. SDK service-identity bundle containing public recovery evidence and
 #      opaque KeyRefs (never secret material).
-#   3. Snapshot of the keystore-persisted notary signing seed. Implemented via `soland-rotate-drill
-#      --export-only` so we can use the same KeyStore trait the running
+#   3. Snapshot of the keystore-persisted notary signing seed. Implemented via
+#      `soland-keystore-snapshot --export-only` so we can use the same
+#      KeyStore trait the running
 #      server uses (no out-of-band keychain probing).
 #   4. The `multisig_pending` table's full state (rows + claim_seq +
 #      partials), exported as JSONL, so the restore drill can walk
@@ -89,8 +90,8 @@ echo "[backup-drill] step 2/4: SDK identity bundle captured"
 
 # ── 3. keystore snapshot ─────────────────────────────────────────────────
 KEYSTORE_PATH="${WORKDIR}/keystore.json"
-echo "[backup-drill] step 3/4: keystore export via soland-rotate-drill --export-only"
-cargo run --quiet --bin soland-rotate-drill -- \
+echo "[backup-drill] step 3/4: keystore export via soland-keystore-snapshot --export-only"
+cargo run --quiet --bin soland-keystore-snapshot -- \
     --export-only \
     --identity-bundle "$BUNDLE_PATH" \
     --output "$KEYSTORE_PATH"

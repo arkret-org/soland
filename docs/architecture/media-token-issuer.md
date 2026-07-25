@@ -163,10 +163,6 @@ Procedure:
 4. Update issuer-key-set metric exporter so dashboards reflect the new
    counter.
 
-`soland-rotate-drill` (referenced in the runbook) exercises this strand
-end-to-end against a side-channel realm and verifies that mid-rotation
-tokens validate correctly across the kid boundary.
-
 ## Failure modes (operator quick map)
 
 | Error | Owner | First check |

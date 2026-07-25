@@ -156,7 +156,6 @@ fn synthetic_dev_grant(state: &AppState, session: &SessionRecord) -> SessionGran
     use arkret_models_identity::admin_grant::admin_scopes::*;
     let scopes = vec![
         NOTARY_RECONFIGURE.to_owned(),
-        NOTARY_ROTATE_SIGNING_KEY.to_owned(),
         SEAL_COMPACT.to_owned(),
         SEAL_PRUNE.to_owned(),
         BOTTOM_REPAIR.to_owned(),

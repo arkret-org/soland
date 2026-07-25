@@ -55,9 +55,7 @@ mod tests;
 pub(super) use bottom::{admin_list_bottom_global, admin_list_realm_bottom, admin_repair_bottom};
 pub(super) use dag::{admin_compact_seal_dag, admin_get_seal_dag, admin_prune_seal_dag};
 pub(super) use gc::admin_list_gc_candidates;
-pub(super) use multisig::{
-    admin_list_multisig_pending, admin_rotate_signing_key, admin_submit_multisig_partial,
-};
+pub(super) use multisig::{admin_list_multisig_pending, admin_submit_multisig_partial};
 pub(super) use notary::{admin_get_notary, admin_reconfigure_notary};
 
 // ── Shared helpers ─────────────────────────────────────────────────────────

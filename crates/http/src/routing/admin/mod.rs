@@ -166,10 +166,6 @@ pub fn admin_router() -> Router {
             Router::with_path("realms/{realm_id}/notary/reconfigure")
                 .post(seal::admin_reconfigure_notary),
         )
-        .push(
-            Router::with_path("realms/{realm_id}/notary/rotate-signing-key")
-                .post(seal::admin_rotate_signing_key),
-        )
         .push(Router::with_path("realms/{realm_id}/bottom").get(seal::admin_list_realm_bottom))
         .push(Router::with_path("bottom").get(seal::admin_list_bottom_global))
         .push(

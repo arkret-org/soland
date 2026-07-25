@@ -12,7 +12,6 @@ use arkret_wire::{PartialSignature, ThresholdAggregator};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::json;
 use soland_contracts::admin::seal::{
     MultisigPendingEntry, MultisigPendingOutcome, PartialSignatureBody, PartialSubmitOutcome,
@@ -199,72 +198,6 @@ pub(crate) async fn admin_list_multisig_pending(
         .collect();
 
     json_ok(MultisigPendingOutcome { entries })
-}
-
-/// This route currently fails closed. Rotating the service signing key is a
-/// service-identity transition: the KeyStore write, WebVH update, DID
-/// document, persisted `StoredServiceIdentity`, and recovery bundle must
-/// commit as one recoverable operation. The current persistence API cannot
-/// provide that transaction, so an in-process or KeyStore-only swap would
-/// publish a signer that no longer matches the authoritative DID document.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RotateSigningKeyOutcome {
-    pub kid: String,
-    pub did: String,
-    pub rotated_at: chrono::DateTime<chrono::Utc>,
-    /// Provenance tag of the **post-rotation** key — `Configured` when
-    /// persisted to the configured durable KeyStore, else
-    /// `Configured` when the rotation succeeded (we never roll forward to
-    /// `Ephemeral`).
-    pub origin: String,
-    /// Whether the new seed was persisted to the configured durable KeyStore. False
-    /// when durable key custody is disabled; true (or accompanied by a non-fatal
-    /// `keystore_warning`) when the platform store accepted the write.
-    pub keystore_persisted: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub keystore_warning: Option<String>,
-}
-
-#[salvo::oapi::endpoint(tags("soland_admin"))]
-pub(crate) async fn admin_rotate_signing_key(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    realm_id: PathParam<String>,
-) -> JsonResult<RotateSigningKeyOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let admin_session = super::super::require_admin_principal(state, session)?;
-    super::super::require_admin_scope(
-        state,
-        req,
-        &admin_session,
-        arkret_models_identity::admin_grant::admin_scopes::NOTARY_ROTATE_SIGNING_KEY,
-    )
-    .await?;
-    // Validate realm_id shape so the endpoint surfaces a clean 400 on a
-    // bogus path; the rotation itself is process-wide.
-    let realm_id_str = realm_id.into_inner();
-    let _ = RealmId::new(realm_id_str.clone()).map_err(|e| {
-        AppError::new(ErrorCode::InvalidParam, format!("invalid realm_id: {e}"))
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
-
-    let did = state.service_id().clone();
-    crate::routing::append_audit_log(
-        state,
-        Some(did.as_str()),
-        "admin.notary.rotate_signing_key",
-        json!({
-            "realm_id": realm_id_str,
-            "reason": "atomic_service_identity_rotation_unavailable"
-        }),
-        "rejected",
-    )
-    .await;
-    Err(AppError::unsupported_feature(
-        "service signing-key rotation requires an atomic WebVH/DID/identity-bundle transition; no safe rotation transaction is available",
-    ))
 }
 
 /// Attempt to aggregate the partial signatures stored on `record` into a

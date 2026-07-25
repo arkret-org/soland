@@ -357,33 +357,3 @@ async fn notary_worker_is_idempotent_when_no_pending_moves() {
         "second signing pass should report nothing pending (got {second:?})"
     );
 }
-
-/// A signing-key-only swap would split the runtime signer from the DID
-/// document and identity bundle. Until the service has an atomic WebVH
-/// rotation transaction, the route must fail closed and leave the key intact.
-#[tokio::test]
-async fn admin_rotate_signing_key_fails_closed_without_mutating_the_signer() {
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
-    let app = service(state.clone());
-    let pre = state.notary_signing_key().to_bytes();
-
-    let url = format!(
-        "http://server/_soland/admin/realms/{}/notary/rotate-signing-key",
-        realm_id().as_str()
-    );
-    let mut response = TestClient::post(&url)
-        .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&json!({}))
-        .send(&app)
-        .await;
-    assert_eq!(response.status_code, Some(StatusCode::NOT_IMPLEMENTED));
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "unsupported_feature");
-
-    let post = state.notary_signing_key().to_bytes();
-    assert_eq!(
-        pre, post,
-        "failed rotation must not alter the active signer"
-    );
-}

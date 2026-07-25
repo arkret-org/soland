@@ -88,7 +88,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_ADMIN_PRINCIPAL_DIDS` | empty | Comma-separated principal DID allowlist for production admin APIs. An empty value closes the admin API outside development mode; browser sessions additionally require `SOLAND_SESSION_GRANT_INTROSPECTION_URL`. |
 | `SOLAND_ADMIN_PAGE_LIMIT` | `100` | Default admin API page size. |
 | `SOLAND_ADMIN_MAX_PAGE_LIMIT` | `1000` | Maximum admin API page size; clamped above the default. |
-| `SOLAND_ADMIN_BEARER` | unset | Bearer accepted only by the `soland-rotate-drill` helper; prefer its CLI flag or a secret injection mechanism. |
 | `SOLAND_COMPACTION_MIN_SEAL_AGE_SECS` | `604800` | Minimum seal age before compaction pruning may consider it. |
 | `SOLAND_COMPACTION_MIN_WITNESSES` | `1` | Minimum compaction witnesses required before pruning. |
 | `SOLAND_COMPACTION_PRESERVE_GENESIS` | `true` | Preserve genesis seals during compaction pruning. |
@@ -119,7 +118,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_RECEIVE_POLICY_*` | unset | Optional ServiceDescribe receive-policy constraints. See `.env.example` for exact names and accepted values. |
 | `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR` | `false` | Trust `X-Forwarded-For` for rate limiting when behind a trusted proxy. |
 | `SOLAND_SEED_DEMO_DATA` | `false` | Seed deterministic demo data. Test/development only; never enable in production. |
-| `SOLAND_SERVICE_IDENTITY_BUNDLE` | unset | Identity-bundle input used only by `soland-rotate-drill`; the server uses `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR`. |
+| `SOLAND_SERVICE_IDENTITY_BUNDLE` | unset | Identity-bundle input used only by `soland-keystore-snapshot`; the server uses `SOLAND_SERVICE_IDENTITY_BUNDLE_DIR`. |
 | `SOLAND_SHUTDOWN_GRACE_SECS` | `0` | Graceful-drain bound in seconds; `0` waits indefinitely. |
 | `SOLAND_TO_DEVICE_QUEUE_CAPACITY` | `10000` | Per-device in-memory to-device queue capacity. Overflow advances the lost watermark. |
 | `SOLAND_TRUST_X_FORWARDED_FOR` | `false` | Backward-compatible alias for `SOLAND_RATE_LIMIT_TRUST_X_FORWARDED_FOR`. |
@@ -488,34 +487,17 @@ pre-upgrade backup if you need to roll back.
 - Rate-limit configuration matches your anticipated traffic and is enforced
   at the shared gateway when more than one soland replica is running.
 
-## 11. Notary signing-key rotation
+## 11. Service-identity signing-key custody
 
-The NotaryWorker signs background sub-seals with the seed loaded
-from `SOLAND_NOTARY_SIGNING_KEY` (a 32-byte ed25519 seed,
-base64-standard-padded). Recommended cadence and ceremony:
+The active signing key is bound to the WebVH DID document and persisted
+service-identity bundle. Soland does not expose an online key-only rotation
+endpoint: changing only the runtime or KeyStore seed would split those
+authorities. A future rotation workflow must commit the KeyStore write,
+WebVH update, DID document, identity bundle and recovery material as one
+recoverable transition before an admin route is added.
 
-- **Rotation cadence**: every **90 days** in steady-state. Same cadence
-  on any suspected compromise, with no grace period. Calendar the
-  rotation against your secret-rotation tooling (Vault, AWS Secrets
-  Manager, ...).
-- **Pre-rotation drill**: run
-  `cargo run --bin soland-rotate-drill --release` (see
-  `src/bin/soland-rotate-drill.rs`) against a staging replica. The
-  drill mints a fresh seed, posts it through the live
-  `/_soland/admin/notary/rotate-signing-key` path, and verifies the
-  hot-swap completed without dropping concurrent signing passes.
-- **Production rotation**: stage the new seed in the secret manager,
-  call the rotate-signing-key admin endpoint on each replica in turn,
-  then retire the old seed. With a durable `SOLAND_KEYSTORE_BACKEND` the same
-  endpoint also persists the rotated key back into the SDK KeyStore so
-  a future restart picks up the new seed automatically.
-- **Audit**: every rotation emits a sticky-info tracing event on the
-  `notary` target with `rotation_id`, `previous_key_origin`, and the
-  new public key's multibase encoding. Capture both the
-  pre-rotation and post-rotation public keys in your operations log
-  so external verifiers can resolve historical seals.
-- **Cross-link**: the runbook (`docs/runbook.md` "Fault-injection
-  examples" §4) documents the drill from an on-call perspective.
+Use `soland-keystore-snapshot --export-only` and `--import-only` only for
+backup/restore of the already-bound key. They do not rotate identity material.
 
 ## 12. Known limits
 

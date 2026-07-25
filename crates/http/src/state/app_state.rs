@@ -557,8 +557,7 @@ impl AppState {
     /// Snapshot the persistent Ed25519 signing key shared by
     /// the NotaryWorker and all admin signing paths. Returns a fresh
     /// `Arc<SigningKey>` (lock-free `ArcSwap::load_full`) so callers can
-    /// hold the snapshot for the duration of a signing pass even if the
-    /// rotate-signing-key endpoint races with them.
+    /// hold the snapshot for the duration of a signing pass.
     pub fn notary_signing_key(&self) -> Arc<SigningKey> {
         self.notary_signing_key.load_full()
     }

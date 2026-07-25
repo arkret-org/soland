@@ -146,14 +146,6 @@ REVOKE INSERT ON projection_audit FROM soland;
 GRANT INSERT ON projection_audit TO soland;
 ```
 
-### 4. Verify the notary key rotation drill
-
-```bash
-cargo run --bin soland-rotate-drill --release
-# Compare the new public key against the prior cycle's archive.
-# DEPLOYMENT.md §11 covers the 90-day cadence and ceremony.
-```
-
 ## Escalation pointers
 
 - `_todos.md` Streams D / E / F for in-flight scaffold work.
@@ -288,8 +280,6 @@ soland is the canonical issuer of media tokens. The wire surface is
      `staged` (not yet issuing).
   2. Flip status to `current`; previous current becomes `previous`.
   3. After max token TTL (10 min hard ceiling), revoke the old `previous`.
-  4. Drill: trigger `cargo run --bin soland-rotate-drill --release` against
-     the rtc-issuer subsystem (mirror of the notary drill).
 
 Focus-binding troubleshooting matrix:
 

@@ -1,44 +1,30 @@
-//! `cargo run --bin soland-rotate-drill -- ...`
+//! `cargo run --bin soland-keystore-snapshot -- ...`
 //!
-//! Notary signing-key rotation drill.
+//! Service-identity KeyStore backup/restore helper.
 //!
-//! Three modes — selected by exactly one of the mode flags:
+//! Exactly one mode is required:
 //!
-//! 1. `--rotate-drill` (default when no mode flag is set) — verifies the current fail-closed
-//!    rotation boundary against a running Soland:
-//!      - snapshots the active KeyStore-backed signing seed,
-//!      - calls the authenticated rotate-signing-key admin route,
-//!      - requires `501 unsupported_feature` while atomic WebVH/DID/bundle rotation is unavailable,
-//!      - asserts the KeyStore seed remains byte-identical and usable.
-//!
-//!    Exit 0 on full PASS, 1 on any assertion fail, 2 on prerequisite/IO.
-//!
-//! 2. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted notary seed
+//! 1. `--export-only` — used by `scripts/backup-drill.sh`. Loads the KeyStore-persisted notary seed
 //!    referenced by an SDK `ServiceIdentityBundle` and writes a single-key JSON snapshot to
 //!    `--output`.
 //!
-//! 3. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
+//! 2. `--import-only` — used by `scripts/restore-drill.sh`. Reads the JSON snapshot from `--input`
 //!    and stores the seed back into the configured durable KeyStore under the same id.
 //!
-//! All three modes resolve the service DID and active signing `KeyRef` from a
+//! Both modes resolve the service DID and active signing `KeyRef` from a
 //! verified SDK identity bundle:
 //!   - `SOLAND_SERVICE_IDENTITY_BUNDLE` (or `--identity-bundle`)
-//!   - `SOLAND_PUBLIC_BASE_URL` (or `--target`)
-//!   - `SOLAND_ADMIN_BEARER` (or `--bearer`)
 //!
-//! The drill is intentionally self-contained (no shared state with the
-//! soland server process beyond the configured KeyStore + the public HTTP
-//! API), so it works in production whether soland is running locally or
-//! in a Kubernetes pod.
+//! The helper is self-contained and shares only the configured KeyStore
+//! with the server process.
 
 use std::process::ExitCode;
 
 use base64::Engine as _;
-use ed25519_dalek::{Signer as _, SigningKey, Verifier as _, VerifyingKey};
+use ed25519_dalek::SigningKey;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Mode {
-    RotateDrill,
     ExportOnly,
     ImportOnly,
 }
@@ -47,39 +33,26 @@ enum Mode {
 struct Args {
     mode: Mode,
     identity_bundle: String,
-    target_url: Option<String>,
-    bearer: Option<String>,
-    realm_id: Option<String>,
     output: Option<String>,
     input: Option<String>,
 }
 
 fn parse_args() -> anyhow::Result<Args> {
     let raw: Vec<String> = std::env::args().collect();
-    let mut mode = Mode::RotateDrill;
+    let mut mode = None;
     let mut identity_bundle = std::env::var("SOLAND_SERVICE_IDENTITY_BUNDLE").ok();
-    let mut target_url = std::env::var("SOLAND_PUBLIC_BASE_URL").ok();
-    let mut bearer = std::env::var("SOLAND_ADMIN_BEARER").ok();
-    let mut realm_id: Option<String> = None;
     let mut output = None;
     let mut input = None;
-    let mut explicit_mode = false;
 
     let mut i = 1;
     while i < raw.len() {
         let arg = &raw[i];
         match arg.as_str() {
-            "--rotate-drill" => {
-                mode = Mode::RotateDrill;
-                explicit_mode = true;
-            }
             "--export-only" => {
-                mode = Mode::ExportOnly;
-                explicit_mode = true;
+                anyhow::ensure!(mode.replace(Mode::ExportOnly).is_none(), "choose one mode");
             }
             "--import-only" => {
-                mode = Mode::ImportOnly;
-                explicit_mode = true;
+                anyhow::ensure!(mode.replace(Mode::ImportOnly).is_none(), "choose one mode");
             }
             "--identity-bundle" => {
                 i += 1;
@@ -87,30 +60,6 @@ fn parse_args() -> anyhow::Result<Args> {
                     raw.get(i)
                         .cloned()
                         .ok_or_else(|| anyhow::anyhow!("--identity-bundle needs a path"))?,
-                );
-            }
-            "--target" => {
-                i += 1;
-                target_url = Some(
-                    raw.get(i)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("--target needs a URL"))?,
-                );
-            }
-            "--bearer" => {
-                i += 1;
-                bearer = Some(
-                    raw.get(i)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("--bearer needs a value"))?,
-                );
-            }
-            "--realm-id" => {
-                i += 1;
-                realm_id = Some(
-                    raw.get(i)
-                        .cloned()
-                        .ok_or_else(|| anyhow::anyhow!("--realm-id needs a value"))?,
                 );
             }
             "--output" => {
@@ -131,18 +80,14 @@ fn parse_args() -> anyhow::Result<Args> {
             }
             "-h" | "--help" => {
                 eprintln!(
-                    "usage: soland-rotate-drill [--rotate-drill | --export-only | --import-only]\n\
+                    "usage: soland-keystore-snapshot (--export-only | --import-only)\n\
                      \n\
-                     mode flags (one of):\n\
-                       --rotate-drill   end-to-end rotate-signing-key drill (default)\n\
+                     mode flags (exactly one):\n\
                        --export-only    write KeyStore-persisted seed to --output\n\
                        --import-only    read seed from --input and write to KeyStore\n\
                      \n\
                      options:\n\
                        --identity-bundle <path>  validated SDK ServiceIdentityBundle (required)\n\
-                       --target <url>          base URL of running soland (rotate-drill mode)\n\
-                       --bearer <token>        admin session token (rotate-drill mode)\n\
-                       --realm-id <id>         Realm id for the rotate endpoint path (required in rotate-drill mode)\n\
                        --output <path>         destination JSON for --export-only\n\
                        --input <path>          source JSON for --import-only\n\
                     "
@@ -153,18 +98,15 @@ fn parse_args() -> anyhow::Result<Args> {
         }
         i += 1;
     }
-    let _ = explicit_mode; // surfaced for clarity; default is rotate-drill.
+    let mode = mode.ok_or_else(|| anyhow::anyhow!("choose --export-only or --import-only"))?;
     let identity_bundle = identity_bundle.ok_or_else(|| {
         anyhow::anyhow!(
-            "--identity-bundle (or SOLAND_SERVICE_IDENTITY_BUNDLE) is required; the drill must not accept a configured service DID"
+            "--identity-bundle (or SOLAND_SERVICE_IDENTITY_BUNDLE) is required; the snapshot helper must not accept a configured service DID"
         )
     })?;
     Ok(Args {
         mode,
         identity_bundle,
-        target_url,
-        bearer,
-        realm_id,
         output,
         input,
     })
@@ -175,39 +117,31 @@ fn main() -> ExitCode {
     let args = match parse_args() {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("[rotate-drill] arg parse failed: {e}");
+            eprintln!("[keystore-snapshot] arg parse failed: {e}");
             return ExitCode::from(2);
         }
     };
     let identity = match load_service_identity(&args.identity_bundle) {
         Ok(identity) => identity,
         Err(error) => {
-            eprintln!("[rotate-drill] identity bundle rejected: {error}");
+            eprintln!("[keystore-snapshot] identity bundle rejected: {error}");
             return ExitCode::from(2);
         }
     };
 
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("tokio current-thread runtime");
-
-    let result = runtime.block_on(async {
-        match args.mode {
-            Mode::RotateDrill => run_rotate_drill(&args, &identity).await,
-            Mode::ExportOnly => run_export_only(&args, &identity),
-            Mode::ImportOnly => run_import_only(&args, &identity),
-        }
-    });
+    let result = match args.mode {
+        Mode::ExportOnly => run_export_only(&args, &identity),
+        Mode::ImportOnly => run_import_only(&args, &identity),
+    };
 
     match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(DrillError::Io(e)) => {
-            eprintln!("[rotate-drill] IO error: {e}");
+            eprintln!("[keystore-snapshot] IO error: {e}");
             ExitCode::from(2)
         }
         Err(DrillError::Assertion(msg)) => {
-            eprintln!("[rotate-drill] FAIL — {msg}");
+            eprintln!("[keystore-snapshot] FAIL — {msg}");
             ExitCode::from(1)
         }
     }
@@ -228,7 +162,8 @@ fn open_service_identity_key_store() -> Result<Box<dyn arkret_keystore::KeyStore
         .map_err(|error| DrillError::Io(format!("durable KeyStore unavailable: {error}")))?
         .ok_or_else(|| {
             DrillError::Io(
-                "SOLAND_KEYSTORE_BACKEND must select a durable backend for this drill".to_owned(),
+                "SOLAND_KEYSTORE_BACKEND must select a durable backend for this snapshot"
+                    .to_owned(),
             )
         })
 }
@@ -320,7 +255,7 @@ fn run_export_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
     });
     std::fs::write(output, serde_json::to_string_pretty(&payload).unwrap())
         .map_err(|e| DrillError::Io(format!("write {output}: {e}")))?;
-    eprintln!("[rotate-drill] export OK -> {output} (key_id={key_id})");
+    eprintln!("[keystore-snapshot] export OK -> {output} (key_id={key_id})");
     Ok(())
 }
 
@@ -340,7 +275,7 @@ fn run_import_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
         .and_then(|v| v.as_bool())
         .unwrap_or(false)
     {
-        eprintln!("[rotate-drill] import skipped — snapshot has skipped=true");
+        eprintln!("[keystore-snapshot] import skipped — snapshot has skipped=true");
         return Ok(());
     }
     let schema = parsed.get("schema").and_then(|v| v.as_str());
@@ -383,104 +318,6 @@ fn run_import_only(args: &Args, identity: &ResolvedServiceIdentity) -> Result<()
     store
         .store(key_id, &seed_bytes)
         .map_err(|e| DrillError::Io(format!("KeyStore::store({key_id}): {e}")))?;
-    eprintln!("[rotate-drill] import OK ({key_id})");
-    Ok(())
-}
-
-// ── --rotate-drill (default) ────────────────────────────────────────────
-
-async fn run_rotate_drill(
-    args: &Args,
-    identity: &ResolvedServiceIdentity,
-) -> Result<(), DrillError> {
-    let target = args.target_url.as_deref().ok_or_else(|| {
-        DrillError::Io("rotate-drill requires --target (or SOLAND_PUBLIC_BASE_URL)".to_owned())
-    })?;
-    let bearer = args.bearer.as_deref().ok_or_else(|| {
-        DrillError::Io("rotate-drill requires --bearer (or SOLAND_ADMIN_BEARER)".to_owned())
-    })?;
-    let realm_id = args.realm_id.as_deref().ok_or_else(|| {
-        DrillError::Io(
-            "rotate-drill requires --realm-id (the Realm whose notary key is being rotated)"
-                .to_owned(),
-        )
-    })?;
-
-    eprintln!(
-        "[rotate-drill] target={target} service_id={}",
-        identity.service_id
-    );
-
-    // ── 1. snapshot the OLD signing seed from the KeyStore ─────────────
-    // This is later compared byte-for-byte after the rejected request.
-    let key_id = &identity.signing_key_ref;
-    let store = open_service_identity_key_store()?;
-    let old_seed_bytes = store
-        .load(key_id)
-        .map_err(|e| DrillError::Io(format!("snapshot old seed: {e}")))?;
-    let old_seed = validate_seed_binding(identity, &old_seed_bytes)?;
-    let signing_key = SigningKey::from_bytes(&old_seed);
-    eprintln!("[rotate-drill] step 1/3: snapshotted active seed (KeyRef only logged)");
-
-    // ── 2. POST the rotate-signing-key endpoint ────────────────────────
-    let url = format!(
-        "{}/_soland/admin/realms/{}/notary/rotate-signing-key",
-        target.trim_end_matches('/'),
-        realm_id
-    );
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .map_err(|e| DrillError::Io(format!("http client: {e}")))?;
-    let resp = client
-        .post(&url)
-        .bearer_auth(bearer)
-        .header("content-type", "application/json")
-        .body("{}")
-        .send()
-        .await
-        .map_err(|e| DrillError::Io(format!("POST {url}: {e}")))?;
-    let status = resp.status();
-    let body: serde_json::Value = resp
-        .json()
-        .await
-        .map_err(|e| DrillError::Io(format!("parse rotate response: {e}")))?;
-    let wire_code = body
-        .pointer("/error/code")
-        .and_then(serde_json::Value::as_str);
-    if status != reqwest::StatusCode::NOT_IMPLEMENTED || wire_code != Some("unsupported_feature") {
-        return Err(DrillError::Assertion(format!(
-            "rotate-signing-key must fail closed with 501 unsupported_feature; got {status}: {body}"
-        )));
-    }
-    eprintln!("[rotate-drill] step 2/3: unsafe partial rotation rejected as unsupported_feature");
-
-    // ── 3. verify rejection left key custody untouched ─────────────────
-    let current_seed_bytes = store
-        .load(key_id)
-        .map_err(|e| DrillError::Io(format!("reload keystore: {e}")))?;
-    if current_seed_bytes != old_seed_bytes {
-        return Err(DrillError::Assertion(
-            "rejected rotation mutated the active KeyStore seed".to_owned(),
-        ));
-    }
-    let probe_bytes = format!(
-        "soland-rotate-drill probe v1 ({}) {}",
-        identity.service_id,
-        arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
-    )
-    .into_bytes();
-    let probe_sig = signing_key.sign(&probe_bytes);
-    let verifying_key: VerifyingKey = signing_key.verifying_key();
-    verifying_key
-        .verify(&probe_bytes, &probe_sig)
-        .map_err(|e| {
-            DrillError::Assertion(format!(
-                "unchanged active key failed its local signing probe: {e}"
-            ))
-        })?;
-    eprintln!("[rotate-drill] step 3/3: active KeyStore seed is unchanged and usable");
-
-    eprintln!("[rotate-drill] PASS — unsafe partial rotation failed closed at {target}");
+    eprintln!("[keystore-snapshot] import OK ({key_id})");
     Ok(())
 }

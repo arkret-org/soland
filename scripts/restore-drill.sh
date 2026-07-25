@@ -113,8 +113,8 @@ echo "[restore-drill] step 2/4: restore SDK identity bundle"
 mkdir -p "$BUNDLE_DIR"
 cp "$BUNDLE_PATH" "$BUNDLE_DIR/$BUNDLE_BACKEND_FILE"
 
-echo "[restore-drill] step 3/4: keystore restore via soland-rotate-drill --import-only"
-cargo run --quiet --bin soland-rotate-drill -- \
+echo "[restore-drill] step 3/4: keystore restore via soland-keystore-snapshot --import-only"
+cargo run --quiet --bin soland-keystore-snapshot -- \
     --import-only \
     --identity-bundle "$BUNDLE_PATH" \
     --input "$WORKDIR/keystore.json"

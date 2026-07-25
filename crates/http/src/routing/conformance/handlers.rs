@@ -332,8 +332,7 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
     // device key — conformance vectors only need a stable Ed25519 keypair
     // so the wire test can verify (a) determinism and (b) signature
     // validity under the returned `public_key`. Production-grade signing
-    // (admin keystore, notary rotate-signing-key) lives on the existing
-    // admin / federation surfaces.
+    // for service-identity custody lives outside this conformance surface.
     let mut hasher = Sha256::new();
     hasher.update(b"soland:conformance:sign:");
     hasher.update(signing_key_ref.as_bytes());
