@@ -73,8 +73,6 @@ struct RealmMediaServiceOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     service_id: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    e2ee_key_sources_allowed: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     foci: Vec<Value>,
 }
 
@@ -83,7 +81,6 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
         return RealmMediaServiceOutcome {
             realm_id: realm_id.to_owned(),
             service_id: None,
-            e2ee_key_sources_allowed: Vec::new(),
             foci: Vec::new(),
         };
     };
@@ -93,16 +90,6 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
         .get("service_id")
         .and_then(Value::as_str)
         .map(str::to_owned);
-    let e2ee_key_sources_allowed = config
-        .get("e2ee_key_sources_allowed")
-        .and_then(Value::as_array)
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(|item| item.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default();
     let foci = config
         .get("foci")
         .and_then(Value::as_array)
@@ -111,7 +98,6 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
     RealmMediaServiceOutcome {
         realm_id: realm_id.to_owned(),
         service_id,
-        e2ee_key_sources_allowed,
         foci,
     }
 }

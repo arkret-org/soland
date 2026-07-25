@@ -1168,7 +1168,6 @@ fn install_media_service_epoch(state: &AppState, media_service: Value) {
 fn good_media_service_epoch() -> Value {
     serde_json::json!({
         "service_id": "did:web:media.example",
-        "e2ee_key_sources_allowed": ["mls_epoch"],
         "foci": [
             {
                 "focus_id": "ak:focus:livekit:green",
@@ -1176,8 +1175,7 @@ fn good_media_service_epoch() -> Value {
                 "connect_url": "wss://media.example/livekit",
                 "issuer_kid": "did:web:media.example#livekit-2026-05",
                 "audience": "livekit-demo",
-                "ttl_seconds": 300,
-                "e2ee_key_source": "mls_epoch"
+                "ttl_seconds": 300
             },
             {
                 "focus_id": "ak:focus:mediasoup:blue",
@@ -1185,8 +1183,7 @@ fn good_media_service_epoch() -> Value {
                 "connect_url": "wss://media.example/mediasoup",
                 "issuer_kid": "did:web:media.example#mediasoup-2026-05",
                 "audience": "mediasoup-demo",
-                "ttl_seconds": 900,
-                "e2ee_key_source": "mls_epoch"
+                "ttl_seconds": 900
             }
         ]
     })

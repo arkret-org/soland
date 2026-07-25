@@ -23414,12 +23414,6 @@
       "soland_http.routing.admin.media.RealmMediaServiceOutcome": {
         "description": "Effective `ak.component.realm.media_service.v1` cell, surfaced read-only\nfor sodmin. Mirrors the projected media_service epoch shape: the service\nDID plus the declared multi-focus set (`bindings/livekit.md` §2 /\n`media-service-binding.md` §2).",
         "properties": {
-          "e2ee_key_sources_allowed": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array"
-          },
           "foci": {
             "items": {},
             "type": "array"

@@ -415,7 +415,6 @@ struct MediaProviderConfig {
     audience: String,
     ttl_seconds: u64,
     connect_url: Option<String>,
-    e2ee_key_source: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -423,7 +422,6 @@ struct MediaServiceEpoch {
     service_id: String,
     issuer_kids: BTreeSet<String>,
     foci: Vec<MediaProviderConfig>,
-    e2ee_key_sources_allowed: BTreeSet<String>,
 }
 
 impl MediaServiceEpoch {
@@ -631,19 +629,6 @@ async fn handle_rtc_token(
             focus.issuer_kid, media_epoch.service_id
         )));
     }
-    if let Some(e2ee_key_source) = &focus.e2ee_key_source
-        && !media_epoch.e2ee_key_sources_allowed.is_empty()
-        && !media_epoch
-            .e2ee_key_sources_allowed
-            .contains(e2ee_key_source)
-    {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            format!("e2ee_key_source `{e2ee_key_source}` is not authorized by media_service epoch"),
-        )
-        .with_wire_code(arkret_wire::ReasonCode::E2EE_KEY_SOURCE_UNAUTHORISED));
-    }
-
     // MEDIA-1 — token TTL defaults to 300s and is capped at the spec ceiling
     // even if the realm focus advertises a larger backend TTL.
     let ttl_secs = focus
@@ -1070,13 +1055,6 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .map(ToOwned::to_owned);
-        let e2ee_key_source = focus_value
-            .get("e2ee_key_source")
-            .or_else(|| config.get("e2ee_key_source"))
-            .and_then(Value::as_str)
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(ToOwned::to_owned);
         foci.push(MediaProviderConfig {
             provider,
             focus_id,
@@ -1084,7 +1062,6 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             audience,
             ttl_seconds,
             connect_url,
-            e2ee_key_source,
         });
     }
     if foci.is_empty() {
@@ -1104,21 +1081,10 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
         .iter()
         .map(|focus| focus.issuer_kid.clone())
         .collect::<BTreeSet<_>>();
-    let e2ee_key_sources_allowed = config
-        .get("e2ee_key_sources_allowed")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .collect::<BTreeSet<_>>();
     Ok(MediaServiceEpoch {
         service_id,
         issuer_kids,
         foci,
-        e2ee_key_sources_allowed,
     })
 }
 
@@ -1156,7 +1122,6 @@ fn issue_signed_backend_token(
         "actor_id": request.actor_id,
         "device_id": request.device_id,
         "participant_identity": request.participant_identity,
-        "e2ee_key_source": request.focus.e2ee_key_source,
         "iat": request.issued_at,
         "exp": request.expires_at,
         "media": {
@@ -1408,7 +1373,6 @@ mod tests {
             audience: "media".to_owned(),
             ttl_seconds: 300,
             connect_url: Some("https://media.example".to_owned()),
-            e2ee_key_source: None,
         };
         let issued_at = Utc::now();
         let request = MediaTokenIssueRequestBody {
