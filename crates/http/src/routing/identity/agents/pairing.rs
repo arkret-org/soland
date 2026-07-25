@@ -819,7 +819,7 @@ async fn validate_agent_signing_key_binding_parts(
     let signing_bytes =
         arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(binding)
             .map_err(|reason| AppError::invalid_param(reason.as_str()))?;
-    let verification = crate::jws_verify::verify_jws_ed25519_async(
+    let verification = crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
         &signing_bytes,
         binding.controller_proof.jws.as_str(),
         binding.controller_proof.verification_method.as_str(),
