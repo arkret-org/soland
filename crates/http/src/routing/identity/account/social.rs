@@ -1,4 +1,3 @@
-use base64::Engine as _;
 use salvo::oapi::endpoint;
 
 use super::*;

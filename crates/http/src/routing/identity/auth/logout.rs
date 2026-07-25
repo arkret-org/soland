@@ -2,7 +2,6 @@ use arkret_models_collaboration::account_lifecycle::SESSION_REVOKE_LIFECYCLE_PRO
 use arkret_models_collaboration::session_grant_bodies::{
     AuthSessionLogoutOutcome, AuthSessionLogoutRequestBody,
 };
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use ed25519_dalek::{Signature, Verifier as _};
 

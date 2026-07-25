@@ -13,7 +13,6 @@ use arkret_state::state::compute_state_root;
 use arkret_wire::move_event::{LatticeOp, LatticeOpType};
 use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event};
 use salvo::oapi::extract::JsonBody;
-use salvo::prelude::*;
 
 use super::*;
 

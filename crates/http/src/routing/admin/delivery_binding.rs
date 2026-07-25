@@ -5,8 +5,7 @@
 //!
 //! - `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` — projected
 //!   `ak.component.realm.delivery_binding_policy.v1` cas-register value for a Realm (security
-//!   boundary). Mirrors the wire shape sodmin's `RealmDeliveryBindingPolicy` DTO consumes via
-//!   `sodmin/src/api/delivery_binding.rs::get_delivery_binding_policy`.
+//!   boundary). The response DTO is owned by `soland-contracts::admin::delivery_binding`.
 //!
 //! The cell value itself is read off the in-process reducer via
 //! [`soland_domain::reducer::ProjectionState::realm_delivery_binding_policy_cell_value`]
@@ -20,31 +19,16 @@ use salvo::oapi::extract::PathParam;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use soland_contracts::admin::{
+    DeliveryBindingHandoverRow as DeliveryBindingHandoverRowOutcome,
+    MemberRoutabilityRow as MemberRoutabilityRowOutcome,
+    RealmDeliveryBindingPolicy as RealmDeliveryBindingPolicyOutcome,
+};
 use soland_http::error::AppError;
 
 use super::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
-
-/// `GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` response.
-///
-/// Mirrors sodmin's `RealmDeliveryBindingPolicy` DTO in
-/// `sodmin/src/types/api.rs`. `realm_id` is the security boundary id
-/// `policy_frontier` is reducer-written and read-only here.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmDeliveryBindingPolicyOutcome {
-    /// Realm identifier (security boundary).
-    #[serde(default)]
-    pub realm_id: String,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_recipient_services: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub binding_source_policy: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub policy_frontier: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub updated_at: Option<String>,
-}
 
 /// Translate the raw `ak.component.realm.delivery_binding_policy.v1`
 /// cell value into the typed response DTO. Unknown / missing fields
@@ -56,7 +40,10 @@ fn response_from_cell(realm_id: &str, value: Option<&Value>) -> RealmDeliveryBin
     let Some(value) = value else {
         return RealmDeliveryBindingPolicyOutcome {
             realm_id: realm_id.to_owned(),
-            ..Default::default()
+            allowed_recipient_services: Vec::new(),
+            binding_source_policy: None,
+            policy_frontier: None,
+            updated_at: None,
         };
     };
     let allowed_recipient_services = value
@@ -134,20 +121,6 @@ pub(super) async fn admin_get_realm_delivery_binding_policy(
 }
 
 // ── B3 (Wave 3) — Realm member-routability read-only view ─────────────
-
-/// One row in the per-Realm member-routability table. Mirrors sodmin's
-/// `MemberRoutabilityRow` DTO (`sodmin/src/types/delivery_binding.rs`).
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct MemberRoutabilityRowOutcome {
-    pub actor_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub display_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub recipient_service_id: Option<String>,
-    pub in_allowed_list: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub delivery_status: Option<String>,
-}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct MemberRoutabilityListOutcome {
@@ -262,24 +235,6 @@ pub(super) async fn admin_list_member_routability(
 }
 
 // ── B4 (Wave 3) — delivery-binding handover audit view ────────────────
-
-/// One row in the delivery-binding handover audit panel. Mirrors sodmin's
-/// `DeliveryBindingHandoverRow` DTO.
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct DeliveryBindingHandoverRowOutcome {
-    pub realm_id: String,
-    pub actor_id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub previous_recipient_service_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub new_recipient_service_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub handover_frontier: Vec<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason_code: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub observed_at: Option<String>,
-}
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct DeliveryBindingHandoverListOutcome {

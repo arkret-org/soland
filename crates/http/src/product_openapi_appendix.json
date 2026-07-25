@@ -6890,7 +6890,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/soland_http.routing.admin.delivery_binding.RealmDeliveryBindingPolicyOutcome"
+                  "$ref": "#/components/schemas/soland_contracts.admin.delivery_binding.RealmDeliveryBindingPolicy"
                 }
               }
             },
@@ -23073,7 +23073,7 @@
         "properties": {
           "data": {
             "items": {
-              "$ref": "#/components/schemas/soland_http.routing.admin.delivery_binding.DeliveryBindingHandoverRowOutcome"
+              "$ref": "#/components/schemas/soland_contracts.admin.delivery_binding.DeliveryBindingHandoverRow"
             },
             "type": "array"
           },
@@ -23095,8 +23095,8 @@
         ],
         "type": "object"
       },
-      "soland_http.routing.admin.delivery_binding.DeliveryBindingHandoverRowOutcome": {
-        "description": "One row in the delivery-binding handover audit panel. Mirrors sodmin's\n`DeliveryBindingHandoverRow` DTO.",
+      "soland_contracts.admin.delivery_binding.DeliveryBindingHandoverRow": {
+        "description": "One row in the delivery-binding handover audit panel.",
         "properties": {
           "actor_id": {
             "type": "string"
@@ -23145,7 +23145,7 @@
         "properties": {
           "data": {
             "items": {
-              "$ref": "#/components/schemas/soland_http.routing.admin.delivery_binding.MemberRoutabilityRowOutcome"
+              "$ref": "#/components/schemas/soland_contracts.admin.delivery_binding.MemberRoutabilityRow"
             },
             "type": "array"
           },
@@ -23167,8 +23167,8 @@
         ],
         "type": "object"
       },
-      "soland_http.routing.admin.delivery_binding.MemberRoutabilityRowOutcome": {
-        "description": "One row in the per-Realm member-routability table. Mirrors sodmin's\n`MemberRoutabilityRow` DTO (`sodmin/src/types/delivery_binding.rs`).",
+      "soland_contracts.admin.delivery_binding.MemberRoutabilityRow": {
+        "description": "One row in the per-Realm member-routability table.",
         "properties": {
           "actor_id": {
             "type": "string"
@@ -23201,8 +23201,8 @@
         ],
         "type": "object"
       },
-      "soland_http.routing.admin.delivery_binding.RealmDeliveryBindingPolicyOutcome": {
-        "description": "`GET /_soland/admin/realms/{realm_id}/delivery-binding-policy` response.\n\nMirrors sodmin's `RealmDeliveryBindingPolicy` DTO in\n`sodmin/src/types/api.rs`. `realm_id` is the security boundary id\n`policy_frontier` is reducer-written and read-only here.",
+      "soland_contracts.admin.delivery_binding.RealmDeliveryBindingPolicy": {
+        "description": "Effective `ak.component.realm.delivery_binding_policy.v1` for a Realm.",
         "properties": {
           "allowed_recipient_services": {
             "items": {
@@ -23233,6 +23233,9 @@
             ]
           }
         },
+        "required": [
+          "realm_id"
+        ],
         "type": "object"
       },
       "soland_http.routing.admin.media.MediaBucket": {
