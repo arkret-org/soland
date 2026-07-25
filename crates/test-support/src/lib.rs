@@ -433,7 +433,9 @@ fn effective_state_with_new_ops(
         if ops.is_empty() {
             continue;
         }
-        ops.sort_by(|left, right| right.move_id.as_str().cmp(left.move_id.as_str()));
+        // Match production CellStore semantics: persisted operations and
+        // `new_ops` are both causal. MoveId is a content hash, not an ordering
+        // key for FSM transitions.
         let binding = registry.resolve(realm_id, &cell)?;
         joined.insert(cell.clone(), binding.lattice.join(&cell, &ops));
     }

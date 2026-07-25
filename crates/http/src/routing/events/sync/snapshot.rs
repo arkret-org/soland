@@ -783,7 +783,32 @@ async fn timeline_events_for_realm(
         ) {
             continue;
         }
-        if let Some(event) = accepted_event(state, &message.event_id).await {
+        if let Some(mut event) = accepted_event(state, &message.event_id).await {
+            if let Some(cell) = projection.redaction_cell_for_message(message) {
+                let mut payload =
+                    Value::Object(std::mem::take(&mut event.payload).into_iter().collect());
+                arkret_models_collaboration::events_payloads::redaction::redaction_tombstone_message_value(
+                    &mut payload,
+                    cell.redacted_at,
+                    cell.redaction_event_id.as_deref(),
+                );
+                if let Value::Object(payload) = payload {
+                    event.payload = payload.into_iter().collect();
+                }
+                event
+                    .payload
+                    .entry("message_id".to_owned())
+                    .or_insert_with(|| Value::String(message.message_id.clone()));
+                event
+                    .payload
+                    .entry("strand_id".to_owned())
+                    .or_insert_with(|| Value::String(message.thread_id.clone()));
+                event
+                    .payload
+                    .entry("thread_id".to_owned())
+                    .or_insert_with(|| Value::String(message.thread_id.clone()));
+                mark_event_as_projection_only(&mut event);
+            }
             timeline_entries.push((position, event));
         }
     }
@@ -825,7 +850,34 @@ async fn timeline_events_for_realm(
         ) {
             continue;
         }
-        if let Some(event) = accepted_event(state, &message.event_id).await {
+        if let Some(mut event) = accepted_event(state, &message.event_id).await {
+            if let Some(projected_message) = projection.messages.get(&message.event_id)
+                && let Some(cell) = projection.redaction_cell_for_message(projected_message)
+            {
+                let mut payload =
+                    Value::Object(std::mem::take(&mut event.payload).into_iter().collect());
+                arkret_models_collaboration::events_payloads::redaction::redaction_tombstone_message_value(
+                    &mut payload,
+                    cell.redacted_at,
+                    cell.redaction_event_id.as_deref(),
+                );
+                if let Value::Object(payload) = payload {
+                    event.payload = payload.into_iter().collect();
+                }
+                event
+                    .payload
+                    .entry("message_id".to_owned())
+                    .or_insert_with(|| Value::String(message.message_id.clone()));
+                event
+                    .payload
+                    .entry("strand_id".to_owned())
+                    .or_insert_with(|| Value::String(message.thread_id.clone()));
+                event
+                    .payload
+                    .entry("thread_id".to_owned())
+                    .or_insert_with(|| Value::String(message.thread_id.clone()));
+                mark_event_as_projection_only(&mut event);
+            }
             timeline_entries.push((position, event));
         }
     }
@@ -887,6 +939,13 @@ async fn timeline_events_for_realm(
             .collect(),
         newest_position,
     )
+}
+
+fn mark_event_as_projection_only(event: &mut arkret_wire::Event) {
+    event
+        .unsigned
+        .insert("projection_only".to_owned(), Value::Bool(true));
+    event.proofs.clear();
 }
 
 async fn state_events_for_realm(

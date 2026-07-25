@@ -756,9 +756,18 @@ async fn try_apply_device_generation_event_seal(
                 ));
             }
         }
+        let member_cell = format!("ak:cell:ak.component.member.state.v1:{}", event.actor_id);
+        let invite_accept_from = event
+            .effects
+            .iter()
+            .find(|effect| effect.cell.as_str() == member_cell)
+            .and_then(|effect| effect.op.from.as_ref())
+            .and_then(serde_json::Value::as_str);
         new_ops.extend(
             crate::routing::events::event_log::governance_proof::canonical_event_ops(
-                &event, digest,
+                &event,
+                digest,
+                invite_accept_from,
             )?,
         );
     }

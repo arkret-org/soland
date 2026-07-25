@@ -335,7 +335,10 @@ fn effective_state_with_new_ops(
         if ops.is_empty() {
             continue;
         }
-        ops.sort_by(|left, right| right.move_id.as_str().cmp(left.move_id.as_str()));
+        // CellStore returns accepted operations in Seal insertion order and
+        // `new_ops` is already in causal Event order. Content digests do not
+        // encode causality; sorting FSM transitions by MoveId can turn a valid
+        // leave -> join -> ban history into Bottom.
         let binding = registry.resolve(realm_id, &cell)?;
         joined.insert(cell.clone(), binding.lattice.join(&cell, &ops));
     }
@@ -1192,6 +1195,7 @@ mod event_seal_commit_tests {
 
     use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
+    use arkret_state::lattice::CellState;
     use arkret_wire::{LatticeOpType, MoveSignature, NotarySig, SealKind};
     use chrono::Utc;
     use serde_json::json;
@@ -1264,6 +1268,47 @@ mod event_seal_commit_tests {
         };
         seal.id = seal.derive_id().unwrap();
         (seal, ops, covered)
+    }
+
+    #[test]
+    fn composite_state_preserves_fsm_causal_order() {
+        let cell_store = arkret_state::state::MemoryCellStore::default();
+        let registry = soland_domain::reducer::lattice_kinds::build_sdk_cell_registry();
+        let realm = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000ca55").unwrap();
+        let cell =
+            CellRef::new("ak:cell:ak.component.member.state.v1:did:web:member.example".to_owned())
+                .unwrap();
+        let join_move = MoveId::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+        let ban_move = MoveId::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+        let ops = [
+            (join_move.clone(), "leave", "join"),
+            (ban_move.clone(), "join", "ban"),
+        ]
+        .into_iter()
+        .map(|(move_id, from, to)| {
+            (
+                cell.clone(),
+                SealedOp::new(
+                    move_id,
+                    LatticeOp {
+                        op_type: LatticeOpType::Transition,
+                        tag: None,
+                        value: None,
+                        from: Some(json!(from)),
+                        to: Some(json!(to)),
+                        reason: None,
+                        issuer_seq: None,
+                    },
+                ),
+            )
+        })
+        .collect::<Vec<_>>();
+        let covered = [join_move, ban_move].into_iter().collect::<BTreeSet<_>>();
+
+        let state =
+            effective_state_with_new_ops(&cell_store, &registry, &realm, &covered, &ops).unwrap();
+
+        assert_eq!(state.get(&cell), Some(&CellState::Value(json!("ban"))),);
     }
 
     #[test]

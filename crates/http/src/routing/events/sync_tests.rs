@@ -1856,8 +1856,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
         json!({
             "message_id": message_id,
             "target_ref": message_id,
-            "redacted": true,
-            "state": "redacted"
+            "content": {"kind": "ak.content.text", "body": "edited"}
         }),
         base + ChronoDuration::seconds(4),
         base + ChronoDuration::seconds(4),
@@ -1884,6 +1883,15 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     assert_eq!(matching[0]["event_id"], revision_event_id);
     assert_eq!(matching[0]["payload"]["redacted"], true);
     assert_eq!(matching[0]["payload"]["state"], "redacted");
+    assert_eq!(matching[0]["payload"]["message_id"], message_id);
+    assert_eq!(matching[0]["payload"]["strand_id"], strand_id);
+    assert_eq!(matching[0]["payload"]["thread_id"], strand_id);
+    assert_eq!(
+        matching[0]["payload"]["content"]["body"], "[redacted]",
+        "sync must not fall back to the plaintext canonical revision"
+    );
+    assert_eq!(matching[0]["unsigned"]["projection_only"], true);
+    assert_eq!(matching[0]["proofs"], json!([]));
 }
 
 #[test]

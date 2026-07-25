@@ -320,8 +320,11 @@ async fn materialize_realm_control(
                     ),
                 )
             })?;
+        let has_reducer_derived_control_ops =
+            event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT;
         if (event.effects.is_empty()
-            && !identity_anchor_event_ids.contains(record.event_id.as_str()))
+            && !identity_anchor_event_ids.contains(record.event_id.as_str())
+            && !has_reducer_derived_control_ops)
             || event.seal_ref.is_some()
         {
             continue;
@@ -358,7 +361,50 @@ async fn materialize_realm_control(
                 "duplicate canonical Event digest in Realm control history",
             ));
         }
-        for (cell, op) in canonical_event_ops(&event, &move_id)? {
+        let invite_accept_from = if has_reducer_derived_control_ops {
+            let member_cell = CellRef::new(format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                event.actor_id
+            ))
+            .map_err(proof_state_error)?;
+            match ops_by_cell.get(&member_cell) {
+                None => Some("leave".to_owned()),
+                Some(ops) => {
+                    let binding = state
+                        .projections()
+                        .resolve_cell(realm_id, &member_cell)
+                        .map_err(|error| {
+                            AppError::new(
+                                ErrorCode::ProfileUnsupported,
+                                format!(
+                                    "no lattice registered for governance cell \
+                                         {member_cell}: {error}"
+                                ),
+                            )
+                        })?;
+                    match binding.lattice.join(&member_cell, ops) {
+                        CellState::Value(serde_json::Value::String(value)) => Some(value),
+                        CellState::Value(_) => {
+                            return Err(AppError::new(
+                                ErrorCode::StateMismatch,
+                                format!(
+                                    "governance member cell {member_cell} is not a string state"
+                                ),
+                            ));
+                        }
+                        CellState::Bottom(_) => {
+                            return Err(AppError::new(
+                                ErrorCode::StateMismatch,
+                                format!("governance member cell {member_cell} is in Bottom state"),
+                            ));
+                        }
+                    }
+                }
+            }
+        } else {
+            None
+        };
+        for (cell, op) in canonical_event_ops(&event, &move_id, invite_accept_from.as_deref())? {
             ops_by_cell
                 .entry(cell.clone())
                 .or_default()
@@ -872,7 +918,53 @@ pub(crate) async fn first_generation_event_seal_requirement(
 pub(crate) fn canonical_event_ops(
     event: &Event,
     move_id: &MoveId,
+    invite_accept_from: Option<&str>,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
+    if event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT {
+        let from = invite_accept_from.ok_or_else(|| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                "invite acceptance proof material is missing prior membership state",
+            )
+        })?;
+        let member_cell = CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{}",
+            event.actor_id
+        ))
+        .map_err(proof_state_error)?;
+        let mut result = event
+            .effects
+            .iter()
+            .filter(|effect| effect.cell != member_cell)
+            .map(|effect| {
+                (
+                    effect.cell.clone(),
+                    SealedOp::new(move_id.clone(), effect.op.clone()),
+                )
+            })
+            .collect::<Vec<_>>();
+        // The accepted invite is the signed authorization for the reducer's
+        // membership cascade. Some invitation flows explicitly materialize
+        // `invite`, while capability-only invitations leave the membership
+        // cell at its implicit `leave` value. Reconstruct the transition from
+        // the actual prior control state so both histories remain joinable.
+        result.push((
+            member_cell,
+            SealedOp::new(
+                move_id.clone(),
+                LatticeOp {
+                    op_type: LatticeOpType::Transition,
+                    tag: None,
+                    value: None,
+                    from: Some(serde_json::json!(from)),
+                    to: Some(serde_json::json!("join")),
+                    reason: Some("invite_accept".to_owned()),
+                    issuer_seq: None,
+                },
+            ),
+        ));
+        return Ok(result);
+    }
     if event.kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE {
         return Ok(event
             .effects
@@ -1111,7 +1203,7 @@ mod tests {
     fn governance_materializer_accepts_managed_agent_create_marker() {
         let event = managed_agent_pcr_create();
         let move_id = MoveId::new(format!("sha256:{}", "11".repeat(32))).unwrap();
-        let ops = canonical_event_ops(&event, &move_id).unwrap();
+        let ops = canonical_event_ops(&event, &move_id, None).unwrap();
         assert_eq!(ops.len(), 3);
         assert!(ops.iter().any(|(cell, _)| {
             cell.as_str() == format!("ak:cell:ak.component.realm.create.v1:{}", event.realm_id)
@@ -1141,6 +1233,37 @@ mod tests {
             },
         }];
         let move_id = MoveId::new(format!("sha256:{}", "22".repeat(32))).unwrap();
-        assert!(canonical_event_ops(&event, &move_id).is_err());
+        assert!(canonical_event_ops(&event, &move_id, None).is_err());
+    }
+
+    #[test]
+    fn governance_materializer_reconstructs_invite_accept_membership() {
+        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000fade").unwrap();
+        let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
+        let event = Event::new(
+            arkret_wire::events::EventKind::INVITE_ACCEPT,
+            realm_id,
+            actor_id.clone(),
+            0,
+            arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
+            serde_json::json!({
+                "invite_id": "ak:invite:01999999-0000-7000-8000-00000000fade"
+            }),
+        )
+        .unwrap();
+        let move_id = MoveId::new(format!("sha256:{}", "33".repeat(32))).unwrap();
+
+        for prior_state in ["leave", "invite"] {
+            let ops = canonical_event_ops(&event, &move_id, Some(prior_state)).unwrap();
+
+            assert_eq!(ops.len(), 1);
+            assert_eq!(
+                ops[0].0.as_str(),
+                format!("ak:cell:ak.component.member.state.v1:{actor_id}")
+            );
+            assert_eq!(ops[0].1.op.op_type, LatticeOpType::Transition);
+            assert_eq!(ops[0].1.op.from, Some(serde_json::json!(prior_state)));
+            assert_eq!(ops[0].1.op.to, Some(serde_json::json!("join")));
+        }
     }
 }
