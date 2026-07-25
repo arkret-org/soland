@@ -23245,11 +23245,6 @@
             "minimum": 0,
             "type": "integer"
           },
-          "size_bytes": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "total_size": {
             "format": "uint64",
             "minimum": 0,
@@ -23258,26 +23253,13 @@
         },
         "required": [
           "count",
-          "size_bytes",
           "total_size"
         ],
         "type": "object"
       },
       "soland_http.routing.admin.media.MediaByActorOutcome": {
         "properties": {
-          "actors": {
-            "items": {
-              "$ref": "#/components/schemas/soland_http.routing.admin.media.MediaByActorRow"
-            },
-            "type": "array"
-          },
           "data": {
-            "items": {
-              "$ref": "#/components/schemas/soland_http.routing.admin.media.MediaByActorRow"
-            },
-            "type": "array"
-          },
-          "items": {
             "items": {
               "$ref": "#/components/schemas/soland_http.routing.admin.media.MediaByActorRow"
             },
@@ -23289,19 +23271,13 @@
               "null"
             ]
           },
-          "resource": {
-            "type": "string"
-          },
           "total": {
             "minimum": 0,
             "type": "integer"
           }
         },
         "required": [
-          "resource",
           "data",
-          "items",
-          "actors",
           "total"
         ],
         "type": "object"
@@ -23326,18 +23302,12 @@
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
-          },
-          "total_size_bytes": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
           }
         },
         "required": [
           "actor_id",
           "blob_count",
-          "total_size",
-          "total_size_bytes"
+          "total_size"
         ],
         "type": "object"
       },
@@ -23382,17 +23352,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "total_count": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
           "total_size": {
-            "format": "uint64",
-            "minimum": 0,
-            "type": "integer"
-          },
-          "total_size_bytes": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -23400,9 +23360,7 @@
         },
         "required": [
           "total_blobs",
-          "total_count",
           "total_size",
-          "total_size_bytes",
           "encrypted_count",
           "quarantined_count",
           "by_media_type",

@@ -224,7 +224,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
     assert_eq!(stats["total_size"], 192);
     assert_eq!(stats["encrypted_count"], 1);
     assert_eq!(stats["by_media_type"]["image/png"]["count"], 1);
-    assert_eq!(stats["by_realm"][DEMO_REALM_ID]["size_bytes"], 192);
+    assert_eq!(stats["by_realm"][DEMO_REALM_ID]["total_size"], 192);
 
     let by_actor: Value = TestClient::get("http://server/_soland/admin/media/by-actor")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -233,7 +233,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
         .take_json()
         .await
         .unwrap();
-    let row = by_actor["actors"]
+    let row = by_actor["data"]
         .as_array()
         .unwrap()
         .iter()

@@ -6,7 +6,6 @@
 //! upload), offset conflicts, incomplete finalize, version negotiation
 //! and cross-actor isolation.
 
-use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 
 use super::common::*;

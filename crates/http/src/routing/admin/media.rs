@@ -18,7 +18,6 @@ use crate::{JsonResult, json_ok};
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaBucket {
     count: u64,
-    size_bytes: u64,
     total_size: u64,
 }
 
@@ -28,15 +27,12 @@ struct MediaByActorRow {
     display_name: Option<String>,
     blob_count: u64,
     total_size: u64,
-    total_size_bytes: u64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaStatisticsOutcome {
     total_blobs: u64,
-    total_count: u64,
     total_size: u64,
-    total_size_bytes: u64,
     encrypted_count: u64,
     quarantined_count: u64,
     by_media_type: BTreeMap<String, MediaBucket>,
@@ -46,10 +42,7 @@ struct MediaStatisticsOutcome {
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaByActorOutcome {
-    resource: String,
     data: Vec<MediaByActorRow>,
-    items: Vec<MediaByActorRow>,
-    actors: Vec<MediaByActorRow>,
     total: usize,
     next_cursor: Option<String>,
 }
@@ -197,9 +190,7 @@ async fn get_media_statistics(
 
     json_ok(MediaStatisticsOutcome {
         total_blobs: blobs.len() as u64,
-        total_count: blobs.len() as u64,
         total_size,
-        total_size_bytes: total_size,
         encrypted_count,
         quarantined_count: 0,
         by_media_type,
@@ -236,12 +227,10 @@ async fn get_media_by_actor(
     )
     .await;
 
+    let total = rows.len();
     json_ok(MediaByActorOutcome {
-        resource: "media_by_actor".to_owned(),
-        data: rows.clone(),
-        items: rows.clone(),
-        actors: rows.clone(),
-        total: rows.len(),
+        data: rows,
+        total,
         next_cursor: None,
     })
 }
@@ -276,7 +265,6 @@ async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<Medi
                 display_name,
                 blob_count,
                 total_size,
-                total_size_bytes: total_size,
             }
         })
         .collect()
@@ -285,6 +273,5 @@ async fn media_by_actor_rows(state: &AppState, blobs: &[BlobRecord]) -> Vec<Medi
 fn add_bucket(buckets: &mut BTreeMap<String, MediaBucket>, key: &str, size: u64) {
     let entry = buckets.entry(key.to_owned()).or_default();
     entry.count += 1;
-    entry.size_bytes = entry.size_bytes.saturating_add(size);
-    entry.total_size = entry.size_bytes;
+    entry.total_size = entry.total_size.saturating_add(size);
 }

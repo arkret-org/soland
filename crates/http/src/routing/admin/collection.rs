@@ -649,7 +649,7 @@ pub(super) async fn admin_media_items(state: &AppState) -> Vec<Value> {
                 "realm_id": blob.realm_id,
                 "encrypted": blob.encryption.is_some(),
                 "uploaded_by": blob.uploaded_by,
-                "size": blob.size_bytes,
+                "size_bytes": blob.size_bytes,
                 "created_at": blob.created_at,
             })
         })
