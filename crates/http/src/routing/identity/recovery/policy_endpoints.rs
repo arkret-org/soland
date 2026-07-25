@@ -97,7 +97,10 @@ pub(super) fn recovery_policy_ref_from_summary(
         })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.recovery_policy.resource.get",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.recovery_policy.resource.get"))]
 pub(super) async fn recovery_policy_get(
     aa: AuthArgs,
@@ -130,7 +133,10 @@ pub(super) async fn recovery_policy_get(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.identity.recovery_policies.get",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.recovery_policies.get")
@@ -156,7 +162,10 @@ pub(super) async fn recovery_policies_get(
     json_ok(SolandRecoveryPoliciesOutcome { policies })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.recovery_policy.command.publish",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_policy.command.publish")

@@ -41,7 +41,7 @@ pub use soland_contracts::admin::{
 };
 use soland_services::protocol_artifacts as artifacts;
 
-#[derive(Debug, Serialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct HealthOutcome {
     pub ok: bool,
     pub service: &'static str,
@@ -70,7 +70,7 @@ pub struct HealthOutcome {
     pub hardening: HardeningStatus,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct SolandServerDescribeOutcome {
     #[serde(flatten)]
     pub service: ServiceDescribe,
@@ -81,7 +81,7 @@ pub struct SolandServerDescribeOutcome {
     pub hardening: HardeningStatus,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct UnsupportedProfileDescriptor {
     pub profile: String,
     pub status: String,
@@ -101,7 +101,7 @@ impl UnsupportedProfileDescriptor {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize, Deserialize)]
 pub struct AuthBridgeDescribeOutcome {
     pub contract: String,
     pub version: String,
@@ -113,7 +113,7 @@ pub struct AuthBridgeDescribeOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize, Deserialize)]
 pub struct AuthBridgeAuthDescriptor {
     pub dev_login_path: String,
     pub session_grant_issuance_path: String,
@@ -121,7 +121,7 @@ pub struct AuthBridgeAuthDescriptor {
     pub principal_id_body_field: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize, Deserialize)]
 pub struct AuthBridgePushDescriptor {
     pub register_device_path: String,
     pub unregister_device_path: String,
@@ -130,14 +130,14 @@ pub struct AuthBridgePushDescriptor {
     pub register_device_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize, Deserialize)]
 pub struct AuthBridgeExamples {
     pub session_grant_issue_request: Value,
     pub register_device_request: Value,
     pub unregister_device_request: Value,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeDescribeOutcome {
     pub contract: String,
     pub version: String,
@@ -149,7 +149,7 @@ pub struct OutboundPushBridgeDescribeOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushGatewayContractDescriptor {
     pub resolve_path: String,
     pub fetch_path: String,
@@ -165,7 +165,7 @@ pub struct OutboundPushGatewayContractDescriptor {
     pub snapshot_store_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushDeliveryDescriptor {
     pub operation_id: String,
     pub origin_service_id_header: String,
@@ -175,7 +175,7 @@ pub struct OutboundPushDeliveryDescriptor {
     pub payload_mode: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeExamples {
     pub resolve_request: Value,
     pub fetch_request: Value,
@@ -191,27 +191,27 @@ pub use arkret_models_integration::integration::{
     IntegrationDependencyDescriptor, IntegrationDescribeOutcome, IntegrationSurfaceDescriptor,
 };
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeResolveRequestBody {
     pub push_gateway_url: String,
     #[serde(default)]
     pub refresh: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeFetchRequestBody {
     pub push_gateway_url: String,
     #[serde(default)]
     pub force_refresh: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheInvalidateRequestBody {
     #[serde(default)]
     pub push_gateway_url: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheSnapshot {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -245,7 +245,7 @@ fn default_trust_pending() -> String {
     "pending".to_owned()
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheExportOutcome {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
@@ -254,7 +254,7 @@ pub struct OutboundPushBridgeCacheExportOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheImportRequestBody {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheSnapshot>,
@@ -262,7 +262,7 @@ pub struct OutboundPushBridgeCacheImportRequestBody {
     pub replace_existing: bool,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheImportOutcome {
     pub imported_count: usize,
     pub skipped_count: usize,
@@ -273,7 +273,7 @@ pub struct OutboundPushBridgeCacheImportOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeResolveOutcome {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -286,7 +286,7 @@ pub struct OutboundPushBridgeResolveOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushResolvedContract {
     pub contract: String,
     pub expected_notify_path: String,
@@ -312,7 +312,7 @@ pub struct OutboundPushResolvedContract {
     pub service_id: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeFetchOutcome {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -346,13 +346,13 @@ pub struct OutboundPushBridgeFetchOutcome {
     pub todos: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheStatusOutcome {
     #[serde(default)]
     pub entries: Vec<OutboundPushBridgeCacheEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheEntry {
     pub push_gateway_url: String,
     pub service_base_url: String,
@@ -377,7 +377,7 @@ pub struct OutboundPushBridgeCacheEntry {
     pub etag: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushBridgeCacheInvalidateOutcome {
     pub removed_count: usize,
     pub remaining_entries: usize,
@@ -418,7 +418,7 @@ fn default_true() -> bool {
     true
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Deserialize)]
 pub struct UpsertPolicyDocumentRequestBody {
     #[serde(default)]
     pub policy_id: Option<String>,
@@ -436,7 +436,7 @@ pub struct UpsertPolicyDocumentRequestBody {
     pub active: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct PolicyDocumentOutcome {
     pub policy_id: String,
     pub owner: String,
@@ -449,13 +449,13 @@ pub struct PolicyDocumentOutcome {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct PolicyDocumentsOutcome {
     pub policies: Vec<PolicyDocumentOutcome>,
     pub next_cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Deserialize)]
 pub struct DevLoginRequestBody {
     pub actor: String,
     pub device_id: String,
@@ -464,7 +464,7 @@ pub struct DevLoginRequestBody {
 
 pub type LogoutOutcome = arkret_models_identity::AccountLogoutOutcome;
 
-#[derive(Debug, Serialize)]
+#[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct SolandAccountRegisterOutcome {
     pub did: String,
     pub handle: String,

@@ -14,6 +14,7 @@ pub const CAPABILITY_FANOUT_KIND: &str = "org.arkret.coauth.collaboration_capabi
 use serde_json::Value;
 
 /// Request body coauth POSTs to `/_soland/root/authz/capability-fanout`.
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CapabilityFanoutBody {
     /// Fixed envelope kind `org.arkret.coauth.collaboration_capability.fanout.v1`.
@@ -34,6 +35,7 @@ pub struct CapabilityFanoutBody {
 }
 
 /// Response from the soland fanout handler.
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CapabilityFanoutResponse {
     pub accepted: Vec<String>,
@@ -45,6 +47,7 @@ pub struct CapabilityFanoutResponse {
 }
 
 /// Post-projection authorization state the fanout handler observed.
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CapabilityFanoutAuthzState {
     pub projected: bool,

@@ -96,19 +96,19 @@ pub(super) const RECEIPT_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "completed_at",
 ];
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryPoliciesOutcome {
     pub(super) policies: Vec<RecoveryPolicySummary>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptsOutcome {
     pub(super) receipts: Vec<SolandRecoveryReceiptItem>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptItem {
     pub(super) receipt_id: ReceiptId,
@@ -127,7 +127,7 @@ pub(super) struct SolandRecoveryReceiptItem {
     pub(super) receipt: Value,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SolandRecoveryReceiptPutOutcome {
     pub(super) ok: bool,
@@ -139,6 +139,6 @@ pub(super) struct SolandRecoveryReceiptPutOutcome {
     pub(super) accepted_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Deserialize)]
 #[serde(transparent)]
 pub(super) struct SignedRecoveryReceiptRequestBody(pub(super) Value);

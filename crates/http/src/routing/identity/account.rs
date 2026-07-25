@@ -213,7 +213,7 @@ fn direct_conversation_routes() -> Router {
         .push(Router::with_path("resolve").post(direct_conversation_resolve))
 }
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, salvo::oapi::ToSchema)]
 #[serde(deny_unknown_fields)]
 struct LocalAccountRegisterRequestBody {
     pub did: String,
@@ -700,7 +700,7 @@ fn managed_agent_direct_authorization_basis_from_record(
     Some(basis)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.account.register", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.register"))]
 async fn local_account_register(
     depot: &mut Depot,
@@ -780,7 +780,7 @@ async fn local_account_register(
     json_ok(account_response(account, state))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.account.me", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.me"))]
 async fn local_account_me(
     aa: AuthArgs,
@@ -799,7 +799,10 @@ async fn local_account_me(
     json_ok(account_response(account, state))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.accounts.localparts.list",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.list"))]
 async fn list_account_localparts(
     account_did: PathParam<String>,
@@ -827,7 +830,10 @@ async fn list_account_localparts(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.accounts.localparts.add",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.add"))]
 async fn add_account_localpart(
     account_did: PathParam<String>,
@@ -870,7 +876,10 @@ async fn add_account_localpart(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.accounts.localparts.update",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.update"))]
 async fn update_account_localpart(
     account_did: PathParam<String>,
@@ -912,7 +921,10 @@ async fn update_account_localpart(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.accounts.localparts.delete",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.accounts.localparts.delete"))]
 async fn delete_account_localpart(
     account_did: PathParam<String>,
@@ -971,9 +983,30 @@ async fn delete_account_localpart(
     json_ok(AccountLocalpartDeleteOutcome { ok: true })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.account.query.viewer", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.query.viewer"))]
 pub(crate) async fn account_viewer(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountView> {
+    account_viewer_impl(aa, depot, req).await
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.account.query.viewer",
+    tags("admin", "identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.account.query.viewer"))]
+pub(crate) async fn admin_account_viewer(
+    aa: AuthArgs,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<AccountView> {
+    account_viewer_impl(aa, depot, req).await
+}
+
+async fn account_viewer_impl(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
@@ -1014,7 +1047,7 @@ pub(crate) async fn account_viewer(
 /// the Account Authority after it has verified the identity-creation protocol.
 /// It requires the configured service bearer, never accepts the client-facing
 /// `identity_creation` branch, and does not create a handle as a side effect.
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.gate.account.command.register", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.gate.account.command.register"))]
 async fn gate_account_register(
     depot: &mut Depot,
@@ -1162,7 +1195,10 @@ async fn gate_account_register(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.account.command.update_profile",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.account.command.update_profile"))]
 async fn update_profile(
     aa: AuthArgs,
@@ -1312,7 +1348,10 @@ fn actor_profile_from_account(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.direct_conversation.command.resolve",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.command.resolve"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,

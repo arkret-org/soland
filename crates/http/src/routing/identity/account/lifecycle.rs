@@ -11,7 +11,7 @@ use arkret_models_collaboration::governance::erasure::{
 
 use super::*;
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.account.export", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.export"))]
 pub(super) async fn export_account(
     aa: AuthArgs,
@@ -113,7 +113,7 @@ pub(super) async fn export_account(
     })
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountExportOutcome {
     pub did: String,
     pub exported_at: String,
@@ -128,14 +128,14 @@ struct AccountExportOutcome {
     pub key_backup_state: Option<Value>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountExportProfile {
     pub display_name: Option<String>,
     pub bio: Option<String>,
     pub avatar_blob_ref: Option<BlobRef>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountExportRealm {
     pub realm_id: String,
     pub discoverability: String,
@@ -143,7 +143,7 @@ struct AccountExportRealm {
     pub created_at: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountExportDevice {
     pub device_id: String,
     pub display_name: Option<String>,
@@ -152,7 +152,7 @@ struct AccountExportDevice {
     pub revoked_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub(crate) struct AccountLifecycleChange {
     pub did: String,
     pub previous_state: String,
@@ -614,7 +614,10 @@ pub(crate) fn deactivation_peer_service_targets_for_actor(
         .collect()
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.account.deactivate",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.deactivate"))]
 pub(super) async fn deactivate_account(
     aa: AuthArgs,
@@ -648,7 +651,7 @@ pub(super) async fn deactivate_account(
     })
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountDeactivateOutcome {
     pub did: String,
     pub previous_state: String,
@@ -664,7 +667,7 @@ struct AccountDeactivateOutcome {
     pub capability_cache_invalidated: usize,
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.account.erase", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.erase"))]
 pub(super) async fn erase_account(
     aa: AuthArgs,
@@ -844,7 +847,7 @@ pub(super) async fn erase_account(
     })
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct AccountEraseOutcome {
     pub did: String,
     pub state: String,

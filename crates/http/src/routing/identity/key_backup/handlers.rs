@@ -247,7 +247,10 @@ pub(super) async fn owned_key_backup_snapshot(
     Ok(snapshot)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.backups.resource.replace",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.replace"))]
 pub(super) async fn put_key_backup(
     aa: AuthArgs,
@@ -362,9 +365,39 @@ pub(super) async fn put_key_backup(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.query.list", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.query.list"))]
 pub(crate) async fn list_key_backups(
+    aa: AuthArgs,
+    cursor: QueryParam<String, false>,
+    series_id: QueryParam<String, false>,
+    backup_class: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<KeysBackupsList> {
+    list_key_backups_impl(aa, cursor, series_id, backup_class, depot, req).await
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.key_backups.query.list",
+    tags("admin")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.admin.key_backups.query.list")
+)]
+pub(crate) async fn list_key_backups_admin(
+    aa: AuthArgs,
+    cursor: QueryParam<String, false>,
+    series_id: QueryParam<String, false>,
+    backup_class: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<KeysBackupsList> {
+    list_key_backups_impl(aa, cursor, series_id, backup_class, depot, req).await
+}
+
+async fn list_key_backups_impl(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
@@ -423,7 +456,7 @@ pub(crate) async fn list_key_backups(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.command.unlock", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.command.unlock"))]
 pub(super) async fn unlock_key_backup(
     aa: AuthArgs,
@@ -503,7 +536,10 @@ pub(super) async fn unlock_key_backup(
     json_ok(backup)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.backups.resource.delete",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.backups.resource.delete"))]
 pub(super) async fn delete_key_backup(
     aa: AuthArgs,

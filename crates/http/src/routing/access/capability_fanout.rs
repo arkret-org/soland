@@ -49,7 +49,10 @@ pub(super) fn router() -> Router {
 // (`org.arkret.soland.gate.account.device_signing_keys.query`): both are
 // deployment-internal S2S contracts, not spec operations. Trust boundary is
 // registered in coauth `docs/{zh,en}/setup/principal-server.md`.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.root.authz.capability_fanout.submit",
+    tags("access")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.root.authz.capability_fanout.submit")

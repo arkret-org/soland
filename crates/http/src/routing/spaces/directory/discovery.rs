@@ -1,6 +1,9 @@
 use super::*;
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.query.private_contact_discovery",
+    tags("spaces")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.find.directory.query.private_contact_discovery")
@@ -19,7 +22,7 @@ pub(super) async fn private_contact_discovery(
     ))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.announce", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.announce"))]
 pub(super) async fn directory_announce(
     body: JsonBody<DirectoryAnnounceRequestBody>,
@@ -63,7 +66,7 @@ pub(super) async fn directory_announce(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.command.withdraw", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.command.withdraw"))]
 pub(super) async fn directory_withdraw(
     body: JsonBody<DirectoryWithdrawRequestBody>,
@@ -89,7 +92,10 @@ pub(super) async fn directory_withdraw(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.push.command.register",
+    tags("spaces")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.push.command.register"))]
 pub(super) async fn directory_subscribe(
     body: JsonBody<DirectoryPushRegisterRequestBody>,

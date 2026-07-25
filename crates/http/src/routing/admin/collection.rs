@@ -41,19 +41,20 @@ use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, RealmDirectoryEntry};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminCollectionOutcome {
     resource: String,
     data: Vec<Value>,
     items: Vec<Value>,
     #[serde(flatten)]
+    #[salvo(schema(value_type = serde_json::Value))]
     resource_items: BTreeMap<String, Value>,
     total: usize,
     next_cursor: Option<String>,
     production_gap: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminRealmItem {
     kind: String,
     id: String,
@@ -64,6 +65,7 @@ pub(super) struct AdminRealmItem {
     topic: Option<String>,
     category: Option<String>,
     realm_class: Option<String>,
+    #[salvo(schema(value_type = serde_json::Value))]
     default_join_rule: Option<JoinRule>,
     tags: Vec<String>,
     public: bool,
@@ -80,13 +82,13 @@ pub(super) struct AdminRealmItem {
     updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminRealmDeleteOutcome {
     realm_id: String,
     deleted: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminRealmMemberItem {
     actor_id: String,
     membership: String,
@@ -94,7 +96,10 @@ pub(super) struct AdminRealmMemberItem {
     joined_at: Option<String>,
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.collection",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.collection"))]
 pub(super) async fn admin_collection(
     aa: AuthArgs,
@@ -209,7 +214,7 @@ pub(super) async fn admin_collection(
     })
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(super) struct AdminCreateRealmRequestBody {
     #[serde(default)]
     title: String,
@@ -218,13 +223,17 @@ pub(super) struct AdminCreateRealmRequestBody {
     #[serde(default)]
     discoverability: Option<String>,
     #[serde(default, rename = "default_join_rule")]
+    #[salvo(schema(value_type = serde_json::Value))]
     default_join_rule: Option<JoinRule>,
     #[serde(default)]
     is_encrypted: bool,
     realm_class: String,
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realm.create",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.create"))]
 pub(super) async fn admin_create_realm(
     aa: AuthArgs,
@@ -289,7 +298,10 @@ pub(super) async fn admin_create_realm(
     json_ok(admin_get_realm_item(state, &realm_id).await?)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realm.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.get"))]
 pub(super) async fn admin_get_realm(
     realm_id: PathParam<String>,
@@ -300,7 +312,10 @@ pub(super) async fn admin_get_realm(
     json_ok(admin_get_realm_item(state, &realm_id).await?)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realm.delete",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.delete"))]
 pub(super) async fn admin_delete_realm(
     aa: AuthArgs,
@@ -334,7 +349,10 @@ pub(super) async fn admin_delete_realm(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realm.members",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm.members"))]
 pub(super) async fn admin_list_realm_members(
     realm_id: PathParam<String>,

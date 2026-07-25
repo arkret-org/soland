@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 
 /// Request for the product-local device signing-key directory.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct DeviceSigningKeyDirectoryQueryRequestBody {
     pub principal_id: Did,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -19,9 +20,11 @@ pub struct DeviceSigningKeyDirectoryQueryRequestBody {
 
 /// One authorized, non-revoked device signing key.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AuthorizedDeviceSigningKey {
     pub device_id: DeviceId,
     pub device_signing_key: String,
+    #[cfg_attr(feature = "openapi", salvo(schema(value_type = String)))]
     pub device_status: DeviceStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_authorize_event_id: Option<EventId>,
@@ -29,6 +32,7 @@ pub struct AuthorizedDeviceSigningKey {
 
 /// Response from the product-local device signing-key directory.
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct DeviceSigningKeyDirectoryOutcome {
     pub principal_id: Did,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

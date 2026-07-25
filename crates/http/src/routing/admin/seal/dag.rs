@@ -16,7 +16,10 @@ use crate::{JsonResult, json_ok};
 
 /// `GET /_soland/admin/realms/{realm_id}/seal-dag` — leaves + covered events
 /// + state_root snapshot built from the live `SealStore`.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.spaces.seal_dag.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.spaces.seal_dag.get"))]
 pub(crate) async fn admin_get_seal_dag(
     aa: AuthArgs,
@@ -96,7 +99,10 @@ pub(crate) async fn admin_get_seal_dag(
 /// (which would prune historical Seals per MAL-11) but it produces a
 /// structurally-correct response so sodmin's UI strand is unblocked.
 /// `max_control_moves` is honoured via `run_one_signing_pass`.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.spaces.seal_dag.compact",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.spaces.seal_dag.compact")
@@ -220,7 +226,10 @@ pub(crate) async fn admin_compact_seal_dag(
 /// (env-driven `SOLAND_COMPACTION_*`). Successor seals have their
 /// `predecessor_refs` rewired to the pruned candidate's parents; the
 /// store guarantees no leaf prune (returns 4xx instead).
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.spaces.seal_dag.prune",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.spaces.seal_dag.prune"))]
 pub(crate) async fn admin_prune_seal_dag(
     aa: AuthArgs,

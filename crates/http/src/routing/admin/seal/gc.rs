@@ -12,7 +12,7 @@ use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` response.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct GcCandidatesOutcome {
     pub realm_id: String,
     pub candidates: Vec<crate::gc::GcCandidate>,
@@ -21,7 +21,7 @@ pub struct GcCandidatesOutcome {
 
 /// `GET /_soland/admin/realms/{realm_id}/gc-candidates` — list Moves that
 /// are GC-eligible per MAL-13 rules. Read-only (no actual deletion).
-#[handler]
+#[salvo::oapi::endpoint(tags("soland_admin"))]
 pub(crate) async fn admin_list_gc_candidates(
     aa: AuthArgs,
     depot: &mut Depot,

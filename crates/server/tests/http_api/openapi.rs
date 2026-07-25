@@ -2,10 +2,9 @@ use super::common::*;
 
 /// The served OpenAPI document is generated from the live salvo router via
 /// salvo-oapi (`OpenApi::merge_router`), not from any embedded/static
-/// artifact. Operation-level coverage grows as handlers migrate from
-/// `#[handler]` to annotated `#[endpoint]`; this test asserts the generation
-/// contract and the soland extension envelope rather than any specific
-/// operation, which is intentionally left to the incremental migration.
+/// artifact. Typed JSON routes are annotated `#[endpoint]`; the remaining
+/// transport-specialized handlers are intentionally outside the ordinary
+/// generated operation surface.
 #[tokio::test]
 async fn served_openapi_is_generated_from_the_router() {
     let spec: Value = TestClient::get("http://server/.well-known/arkret/openapi.json")
@@ -34,6 +33,8 @@ async fn served_openapi_is_generated_from_the_router() {
         spec["paths"].is_object(),
         "generated document must expose a paths object"
     );
+    assert_required_migrated_operations(&spec);
+    assert_operation_ids_are_unique(&spec);
     assert_component_refs_resolve(&spec, &spec);
 }
 
@@ -77,6 +78,54 @@ fn assert_component_refs_resolve(root: &Value, value: &Value) {
         }
         _ => {}
     }
+}
+
+fn assert_required_migrated_operations(root: &Value) {
+    let operation_ids = operation_ids(root);
+    for expected in [
+        "org.arkret.soland.system.health",
+        "ak.server.query.describe",
+        "ak.self.events.query.scan",
+        "ak.self.snapshot.query.manifest_head",
+        "ak.self.blob.command.presign",
+        "mimi_protocol_directory",
+        "org.arkret.soland.well_known.arkret",
+    ] {
+        assert!(
+            operation_ids
+                .iter()
+                .any(|operation_id| *operation_id == expected),
+            "migrated operation is absent from generated OpenAPI: {expected}"
+        );
+    }
+}
+
+fn assert_operation_ids_are_unique(root: &Value) {
+    let mut seen = std::collections::BTreeSet::new();
+    for operation_id in operation_ids(root) {
+        assert!(
+            seen.insert(operation_id),
+            "duplicate generated OpenAPI operationId: {operation_id}"
+        );
+    }
+}
+
+fn operation_ids(root: &Value) -> Vec<&str> {
+    const METHODS: &[&str] = &[
+        "get", "head", "post", "put", "patch", "delete", "options", "trace",
+    ];
+    root["paths"]
+        .as_object()
+        .into_iter()
+        .flat_map(|paths| paths.values())
+        .filter_map(Value::as_object)
+        .flat_map(|path_item| {
+            path_item
+                .iter()
+                .filter(|(method, _)| METHODS.contains(&method.as_str()))
+                .filter_map(|(_, operation)| operation["operationId"].as_str())
+        })
+        .collect()
 }
 
 /// A path that exists only in the canonical spec artifact (never registered as

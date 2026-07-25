@@ -79,7 +79,10 @@ pub(super) fn product_router() -> Router {
         )
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.policy_document.query.list",
+    tags("access")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.policy_document.query.list"))]
 async fn list_policy_documents(
     aa: AuthArgs,
@@ -115,7 +118,10 @@ async fn list_policy_documents(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.policy_document.resource.get",
+    tags("access")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.policy_document.resource.get")
@@ -140,7 +146,10 @@ async fn get_policy_document(
         .unwrap_or_else(|| Err(AppError::not_found("policy not found")))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.policy_document.command.upsert",
+    tags("access")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.policy_document.command.upsert")
@@ -216,7 +225,10 @@ async fn upsert_policy_document(
     json_ok(policy_document_to_response(&record))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.policy_document.resource.delete",
+    tags("access")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.policy_document.resource.delete")
@@ -246,7 +258,7 @@ async fn delete_policy_document(
     json_ok(OkOutcome { ok: true })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.policy.query.check", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.policy.query.check"))]
 async fn policy_check(
     aa: AuthArgs,

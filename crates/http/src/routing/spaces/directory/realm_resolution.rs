@@ -1,6 +1,6 @@
 use super::*;
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.query.search_realms", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_realms"))]
 pub(super) async fn search_realms(
     body: JsonBody<DirectorySearchRealmsRequestBody>,
@@ -41,7 +41,7 @@ pub(super) async fn search_realms(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.query.resolve_realm", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_realm"))]
 pub(super) async fn resolve_realm(
     body: JsonBody<DirectoryResolveRealmRequestBody>,
@@ -126,7 +126,10 @@ pub(super) async fn resolve_realm(
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.query.resolve_target",
+    tags("spaces")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.resolve_target"))]
 pub(super) async fn resolve_target(
     body: JsonBody<DirectoryResolveTargetRequestBody>,

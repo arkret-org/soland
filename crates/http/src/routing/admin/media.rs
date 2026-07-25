@@ -15,14 +15,14 @@ use super::{AuthArgs, append_audit_log, require_admin_principal};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaBucket {
     count: u64,
     size_bytes: u64,
     total_size: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaByActorRow {
     actor_id: String,
     display_name: Option<String>,
@@ -31,7 +31,7 @@ struct MediaByActorRow {
     total_size_bytes: u64,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaStatisticsOutcome {
     total_blobs: u64,
     total_count: u64,
@@ -44,7 +44,7 @@ struct MediaStatisticsOutcome {
     by_actor: Vec<MediaByActorRow>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct MediaByActorOutcome {
     resource: String,
     data: Vec<MediaByActorRow>,
@@ -67,7 +67,7 @@ pub(super) fn router() -> Router {
 /// for sodmin. Mirrors the projected media_service epoch shape: the service
 /// DID plus the declared multi-focus set (`bindings/livekit.md` §2 /
 /// `media-service-binding.md` §2).
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct RealmMediaServiceOutcome {
     realm_id: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -119,7 +119,10 @@ fn response_from_media_cell(realm_id: &str, value: Option<&Value>) -> RealmMedia
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.media_service.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.media_service.get")
@@ -165,7 +168,10 @@ async fn admin_get_realm_media_service(
     json_ok(response_from_media_cell(&realm_id, value.as_ref()))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.media.statistics",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.media.statistics"))]
 async fn get_media_statistics(
     aa: AuthArgs,
@@ -219,7 +225,10 @@ async fn get_media_statistics(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.media.by_actor",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.media.by_actor"))]
 async fn get_media_by_actor(
     aa: AuthArgs,

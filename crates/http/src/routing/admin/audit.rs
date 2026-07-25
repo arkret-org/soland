@@ -29,7 +29,7 @@ use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 use crate::wire::OkOutcome;
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct FrankingProofVerifyRequestBody {
     #[serde(default)]
     proof_digest: Option<String>,
@@ -47,18 +47,18 @@ struct FrankingProofVerifyRequestBody {
     event_canonical_digest: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct FrankingProofVerifyOutcome {
     ok: bool,
     proof_digest: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditErasureReceiptsOutcome {
     receipts: Vec<AuditErasureReceiptItem>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditErasureReceiptItem {
     receipt_id: Option<String>,
     issuer: Option<String>,
@@ -73,14 +73,14 @@ struct AuditErasureReceiptItem {
     payload: Value,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditErasureReceiptPeerStatus {
     sent_at: Option<String>,
     acked_at: Option<String>,
     outcome: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditUserActionRequestBody {
     #[serde(default)]
     actor: Option<String>,
@@ -94,7 +94,7 @@ struct AuditUserActionRequestBody {
     recorded_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditEventsOutcome {
     events: Vec<Value>,
     next_cursor: Option<String>,
@@ -117,7 +117,10 @@ pub(super) fn ops_router() -> Router {
         .push(Router::with_path("audit/erasure-receipts").get(audit_erasure_receipts))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.audit.franking.verify",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.franking.verify"))]
 async fn verify_franking_proof(
     aa: AuthArgs,
@@ -155,7 +158,10 @@ async fn verify_franking_proof(
 /// not leak any post-erasure payload (the projection holds canonical
 /// receipt envelopes — issuer / subject / outcome / scope — which are
 /// the auditable surface by design).
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.audit.erasure_receipts.list",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.erasure_receipts.list"))]
 async fn audit_erasure_receipts(
     aa: AuthArgs,
@@ -225,7 +231,10 @@ async fn audit_erasure_receipts(
 /// itself while handling the admin endpoint (see `admin/spec.rs`
 /// `admin_account_state_action`), binding the session actor and the target id
 /// rather than trusting a client-asserted copy.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.audit.user_action",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.user_action"))]
 async fn post_user_action(
     aa: AuthArgs,
@@ -271,7 +280,7 @@ async fn post_user_action(
     json_ok(OkOutcome { ok: true })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.audit.events", tags("soland_admin"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.events"))]
 async fn audit_events(
     aa: AuthArgs,

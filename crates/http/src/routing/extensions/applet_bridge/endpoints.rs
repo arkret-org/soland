@@ -107,7 +107,7 @@ pub(in crate::routing::extensions) fn protocol_router() -> Router {
         )
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.query.ping", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.ping"))]
 async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -122,7 +122,7 @@ async fn protocol_ping_endpoint(depot: &mut Depot) -> JsonResult<AppletPingOutco
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.edge.applet.query.describe", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.describe"))]
 async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcome> {
     json_ok(AppletProtocolDescribeOutcome {
@@ -161,7 +161,10 @@ async fn protocol_describe_endpoint() -> JsonResult<AppletProtocolDescribeOutcom
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.applet.install.command.preview",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.install.command.preview"))]
 async fn install_preview_endpoint(
     aa: AuthArgs,
@@ -188,7 +191,7 @@ async fn install_preview_endpoint(
     json_ok(plan)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.install", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.install"))]
 async fn install_endpoint(
     aa: AuthArgs,
@@ -244,7 +247,7 @@ async fn install_endpoint(
     json_ok(response)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.applet.command.revoke", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.command.revoke"))]
 async fn revoke_install_endpoint(
     aa: AuthArgs,
@@ -476,7 +479,10 @@ fn session_revoke_body_for_applet(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.applet.ghost.command.provision",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.applet.ghost.command.provision"))]
 async fn provision_ghost_actor_endpoint(
     aa: AuthArgs,
@@ -669,7 +675,10 @@ async fn provision_ghost_actor_endpoint(
     json_ok(outcome)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.applet.command.transaction",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.command.transaction"))]
 async fn transaction_endpoint(
     body: JsonBody<AppletTransactionRequestBody>,
@@ -704,7 +713,10 @@ async fn transaction_endpoint(
     json_ok(outcome)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.applet.actor.query.resolve",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.actor.query.resolve"))]
 async fn resolve_actor_endpoint(
     req: &mut Request,
@@ -735,7 +747,10 @@ async fn resolve_actor_endpoint(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.applet.realm.query.resolve",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.realm.query.resolve"))]
 async fn resolve_realm_endpoint(
     req: &mut Request,
@@ -779,7 +794,10 @@ async fn resolve_realm_endpoint(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.applet.query.protocol_metadata",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.query.protocol_metadata"))]
 async fn protocol_metadata_endpoint(
     req: &mut Request,
@@ -838,7 +856,10 @@ async fn protocol_metadata_endpoint(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.applet.third_party_users.query.list",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.edge.applet.third_party_users.query.list"))]
 async fn third_party_users_endpoint(
     req: &mut Request,
@@ -885,7 +906,10 @@ async fn third_party_users_endpoint(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.edge.applet.third_party_locations.query.list",
+    tags("extensions")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.edge.applet.third_party_locations.query.list")
@@ -932,7 +956,10 @@ async fn third_party_locations_endpoint(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.applets.register",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.register"))]
 async fn register_endpoint(
     aa: AuthArgs,
@@ -967,7 +994,7 @@ async fn register_endpoint(
     json_ok(response)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.applets.get", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.get"))]
 async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<AppletView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -978,7 +1005,10 @@ async fn get_endpoint(req: &mut Request, depot: &mut Depot) -> JsonResult<Applet
     json_ok(applet_response(&record))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.applets.ghosts.provision",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.ghosts.provision"))]
 async fn ghost_endpoint(
     aa: AuthArgs,
@@ -1026,7 +1056,10 @@ async fn ghost_endpoint(
     json_ok(response)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.applets.bot.message",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.bot.message"))]
 async fn bot_message_endpoint(
     aa: AuthArgs,
@@ -1065,7 +1098,7 @@ async fn bot_message_endpoint(
     json_ok(message_result)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.applets.revoke", tags("extensions"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.revoke"))]
 async fn revoke_endpoint(
     aa: AuthArgs,

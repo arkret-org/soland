@@ -652,7 +652,9 @@ fn load_livekit_config() -> anyhow::Result<LiveKitConfig> {
 
 /// Federation fanout topology. Selected at config-load
 /// time via `SOLAND_FEDERATION_FANOUT_TOPOLOGY` env var (`mesh` | `hub`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema,
+)]
 #[serde(rename_all = "lowercase")]
 pub enum FederationFanoutTopology {
     /// Default — broadcast every accepted Event to every peer in

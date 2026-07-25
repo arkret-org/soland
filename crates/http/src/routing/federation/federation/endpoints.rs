@@ -35,14 +35,14 @@ use super::{
 };
 use crate::state::AppState;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(in crate::routing::federation::federation) struct FederationActorEventsOutcome {
     actor: String,
     events: Vec<Value>,
     erasure_receipts: Vec<Value>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 #[serde(deny_unknown_fields)]
 pub(in crate::routing::federation::federation) struct FederationBackfillOperationsRequestBody {
     realm_id: String,
@@ -58,7 +58,7 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
     after_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(in crate::routing::federation::federation) struct FederationOperationFrontierOutcome {
     pub(in crate::routing::federation::federation) realm_id: String,
     pub(in crate::routing::federation::federation) operation_count: usize,
@@ -68,7 +68,7 @@ pub(in crate::routing::federation::federation) struct FederationOperationFrontie
     pub(in crate::routing::federation::federation) frontier_digest: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub(in crate::routing::federation::federation) struct FederationBackfillOperationsOutcome {
     peer_url: String,
     peer_did: String,
@@ -84,7 +84,10 @@ pub(in crate::routing::federation::federation) struct FederationBackfillOperatio
     frontier_after: FederationOperationFrontierOutcome,
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.transaction",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.transaction"))]
 pub(crate) async fn federation_transaction(
     txn_id: PathParam<String>,
@@ -382,7 +385,10 @@ fn local_peer_policy_digest_for_transaction(
     Ok(arkret_canonical::sha256_digest(&canonical))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.push_operations",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.push_operations"))]
 pub(crate) async fn federation_push_operations(
     depot: &mut Depot,
@@ -430,7 +436,10 @@ pub(crate) async fn federation_push_operations(
     )
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.actor_events",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.actor_events"))]
 pub(crate) async fn federation_actor_events(
     actor_id: PathParam<String>,
@@ -499,7 +508,10 @@ fn projection_event_matches_actor(
             == Some(actor)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.pull_operations",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.pull_operations"))]
 pub(crate) async fn federation_pull_operations(
     realm_id: QueryParam<String, true>,
@@ -563,7 +575,10 @@ pub(crate) async fn federation_pull_operations(
     )
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.backfill_operations",
+    tags("federation")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.federation.backfill_operations")
@@ -668,7 +683,10 @@ async fn operation_history_visible_for_federation_pull(
         .unwrap_or(false)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.operation_frontier",
+    tags("federation")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.federation.operation_frontier")
@@ -686,7 +704,10 @@ pub(crate) async fn federation_operation_frontier(
     json_ok(operation_frontier_outcome(state, &realm_id).await)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.realm_members",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.realm_members"))]
 pub(crate) async fn federation_realm_members(
     realm_id: QueryParam<String, true>,
@@ -720,7 +741,10 @@ pub(crate) async fn federation_realm_members(
     )
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.verify_actor",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.verify_actor"))]
 pub(crate) async fn federation_verify_actor(
     body: JsonBody<
@@ -785,7 +809,7 @@ pub(crate) async fn federation_verify_actor(
 
 // ── Seal pull/push (federation/seals) ──────────────
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsOutcome {
     pub seals: Vec<arkret_wire::Seal>,
     /// Echo of [`crate::config::FederationFanoutTopology::as_str`] so the calling
@@ -794,19 +818,22 @@ pub struct FederationSealsOutcome {
     pub next_cursor: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsPushRequestBody {
     pub origin: String,
     pub seals: Vec<arkret_wire::Seal>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct FederationSealsPushOutcome {
     pub accepted: Vec<String>,
     pub rejected: Vec<serde_json::Value>,
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.seals.pull",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.seals.pull"))]
 pub(crate) async fn federation_seals_pull(
     depot: &mut Depot,
@@ -840,7 +867,10 @@ pub(crate) async fn federation_seals_pull(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.federation.seals.push",
+    tags("federation")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.federation.seals.push"))]
 pub(crate) async fn federation_seals_push(
     req: &mut Request,

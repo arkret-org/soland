@@ -9,6 +9,17 @@ homepage.workspace = true
 authors.workspace = true
 description = "Shared deployment-local contracts for Soland integrations."
 
+[features]
+default = []
+openapi = [
+    "dep:salvo-oapi",
+    "arkret-identifiers/openapi",
+    "arkret-models-collaboration/openapi",
+    "arkret-models-crypto/openapi",
+    "arkret-wire/openapi",
+    "salvo-oapi/chrono",
+]
+
 [dependencies]
 arkret-canonical.workspace = true
 arkret-identifiers.workspace = true
@@ -18,3 +29,4 @@ arkret-wire.workspace = true
 chrono = {workspace = true,features = ["serde"]}
 serde = {workspace = true,features = ["derive"]}
 serde_json = {workspace = true}
+salvo-oapi = {workspace = true,optional = true}

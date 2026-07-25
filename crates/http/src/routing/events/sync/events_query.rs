@@ -707,7 +707,7 @@ fn truncate_before_stop_cursor(mut events: Vec<Value>, stop_cursor: Option<&str>
 /// Range: `from?` + `until?` + `direction`.
 /// `direction=backward` reverses the merged stream so callers can paginate
 /// older events with the same `next_cursor` semantics.
-#[handler]
+#[endpoint(operation_id = "ak.self.events.query.scan")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan"))]
 pub(crate) async fn events_query(
     depot: &mut Depot,
@@ -732,7 +732,7 @@ pub(crate) async fn events_query(
     events_query_impl(state, req, parts).await
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.events.query.scan_body")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.scan_body"))]
 pub(crate) async fn events_query_post(
     body: salvo::oapi::extract::JsonBody<EventsQueryPostRequestBody>,
@@ -1468,7 +1468,7 @@ async fn durable_events_query_from_parts(
     }
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.self.snapshot.query.manifest_head")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.snapshot.query.manifest_head"))]
 pub(super) async fn snapshot_head(
     depot: &mut Depot,

@@ -234,7 +234,10 @@ pub(crate) fn enqueue_device_revoke_mls_removals(
     )
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.keypackages.upload.create",
+    tags("mls.rs")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.upload.create"))]
 async fn upload_keypackage(
     aa: AuthArgs,
@@ -495,7 +498,10 @@ async fn upload_keypackage(
 
 // ── claim ─────────────────────────────────────────────────────────────
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.peer.keys.keypackages.command.claim",
+    tags("mls.rs")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.command.claim"))]
 async fn peer_claim_keypackage(
     depot: &mut Depot,
@@ -685,7 +691,7 @@ async fn peer_claim_keypackage(
     Err(peer_claim_failed())
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.keys.keypackages.query.claim", tags("mls.rs"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.keys.keypackages.query.claim"))]
 async fn peer_query_keypackage_claim(
     depot: &mut Depot,
@@ -1231,7 +1237,10 @@ fn peer_claim_failed() -> AppError {
         .with_wire_code("claim_failed")
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.keypackages.command.claim",
+    tags("mls.rs")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.claim"))]
 async fn claim_keypackage(
     aa: AuthArgs,
@@ -1477,7 +1486,10 @@ pub(crate) async fn claim_keypackages_for_request(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.keypackages.command.consume",
+    tags("mls.rs")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.consume"))]
 async fn consume_keypackages(
     aa: AuthArgs,
@@ -1891,7 +1903,10 @@ async fn validate_sidecar_keypackage_consume(
     Ok(())
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.keypackages.command.revoke",
+    tags("mls.rs")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.keypackages.command.revoke"))]
 async fn revoke_keypackages(
     aa: AuthArgs,

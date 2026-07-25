@@ -1,6 +1,9 @@
 use super::*;
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.identity.recovery_receipts.get",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.recovery_receipts.get")
@@ -86,7 +89,10 @@ fn recovery_receipt_outcome(value: &str) -> Result<RecoveryReceiptOutcome, AppEr
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.identity.recovery_receipt.put",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.identity.recovery_receipt.put")

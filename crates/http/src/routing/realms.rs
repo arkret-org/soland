@@ -105,6 +105,34 @@ pub(crate) async fn list_realm_links(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmLinkList> {
+    list_realm_links_impl(aa, realm_id, direction, link_kind_allow, depot, req).await
+}
+
+#[endpoint(
+    operation_id = "org.arkret.soland.admin.realm_link.query.list",
+    summary = "List typed cross-Realm links for administration",
+    tags("admin", "realm_links")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realm_link.query.list"))]
+pub(crate) async fn admin_list_realm_links(
+    aa: AuthArgs,
+    realm_id: PathParam<String>,
+    direction: QueryParam<String, false>,
+    link_kind_allow: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RealmLinkList> {
+    list_realm_links_impl(aa, realm_id, direction, link_kind_allow, depot, req).await
+}
+
+async fn list_realm_links_impl(
+    aa: AuthArgs,
+    realm_id: PathParam<String>,
+    direction: QueryParam<String, false>,
+    link_kind_allow: QueryParam<String, false>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RealmLinkList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = RealmId::new(realm_id.into_inner())

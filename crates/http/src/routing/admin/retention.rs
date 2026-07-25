@@ -19,7 +19,7 @@ use crate::routing::events::projection::retention_ttl_seconds_from_value;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::{AppState, EventNotification, EventNotificationKind};
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct ConfigureRetentionPolicyRequestBody {
     #[serde(default)]
     realm_id: Option<String>,
@@ -33,7 +33,7 @@ struct ConfigureRetentionPolicyRequestBody {
     retention_policy: Option<Value>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct SweepRetentionPolicyRequestBody {
     #[serde(default)]
     realm_id: Option<String>,
@@ -41,7 +41,7 @@ struct SweepRetentionPolicyRequestBody {
     now: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct RetentionPolicyOutcome {
     realm_id: String,
     ttl_seconds: i64,
@@ -49,7 +49,7 @@ struct RetentionPolicyOutcome {
     updated_at: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct RetentionTombstoneItem {
     event_id: String,
     realm_id: String,
@@ -62,7 +62,7 @@ struct RetentionTombstoneItem {
     physical_delete: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct RetentionSweepOutcome {
     realm_id: String,
     policy: RetentionPolicyOutcome,
@@ -78,7 +78,10 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("sweep").post(sweep_retention_policy))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.retention.policy.configure",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.retention.policy.configure")
@@ -120,7 +123,10 @@ async fn configure_retention_policy(
     json_ok(policy_outcome(&record))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.retention.sweep",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.retention.sweep"))]
 async fn sweep_retention_policy(
     aa: AuthArgs,

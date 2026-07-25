@@ -67,20 +67,20 @@ const SNAPSHOT_SIGNED_TRANSCRIPT_FIELDS: &[&str] = &[
     "created_at",
 ];
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct EncodeVectorRequest {
     vector_id: String,
 
     input: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct CanonicalJsonDigestOutcome {
     canonical_json: String,
     digest: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SignVectorRequest {
     vector_id: String,
 
@@ -88,7 +88,7 @@ pub struct SignVectorRequest {
     signing_key_ref: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SignVectorOutcome {
     canonical_bytes: String,
     digest: String,
@@ -97,7 +97,7 @@ pub struct SignVectorOutcome {
     algorithm: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct HlcClockVectorItem {
     actor: String,
     hlc: String,
@@ -105,30 +105,30 @@ pub struct HlcClockVectorItem {
     payload_hint: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct HlcMergeVectorRequest {
     vector_id: String,
     clocks: Vec<HlcClockVectorItem>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct HlcMergeVectorOutcome {
     ordered: Vec<HlcClockVectorItem>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct CursorVectorRequest {
     vector_id: String,
 
     events: Vec<Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct CursorVectorOutcome {
     cursor: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct EnvelopeVectorRequest {
     vector_id: String,
 
@@ -136,13 +136,13 @@ pub struct EnvelopeVectorRequest {
     ciphertext_base64url: Option<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct CanonicalBytesDigestOutcome {
     canonical_bytes: String,
     digest: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct RedactVectorRequest {
     vector_id: String,
 
@@ -152,12 +152,12 @@ pub struct RedactVectorRequest {
     viewer_did: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct RedactVectorOutcome {
     projected_event: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct EraseReceiptVectorRequest {
     vector_id: String,
 
@@ -166,7 +166,7 @@ pub struct EraseReceiptVectorRequest {
     receipt: Value,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct EraseReceiptVectorOutcome {
     projected_event: Value,
     outcome: String,
@@ -176,7 +176,7 @@ pub struct EraseReceiptVectorOutcome {
     legal_hold_blocked: bool,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 pub struct SnapshotVectorRequest {
     vector_id: String,
 
@@ -189,7 +189,7 @@ pub struct SnapshotVectorRequest {
     revoked_signer_dids: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct SnapshotVectorOutcome {
     vector_id: String,
     manifest_digest: String,
@@ -202,7 +202,7 @@ pub struct SnapshotVectorOutcome {
     signed_transcript_fields: Vec<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct QueryVectorRequest {
     vector_id: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -220,16 +220,17 @@ pub struct QueryVectorRequest {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     chunks: Option<Vec<Value>>,
     #[serde(default, flatten, skip_serializing_if = "BTreeMap::is_empty")]
+    #[salvo(schema(value_type = serde_json::Value))]
     extra: BTreeMap<String, Value>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct QueryVectorFrontier {
     barrier_cursor: String,
     row_count: usize,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct QueryVectorOutcome {
     vector_id: String,
 
@@ -240,7 +241,7 @@ pub struct QueryVectorOutcome {
     frontier: QueryVectorFrontier,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct ChaosOperationOutcome {
     operation_id: String,
     canonical_event: Option<CanonicalEventDiagnostic>,
@@ -248,7 +249,7 @@ pub struct ChaosOperationOutcome {
     consistent: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct CanonicalEventDiagnostic {
     event_id: String,
     actor_id: String,
@@ -260,7 +261,7 @@ struct CanonicalEventDiagnostic {
     received_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct ProjectionEventDiagnostic {
     event_id: String,
     realm_id: String,
@@ -293,7 +294,10 @@ fn encode_reject_for_vector(vector: &str) -> Option<(ErrorCode, &'static str)> {
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.encode",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.encode"))]
 pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<CanonicalJsonDigestOutcome> {
     super::ensure_enabled()?;
@@ -311,7 +315,10 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.sign",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.sign"))]
 pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOutcome> {
     super::ensure_enabled()?;
@@ -359,7 +366,10 @@ pub async fn sign(body: JsonBody<SignVectorRequest>) -> JsonResult<SignVectorOut
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.hlc_merge",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.hlc_merge"))]
 pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcMergeVectorOutcome> {
     super::ensure_enabled()?;
@@ -395,7 +405,10 @@ pub async fn hlc_merge(body: JsonBody<HlcMergeVectorRequest>) -> JsonResult<HlcM
     json_ok(HlcMergeVectorOutcome { ordered })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.cursor",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.cursor"))]
 pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVectorOutcome> {
     super::ensure_enabled()?;
@@ -441,7 +454,10 @@ pub async fn cursor(body: JsonBody<CursorVectorRequest>) -> JsonResult<CursorVec
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.envelope",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.envelope"))]
 pub async fn envelope(
     body: JsonBody<EnvelopeVectorRequest>,
@@ -468,7 +484,10 @@ pub async fn envelope(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.redact",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.redact"))]
 pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVectorOutcome> {
     super::ensure_enabled()?;
@@ -521,7 +540,10 @@ pub async fn redact(body: JsonBody<RedactVectorRequest>) -> JsonResult<RedactVec
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.erase_receipt",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.erase_receipt"))]
 pub async fn erase_receipt(
     body: JsonBody<EraseReceiptVectorRequest>,
@@ -630,7 +652,10 @@ fn projected_event_carries_plaintext(projected: &Value, original: &Value) -> boo
     serialized.contains(body) || serialized.contains(&body_digest)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.snapshot",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.snapshot"))]
 pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<SnapshotVectorOutcome> {
     super::ensure_enabled()?;
@@ -723,7 +748,10 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.query",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.query"))]
 pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVectorOutcome> {
     super::ensure_enabled()?;
@@ -787,7 +815,10 @@ pub async fn query(body: JsonBody<QueryVectorRequest>) -> JsonResult<QueryVector
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.chaos_operation",
+    tags("conformance")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.chaos_operation"))]
 pub async fn chaos_operation(
     depot: &mut Depot,

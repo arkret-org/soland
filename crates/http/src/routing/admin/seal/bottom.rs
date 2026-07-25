@@ -124,7 +124,10 @@ fn collect_bottom_entries_for_realm(state: &AppState, realm_id: &str) -> Vec<Bot
 
 /// `GET /_soland/admin/realms/{realm_id}/bottom` — list bottom cells in
 /// this Realm.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.bottom.list",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.bottom.list"))]
 pub(crate) async fn admin_list_realm_bottom(
     aa: AuthArgs,
@@ -142,7 +145,10 @@ pub(crate) async fn admin_list_realm_bottom(
 }
 
 /// `GET /_soland/admin/bottom` — global cross-Realm bottom entries.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.bottom.list_global",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.bottom.list_global"))]
 pub(crate) async fn admin_list_bottom_global(
     aa: AuthArgs,
@@ -177,7 +183,10 @@ pub(crate) async fn admin_list_bottom_global(
 ///   request payload provides both.
 /// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
 ///   non-trivial and lives behind a separate admin signer strand.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.bottom.repair",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.bottom.repair"))]
 pub(crate) async fn admin_repair_bottom(
     aa: AuthArgs,

@@ -19,7 +19,10 @@ use super::*;
 
 const SUPPORTED_REDUCER_PROFILE: &str = "ak.reducer.v1";
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.events.query.mls_governance_proof",
+    tags("events")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.events.query.mls_governance_proof"))]
 pub(super) async fn mls_governance_proof(
     aa: AuthArgs,

@@ -61,7 +61,10 @@ fn covered_state_for_realm(state: &AppState, realm_id: &str) -> Option<(u64, Vec
         .map(|row| (row.epoch, row.covered_seals.clone(), row.committed_at))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.covered_seals.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.covered_seals.get")
@@ -107,7 +110,10 @@ async fn get_covered_seals(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.covered_seals.advance",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.covered_seals.advance")

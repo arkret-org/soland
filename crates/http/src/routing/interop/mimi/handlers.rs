@@ -2,14 +2,14 @@ use salvo::oapi::endpoint;
 
 use super::*;
 
-#[handler]
+#[endpoint(operation_id = "mimi_protocol_directory")]
 #[tracing::instrument(skip_all, fields(op = "mimi_protocol_directory"))]
 pub(super) async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
     res.render(Json(mimi_provider_directory_value(state)));
 }
 
-#[handler]
+#[endpoint(operation_id = "mimi_provider_directory")]
 #[tracing::instrument(skip_all, fields(op = "mimi_provider_directory"))]
 pub(super) async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");

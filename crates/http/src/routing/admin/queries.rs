@@ -188,7 +188,10 @@ pub(super) async fn actor_count_maps(
     (device_counts, realm_counts)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.actors.query",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.query"))]
 pub(super) async fn admin_list_actors(
     aa: AuthArgs,
@@ -315,7 +318,10 @@ fn parse_time_bound(raw: &str, name: &str) -> Result<chrono::DateTime<chrono::Ut
         .map_err(|_| AppError::invalid_param(format!("{name} must be an RFC3339 timestamp")))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.audit.query",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.audit.query"))]
 pub(super) async fn admin_query_audit(
     aa: AuthArgs,
@@ -453,7 +459,10 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.capabilities.query",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.capabilities.query"))]
 pub(super) async fn admin_list_capabilities(
     aa: AuthArgs,
@@ -559,7 +568,10 @@ fn admin_device_row(device: &soland_services::identity::DeviceIdentity) -> Admin
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.devices.query",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.devices.query"))]
 pub(super) async fn admin_list_devices(
     aa: AuthArgs,

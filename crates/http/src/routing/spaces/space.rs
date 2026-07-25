@@ -72,7 +72,7 @@ pub(super) fn local_router() -> Router {
         .push(Router::with_path("spaces/{space_id}/cells/{cell_family}").get(get_space_cell))
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct SpaceCellOutcome {
     cell_id: String,
     cell_family: String,
@@ -83,7 +83,7 @@ struct SpaceCellOutcome {
     total: usize,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct RealmExportEvent {
     event_id: String,
     realm_id: String,
@@ -98,7 +98,7 @@ struct RealmExportEvent {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct RealmExportOperation {
     operation_id: String,
     realm_id: String,
@@ -109,7 +109,7 @@ struct RealmExportOperation {
     created_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 struct RealmExportOutcome {
     schema: String,
     realm_id: String,
@@ -119,7 +119,7 @@ struct RealmExportOutcome {
     events: Vec<RealmExportEvent>,
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.resource.get", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.resource.get"))]
 async fn get_realm(
     aa: AuthArgs,
@@ -167,7 +167,7 @@ async fn submit_realm_lifecycle_command(
     realm_lifecycle_response(state, &realm_id).await
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.archive", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.archive"))]
 async fn archive_realm(
     aa: AuthArgs,
@@ -193,7 +193,7 @@ async fn archive_realm(
     .map(salvo::prelude::Json)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.freeze", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.freeze"))]
 async fn freeze_realm(
     aa: AuthArgs,
@@ -219,7 +219,7 @@ async fn freeze_realm(
     .map(salvo::prelude::Json)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.tombstone", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.tombstone"))]
 async fn tombstone_realm(
     aa: AuthArgs,
@@ -245,7 +245,7 @@ async fn tombstone_realm(
     .map(salvo::prelude::Json)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.command.destroy", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.command.destroy"))]
 async fn destroy_realm(
     aa: AuthArgs,
@@ -271,7 +271,10 @@ async fn destroy_realm(
     .map(salvo::prelude::Json)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.realm.moderation_policy.query.effective",
+    tags("spaces")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.self.realm.moderation_policy.query.effective")
@@ -295,7 +298,10 @@ async fn get_realm_effective_moderation_policy(
     json_ok(organizations::effective_policy_for_realm(state, &realm_id))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.realm.moderation_policy.resource.replace",
+    tags("spaces")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.self.realm.moderation_policy.resource.replace")
@@ -335,7 +341,7 @@ async fn upsert_realm_moderation_policy(
     json_ok(organizations::realm_policy_record_outcome(&policy))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.spaces.cells.get", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.spaces.cells.get"))]
 async fn get_space_cell(
     aa: AuthArgs,
@@ -387,7 +393,7 @@ async fn get_space_cell(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.realm.query.export", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.realm.query.export"))]
 async fn export_realm(
     aa: AuthArgs,

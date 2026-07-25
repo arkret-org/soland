@@ -24,7 +24,7 @@ bs58.workspace = true
 bytes.workspace = true
 chrono = { workspace = true, features = ["serde"] }
 arkret-canonical.workspace = true
-arkret-event-draft.workspace = true
+arkret-event-draft = { workspace = true, features = ["openapi"] }
 arkret-auth.workspace = true
 arkret-bootstrap.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data"] }
@@ -35,9 +35,9 @@ arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }
 arkret-mls.workspace = true
 arkret-models-collaboration = { workspace = true, features = ["openapi"] }
-arkret-models-discovery.workspace = true
-arkret-models-integration.workspace = true
-arkret-models-crypto.workspace = true
+arkret-models-discovery = { workspace = true, features = ["openapi"] }
+arkret-models-integration = { workspace = true, features = ["openapi"] }
+arkret-models-crypto = { workspace = true, features = ["openapi"] }
 arkret-models-identity = { workspace = true, features = ["openapi"] }
 arkret-policy.workspace = true
 arkret-push-policy.workspace = true
@@ -45,7 +45,7 @@ arkret-rate-limit.workspace = true
 arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
 arkret-server.workspace = true
 arkret-signatures = { workspace = true, features = ["collaboration", "keypackages", "signer", "webvh"] }
-arkret-state.workspace = true
+arkret-state = { workspace = true, features = ["openapi"] }
 arkret-wire.workspace = true
 ed25519-dalek.workspace = true
 futures-util.workspace = true
@@ -62,7 +62,7 @@ serde_json.workspace = true
 serde-saphyr.workspace = true
 sha2.workspace = true
 soland-services.workspace = true
-soland-contracts.workspace = true
+soland-contracts = { workspace = true, features = ["openapi"] }
 subtle.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
@@ -79,4 +79,3 @@ soland-storage.workspace = true
 soland-storage-memory.workspace = true
 soland-storage-postgres.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
-

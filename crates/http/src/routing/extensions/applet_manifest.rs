@@ -55,7 +55,7 @@ pub const KNOWN_APPLET_CAPABILITIES: &[&str] = &[
 /// On-wire applet manifest envelope. The bot/ghost actor registration
 /// strand in `applet-integration.md` Section 4 takes one of these, verifies it,
 /// and (if accepted) mints a `bot_actor_id` bound to the manifest.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AppletManifest {
     pub id: String,
     pub version: String,
@@ -81,7 +81,7 @@ pub struct AppletManifest {
 
 /// Verified manifest - same fields as the input plus a recompute of the
 /// schema-hash for the audit trail.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct VerifiedAppletManifest {
     pub id: String,
     pub signer_did: String,
@@ -90,19 +90,19 @@ pub struct VerifiedAppletManifest {
     pub metadata: Value,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct AppletManifestVerifyRequestBody {
     pub manifest_json: AppletManifest,
     pub trusted_registry_did: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct AppletManifestVerifyErrorView {
     pub code: String,
     pub message: String,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct AppletManifestVerifyOutcome {
     pub verified: bool,
     pub signer_did: String,
@@ -278,7 +278,10 @@ pub(super) fn router() -> Router {
     Router::with_path("applets/manifest/verify").post(verify_endpoint)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.applets.manifest.verify",
+    tags("extensions")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.applets.manifest.verify"))]
 async fn verify_endpoint(
     body: JsonBody<AppletManifestVerifyRequestBody>,

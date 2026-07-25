@@ -58,6 +58,33 @@ pub(crate) async fn list_realm_organizations(
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<RealmOrganizationRelationshipList> {
+    list_realm_organizations_impl(aa, realm_id, depot, req).await
+}
+
+#[endpoint(
+    operation_id = "org.arkret.soland.admin.realm_organization.query.list",
+    summary = "List a realm's organization relationships for administration",
+    tags("admin", "realm_organizations")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.admin.realm_organization.query.list")
+)]
+pub(crate) async fn admin_list_realm_organizations(
+    aa: AuthArgs,
+    realm_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RealmOrganizationRelationshipList> {
+    list_realm_organizations_impl(aa, realm_id, depot, req).await
+}
+
+async fn list_realm_organizations_impl(
+    aa: AuthArgs,
+    realm_id: PathParam<String>,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<RealmOrganizationRelationshipList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();

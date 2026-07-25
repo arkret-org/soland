@@ -133,7 +133,10 @@ pub(super) fn signed_agent_selector_claim(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.find.directory.query.resolve_agent_selector",
+    tags("spaces")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.find.directory.query.resolve_agent_selector")

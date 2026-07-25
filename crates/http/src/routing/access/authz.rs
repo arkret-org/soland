@@ -334,7 +334,7 @@ mod tests {
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.authz.grants.query.effective", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.grants.query.effective"))]
 async fn effective_grants(
     aa: AuthArgs,
@@ -630,7 +630,7 @@ fn capability_resource_selector(
         .map_err(|error| AppError::internal(format!("resource selector encode failed: {error}")))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.authz.invites.query.list", tags("access"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.authz.invites.query.list"))]
 async fn invites(
     aa: crate::routing::system::extract::AuthArgs,

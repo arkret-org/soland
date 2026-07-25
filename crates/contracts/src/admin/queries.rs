@@ -36,6 +36,7 @@ use serde_json::Value;
 /// admin-principal configuration. `id` is the canonical actor id (the DID
 /// string) and is always present.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminActor {
     /// Canonical actor id (the DID string).
@@ -86,6 +87,7 @@ pub struct AdminActor {
 
 /// Cursor-paginated admin actors page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminActorList {
     #[serde(default)]
@@ -108,6 +110,7 @@ pub struct AdminActorList {
 /// not persist them as top-level columns, and this contract does not invent
 /// them. Action-specific detail lives in `payload`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminAuditEntry {
     /// Audit record id (`audit_id`).
@@ -140,6 +143,7 @@ pub struct AdminAuditEntry {
 
 /// Cursor-paginated admin audit page (newest first).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminAuditList {
     #[serde(default)]
@@ -158,6 +162,7 @@ pub struct AdminAuditList {
 /// Closed set; unknown wire values fail deserialization (this gates what an
 /// operator sees, so it must not degrade silently).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum CapabilityGrantState {
@@ -190,6 +195,7 @@ impl CapabilityGrantState {
 /// Flat summary of the authz read-index `Grant` (the projection of
 /// `ak.component.capability.grant.v1` cells).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct CapabilitySummary {
     pub grant_id: String,
@@ -202,6 +208,10 @@ pub struct CapabilitySummary {
     #[serde(default)]
     pub actions: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "openapi",
+        salvo(schema(value_type = Vec<serde_json::Value>))
+    )]
     pub constraints: Vec<GrantConstraint>,
     pub revoked: bool,
     #[serde(
@@ -225,6 +235,7 @@ pub struct CapabilitySummary {
 
 /// Cursor-paginated admin capabilities page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminCapabilityList {
     #[serde(default)]
@@ -240,6 +251,7 @@ pub struct AdminCapabilityList {
 
 /// One device row in the non-protocol product-admin projection.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminDevice {
     pub id: String,
@@ -276,6 +288,7 @@ pub struct AdminDevice {
 
 /// Cursor-paginated product-admin devices page.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 #[serde(deny_unknown_fields)]
 pub struct AdminDeviceList {
     #[serde(default)]

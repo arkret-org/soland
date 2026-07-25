@@ -156,7 +156,7 @@ pub(crate) fn protocol_router() -> Router {
         .push(Router::with_path("directory/push/register").post(directory_subscribe))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "directory_describe", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "directory_describe"))]
 async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let state = depot.get_typed::<AppState>().expect("state injected");

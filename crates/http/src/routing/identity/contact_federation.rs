@@ -48,7 +48,7 @@ pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("contacts").post(peer_contacts_submit))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct PeerContactDeliveryOutcome {
     status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -287,7 +287,7 @@ fn contact_delivery_idempotency_key(
     format!("ak:contact-outbox:{}", hex::encode(hasher.finalize()))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.peer.contacts.command.submit", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.peer.contacts.command.submit"))]
 async fn peer_contacts_submit(
     depot: &mut Depot,

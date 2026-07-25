@@ -211,7 +211,10 @@ pub(super) async fn load_owned_recovery_session(
     Ok(record)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.recovery_session.command.create",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.command.create")
@@ -429,7 +432,10 @@ pub(super) async fn recovery_session_create(
     json_ok(typed_recovery_session_state(&record)?)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.recovery_session.resource.get",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.resource.get")
@@ -447,7 +453,10 @@ pub(super) async fn recovery_session_get(
     json_ok(typed_recovery_session_state(&record)?)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.recovery_session.command.submit_proof",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.command.submit_proof")
@@ -1076,7 +1085,10 @@ pub(super) fn generic_recovery_proof_transcript(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.root.identity.recovery_session.command.complete",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "ak.root.identity.recovery_session.command.complete")

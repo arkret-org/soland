@@ -226,7 +226,10 @@ fn admin_notary_value_from_sdk(
 
 /// `GET /_soland/admin/realms/{realm_id}/notary` — read current
 /// notary cell value.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.notary.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.realms.notary.get"))]
 pub(crate) async fn admin_get_notary(
     aa: AuthArgs,
@@ -262,7 +265,10 @@ pub(crate) async fn admin_get_notary(
 /// `admin_principal_dids` allowlist (see `super::require_admin_principal`);
 /// the signing identity is still the service signer so Moves chain off the
 /// NotaryWorker key.
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.realms.notary.reconfigure",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.realms.notary.reconfigure")

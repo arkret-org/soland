@@ -33,6 +33,7 @@
 use std::collections::BTreeMap;
 
 use chrono::Utc;
+use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -45,7 +46,7 @@ use super::require_admin_principal;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct ModerationQueueItemOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -62,6 +63,7 @@ pub struct ModerationQueueItemOutcome {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub updated_at: Option<Value>,
     #[serde(flatten)]
+    #[salvo(schema(value_type = serde_json::Value))]
     pub extra: BTreeMap<String, Value>,
 }
 
@@ -95,13 +97,13 @@ impl ModerationQueueItemOutcome {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct ModerationAppealsOutcome {
     items: Vec<Value>,
     total: usize,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct ModerationAppealHistoryOutcome {
     appeal_id: String,
     history: Vec<Value>,
@@ -164,12 +166,15 @@ pub(super) fn router() -> Router {
 // The local `GET /_soland/admin/moderation/queue` read lives in
 // `super::spec`; the queue sub-actions (assign / priority) are below.
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct AssignReviewerReq {
     pub reviewers: Vec<String>,
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "org.arkret.soland.admin.moderation.queue.assign",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.moderation.queue.assign")
@@ -217,13 +222,16 @@ async fn assign_queue_item(
     json_ok(ModerationQueueItemOutcome::from_value(item))
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct PrioritiseReq {
     /// `low` | `normal` | `high` | `urgent`.
     pub priority: String,
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "org.arkret.soland.admin.moderation.queue.priority",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.moderation.queue.priority")
@@ -278,7 +286,10 @@ async fn prioritise_queue_item(
 
 // ── Appeals ──────────────────────────────────────────────────────────
 
-#[handler]
+#[endpoint(
+    operation_id = "org.arkret.soland.admin.moderation.appeals.list",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.moderation.appeals.list")
@@ -302,7 +313,10 @@ async fn list_appeals(
     })
 }
 
-#[handler]
+#[endpoint(
+    operation_id = "org.arkret.soland.admin.moderation.appeals.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.admin.moderation.appeals.get")

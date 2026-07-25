@@ -39,7 +39,7 @@ const SOLAND_LOCAL_COMPAT_BASE_PATH: &str = "/_soland";
 const SOLAND_LOCAL_COMPAT_STATUS: &str = "soland_private_local";
 const SOLAND_LOCAL_COMPAT_NOTES: &str = "non-registry REST routes were moved out of /_arkret; clients should prefer operation-registry canonical paths";
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzOutcome {
     ok: bool,
     service: String,
@@ -48,7 +48,7 @@ struct ReadyzOutcome {
     checks: ReadyzChecks,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzChecks {
     database: ReadyzDatabaseCheck,
     migrations: ReadyzMigrationCheck,
@@ -57,26 +57,26 @@ struct ReadyzChecks {
     pq_hybrid_tls: ReadyzConfiguredCheck,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzDatabaseCheck {
     ok: bool,
     mode: String,
     migrations: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzMigrationCheck {
     ok: bool,
     mode: String,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzConfiguredCheck {
     ok: bool,
     configured: bool,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzExternalWebvhProviderCheck {
     ok: bool,
     configured: bool,
@@ -102,7 +102,7 @@ pub(super) fn local_router() -> Router {
         .push(Router::with_path("self/integration/describe").get(integration_describe))
 }
 
-#[handler]
+#[endpoint(operation_id = "org.arkret.soland.system.health")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.health"))]
 async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -134,7 +134,7 @@ async fn health(depot: &mut Depot, res: &mut Response) -> JsonResult<HealthOutco
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "org.arkret.soland.system.readyz")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.readyz"))]
 async fn readyz(depot: &mut Depot, res: &mut Response) -> JsonResult<ReadyzOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -296,7 +296,7 @@ async fn database_ready(state: &AppState) -> bool {
     state.jobs().database_ready().await
 }
 
-#[handler]
+#[endpoint(operation_id = "ak.server.query.describe")]
 #[tracing::instrument(skip_all, fields(op = "ak.server.query.describe"))]
 async fn server_describe(
     service_type: QueryParam<String, false>,
@@ -313,7 +313,7 @@ async fn server_describe(
     json_ok(ServerDescribeOutcome(build_server_description(state)))
 }
 
-#[handler]
+#[endpoint(operation_id = "org.arkret.soland.system.describe")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.describe"))]
 async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
@@ -655,7 +655,7 @@ fn soland_compat_surfaces() -> Vec<arkret_models_discovery::service_description:
     ]
 }
 
-#[handler]
+#[endpoint(operation_id = "org.arkret.soland.auth.bridge.describe")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.auth.bridge.describe"))]
 pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeDescribeOutcome> {
     json_ok(AuthBridgeDescribeOutcome {
@@ -708,7 +708,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
     })
 }
 
-#[handler]
+#[endpoint(operation_id = "org.arkret.soland.integration.describe")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.integration.describe"))]
 async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
     json_ok(IntegrationDescribeOutcome {

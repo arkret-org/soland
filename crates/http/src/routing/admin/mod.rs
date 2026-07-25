@@ -150,15 +150,15 @@ pub fn admin_router() -> Router {
         )
         .push(
             Router::with_path("realms/{realm_id}/links")
-                .get(crate::routing::realms::list_realm_links),
+                .get(crate::routing::realms::admin_list_realm_links),
         )
         .push(
             Router::with_path("realms/{realm_id}/organizations")
-                .get(crate::routing::realm_organization::list_realm_organizations),
+                .get(crate::routing::realm_organization::admin_list_realm_organizations),
         )
         .push(
             Router::with_path("viewer")
-                .get(crate::routing::identity::account::account_viewer),
+                .get(crate::routing::identity::account::admin_account_viewer),
         )
         .push(crate::routing::identity::key_backup::admin_router())
         .push(Router::with_path("realms/{realm_id}/notary").get(seal::admin_get_notary))

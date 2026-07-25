@@ -17,10 +17,10 @@ static PRODUCT_OPENAPI_APPENDIX: OnceLock<std::result::Result<Value, String>> = 
 /// The document is generated from the live salvo router via salvo-oapi
 /// (`OpenApi::merge_router`) rather than from any embedded/static artifact, so
 /// every advertised operation comes from a real registered `#[endpoint]`
-/// handler. Handlers still declared with `#[handler]` carry no OpenAPI metadata
-/// and are intentionally absent from the document until they are migrated;
-/// coverage therefore grows incrementally rather than being backed by a curated
-/// static file.
+/// handler. The remaining `#[handler]` routes are deliberately limited to
+/// streaming, multipart/binary transfer, protocol middleware, documentation
+/// rendering, and framework catchers that cannot be described by the ordinary
+/// typed JSON endpoint macro.
 ///
 /// The 404/405 `Allow`-header table (`KNOWN_ROUTES`) is populated separately
 /// from a direct router walk (`collect_registered_routes`), so error-envelope
@@ -154,10 +154,9 @@ fn join_route_path(parent: &str, fragment: &str) -> String {
 /// The soland extension operationIds advertised through `*.describe`.
 ///
 /// Sourced from the product appendix registry (an operation-id catalog, not a
-/// served OpenAPI document). This is deliberately independent of the generated
-/// OpenAPI surface and remains the describe-time source of truth for
-/// `org.arkret.soland.*` extension operations until they are migrated onto
-/// annotated `#[endpoint]` handlers.
+/// served OpenAPI document). This remains deliberately independent of the
+/// generated OpenAPI surface because the describe response advertises the
+/// complete product contract, including transport-specialized operations.
 pub fn soland_extension_operation_ids() -> Vec<String> {
     let appendix = product_openapi_appendix()
         .unwrap_or_else(|error| panic!("failed to load product OpenAPI appendix: {error:#}"));

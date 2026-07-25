@@ -19,7 +19,10 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{actor_id}").get(get_actor))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.actors.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.actors.get"))]
 async fn get_actor(
     aa: AuthArgs,

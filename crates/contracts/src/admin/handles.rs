@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleRecord {
     pub id: String,
     pub canonical_uri: String,
@@ -14,6 +15,7 @@ pub struct AdminHandleRecord {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleAuditEvent {
     pub id: String,
     pub action: String,
@@ -25,6 +27,7 @@ pub struct AdminHandleAuditEvent {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleListOutcome {
     pub data: Vec<AdminHandleRecord>,
     pub total: u64,
@@ -32,6 +35,7 @@ pub struct AdminHandleListOutcome {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleAuditListOutcome {
     pub data: Vec<AdminHandleAuditEvent>,
     pub total: u64,
@@ -39,12 +43,14 @@ pub struct AdminHandleAuditListOutcome {
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleReassignBody {
     pub new_subject_id: String,
     pub reason: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[cfg_attr(feature = "openapi", derive(salvo_oapi::ToSchema))]
 pub struct AdminHandleRevokeBody {
     #[serde(default)]
     pub reason: Option<String>,

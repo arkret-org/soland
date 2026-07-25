@@ -5,7 +5,7 @@
 use super::*;
 use crate::routing::spaces::space::presence_visible_to_session;
 
-#[handler]
+#[endpoint(operation_id = "account_describe")]
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
 pub(super) async fn account_describe(
     depot: &mut Depot,

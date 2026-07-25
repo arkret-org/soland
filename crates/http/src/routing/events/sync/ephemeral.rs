@@ -18,7 +18,7 @@ use crate::routing::spaces::space::{
 };
 use crate::state::{AppState, EventNotification};
 
-#[handler]
+#[endpoint(operation_id = "ak.self.ephemeral.command.send")]
 #[tracing::instrument(skip_all, fields(op = "ak.self.ephemeral.command.send"))]
 pub(super) async fn submit_ephemeral(
     aa: crate::routing::system::extract::AuthArgs,

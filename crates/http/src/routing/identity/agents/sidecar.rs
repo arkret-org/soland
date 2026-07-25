@@ -1291,7 +1291,10 @@ async fn ensure_sidecar_impl(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.agent.sidecar.command.ensure",
+    tags("identity")
+)]
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure"))]
 pub(super) async fn ensure_sidecar(
     aa: AuthArgs,
@@ -1302,7 +1305,7 @@ pub(super) async fn ensure_sidecar(
     ensure_sidecar_impl(aa, body.into_inner(), depot, req).await
 }
 
-#[handler]
+#[salvo::oapi::endpoint(tags("identity"))]
 pub(super) async fn get_sidecar(
     aa: AuthArgs,
     sidecar_id: PathParam<SidecarId>,
@@ -1321,7 +1324,7 @@ pub(super) async fn get_sidecar(
     json_ok(sidecar_view(state, &record, &session.device_id).await?)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(tags("identity"))]
 pub(super) async fn list_sidecars(
     aa: AuthArgs,
     realm_id: QueryParam<RealmId, false>,

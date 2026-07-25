@@ -26,7 +26,7 @@ use crate::config::{AppConfig, FederationFanoutTopology};
 /// Rate-limit ceilings, per endpoint class, as a serializable snapshot.
 /// Mirrors the fields of [`RateLimiterConfig`] but is `Serialize`/
 /// `Deserialize` for DB persistence and the admin wire surface.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RateLimitSettings {
     /// Sliding-window length in seconds.
     pub window_seconds: u32,
@@ -70,7 +70,7 @@ impl RateLimitSettings {
 
 /// The mutable operational overlay. See the module docs for the boundary
 /// against [`AppConfig`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RuntimeSettings {
     /// Principal DIDs allowed to call the production-gated admin surfaces
     /// when `development_mode` is false.

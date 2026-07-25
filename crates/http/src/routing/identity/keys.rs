@@ -47,7 +47,7 @@ pub(super) fn product_router() -> Router {
     Router::with_path("gate/account/device-signing-keys/query").post(device_signing_keys_query)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.upload.create", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.upload.create"))]
 async fn keys_upload(
     aa: AuthArgs,
@@ -214,7 +214,7 @@ async fn keys_upload(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.query.lookup", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.query.lookup"))]
 async fn keys_query(
     aa: AuthArgs,
@@ -490,7 +490,7 @@ fn verify_keys_upload_device_signature(
         .map_err(|_| AppError::invalid_param("keys/upload signature verification failed"))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.keys.command.claim", tags("identity"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.keys.command.claim"))]
 async fn keys_claim(
     aa: AuthArgs,
@@ -573,7 +573,10 @@ fn require_device_directory_bearer(state: &AppState, req: &Request) -> Result<()
     Ok(())
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.gate.account.device_signing_keys.query",
+    tags("identity")
+)]
 #[tracing::instrument(
     skip_all,
     fields(op = "org.arkret.soland.gate.account.device_signing_keys.query")

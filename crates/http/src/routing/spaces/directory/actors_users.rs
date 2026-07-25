@@ -1,6 +1,6 @@
 use super::*;
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.query.search_actors", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_actors"))]
 pub(super) async fn search_actors(
     body: JsonBody<DirectorySearchActorsRequestBody>,
@@ -44,7 +44,7 @@ pub(super) async fn search_actors(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.find.directory.query.search_users", tags("spaces"))]
 #[tracing::instrument(skip_all, fields(op = "ak.find.directory.query.search_users"))]
 pub(super) async fn search_users(
     body: JsonBody<DirectorySearchUsersRequestBody>,

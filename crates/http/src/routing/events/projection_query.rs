@@ -956,7 +956,7 @@ fn document_projection_comments(
         .collect()
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.space.query.list", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.space.query.list"))]
 async fn list_space_container_projections(
     aa: AuthArgs,
@@ -1037,7 +1037,7 @@ async fn list_space_container_projections(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.strand.query.list", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.strand.query.list"))]
 async fn list_strand_projections(
     aa: AuthArgs,
@@ -1141,7 +1141,7 @@ async fn list_strand_projections(
 /// board/list position fields. `state` / `fields` keep `serde_json` free-form
 /// types: `state` is a small projected enum already rendered as a string and
 /// `fields` is an arbitrary materialized key/value map.
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
 struct StrandProjectionView {
     strand_id: String,
     realm_id: String,
@@ -1170,7 +1170,7 @@ struct StrandProjectionView {
 /// Mirrors the projected [`SolandRelationState`] fields surfaced by the
 /// product-private `/_soland/self/relations` read. `fields` stays a free-form
 /// `serde_json` map (arbitrary relation payload values).
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
 struct RelationEdgeView {
     relation_id: String,
     realm_id: String,
@@ -1189,7 +1189,7 @@ struct RelationEdgeView {
 /// Strongly-typed response body for `org.arkret.soland.relations.list`
 /// (`GET /_soland/self/relations`). soland product-private projection read;
 /// the DTO lives here for the same reason as [`StrandProjectionView`].
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
 struct RelationEdgeList {
     items: Vec<RelationEdgeView>,
     total: u64,
@@ -1202,7 +1202,7 @@ struct RelationEdgeList {
 /// product-private read backs invariant assertions (CAS read-back,
 /// patch-merge effects) that need the materialized field values. Visibility
 /// reuses the same Realm history / Circle scope gate as the list endpoint.
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.strands.get", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.strands.get"))]
 async fn get_strand_projection(
     aa: AuthArgs,
@@ -1279,7 +1279,7 @@ async fn get_strand_projection(
 /// `has_default_view` edge per `from_ref`). Filters are AND-combined; `state`
 /// defaults to `active`. Only edges whose `realm_id` is accessible to the
 /// caller are returned, so non-members can't enumerate another Realm's graph.
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.relations.list", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.relations.list"))]
 async fn list_relation_projections(
     aa: AuthArgs,
@@ -1353,7 +1353,7 @@ async fn list_relation_projections(
     json_ok(RelationEdgeList { items, total })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.morph.resource.get", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.morph.resource.get"))]
 async fn get_document_projection(
     aa: AuthArgs,
@@ -1437,7 +1437,7 @@ async fn get_document_projection(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(operation_id = "ak.self.morph.query.list", tags("events"))]
 #[tracing::instrument(skip_all, fields(op = "ak.self.morph.query.list"))]
 async fn list_morph_projections(
     aa: AuthArgs,

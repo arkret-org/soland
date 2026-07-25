@@ -17,7 +17,7 @@ use crate::state::AppState;
 
 /// One GC candidate row. Keep the surface tiny — sodmin / ops only need
 /// enough to render a list view; full Move bytes are a follow-up.
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, salvo::oapi::ToSchema)]
 pub struct GcCandidate {
     pub move_id: String,
     pub realm_id: String,

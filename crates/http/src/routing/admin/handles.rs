@@ -148,7 +148,10 @@ async fn handle_record_by_id(
         .ok_or_else(|| AppError::not_found("handle not found"))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.handles.list",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.list"))]
 async fn list_handles(
     aa: AuthArgs,
@@ -201,7 +204,10 @@ async fn list_handles(
     })
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.handles.get",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.get"))]
 async fn get_handle(
     aa: AuthArgs,
@@ -215,7 +221,10 @@ async fn get_handle(
     json_ok(handle_record_by_id(state, &handle_id.into_inner()).await?)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.handles.audit",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.audit"))]
 async fn get_handle_audit(
     aa: AuthArgs,
@@ -298,7 +307,10 @@ fn audit_entry_to_handle_event(entry: Value) -> AdminHandleAuditEvent {
     }
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.handles.revoke",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.revoke"))]
 async fn revoke_handle(
     aa: AuthArgs,
@@ -350,7 +362,10 @@ async fn revoke_handle(
     json_ok(revoked)
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.handles.reassign",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.handles.reassign"))]
 async fn reassign_handle(
     aa: AuthArgs,

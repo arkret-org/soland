@@ -5319,7 +5319,7 @@
     },
     "/_soland/admin/key-backups": {
       "get": {
-        "operationId": "ak.self.keys.backups.query.list",
+        "operationId": "org.arkret.soland.admin.key_backups.query.list",
         "parameters": [
           {
             "description": "`Authorization: Bearer <token>` header. The deserializer doesn't read\nit (we extract it from `req` in [`AuthArgs::authenticated_session`]),\nbut `ToParameters` does — so the OpenAPI doc carries the header\nrequirement on every protected operation.",
@@ -7195,7 +7195,7 @@
     },
     "/_soland/admin/realms/{realm_id}/links": {
       "get": {
-        "operationId": "ak.self.realm_link.query.list",
+        "operationId": "org.arkret.soland.admin.realm_link.query.list",
         "parameters": [
           {
             "description": "`Authorization: Bearer <token>` header. The deserializer doesn't read\nit (we extract it from `req` in [`AuthArgs::authenticated_session`]),\nbut `ToParameters` does — so the OpenAPI doc carries the header\nrequirement on every protected operation.",
@@ -8443,7 +8443,7 @@
     },
     "/_soland/admin/realms/{realm_id}/organizations": {
       "get": {
-        "operationId": "ak.self.realm_organization.query.list",
+        "operationId": "org.arkret.soland.admin.realm_organization.query.list",
         "parameters": [
           {
             "description": "`Authorization: Bearer <token>` header. The deserializer doesn't read\nit (we extract it from `req` in [`AuthArgs::authenticated_session`]),\nbut `ToParameters` does — so the OpenAPI doc carries the header\nrequirement on every protected operation.",
@@ -9511,7 +9511,7 @@
     },
     "/_soland/admin/viewer": {
       "get": {
-        "operationId": "ak.self.account.query.viewer",
+        "operationId": "org.arkret.soland.admin.account.query.viewer",
         "parameters": [
           {
             "description": "`Authorization: Bearer <token>` header. The deserializer doesn't read\nit (we extract it from `req` in [`AuthArgs::authenticated_session`]),\nbut `ToParameters` does — so the OpenAPI doc carries the header\nrequirement on every protected operation.",

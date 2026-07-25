@@ -22,7 +22,10 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("{invite_id}").delete(revoke_invite_token))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.invite_tokens.create",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.invite_tokens.create"))]
 async fn create_invite_token(
     aa: AuthArgs,
@@ -93,7 +96,10 @@ async fn create_invite_token(
     json_ok(super::collection::admin_invite_item(&invite))
 }
 
-#[handler]
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.admin.invite_tokens.revoke",
+    tags("soland_admin")
+)]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.admin.invite_tokens.revoke"))]
 async fn revoke_invite_token(
     aa: AuthArgs,
