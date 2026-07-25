@@ -59,6 +59,8 @@ const DEVICE_SCOPE_PREFIX: &str = "urn:arkret:client:device:";
 /// sensitive operations bypass the cache entirely (`force_fresh`).
 const INTROSPECTION_CACHE_TTL: StdDuration = StdDuration::from_secs(120);
 const INTROSPECTION_CACHE_MAX_ENTRIES: usize = 4096;
+const INTROSPECTION_HTTP_CLIENT_TTL: StdDuration = StdDuration::from_secs(300);
+const INTROSPECTION_HTTP_CLIENT_MAX_ENTRIES: usize = 32;
 
 /// DPoP proof freshness window. The proof's `iat` MUST be within
 /// [now - WINDOW, now + skew]; combined with single-use `jti` tracking this
@@ -97,6 +99,25 @@ struct CachedIntrospection {
 /// service-DID-bound hash of the presented grant so cross-audience grants never
 /// collide.
 static INTROSPECTION_CACHE: LazyLock<Mutex<HashMap<String, CachedIntrospection>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
+
+#[derive(Clone)]
+struct CachedIntrospectionHttpClient {
+    url: reqwest::Url,
+    client: reqwest::Client,
+    inserted_at: Instant,
+}
+
+/// Reuse the connection pool for the configured Auth Server instead of
+/// constructing a fresh reqwest client for every force-fresh introspection.
+///
+/// Sensitive self operations intentionally bypass the grant-result cache, so a
+/// long-lived process can perform thousands of remote introspections. Creating
+/// one client per request disables keep-alive and can exhaust ephemeral ports
+/// under a full conformance run. The cache is bounded and keyed by the complete
+/// configured URL plus the private-network posture; each cached client remains
+/// pinned to the addresses that passed the egress guard when it was built.
+static INTROSPECTION_HTTP_CLIENTS: LazyLock<Mutex<HashMap<String, CachedIntrospectionHttpClient>>> =
     LazyLock::new(|| Mutex::new(HashMap::new()));
 
 fn introspection_cache_key(grant_jwt: &str, audience: &str) -> String {
@@ -154,6 +175,53 @@ fn prune_introspection_cache_locked(
     now: Instant,
 ) {
     cache.retain(|_, entry| now.duration_since(entry.inserted_at) < INTROSPECTION_CACHE_TTL);
+}
+
+fn introspection_http_client(
+    raw_url: &str,
+    development_mode: bool,
+) -> Result<(reqwest::Url, reqwest::Client), String> {
+    let cache_key = introspection_http_client_cache_key(raw_url, development_mode);
+    let mut clients = INTROSPECTION_HTTP_CLIENTS.lock();
+    let reusable = clients
+        .get(&cache_key)
+        .filter(|cached| cached.inserted_at.elapsed() < INTROSPECTION_HTTP_CLIENT_TTL)
+        .map(|cached| (cached.url.clone(), cached.client.clone()));
+    if let Some(cached) = reusable {
+        return Ok(cached);
+    }
+    clients.remove(&cache_key);
+
+    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        raw_url,
+        "session grant introspection",
+        development_mode,
+        StdDuration::from_secs(10),
+    )?;
+    while clients.len() >= INTROSPECTION_HTTP_CLIENT_MAX_ENTRIES {
+        let Some(oldest_key) = clients
+            .iter()
+            .min_by_key(|(_, cached)| cached.inserted_at)
+            .map(|(key, _)| key.clone())
+        else {
+            break;
+        };
+        clients.remove(&oldest_key);
+    }
+    clients.insert(
+        cache_key,
+        CachedIntrospectionHttpClient {
+            url: url.clone(),
+            client: client.clone(),
+            inserted_at: Instant::now(),
+        },
+    );
+    Ok((url, client))
+}
+
+fn introspection_http_client_cache_key(raw_url: &str, development_mode: bool) -> String {
+    let private_networks_allowed = crate::security::private_networks_allowed(development_mode);
+    format!("{raw_url}\nprivate_networks={private_networks_allowed}")
 }
 
 /// Drop any cached introspection entry for `grant_jwt`. Called by logout so the
@@ -229,19 +297,15 @@ async fn introspect_session_grant_remote(
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
     let (introspection_url, client) =
-        crate::security::validate_http_url_for_egress_with_pinned_client(
-            introspection_url,
-            "session grant introspection",
-            state.config().development_mode,
-            StdDuration::from_secs(10),
-        )
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "session grant introspection service unavailable",
-            )
-        })?;
+        introspection_http_client(introspection_url, state.config().development_mode).map_err(
+            |_| {
+                (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "auth_unavailable",
+                    "session grant introspection service unavailable",
+                )
+            },
+        )?;
     let response = client
         .post(introspection_url)
         .bearer_auth(bearer)
@@ -691,6 +755,61 @@ mod tests {
         let a = introspection_cache_key("grant", "did:web:a");
         let b = introspection_cache_key("grant", "did:web:b");
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn introspection_http_client_reuses_the_pinned_connection_pool() {
+        let raw_url = "http://127.0.0.1:65530/_arkret/admin/session-grants/introspect";
+        let cache_key = introspection_http_client_cache_key(raw_url, true);
+        INTROSPECTION_HTTP_CLIENTS.lock().remove(&cache_key);
+
+        introspection_http_client(raw_url, true).unwrap();
+        let first_inserted_at = INTROSPECTION_HTTP_CLIENTS
+            .lock()
+            .get(&cache_key)
+            .expect("client cached after first construction")
+            .inserted_at;
+
+        introspection_http_client(raw_url, true).unwrap();
+        let second_inserted_at = INTROSPECTION_HTTP_CLIENTS
+            .lock()
+            .get(&cache_key)
+            .expect("client remains cached")
+            .inserted_at;
+
+        assert_eq!(first_inserted_at, second_inserted_at);
+        INTROSPECTION_HTTP_CLIENTS.lock().remove(&cache_key);
+    }
+
+    #[test]
+    fn introspection_http_client_rebuilds_an_expired_pinned_client() {
+        let raw_url = "http://127.0.0.1:65529/_arkret/admin/session-grants/introspect";
+        let cache_key = introspection_http_client_cache_key(raw_url, true);
+        INTROSPECTION_HTTP_CLIENTS.lock().remove(&cache_key);
+
+        introspection_http_client(raw_url, true).unwrap();
+        {
+            let mut clients = INTROSPECTION_HTTP_CLIENTS.lock();
+            clients
+                .get_mut(&cache_key)
+                .expect("client cached after first construction")
+                .inserted_at = Instant::now() - INTROSPECTION_HTTP_CLIENT_TTL;
+        }
+        let expired_inserted_at = INTROSPECTION_HTTP_CLIENTS
+            .lock()
+            .get(&cache_key)
+            .expect("expired client remains present until next lookup")
+            .inserted_at;
+
+        introspection_http_client(raw_url, true).unwrap();
+        let rebuilt_inserted_at = INTROSPECTION_HTTP_CLIENTS
+            .lock()
+            .get(&cache_key)
+            .expect("expired client was rebuilt")
+            .inserted_at;
+
+        assert!(rebuilt_inserted_at > expired_inserted_at);
+        INTROSPECTION_HTTP_CLIENTS.lock().remove(&cache_key);
     }
 
     fn test_introspection_grant() -> SessionGrantIntrospectGrant {

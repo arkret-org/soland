@@ -1296,9 +1296,10 @@ pub(crate) async fn claim_keypackages_for_request(
         Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
-    // The claim op's group ref — also used during selection: a package already
-    // claimed by this same group is eligible for idempotent claim renewal
-    // (interrupted materialization retry), mirroring the reducer's CAS rule.
+    // The claim operation is not retry-safe and each successful request must
+    // consume a previously published single-use KeyPackage. The group ref is
+    // recorded on the winning claim for subsequent Welcome/consume binding,
+    // but it never makes an already claimed package eligible for selection.
     let mls_group_ref = body
         .mls_group_id
         .clone()
@@ -1309,10 +1310,7 @@ pub(crate) async fn claim_keypackages_for_request(
         let ordinary = keypackages
             .iter()
             .filter(|kp| !kp.last_resort)
-            .filter(|kp| {
-                kp.claimed_by_mls_group_id.is_none()
-                    || kp.claimed_by_mls_group_id.as_deref() == Some(mls_group_ref.as_str())
-            })
+            .filter(|kp| kp.claimed_by_mls_group_id.is_none())
             .filter(|kp| {
                 keypackage_matches_claim(
                     kp,
