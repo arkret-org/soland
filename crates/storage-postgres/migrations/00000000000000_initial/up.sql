@@ -1549,6 +1549,9 @@ ALTER TABLE ONLY public.mls_commits
 ALTER TABLE ONLY public.mls_key_packages
     ADD CONSTRAINT mls_key_packages_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.mls_key_packages
+    ADD CONSTRAINT mls_key_packages_keypackage_ref_key UNIQUE (keypackage_ref);
+
 ALTER TABLE ONLY public.mls_welcomes
     ADD CONSTRAINT mls_welcomes_pkey PRIMARY KEY (id);
 

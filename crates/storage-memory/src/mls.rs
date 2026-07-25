@@ -35,6 +35,19 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         Ok(self.state.lock().rows.get(id).cloned())
     }
 
+    async fn get_by_ref(
+        &self,
+        keypackage_ref: &str,
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
+        Ok(self
+            .state
+            .lock()
+            .rows
+            .values()
+            .find(|row| row.keypackage_ref == keypackage_ref)
+            .cloned())
+    }
+
     async fn try_claim(
         &self,
         claim: MlsKeyPackageClaim<'_>,
@@ -462,6 +475,23 @@ mod tests {
             expires_at: i64::MAX,
             updated_at: 10,
         }
+    }
+
+    #[tokio::test]
+    async fn keypackage_lookup_by_wire_ref_resolves_internal_row_id() {
+        let store = MemoryMlsKeyPackageStore::new();
+        let record = keypackage("kp-internal-id", false);
+        let keypackage_ref = record.keypackage_ref.clone();
+        store.put(&record).await.unwrap();
+
+        let resolved = store
+            .get_by_ref(&keypackage_ref)
+            .await
+            .unwrap()
+            .expect("wire KeyPackage ref should resolve");
+
+        assert_eq!(resolved.id, "kp-internal-id");
+        assert_eq!(resolved.keypackage_ref, keypackage_ref);
     }
 
     #[tokio::test]

@@ -1516,74 +1516,75 @@ async fn consume_keypackages(
     let consumed_at = now().timestamp();
     let mut consumed = Vec::new();
     let mut failures = Vec::new();
-    for keypackage_id in refs {
-        match state.mls_key_packages().key_package(&keypackage_id).await {
-            Ok(Some(record))
-                if record.last_resort
-                    && record.claimed_by_mls_group_id.as_deref() != Some("revoked") =>
-            {
-                if record
-                    .last_resort_realm_id
-                    .as_deref()
-                    .zip(consume_realm_id.as_deref())
-                    .is_some_and(|(bound, requested)| bound != requested)
-                {
-                    failures.push(keypackage_ref_failure(
-                        keypackage_id,
-                        soland_services::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH,
-                    ));
-                    continue;
-                }
-                if record.last_resort_realm_id.is_none() {
-                    failures.push(keypackage_ref_failure(keypackage_id, "claim_missing"));
-                    continue;
-                }
-                consumed.push(keypackage_id);
-                continue;
-            }
-            Ok(Some(record)) if record.consumed_at.is_some() => {
-                if record.actor_id == session.actor
-                    && record.device_id == session.device_id
-                    && record.claimed_by_mls_group_id.as_deref() == Some(group_id.as_str())
-                {
-                    consumed.push(keypackage_id);
-                } else {
-                    failures.push(keypackage_ref_failure(keypackage_id, "claim_mismatch"));
-                }
-                continue;
-            }
-            Ok(Some(_)) => {}
+    for keypackage_ref in refs {
+        let record = match state
+            .mls_key_packages()
+            .key_package_by_ref(&keypackage_ref)
+            .await
+        {
+            Ok(Some(record)) => record,
             Ok(None) => {
                 failures.push(keypackage_ref_failure(
-                    keypackage_id,
+                    keypackage_ref,
                     "already_consumed_or_missing",
                 ));
                 continue;
             }
             Err(error) => {
-                failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
+                failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
                 continue;
             }
+        };
+        if record.last_resort && record.claimed_by_mls_group_id.as_deref() != Some("revoked") {
+            if record
+                .last_resort_realm_id
+                .as_deref()
+                .zip(consume_realm_id.as_deref())
+                .is_some_and(|(bound, requested)| bound != requested)
+            {
+                failures.push(keypackage_ref_failure(
+                    keypackage_ref,
+                    soland_services::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH,
+                ));
+                continue;
+            }
+            if record.last_resort_realm_id.is_none() {
+                failures.push(keypackage_ref_failure(keypackage_ref, "claim_missing"));
+                continue;
+            }
+            consumed.push(keypackage_ref);
+            continue;
+        }
+        if record.consumed_at.is_some() {
+            if record.actor_id == session.actor
+                && record.device_id == session.device_id
+                && record.claimed_by_mls_group_id.as_deref() == Some(group_id.as_str())
+            {
+                consumed.push(keypackage_ref);
+            } else {
+                failures.push(keypackage_ref_failure(keypackage_ref, "claim_mismatch"));
+            }
+            continue;
         }
         match state
             .mls_key_packages()
-            .consume_key_package_claim(&keypackage_id, &group_id, consumed_at)
+            .consume_key_package_claim(&record.id, &group_id, consumed_at)
             .await
         {
             Ok(Some(_)) => {
                 state
                     .projections()
-                    .mark_key_package_consumed(&keypackage_id, consumed_at);
-                consumed.push(keypackage_id)
+                    .mark_key_package_consumed(&record.id, consumed_at);
+                consumed.push(keypackage_ref)
             }
             Ok(None) => {
                 failures.push(keypackage_ref_failure(
-                    keypackage_id,
+                    keypackage_ref,
                     "already_consumed_or_missing",
                 ));
             }
             Err(error) => {
-                failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
+                failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
             }
         }
     }
@@ -1926,19 +1927,23 @@ async fn revoke_keypackages(
     let revoked_at = now().timestamp();
     let mut revoked = Vec::new();
     let mut failures = Vec::new();
-    for keypackage_id in refs {
-        match state.mls_key_packages().key_package(&keypackage_id).await {
+    for keypackage_ref in refs {
+        match state
+            .mls_key_packages()
+            .key_package_by_ref(&keypackage_ref)
+            .await
+        {
             Ok(Some(record)) if record.actor_id != session.actor => {
-                failures.push(keypackage_ref_failure(keypackage_id, "not_owner"));
+                failures.push(keypackage_ref_failure(keypackage_ref, "not_owner"));
             }
             Ok(Some(record)) if record.consumed_at.is_some() => {
-                failures.push(keypackage_ref_failure(keypackage_id, "already_consumed"));
+                failures.push(keypackage_ref_failure(keypackage_ref, "already_consumed"));
             }
-            Ok(Some(_)) => {
+            Ok(Some(record)) => {
                 match state
                     .mls_key_packages()
                     .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
-                        id: &keypackage_id,
+                        id: &record.id,
                         mls_group_id: "revoked",
                         intended_realm_id: None,
                         ssk_generation: None,
@@ -1951,29 +1956,29 @@ async fn revoke_keypackages(
                 {
                     Ok(Some(_)) => {
                         state.projections().mark_key_package_claimed(
-                            &keypackage_id,
+                            &record.id,
                             "revoked".to_owned(),
                             revoked_at,
                             None,
                         );
-                        revoked.push(keypackage_id);
+                        revoked.push(keypackage_ref);
                     }
                     Ok(None) => {
                         failures.push(keypackage_ref_failure(
-                            keypackage_id,
+                            keypackage_ref,
                             "already_consumed_or_missing",
                         ));
                     }
                     Err(error) => {
-                        failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
+                        failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
                     }
                 }
             }
             Ok(None) => {
-                failures.push(keypackage_ref_failure(keypackage_id, "not_found"));
+                failures.push(keypackage_ref_failure(keypackage_ref, "not_found"));
             }
             Err(error) => {
-                failures.push(keypackage_ref_failure(keypackage_id, error.to_string()));
+                failures.push(keypackage_ref_failure(keypackage_ref, error.to_string()));
             }
         }
     }
@@ -2228,7 +2233,7 @@ async fn verify_session_keypackage_write_signature(
         for keypackage_ref in keypackage_refs {
             let record = state
                 .mls_key_packages()
-                .key_package(keypackage_ref)
+                .key_package_by_ref(keypackage_ref)
                 .await
                 .map_err(|error| AppError::internal(error.to_string()))?
                 .ok_or_else(|| AppError::invalid_param("KeyPackage signature target is missing"))?;

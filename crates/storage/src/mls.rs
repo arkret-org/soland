@@ -140,6 +140,8 @@ pub trait MlsKeyPackageStore: Send + Sync {
     /// idempotent — production fixtures sometimes resubmit on retry).
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool>;
     async fn get(&self, id: &str) -> PersistenceResult<Option<MlsKeyPackageRow>>;
+    async fn get_by_ref(&self, keypackage_ref: &str)
+    -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Atomically claim the named KeyPackage for `mls_group_id`. Returns
     /// `Ok(Some(record))` on success (with `claimed_by_mls_group_id` /
     /// claim-window fields filled in), `Ok(None)` if the row is already

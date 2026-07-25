@@ -1112,6 +1112,10 @@ pub enum PeerKeyPackageClaimLedgerWriteResult {
 pub trait MlsKeyPackageMaintenancePort: Send + Sync {
     async fn store_key_package(&self, record: &MlsKeyPackageState) -> ServiceResult<bool>;
     async fn key_package(&self, id: &str) -> ServiceResult<Option<MlsKeyPackageState>>;
+    async fn key_package_by_ref(
+        &self,
+        keypackage_ref: &str,
+    ) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn claim_key_package(
         &self,
         command: ClaimMlsKeyPackageCommand<'_>,
@@ -1189,6 +1193,12 @@ impl MlsKeyPackageService {
     }
     pub async fn key_package(&self, id: &str) -> ServiceResult<Option<MlsKeyPackageState>> {
         self.key_packages.key_package(id).await
+    }
+    pub async fn key_package_by_ref(
+        &self,
+        keypackage_ref: &str,
+    ) -> ServiceResult<Option<MlsKeyPackageState>> {
+        self.key_packages.key_package_by_ref(keypackage_ref).await
     }
     pub async fn claim_key_package(
         &self,

@@ -911,6 +911,17 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .await?
             .map(application_mls_key_package))
     }
+    async fn key_package_by_ref(
+        &self,
+        keypackage_ref: &str,
+    ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .get_by_ref(keypackage_ref)
+            .await?
+            .map(application_mls_key_package))
+    }
     async fn claim_key_package(
         &self,
         command: crate::events::ClaimMlsKeyPackageCommand<'_>,

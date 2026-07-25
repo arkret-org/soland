@@ -81,6 +81,29 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn get_by_ref(
+        &self,
+        keypackage_ref: &str,
+    ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT id, keypackage_ref, keypackage_digest, actor_id, device_id, \
+             key_package_bytes, capabilities, capabilities_digest, device_signature, \
+             last_resort, last_resort_realm_id, lifetime_not_before, lifetime_not_after, \
+             claimed_by_mls_group_id, ssk_generation, device_authorize_event_id, agent_key_authorize_event_id, claimed_at, \
+             claim_expires_at_unix_ms, consumed_at, created_at \
+             FROM mls_key_packages WHERE keypackage_ref = $1",
+        )
+        .bind::<Text, _>(keypackage_ref)
+        .get_result::<MlsKeyPackagePgRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(MlsKeyPackageRow::from))
+        .map_err(PersistenceError::database)
+    }
+
     async fn try_claim(
         &self,
         claim: MlsKeyPackageClaim<'_>,
