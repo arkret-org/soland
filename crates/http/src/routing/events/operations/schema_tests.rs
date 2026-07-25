@@ -482,15 +482,13 @@ mod realm_media_service_schema_tests {
             .unwrap(),
             arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
             json!({
-                "media_service": {
-                    "service_id": "did:web:media.example",
-                    "foci": [{
-                        "focus_id": "ak:focus:livekit-lhr",
-                        "type": "livekit",
-                        "issuer_kid": "did:web:media.example#media-token",
-                        "connect_url": "wss://livekit.media.example"
-                    }]
-                }
+                "service_id": "did:web:media.example",
+                "foci": [{
+                    "focus_id": "ak:focus:livekit-lhr",
+                    "type": "livekit",
+                    "issuer_kid": "did:web:media.example#media-token",
+                    "connect_url": "wss://livekit.media.example"
+                }]
             }),
         );
         let schema = operation_schema_for_kind(arkret_wire::events::EventKind::REALM_MEDIA_SERVICE)

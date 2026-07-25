@@ -21,6 +21,23 @@ fn media_service_projects_cell_and_rejects_empty_foci() {
         ProjectionEffect::Rejected { reason } if reason == "media_service_foci_required"
     ));
 
+    assert!(matches!(
+        state.apply(
+            &make_operation(
+                arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
+                realm,
+                serde_json::json!({
+                    "media_service": {
+                        "service_id": "did:web:media.example",
+                        "foci": [{"focus_id": "ak:focus:legacy"}]
+                    }
+                }),
+            ),
+            &hlc,
+        ),
+        ProjectionEffect::Rejected { reason } if reason == "media_service_foci_required"
+    ));
+
     let payload = serde_json::json!({
         "service_id": "did:web:media.example",
         "foci": [{

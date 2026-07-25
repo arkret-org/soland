@@ -304,17 +304,13 @@ impl ProjectionState {
     /// Project `ak.realm.media_service` into the canonical
     /// `ak.component.realm.media_service.v1` cas-register cell consumed by
     /// the AKP-0010 media token exchange (`routing::interop::webrtc`). The
-    /// payload is normalized like `apply_realm_policy_components` (accepting
-    /// both the Event-Envelope `{"value": ...}` wrapper and a direct value),
-    /// then the `foci[]` array is required to be non-empty so a realm cannot
-    /// advertise a media service that exposes no focus. Both the wrapped
-    /// (`{"media_service": {...}}`) and unwrapped (`{"service_id", "foci"}`)
-    /// shapes are tolerated to match `parse_media_service_epoch`.
+    /// payload is normalized like `apply_realm_policy_components`, then the
+    /// `foci[]` array is required to be non-empty so a realm cannot advertise
+    /// a media service that exposes no focus.
     pub(crate) fn apply_realm_media_service(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = state_payload_value(&operation.payload).clone();
-        let config = value.get("media_service").unwrap_or(&value);
-        let foci_non_empty = config
+        let foci_non_empty = value
             .get("foci")
             .and_then(Value::as_array)
             .is_some_and(|foci| !foci.is_empty());

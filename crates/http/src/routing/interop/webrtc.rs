@@ -1010,14 +1010,13 @@ fn media_service_epoch_for_realm(
 }
 
 fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServiceEpoch, AppError> {
-    let config = value.get("media_service").unwrap_or(value);
-    let service_id = config
+    let service_id = value
         .get("service_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
-    let foci_value = normalized_media_foci(config)?;
+    let foci_value = normalized_media_foci(value)?;
     let mut foci = Vec::new();
     for focus_value in foci_value {
         let focus_id = required_json_string(&focus_value, "focus_id")?;
@@ -1028,7 +1027,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .and_then(MediaProviderKind::parse)?;
         let issuer_kid = focus_value
             .get("issuer_kid")
-            .or_else(|| config.get("issuer_kid"))
+            .or_else(|| value.get("issuer_kid"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1038,7 +1037,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .to_owned();
         let audience = focus_value
             .get("audience")
-            .or_else(|| config.get("audience"))
+            .or_else(|| value.get("audience"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -1046,7 +1045,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .unwrap_or_else(|| format!("arkret:media:{realm_id}:{focus_id}"));
         let ttl_seconds = focus_value
             .get("ttl_seconds")
-            .or_else(|| config.get("ttl_seconds"))
+            .or_else(|| value.get("ttl_seconds"))
             .and_then(Value::as_u64)
             .unwrap_or(arkret_wire::constants::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value

@@ -39,15 +39,13 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
     state.test_projection().lock().cells.insert(
         cell_id,
         CellState::Value(json!({
-            "media_service": {
-                "service_id": service_id,
-                "foci": [{
-                    "focus_id": FOCUS_ID,
-                    "backend": "arkret-native",
-                    "issuer_kid": issuer_kid,
-                    "connect_url": "wss://media.soland.local/native"
-                }]
-            }
+            "service_id": service_id,
+            "foci": [{
+                "focus_id": FOCUS_ID,
+                "backend": "arkret-native",
+                "issuer_kid": issuer_kid,
+                "connect_url": "wss://media.soland.local/native"
+            }]
         })),
     );
 }

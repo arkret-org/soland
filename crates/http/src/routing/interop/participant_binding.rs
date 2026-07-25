@@ -172,15 +172,12 @@ fn media_service_anchors(state: &AppState, realm_id: &str) -> Option<MediaServic
         let projection = state.projections().snapshot();
         projection.cell_value(&cell_id).cloned()?
     };
-    // `apply_realm_media_service` stores either the wrapped
-    // `{"media_service": {...}}` or a direct value; tolerate both.
-    let config = value.get("media_service").unwrap_or(&value);
-    let foci = config.get("foci").and_then(Value::as_array)?;
+    let foci = value.get("foci").and_then(Value::as_array)?;
     let mut issuer_kids = BTreeSet::new();
     for focus in foci {
         if let Some(issuer_kid) = focus
             .get("issuer_kid")
-            .or_else(|| config.get("issuer_kid"))
+            .or_else(|| value.get("issuer_kid"))
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|kid| !kid.is_empty())
@@ -188,9 +185,8 @@ fn media_service_anchors(state: &AppState, realm_id: &str) -> Option<MediaServic
             issuer_kids.insert(issuer_kid.to_owned());
         }
     }
-    let service_id = config
+    let service_id = value
         .get("service_id")
-        .or_else(|| config.get("service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|id| !id.is_empty())
