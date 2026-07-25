@@ -3,8 +3,6 @@ use super::{ModerationStore, Mutex, PersistenceError, PersistenceResult, Value, 
 pub(crate) struct MemoryModerationStore {
     reports: Mutex<Vec<Value>>,
     actions: Mutex<Vec<Value>>,
-    decisions: Mutex<Vec<Value>>,
-    decision_lifts: Mutex<Vec<Value>>,
     queue_items: Mutex<Vec<Value>>,
     appeals: Mutex<Vec<Value>>,
 }
@@ -31,42 +29,6 @@ impl ModerationStore for MemoryModerationStore {
 
     async fn list_actions(&self) -> PersistenceResult<Vec<Value>> {
         Ok(self.actions.lock().clone())
-    }
-
-    async fn append_decision(&self, decision: Value) -> PersistenceResult<()> {
-        let id = decision
-            .get("decision_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| {
-                PersistenceError::Internal("moderation decision missing decision_id".to_owned())
-            })?
-            .to_owned();
-        let mut decisions = self.decisions.lock();
-        if !decisions
-            .iter()
-            .any(|d| d.get("decision_id").and_then(Value::as_str) == Some(id.as_str()))
-        {
-            decisions.push(decision);
-        }
-        Ok(())
-    }
-
-    async fn list_decisions(&self) -> PersistenceResult<Vec<Value>> {
-        Ok(self.decisions.lock().clone())
-    }
-
-    async fn get_decision(&self, decision_id: &str) -> PersistenceResult<Option<Value>> {
-        Ok(self
-            .decisions
-            .lock()
-            .iter()
-            .find(|d| d.get("decision_id").and_then(Value::as_str) == Some(decision_id))
-            .cloned())
-    }
-
-    async fn append_decision_lift(&self, lift: Value) -> PersistenceResult<()> {
-        self.decision_lifts.lock().push(lift);
-        Ok(())
     }
 
     async fn upsert_queue_item(&self, item: Value) -> PersistenceResult<()> {
