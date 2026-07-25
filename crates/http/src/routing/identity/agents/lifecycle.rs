@@ -1048,13 +1048,15 @@ pub(super) async fn deactivate_agent(
         &body.lifecycle_event,
     )?;
 
-    let (active_key_ids, active_grant_locations, all_grant_locations) = {
+    let (active_key_authorizations, active_key_ids, active_grant_locations, all_grant_locations) = {
         let projection = state.projections().snapshot();
+        let active_key_authorizations = projection
+            .active_agent_key_authorizations(&agent_id)
+            .into_iter()
+            .collect::<BTreeMap<_, _>>();
         (
-            projection
-                .authorized_key_ids_for(&agent_id)
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
+            active_key_authorizations.clone(),
+            active_key_authorizations.keys().cloned().collect(),
             projection
                 .unrevoked_grant_locations_for_subject(&agent_id)
                 .into_iter()
@@ -1068,8 +1070,14 @@ pub(super) async fn deactivate_agent(
 
     let mut supplied_key_ids = BTreeSet::new();
     for event in &body.key_revocation_events {
-        let key_id =
-            validate_agent_key_revocation_event(&session, &record, &agent_id, reason, event)?;
+        let key_id = validate_agent_key_revocation_event(
+            &session,
+            &record,
+            &agent_id,
+            reason,
+            &active_key_authorizations,
+            event,
+        )?;
         if !supplied_key_ids.insert(key_id) {
             return Err(AppError::invalid_param(
                 "key_revocation_events contains a duplicate key_id",
@@ -1141,6 +1149,7 @@ fn validate_agent_key_revocation_event(
     record: &AgentPrincipalRecord,
     agent_id: &str,
     reason: Option<&str>,
+    active_key_authorizations: &BTreeMap<String, String>,
     event: &arkret_wire::Event,
 ) -> Result<String, AppError> {
     if event.kind.as_str() != "ak.agent.key.revoke"
@@ -1171,13 +1180,47 @@ fn validate_agent_key_revocation_event(
             "key_revocation_events payload does not match the requested deactivation",
         ));
     }
-    event
+    let key_id = event
         .payload
         .get("key_id")
         .and_then(Value::as_str)
         .filter(|key_id| !key_id.is_empty())
         .map(ToOwned::to_owned)
-        .ok_or_else(|| AppError::invalid_param("key_revocation_events key_id is required"))
+        .ok_or_else(|| AppError::invalid_param("key_revocation_events key_id is required"))?;
+    let authorized_event_ref = active_key_authorizations.get(&key_id).ok_or_else(|| {
+        AppError::invalid_param("key_revocation_events key_id is not currently authorized")
+    })?;
+    let payload = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::agent::AgentKeyRevokePayload,
+    >(serde_json::to_value(&event.payload).map_err(|error| {
+        AppError::invalid_param(format!("key_revocation_events payload invalid: {error}"))
+    })?)
+    .map_err(|error| {
+        AppError::invalid_param(format!("key_revocation_events payload invalid: {error}"))
+    })?;
+    let authorized_event_ref =
+        arkret_wire::EventId::new(authorized_event_ref.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "active Agent authorization Event id invalid: {error}"
+            ))
+        })?;
+    let expected = arkret_event_draft::agent_key_revoke_effects(
+        &payload,
+        std::slice::from_ref(&authorized_event_ref),
+        &event.event_id,
+        event.actor_seq,
+    )
+    .map_err(|error| {
+        AppError::invalid_param(format!(
+            "key_revocation_events canonical Agent key effects invalid: {error}"
+        ))
+    })?;
+    if event.effects != expected {
+        return Err(AppError::invalid_param(
+            "key_revocation_events effects must exactly match the canonical Agent key revocation effects",
+        ));
+    }
+    Ok(key_id)
 }
 
 fn validate_agent_capability_revocation_event(

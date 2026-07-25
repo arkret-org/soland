@@ -1140,6 +1140,14 @@ mod tests {
                 "agent_id": "did:web:agent.example",
                 "key_id": "did:web:agent.example#runtime-1",
                 "verification_method": "did:web:agent.example#runtime-1",
+                "public_key_digest": concat!(
+                    "sha256:",
+                    "1111111111111111111111111111111111111111111111111111111111111111"
+                ),
+                "signing_key_binding_digest": concat!(
+                    "sha256:",
+                    "2222222222222222222222222222222222222222222222222222222222222222"
+                ),
                 "accountable_principal_id": "did:web:controller.example",
                 "agent_key_scope": {
                     "actions": ["ak.self.events.command.submit"],

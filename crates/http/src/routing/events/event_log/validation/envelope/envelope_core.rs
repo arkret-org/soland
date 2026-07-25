@@ -531,6 +531,9 @@ async fn enforce_device_generation_fence(
             admission
                 .signer_key_evidence(session, object, verification_method)
                 .is_some()
+                || admission
+                    .agent_signer_evidence(session, object, verification_method)
+                    .is_some()
         })
     {
         return Ok(());

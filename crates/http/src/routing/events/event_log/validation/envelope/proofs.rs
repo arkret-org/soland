@@ -185,7 +185,7 @@ pub(crate) async fn validate_event_proofs(
             if verify_with_active_agent_session(
                 state,
                 session,
-                actor_id,
+                &signer_controller,
                 &verification_method,
                 &proof_binding_bytes,
                 &jws,
@@ -193,6 +193,27 @@ pub(crate) async fn validate_event_proofs(
             .await?
             {
                 continue;
+            }
+            if verify_with_federated_agent_signer_evidence(
+                internal_admission,
+                session,
+                object,
+                &verification_method,
+                &proof_binding_bytes,
+                &jws,
+            )? {
+                continue;
+            }
+            if object
+                .get("unsigned")
+                .and_then(|unsigned| unsigned.get("agent_authorization_admission"))
+                .is_some()
+            {
+                return Err(event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "Agent Event proof requires matching independently verified Agent signer evidence",
+                ));
             }
             // §5.4/§8.2: `{principal}#{device_id}` resolves from the current
             // device-set projection. DID control/delegation methods resolve
@@ -242,10 +263,39 @@ pub(crate) async fn validate_event_proofs(
     Ok(())
 }
 
+fn verify_with_federated_agent_signer_evidence(
+    internal_admission: Option<&InternalEventAdmission>,
+    session: &SessionRecord,
+    object: &serde_json::Map<String, Value>,
+    verification_method: &str,
+    canonical_bytes: &[u8],
+    jws: &str,
+) -> Result<bool, EventValidationError> {
+    let Some(evidence) = internal_admission.and_then(|admission| {
+        admission.agent_signer_evidence(session, object, verification_method)
+    }) else {
+        return Ok(false);
+    };
+    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: evidence.public_key().to_vec(),
+    };
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(jws, canonical_bytes, &material)
+        .map_err(|error| {
+            tracing::debug!(%error, "federated Agent Event proof JWS verification failed");
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "federated Agent Event proof JWS verification failed",
+            )
+        })?;
+    Ok(true)
+}
+
 async fn verify_with_active_agent_session(
     state: &AppState,
     session: &SessionRecord,
-    actor_id: &str,
+    signer_id: &str,
     verification_method: &str,
     canonical_bytes: &[u8],
     jws: &str,
@@ -253,7 +303,7 @@ async fn verify_with_active_agent_session(
     let Some(agent_session) = session.agent_session.as_ref() else {
         return Ok(false);
     };
-    if session.actor != actor_id
+    if session.actor != signer_id
         || agent_session.freshness_state != arkret_wire::FreshnessState::Fresh
     {
         return Err(event_validation_error(
@@ -265,7 +315,7 @@ async fn verify_with_active_agent_session(
     let Some((_, authorization_ref)) = state
         .projections()
         .snapshot()
-        .active_agent_key_authorizations(actor_id)
+        .active_agent_key_authorizations(signer_id)
         .into_iter()
         .find(|(key_id, _)| key_id == verification_method)
     else {
@@ -305,7 +355,7 @@ async fn verify_with_active_agent_session(
             )
         })?;
     if authorization.kind != arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
-        || payload.get("agent_id").and_then(Value::as_str) != Some(actor_id)
+        || payload.get("agent_id").and_then(Value::as_str) != Some(signer_id)
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
     {
         return Err(event_validation_error(

@@ -85,6 +85,7 @@ use dev_fanout::{
 
 mod common;
 pub(crate) use common::agent_grant_within_requested_scope;
+pub(crate) mod evidence;
 mod lifecycle;
 mod pairing;
 mod participation;
@@ -128,6 +129,10 @@ pub(super) fn protocol_router() -> Router {
                         .get(get_agent_participation)
                         .put(set_agent_participation),
                 ),
+        )
+        .push(
+            Router::with_path("agent-signer-evidence/query")
+                .post(evidence::query_agent_signer_evidence),
         )
         .push(Router::with_path("agent-sidecars:ensure").post(ensure_sidecar))
         .push(
@@ -370,6 +375,7 @@ mod tests {
         let signing_key_binding = serde_json::from_value(json!({
             "schema": "ak.schema.agent_signing_key_binding.v1",
             "agent_id": agent_id,
+            "agent_key_id": "ak:agent_key:01999999000070008000000000000001",
             "verification_method": verification_method,
             "public_key": {
                 "kty": "OKP",

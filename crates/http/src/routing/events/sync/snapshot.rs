@@ -332,6 +332,8 @@ pub(crate) async fn build_sync_snapshot(
     // Realm title during render. Spec: discovery/client-preferences.md
     // §2 (storage model) / §3.7 (Realm remarks).
     let account_data = account_data_events(state, session).await;
+    let agent_signer_evidence_bundle =
+        agent_signer_evidence_bundle_for_sync(state, &sync_realms).await;
 
     let cursor = sync_token_for_client_sync_frontiers(
         state,
@@ -368,9 +370,121 @@ pub(crate) async fn build_sync_snapshot(
         ),
         presence: Some(arkret_models_collaboration::sync_frames::account_sync::EphemeralEventContainer { events: presence }),
         notifications: Some(account_notifications),
+        agent_signer_evidence_bundle,
         partial: None,
         priority: None,
         reconnect_after_ms: None,
+    }
+}
+
+async fn agent_signer_evidence_bundle_for_sync(
+    state: &AppState,
+    realms: &BTreeMap<
+        String,
+        arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry,
+    >,
+) -> Option<arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle> {
+    use arkret_models_collaboration::agent_signer_evidence::AGENT_SIGNER_EVIDENCE_BUNDLE_SCHEMA;
+    use arkret_wire::NonEmptyString;
+
+    let mut selectors = BTreeMap::new();
+    for (realm_id, entry) in realms {
+        let Ok(value) = serde_json::to_value(entry) else {
+            continue;
+        };
+        collect_agent_evidence_selectors(&value, realm_id, 0, &mut selectors);
+    }
+    let mut evidence = Vec::new();
+    for selector in selectors.into_values().take(256) {
+        if let Ok(Some(item)) =
+            crate::routing::identity::agents::evidence::build_evidence(state, &selector).await
+        {
+            evidence.push(item);
+        }
+    }
+    if evidence.is_empty() {
+        return None;
+    }
+    Some(
+        arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle {
+            schema: NonEmptyString::new(AGENT_SIGNER_EVIDENCE_BUNDLE_SCHEMA.to_owned()).ok()?,
+            evidence,
+        },
+    )
+}
+
+fn collect_agent_evidence_selectors(
+    value: &Value,
+    realm_id: &str,
+    depth: usize,
+    selectors: &mut BTreeMap<
+        (String, String, String, String),
+        arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceQuerySelector,
+    >,
+) {
+    use arkret_models_collaboration::agent_signer_evidence::{
+        AgentAuthorizationAdmission, AgentSignerEvidenceQuerySelector,
+    };
+
+    if depth > 32 {
+        return;
+    }
+    match value {
+        Value::Object(object) => {
+            let admission = object
+                .get("unsigned")
+                .and_then(|unsigned| unsigned.get("agent_authorization_admission"))
+                .cloned()
+                .and_then(|value| {
+                    serde_json::from_value::<AgentAuthorizationAdmission>(value).ok()
+                });
+            if let Some(admission) = admission {
+                let event_realm = object
+                    .get("realm_id")
+                    .and_then(Value::as_str)
+                    .unwrap_or(realm_id);
+                let actor = object.get("actor_id").and_then(Value::as_str);
+                let signer = object.get("executed_by").and_then(Value::as_str).or(actor);
+                let proof_matches =
+                    object
+                        .get("proofs")
+                        .and_then(Value::as_array)
+                        .is_some_and(|proofs| {
+                            proofs.iter().any(|proof| {
+                                proof.get("verification_method").and_then(Value::as_str)
+                                    == Some(admission.verification_method.as_str())
+                            })
+                        });
+                if event_realm == realm_id
+                    && signer == Some(admission.agent_id.as_str())
+                    && proof_matches
+                {
+                    let key = (
+                        admission.agent_id.as_str().to_owned(),
+                        admission.verification_method.as_str().to_owned(),
+                        admission.authorization_event_id.as_str().to_owned(),
+                        admission.accepted_frontier.as_str().to_owned(),
+                    );
+                    selectors
+                        .entry(key)
+                        .or_insert(AgentSignerEvidenceQuerySelector {
+                            agent_id: admission.agent_id,
+                            verification_method: admission.verification_method,
+                            agent_key_authorize_event_id: Some(admission.authorization_event_id),
+                            event_accepted_frontier: Some(admission.accepted_frontier),
+                        });
+                }
+            }
+            for child in object.values() {
+                collect_agent_evidence_selectors(child, realm_id, depth + 1, selectors);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                collect_agent_evidence_selectors(item, realm_id, depth + 1, selectors);
+            }
+        }
+        _ => {}
     }
 }
 

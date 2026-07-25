@@ -605,6 +605,7 @@ pub(super) async fn agent_key_pair(
     }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
     validate_requested_scope_disclosure(&body, &agent_record, state).await?;
+    validate_agent_key_authorize_effects(&body.authorize_event)?;
     let paired_request_digest = agent_key_pair_request_digest(&body)?;
     if agent_record.authorized_event_ref.as_deref() == Some(event_id) {
         let same_request = agent_record.paired_pairing_request_id.as_deref()
@@ -722,6 +723,30 @@ pub(super) async fn agent_key_pair(
     })
 }
 
+fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<(), AppError> {
+    let payload = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload,
+    >(serde_json::to_value(&event.payload).map_err(|error| {
+        AppError::invalid_param(format!("authorize_event.payload invalid: {error}"))
+    })?)
+    .map_err(|error| {
+        AppError::invalid_param(format!("authorize_event.payload invalid: {error}"))
+    })?;
+    let expected =
+        arkret_event_draft::agent_key_authorize_effects(&payload, &event.event_id, event.actor_seq)
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "authorize_event canonical Agent key effects invalid: {error}"
+                ))
+            })?;
+    if event.effects != expected {
+        return Err(AppError::invalid_param(
+            "authorize_event.effects must exactly match the canonical Agent key authorization effects",
+        ));
+    }
+    Ok(())
+}
+
 async fn validate_agent_signing_key_binding(
     body: &AgentKeyPairRequestBody,
     controller_id: &str,
@@ -768,6 +793,7 @@ async fn validate_agent_signing_key_binding_parts(
         ));
     }
     if binding.agent_id != *agent_id
+        || payload.get("key_id").and_then(Value::as_str) != Some(binding.agent_key_id.as_str())
         || binding.verification_method != *verification_method
         || binding.agent_key_authorize_event_id != authorize_event.event_id
         || binding.public_key_digest.as_str() != runtime_public_key_digest
@@ -811,11 +837,6 @@ async fn validate_agent_signing_key_binding_parts(
             "signing_key_binding.expires_at must match authorize_event.payload.expires_at",
         ));
     }
-    crate::jws_verify::validate_verification_method_controller(
-        controller_id,
-        binding.controller_proof.verification_method.as_str(),
-    )
-    .map_err(AppError::invalid_param)?;
     let signing_bytes =
         arkret_signatures::agent_evidence::agent_signing_key_binding_signing_bytes(binding)
             .map_err(|reason| AppError::invalid_param(reason.as_str()))?;

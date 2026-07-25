@@ -268,7 +268,11 @@ pub(in crate::routing) fn projection_operation_from_event(
             .entry("effects".to_owned())
             .or_insert_with(|| effects.clone());
     }
-    if parsed.kind == arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE {
+    if matches!(
+        parsed.kind.as_str(),
+        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
+            | arkret_wire::events::EventKind::AGENT_KEY_REVOKE
+    ) {
         payload_object.insert(
             "accepted_event_id".to_owned(),
             Value::String(parsed.event_id.clone()),
@@ -466,7 +470,13 @@ mod projection_operation_tests {
             &json!({ "payload": {} }),
         )
         .unwrap();
-        assert!(agent_key_revoke.payload.get("accepted_event_id").is_none());
+        assert_eq!(
+            agent_key_revoke
+                .payload
+                .get("accepted_event_id")
+                .and_then(Value::as_str),
+            Some("ak:event:01904100-0000-7000-8000-000000000001")
+        );
     }
 
     #[test]
@@ -479,6 +489,14 @@ mod projection_operation_tests {
                     "agent_id": "did:web:agent.example",
                     "key_id": "did:web:agent.example#runtime-1",
                     "verification_method": "did:web:agent.example#runtime-1",
+                    "public_key_digest": concat!(
+                        "sha256:",
+                        "1111111111111111111111111111111111111111111111111111111111111111"
+                    ),
+                    "signing_key_binding_digest": concat!(
+                        "sha256:",
+                        "2222222222222222222222222222222222222222222222222222222222222222"
+                    ),
                     "accountable_principal_id": "did:web:controller.example",
                     "agent_key_scope": {
                         "actions": ["ak.self.events.command.submit"],

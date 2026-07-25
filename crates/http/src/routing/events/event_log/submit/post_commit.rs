@@ -188,6 +188,11 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             }
         }
     }
+    let agent_signer_evidence_bundle =
+        crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
+            state, &events,
+        )
+        .await;
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -220,6 +225,7 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             service_binding_ref,
             events: events.clone(),
             signer_key_evidence: signer_key_evidence.clone(),
+            agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
             idempotency_key: Some(idempotency_key.clone()),
         };
         let Some(payload_json) = canonical::canonical_json_bytes(&body)
@@ -291,6 +297,12 @@ pub(super) async fn peer_event_fanout_records(
                 return Vec::new();
             }
         };
+    let agent_signer_evidence_bundle =
+        crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
+            state,
+            std::slice::from_ref(&event),
+        )
+        .await;
     let now = chrono::Utc::now().timestamp();
     let mut records = Vec::new();
     for peer in peers {
@@ -326,6 +338,7 @@ pub(super) async fn peer_event_fanout_records(
             service_binding_ref,
             events: vec![event.clone()],
             signer_key_evidence: signer_key_evidence.clone(),
+            agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
             idempotency_key: Some(idempotency_key.clone()),
         };
         let payload = match canonical::canonical_json_bytes(&body)

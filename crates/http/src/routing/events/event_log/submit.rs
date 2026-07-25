@@ -151,6 +151,21 @@ pub(in crate::routing) struct InternalEventAdmission {
 }
 
 #[derive(Debug, Clone)]
+pub(in crate::routing) struct VerifiedFederatedAgentSignerEvidence {
+    agent_id: arkret_identifiers::Did,
+    verification_method: arkret_wire::DidUrl,
+    authorization_event_id: arkret_identifiers::EventId,
+    accepted_frontier: arkret_wire::NonEmptyString,
+    public_key: [u8; 32],
+}
+
+impl VerifiedFederatedAgentSignerEvidence {
+    pub(in crate::routing::events::event_log) fn public_key(&self) -> &[u8; 32] {
+        &self.public_key
+    }
+}
+
+#[derive(Debug, Clone)]
 enum InternalEventBinding {
     MimiProvider {
         binding_ref: String,
@@ -169,6 +184,7 @@ enum InternalEventBinding {
     PeerFederatedEvent {
         event_id: String,
         signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
+        agent_signer_evidence: Vec<VerifiedFederatedAgentSignerEvidence>,
     },
 }
 
@@ -250,6 +266,7 @@ impl InternalEventAdmission {
         device_id: impl Into<String>,
         event_id: impl Into<String>,
         signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
+        agent_signer_evidence: Vec<VerifiedFederatedAgentSignerEvidence>,
     ) -> Self {
         Self {
             realm_id: realm_id.into(),
@@ -259,6 +276,7 @@ impl InternalEventAdmission {
             binding: InternalEventBinding::PeerFederatedEvent {
                 event_id: event_id.into(),
                 signer_key_evidence,
+                agent_signer_evidence,
             },
         }
     }
@@ -332,6 +350,43 @@ impl InternalEventAdmission {
             entry.actor_id.as_str() == self.actor_id
                 && entry.verification_method == verification_method
                 && entry.validate_shape().is_ok()
+        })
+    }
+
+    pub(in crate::routing::events::event_log) fn agent_signer_evidence(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+        verification_method: &str,
+    ) -> Option<&VerifiedFederatedAgentSignerEvidence> {
+        if !self.matches(session, object) || object.get("applet_id").is_some() {
+            return None;
+        }
+        let InternalEventBinding::PeerFederatedEvent {
+            agent_signer_evidence,
+            ..
+        } = &self.binding
+        else {
+            return None;
+        };
+        let admission: arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationAdmission =
+            object
+                .get("unsigned")
+                .and_then(|unsigned| unsigned.get("agent_authorization_admission"))
+                .cloned()
+                .and_then(|value| serde_json::from_value(value).ok())?;
+        let actor = object.get("actor_id").and_then(Value::as_str)?;
+        let signer = object
+            .get("executed_by")
+            .and_then(Value::as_str)
+            .unwrap_or(actor);
+        agent_signer_evidence.iter().find(|entry| {
+            signer == entry.agent_id.as_str()
+                && verification_method == entry.verification_method.as_str()
+                && admission.agent_id == entry.agent_id
+                && admission.verification_method == entry.verification_method
+                && admission.authorization_event_id == entry.authorization_event_id
+                && admission.accepted_frontier == entry.accepted_frontier
         })
     }
 
@@ -695,29 +750,22 @@ pub(crate) async fn submit_federation_events(
                 return;
             }
         };
-    let EventsSubmitFederationRequestBody {
-        service_binding_ref,
-        events,
-        signer_key_evidence,
-        idempotency_key: _,
-    } = submit;
-    if signer_key_evidence.len()
-        > arkret_models_collaboration::event_sync::MAX_FEDERATED_EVENT_SIGNER_EVIDENCE
-        || signer_key_evidence.iter().any(|evidence| {
-            evidence.validate_shape().is_err()
-                || !events
-                    .iter()
-                    .any(|event| evidence.matches_event_proof(event, &evidence.verification_method))
-        })
-    {
+    if submit.validate_signer_key_evidence().is_err() {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "invalid federation signer_key_evidence",
+            "invalid federation signer evidence",
         );
         return;
     }
+    let EventsSubmitFederationRequestBody {
+        service_binding_ref,
+        events,
+        signer_key_evidence,
+        agent_signer_evidence_bundle,
+        idempotency_key: _,
+    } = submit;
     for evidence in &signer_key_evidence {
         if let Err(error) =
             super::validate_federated_device_signing_key_evidence(state, evidence).await
@@ -730,6 +778,55 @@ pub(crate) async fn submit_federation_events(
                 "federation signer_key_evidence has no valid portable device authorization",
             );
             return;
+        }
+    }
+    let mut verified_agent_signer_evidence = Vec::new();
+    if let Some(bundle) = &agent_signer_evidence_bundle {
+        for evidence in &bundle.evidence {
+            let binding = &evidence.signing_key_binding;
+            let Some(event) = events.iter().find(|event| {
+                event.applet_id.is_none()
+                    && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id
+                    && event.proofs.iter().any(|proof| {
+                        proof.verification_method == binding.verification_method.as_str()
+                    })
+            }) else {
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "federation Agent signer evidence does not match an Event",
+                );
+                return;
+            };
+            let public_key =
+                match crate::routing::identity::agents::evidence::verify_federated_signer_evidence(
+                    state,
+                    evidence,
+                    event,
+                    now(),
+                )
+                .await
+                {
+                    Ok(public_key) => public_key,
+                    Err(error) => {
+                        tracing::debug!(%error, "federated Agent signer evidence rejected");
+                        render_error(
+                            res,
+                            StatusCode::BAD_REQUEST,
+                            "invalid_proof",
+                            "federation Agent signer evidence is not independently verifiable",
+                        );
+                        return;
+                    }
+                };
+            verified_agent_signer_evidence.push(VerifiedFederatedAgentSignerEvidence {
+                agent_id: binding.agent_id.clone(),
+                verification_method: binding.verification_method.clone(),
+                authorization_event_id: binding.agent_key_authorize_event_id.clone(),
+                accepted_frontier: evidence.authorization.accepted_frontier.clone(),
+                public_key,
+            });
         }
     }
 
@@ -1066,6 +1163,7 @@ pub(crate) async fn submit_federation_events(
                     device_id.clone(),
                     event_string_field_from_value(event, "event_id").unwrap_or_default(),
                     signer_key_evidence.clone(),
+                    verified_agent_signer_evidence.clone(),
                 )
             })
             .collect::<Vec<_>>();
@@ -1219,6 +1317,7 @@ pub(crate) async fn submit_federation_events(
             device_id,
             id.clone(),
             signer_key_evidence.clone(),
+            verified_agent_signer_evidence.clone(),
         );
         match submit_event_value_with_context(
             state,
