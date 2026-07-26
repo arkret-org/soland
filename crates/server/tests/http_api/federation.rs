@@ -597,7 +597,7 @@ fn peer_submit_body(event: &Value) -> Value {
             "realm_policy_digest": sha256_json(&binding_payload),
             "membership_frontier": [event_id],
             "delivery_binding_frontier": [PEER_DELIVERY_FRONTIER],
-            "destination_service_type": "principal_server",
+            "destination_service_kind": "principal_server",
             "reducer_profile_digest": arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [wire_event],
@@ -704,7 +704,7 @@ fn realm_sync_endpoint_event(event_id: &str, source_service_id: &str, seq: u64) 
                 "did": source_service_id,
                 "endpoint": "https://remote.example",
                 "role": "federation_peer",
-                "service_type": "principal_server",
+                "service_kind": "principal_server",
                 "plaintext_visible": true,
                 "visibility_scope": "plaintext_events"
             }]

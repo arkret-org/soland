@@ -43,7 +43,7 @@ pub trait AccountLifecycleStore: Send + Sync {
 }
 /// Trait for actor-private account data storage.
 ///
-/// `data_type` is the canonical wire key (e.g. `ak.contacts.actor.<did>`,
+/// `account_data_key` is the canonical wire key (e.g. `ak.contacts.actor.<did>`,
 /// `ak.contacts.realm.<realm_id>`, `ak.read_receipt.preferences`). The
 /// payload is opaque to the server — no schema validation runs here; the
 /// client owns canonical encoding and (where applicable) encryption.
@@ -55,10 +55,10 @@ pub trait AccountDataStore: Send + Sync {
     async fn get(
         &self,
         actor: &str,
-        data_type: &str,
+        account_data_key: &str,
     ) -> PersistenceResult<Option<AccountDataRecord>>;
     async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()>;
-    async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()>;
+    async fn delete(&self, actor: &str, account_data_key: &str) -> PersistenceResult<()>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
 }
 #[doc(hidden)]

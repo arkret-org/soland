@@ -626,8 +626,8 @@ fn spawn_federation_peer_discovery(state: AppState) {
                 };
                 match client.describe().await {
                     Ok(description)
-                        if description.service_type
-                            == arkret_wire::ServiceType::PrincipalServer
+                        if description.service_kind
+                            == arkret_wire::ServiceKind::PrincipalServer
                             && description.service_id.as_str() != state.service_id() =>
                     {
                         let document_view = match client
@@ -673,7 +673,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             }
                         };
                         let registration_key = match arkret_models_identity::service_identity::ServiceRegistrationKey::new(
-                            arkret_wire::ServiceType::PrincipalServer,
+                            arkret_wire::ServiceKind::PrincipalServer,
                             public_base,
                         ) {
                             Ok(key) => key,
@@ -806,7 +806,7 @@ fn spawn_federation_peer_discovery(state: AppState) {
                     Ok(description) => {
                         tracing::warn!(
                             peer_endpoint = %endpoint,
-                            peer_service_type = %description.service_type.as_str(),
+                            peer_service_kind = %description.service_kind.as_str(),
                             peer_service_id = %description.service_id,
                             "federation peer describe returned an ineligible service"
                         );

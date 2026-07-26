@@ -428,7 +428,7 @@ pub(super) async fn emit_mimi_room_binding_event(
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
         event_kind: "ak.mimi.room_binding".to_owned(),
-        operation_type: "mimi_facade_room_binding".to_owned(),
+        operation_kind: "mimi_facade_room_binding".to_owned(),
         operation_id: None,
         sender: None,
         payload: json!({

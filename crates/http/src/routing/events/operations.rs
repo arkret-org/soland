@@ -70,7 +70,7 @@ pub(crate) async fn lock_active_series_operations(
             .and_then(Value::as_str)
             .unwrap_or("invalid");
         let class = payload
-            .get("backup_class")
+            .get("backup_kind")
             .and_then(Value::as_str)
             .unwrap_or("invalid");
         let mut hasher = std::collections::hash_map::DefaultHasher::new();

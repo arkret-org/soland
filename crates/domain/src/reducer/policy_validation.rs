@@ -32,14 +32,14 @@ pub(crate) const CIRCLE_JOIN_NOT_OPEN: &str = "circle_join_not_open";
 /// One-way ratchet: effective metadata encryption floor MUST be monotonically
 /// non-decreasing (`allow_plaintext < e2ee_required`).
 /// One-way ratchet: effective Realm `content_scheme` MUST NOT downgrade from the
-/// exporter-derived AEAD scheme (`mls-exporter-aead-v1`) back to the application
-/// message scheme (`mls-rfc9420`). Lowering the negotiated scheme would let a
+/// exporter-derived AEAD scheme (`mls_exporter_aead_v1`) back to the application
+/// message scheme (`mls_rfc9420`). Lowering the negotiated scheme would let a
 /// member re-key history content under a weaker mechanism after the realm has
 /// committed to the exporter-AEAD history-sharing path.
 pub(crate) const CONTENT_SCHEME_DOWNGRADE: &str = "content_scheme_downgrade";
 /// realm-and-space.md §2.3.1 / encryption-and-audit.md §2.10.8 — a Realm Recovery
 /// Key durability policy with `mode != none` is only meaningful on a
-/// `content_scheme=mls-exporter-aead-v1` Realm, because `mls-rfc9420`
+/// `content_scheme=mls_exporter_aead_v1` Realm, because `mls_rfc9420`
 /// (PrivateMessage) has no deliverable `history_secret` to seal to recovery
 /// recipients. Declaring `mode != none` on an incompatible Realm is rejected.
 /// realm-and-space.md §2.3.1 — `durability_policy` invariants: `recovery_recipients`
@@ -65,10 +65,10 @@ pub(crate) fn enforce_delivery_binding_policy(
         .and_then(Value::as_str)
         .unwrap_or("");
 
-    // `allow_binding_sources` is an explicit allow-list. Missing or
+    // `allowed_binding_sources` is an explicit allow-list. Missing or
     // empty means "no source admissible" — fail closed.
     let allow_sources: Vec<&str> = policy
-        .get("allow_binding_sources")
+        .get("allowed_binding_sources")
         .and_then(Value::as_array)
         .map(|arr| arr.iter().filter_map(Value::as_str).collect())
         .unwrap_or_default();
@@ -77,10 +77,10 @@ pub(crate) fn enforce_delivery_binding_policy(
     }
     // `did_document_default` requires the toggle even if the source list
     // includes it (spec §5.1.3 — organization/compliance Realms must set
-    // `allow_did_document_default=false`).
+    // `did_document_default_allowed=false`).
     if binding_source == "did_document_default"
         && !policy
-            .get("allow_did_document_default")
+            .get("did_document_default_allowed")
             .and_then(Value::as_bool)
             .unwrap_or(false)
     {
@@ -436,7 +436,7 @@ pub(crate) fn validate_claim_required_gate(
     gate: &serde_json::Map<String, Value>,
 ) -> Result<(), &'static str> {
     validate_auto_resolve(gate, true)?;
-    let Some(claims) = gate.get("requires_claims").and_then(Value::as_array) else {
+    let Some(claims) = gate.get("required_claims").and_then(Value::as_array) else {
         return Err("claim_required_claims_invalid");
     };
     if claims.is_empty() {
@@ -618,7 +618,7 @@ pub(crate) fn claim_required_gate_has_proof(
     proof: &serde_json::Map<String, Value>,
 ) -> bool {
     let required_claims = gate
-        .get("requires_claims")
+        .get("required_claims")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -653,7 +653,7 @@ fn claim_presentation_covers_claim(value: &Value, claim: &str) -> bool {
             .iter()
             .any(|value| claim_presentation_covers_claim(value, claim)),
         Value::Object(object) => {
-            for field in ["claim", "claim_type", "type", "id", "name"] {
+            for field in ["claim", "claim_kind", "type", "id", "name"] {
                 if object.get(field).and_then(Value::as_str) == Some(claim) {
                     return true;
                 }
@@ -956,22 +956,22 @@ pub(crate) fn content_scheme_field(value: &Value) -> Option<&str> {
 }
 
 /// Ordinal rank for the Realm `content_scheme`. The exporter-derived AEAD scheme
-/// (`mls-exporter-aead-v1`, rank 1) sits above the MLS application-message scheme
-/// (`mls-rfc9420`, rank 0). `None` / unknown values rank as `mls-rfc9420` (0);
+/// (`mls_exporter_aead_v1`, rank 1) sits above the MLS application-message scheme
+/// (`mls_rfc9420`, rank 0). `None` / unknown values rank as `mls_rfc9420` (0);
 /// the one-way ratchet rejects any later write whose rank is strictly lower than
 /// the projected scheme.
 pub(crate) fn content_scheme_rank(scheme: Option<&str>) -> u8 {
     match scheme.map(str::trim) {
-        Some("mls-exporter-aead-v1") => 1,
+        Some("mls_exporter_aead_v1") => 1,
         _ => 0,
     }
 }
 
 /// The canonical Realm `content_scheme` enum
-/// (realm-and-space.md history-sharing): `mls-rfc9420` (application messages) and
-/// `mls-exporter-aead-v1` (exporter-derived AEAD content for history sharing).
+/// (realm-and-space.md history-sharing): `mls_rfc9420` (application messages) and
+/// `mls_exporter_aead_v1` (exporter-derived AEAD content for history sharing).
 pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
-    matches!(scheme.trim(), "mls-rfc9420" | "mls-exporter-aead-v1")
+    matches!(scheme.trim(), "mls_rfc9420" | "mls_exporter_aead_v1")
 }
 
 /// Extract the `durability_policy` object from a `ak.realm.policy_components`
@@ -993,7 +993,7 @@ pub(crate) fn durability_policy_field(value: &Value) -> Option<&Value> {
 ///   otherwise.
 /// - `mode=threshold` requires `threshold.{k,n}` with `1 <= k <= n == len(recovery_recipients)` →
 ///   `durability_policy_invalid` otherwise.
-/// - `mode != none` is only valid on `content_scheme=mls-exporter-aead-v1` →
+/// - `mode != none` is only valid on `content_scheme=mls_exporter_aead_v1` →
 ///   `durability_scheme_incompatible` otherwise (the spec failed_precondition).
 pub(crate) fn validate_durability_policy(
     policy: &Value,
@@ -1013,7 +1013,7 @@ pub(crate) fn validate_durability_policy(
         .filter(|recipients| !recipients.is_empty())
         .ok_or(DURABILITY_POLICY_INVALID)?;
     // scheme gate: organizational recovery requires a deliverable history_secret.
-    if content_scheme_rank(effective_scheme) < content_scheme_rank(Some("mls-exporter-aead-v1")) {
+    if content_scheme_rank(effective_scheme) < content_scheme_rank(Some("mls_exporter_aead_v1")) {
         return Err(arkret_wire::ReasonCode::DURABILITY_SCHEME_INCOMPATIBLE);
     }
     if mode == "threshold" {

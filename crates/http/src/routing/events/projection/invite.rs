@@ -747,13 +747,13 @@ fn invite_delivery_target_for_operation(operation: &Operation) -> Option<Value> 
         );
         return None;
     }
-    if let Some(service_type) = object.get("recipient_service_type").and_then(Value::as_str)
-        && service_type != "principal_server"
+    if let Some(service_kind) = object.get("recipient_service_kind").and_then(Value::as_str)
+        && service_kind != "principal_server"
     {
         tracing::warn!(
             operation_id = %operation.operation_id,
-            service_type = %service_type,
-            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_type"
+            service_kind = %service_kind,
+            "ak.invite.create supplied invalid invite_delivery_target.recipient_service_kind"
         );
         return None;
     }

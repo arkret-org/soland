@@ -375,7 +375,7 @@ async fn append_contact_fact_projection_event(
             event_id: event_ref.to_string(),
             realm_id: soland_services::identity::principal_control_realm_for_did(issuer),
             event_kind: event_kind.to_owned(),
-            operation_type: "contact_fact".to_owned(),
+            operation_kind: "contact_fact".to_owned(),
             operation_id: None,
             sender: Some(issuer.to_owned()),
             payload,
@@ -578,7 +578,7 @@ pub(crate) async fn contact_tombstone(
     // contact-managed active consent dots toward `peer` (default =
     // every scope, or the explicit `revoke_scopes[]`), and — when
     // `block_peer` — adds the peer DID to the holder's private
-    // `invite_receive_policy.blocked_subjects` (hard block).
+    // `invite_receive_policy.denied_subjects` (hard block).
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
@@ -759,7 +759,7 @@ pub(crate) async fn contact_tombstone(
     })
 }
 
-/// Add `peer` to the holder's private `invite_receive_policy.blocked_subjects`
+/// Add `peer` to the holder's private `invite_receive_policy.denied_subjects`
 /// (spec invite-addressing.md §5 / 0015 §3.4). Materializes the holder's
 /// recommended default policy first if no override exists yet, so the hard
 /// block is the only durable mutation a tombstone needs to make.
@@ -776,10 +776,10 @@ fn blocked_invite_policy_update(
         .contacts()
         .invite_policy(holder)
         .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(holder));
-    if policy.blocked_subjects.iter().any(|did| did == &peer_did) {
+    if policy.denied_subjects.iter().any(|did| did == &peer_did) {
         return None;
     }
-    policy.blocked_subjects.push(peer_did);
+    policy.denied_subjects.push(peer_did);
     Some(policy)
 }
 
@@ -796,7 +796,7 @@ pub(crate) async fn get_invite_receive_policy(
 ) -> JsonResult<InviteReceivePolicy> {
     // Spec invite-addressing.md §5 — return the subject's private override
     // from the shared in-memory store (the same store
-    // `ak.self.contact.command.tombstone(block_peer)` writes `blocked_subjects` to),
+    // `ak.self.contact.command.tombstone(block_peer)` writes `denied_subjects` to),
     // falling back to the recommended default when none is set.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -824,7 +824,7 @@ pub(crate) async fn set_invite_receive_policy(
 ) -> JsonResult<InviteReceivePolicy> {
     // Spec invite-addressing.md §5 — the subject may only set its own
     // policy: `subject_id` MUST equal the session actor. The override lands
-    // in the same store as the tombstone `blocked_subjects` writes, so the
+    // in the same store as the tombstone `denied_subjects` writes, so the
     // two stay consistent.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;

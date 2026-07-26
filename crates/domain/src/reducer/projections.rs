@@ -102,7 +102,7 @@ pub struct InviteProjection {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SolandKeyBackupActiveSeries {
     pub actor_id: String,
-    pub backup_class: String,
+    pub backup_kind: String,
     pub active_series_id: String,
     pub series_pointer_version: u64,
     pub previous_series_ids: Vec<String>,
@@ -691,7 +691,7 @@ pub struct MorphProjection {
     /// Morph updates and lifecycle writes must satisfy the same Circle
     /// membership conjunct as creates.
     pub scope_circle_id: Option<String>,
-    pub morph_type: String,
+    pub morph_kind: String,
     pub title: Option<String>,
     pub fields: BTreeMap<String, Value>,
     pub schema_refs: Vec<String>,

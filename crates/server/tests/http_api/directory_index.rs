@@ -320,7 +320,7 @@ async fn directory_resolve_handle_invite_accepts_canonical_handles_without_conta
     let drop_handle_policy = serde_json::json!({
         "schema": "ak.schema.invite_receive_policy.v1",
         "subject_id": "did:web:bob.example",
-        "allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm"],
+        "holder_allowed_introduction_kinds": ["locator_ref", "consent_grant", "shared_realm"],
         "explicit_address_behavior": "quarantine",
         "handle_claim_behavior": "drop",
         "unknown_invites": "drop"
@@ -617,7 +617,7 @@ fn preview_token_for_address(
     let parsed = arkret_wire::parse_address(address).unwrap();
     let mut descriptor = arkret_wire::TargetDescriptor::from_parsed(&parsed);
     descriptor.set_realm_id(realm_id);
-    descriptor.link_type = arkret_wire::LinkType::Preview;
+    descriptor.address_link_kind = arkret_wire::AddressLinkKind::Preview;
     let target_digest = arkret_wire::target_digest(&descriptor).unwrap();
     let mut claim = serde_json::json!({
         "iss": state.service_id().clone(),
@@ -627,7 +627,7 @@ fn preview_token_for_address(
         ),
         "nonce": new_prefixed_uuid7("ak:nonce:"),
         "target_digest": target_digest,
-        "link_type": "preview",
+        "address_link_kind": "preview",
         "preview_policy_digest": preview_policy_digest,
     });
     let canonical_bytes = arkret_canonical::canonical_json_bytes(&claim).unwrap();

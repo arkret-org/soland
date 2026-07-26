@@ -30,7 +30,7 @@ pub struct PolicyDocumentRecord {
     pub owner: String,
     pub scope: String,
     pub subject_ref: String,
-    pub policy_type: String,
+    pub policy_kind: String,
     pub payload: Value,
     pub active: bool,
     pub updated_at: DateTime<Utc>,

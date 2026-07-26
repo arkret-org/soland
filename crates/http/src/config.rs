@@ -1516,9 +1516,9 @@ fn load_receive_policy_constraints()
                 .collect::<anyhow::Result<Vec<_>>>()
         })
         .transpose()?;
-    let permitted_introduction_kinds =
+    let deployment_allowed_introduction_kinds =
         env_csv_cap("SOLAND_RECEIVE_POLICY_PERMITTED_INTRODUCTION_KINDS");
-    let forbidden_introduction_kinds =
+    let deployment_denied_introduction_kinds =
         env_csv_cap("SOLAND_RECEIVE_POLICY_FORBIDDEN_INTRODUCTION_KINDS").unwrap_or_default();
     let handle_claim_max_behavior =
         env_receive_action("SOLAND_RECEIVE_POLICY_HANDLE_CLAIM_MAX_BEHAVIOR")?;
@@ -1538,14 +1538,14 @@ fn load_receive_policy_constraints()
         env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_DIRECTORY_SERVICES")?;
     let trusted_principal_services =
         env_did_csv_cap("SOLAND_RECEIVE_POLICY_TRUSTED_PRINCIPAL_SERVICES")?;
-    let blocked_principal_services =
+    let denied_principal_services =
         env_did_csv_cap("SOLAND_RECEIVE_POLICY_BLOCKED_PRINCIPAL_SERVICES")?;
     let accepted_subject_did_methods =
         env_csv_cap("SOLAND_RECEIVE_POLICY_ACCEPTED_SUBJECT_DID_METHODS");
 
     let has_any_constraint = applies_to.is_some()
-        || permitted_introduction_kinds.is_some()
-        || !forbidden_introduction_kinds.is_empty()
+        || deployment_allowed_introduction_kinds.is_some()
+        || !deployment_denied_introduction_kinds.is_empty()
         || handle_claim_max_behavior.is_some()
         || explicit_address_max_behavior.is_some()
         || unknown_invites_max_behavior.is_some()
@@ -1553,7 +1553,7 @@ fn load_receive_policy_constraints()
         || trusted_handle_issuers.is_some()
         || trusted_directory_services.is_some()
         || trusted_principal_services.is_some()
-        || blocked_principal_services.is_some()
+        || denied_principal_services.is_some()
         || accepted_subject_did_methods.is_some();
     if !has_any_constraint {
         return Ok(None);
@@ -1563,8 +1563,8 @@ fn load_receive_policy_constraints()
         arkret_wire::receive_policy::ReceivePolicyConstraints {
             policy_version: Some("env".to_owned()),
             applies_to,
-            permitted_introduction_kinds,
-            forbidden_introduction_kinds,
+            deployment_allowed_introduction_kinds,
+            deployment_denied_introduction_kinds,
             handle_claim_max_behavior,
             explicit_address_max_behavior,
             unknown_invites_max_behavior,
@@ -1572,7 +1572,7 @@ fn load_receive_policy_constraints()
             trusted_handle_issuers,
             trusted_directory_services,
             trusted_principal_services,
-            blocked_principal_services,
+            denied_principal_services,
             accepted_subject_did_methods,
         },
     ))

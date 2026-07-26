@@ -393,7 +393,7 @@ fn account_data_entry<'a>(sync: &'a Value, key: &str) -> &'a Value {
 
 fn account_data_encrypted_value(
     actor_id: &str,
-    data_type: &str,
+    account_data_key: &str,
     plaintext: &Value,
     nonce_byte: u8,
 ) -> Value {
@@ -401,7 +401,7 @@ fn account_data_encrypted_value(
         arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
             &[7u8; 32],
             actor_id,
-            data_type,
+            account_data_key,
             plaintext,
             [nonce_byte; 24],
         )

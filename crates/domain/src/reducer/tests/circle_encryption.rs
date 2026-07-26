@@ -271,7 +271,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
 }
 
 // realm-and-space.md history-sharing — one-way `content_scheme` ratchet.
-// `mls-rfc9420` < `mls-exporter-aead-v1`; once the realm negotiates the
+// `mls_rfc9420` < `mls_exporter_aead_v1`; once the realm negotiates the
 // exporter-AEAD scheme it MUST NOT fall back to the application-message scheme.
 #[test]
 fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
@@ -292,24 +292,24 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
             &hlc,
         )
     };
-    // baseline mls-rfc9420 -> projected
+    // baseline mls_rfc9420 -> projected
     assert!(matches!(
-        apply_scheme(&mut state, Some("mls-rfc9420")),
+        apply_scheme(&mut state, Some("mls_rfc9420")),
         ProjectionEffect::RealmPolicyComponentsProjected { .. }
     ));
     // upgrade rfc9420 -> exporter-aead is accepted
     assert!(matches!(
-        apply_scheme(&mut state, Some("mls-exporter-aead-v1")),
+        apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
         ProjectionEffect::RealmPolicyComponentsProjected { .. }
     ));
     // re-asserting the same scheme is an idempotent no-op (accepted)
     assert!(matches!(
-        apply_scheme(&mut state, Some("mls-exporter-aead-v1")),
+        apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
         ProjectionEffect::RealmPolicyComponentsProjected { .. }
     ));
     // downgrade exporter-aead -> rfc9420 is rejected
     assert!(matches!(
-        apply_scheme(&mut state, Some("mls-rfc9420")),
+        apply_scheme(&mut state, Some("mls_rfc9420")),
         ProjectionEffect::Rejected { reason } if reason == CONTENT_SCHEME_DOWNGRADE
     ));
     // dropping the scheme by omission is also a downgrade
@@ -370,7 +370,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
         &make_operation(
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
-            serde_json::json!({ "content_scheme": "mls-rfc9420" }),
+            serde_json::json!({ "content_scheme": "mls_rfc9420" }),
         ),
         &hlc,
     );
@@ -407,7 +407,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
         &make_operation(
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
-            serde_json::json!({ "content_scheme": "mls-exporter-aead-v1" }),
+            serde_json::json!({ "content_scheme": "mls_exporter_aead_v1" }),
         ),
         &hlc,
     );
@@ -432,19 +432,19 @@ fn content_scheme_falls_back_to_realm_create_log() {
         CellState::Value(serde_json::json!([{
             "encryption_profile": "mls_rfc9420",
             "history_visibility": "shared",
-            "content_scheme": "mls-exporter-aead-v1"
+            "content_scheme": "mls_exporter_aead_v1"
         }])),
     );
 
     assert_eq!(
         state.realm_content_scheme(realm).as_deref(),
-        Some("mls-exporter-aead-v1")
+        Some("mls_exporter_aead_v1")
     );
     let effect = state.apply(
         &make_operation(
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
-            serde_json::json!({ "content_scheme": "mls-rfc9420" }),
+            serde_json::json!({ "content_scheme": "mls_rfc9420" }),
         ),
         &hlc,
     );
@@ -455,7 +455,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
 }
 
 // realm-and-space.md §2.3.1 — `durability_policy.mode != none` is only valid on
-// a `content_scheme=mls-exporter-aead-v1` realm. Declaring an org RRK on a realm
+// a `content_scheme=mls_exporter_aead_v1` realm. Declaring an org RRK on a realm
 // that has not committed to the exporter-AEAD scheme MUST
 // `durability_scheme_incompatible`.
 #[test]
@@ -468,7 +468,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
         "principal_id": "did:web:hr.example",
         "verification_method": "did:web:hr.example#rrk-1"
     });
-    // No scheme committed yet (defaults to mls-rfc9420) → incompatible.
+    // No scheme committed yet (defaults to mls_rfc9420) → incompatible.
     let effect = state.apply(
         &make_operation(
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
@@ -489,7 +489,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
 }
 
 // A `durability_policy.mode != none` declared together with (or after) the
-// `mls-exporter-aead-v1` scheme is accepted and projected.
+// `mls_exporter_aead_v1` scheme is accepted and projected.
 #[test]
 fn durability_policy_accepted_on_exporter_aead_scheme() {
     let mut state = ProjectionState::new();
@@ -506,7 +506,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
-                "content_scheme": "mls-exporter-aead-v1",
+                "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "org_recovery_key",
                     "recovery_recipients": [recipient]
@@ -541,7 +541,7 @@ fn durability_policy_rejects_empty_recipients() {
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
-                "content_scheme": "mls-exporter-aead-v1",
+                "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "org_recovery_key",
                     "recovery_recipients": []
@@ -572,7 +572,7 @@ fn durability_policy_threshold_validates_k_of_n() {
             arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
             realm,
             serde_json::json!({
-                "content_scheme": "mls-exporter-aead-v1",
+                "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "threshold",
                     "recovery_recipients": recipients,

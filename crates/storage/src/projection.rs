@@ -106,7 +106,7 @@ pub struct MorphProjectionRecord {
     pub morph_id: String,
     pub realm_id: String,
     pub scope_circle_id: Option<String>,
-    pub morph_type: String,
+    pub morph_kind: String,
     pub title: Option<String>,
     pub fields: serde_json::Value,
     pub schema_refs: serde_json::Value,

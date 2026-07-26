@@ -326,7 +326,7 @@ pub(crate) async fn build_sync_snapshot(
         Vec::new()
     };
 
-    // Actor-private account data: hydrate every `(actor, data_type)` row
+    // Actor-private account data: hydrate every `(actor, account_data_key)` row
     // owned by the authenticated session so the client can join e.g.
     // `ak.contacts.realm.<realm_id>` Realm remarks against the public
     // Realm title during render. Spec: discovery/client-preferences.md
@@ -1364,7 +1364,7 @@ async fn notification_account_data_events(
 
 fn notification_projection_payload(row: &Value, actor_id: &str) -> Option<Value> {
     let notification_id = row.get("notification_id")?.as_str()?;
-    let notification_type = row.get("notification_type")?.as_str()?;
+    let notification_kind = row.get("notification_kind")?.as_str()?;
     let priority = row.get("priority")?.as_str()?;
     let state = row.get("state")?.as_str()?;
     let created_at = row
@@ -1376,7 +1376,7 @@ fn notification_projection_payload(row: &Value, actor_id: &str) -> Option<Value>
         "id": notification_id,
         "schema": "ak.schema.notification.v1",
         "actor_id": actor_id,
-        "notification_type": notification_type,
+        "notification_kind": notification_kind,
         "priority": priority,
         "state": state,
         "created_at": created_at,

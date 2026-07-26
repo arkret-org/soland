@@ -92,11 +92,11 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit", "invite"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit", "invite"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": ["did:web:principal.acme.example"],
             "required_endorsers": [],
-            "allow_unroutable_membership": false,
+            "unroutable_membership_allowed": false,
             "rebind_authorization": "member_and_admin"
         }),
     );
@@ -158,8 +158,8 @@ fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": [],
             "required_endorsers": [],
         }),
@@ -190,8 +190,8 @@ fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit"],
+            "did_document_default_allowed": false,
             // allowed_recipient_services omitted → defaults to [] (fail-closed).
             "required_endorsers": [],
         }),
@@ -222,8 +222,8 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": ["*"],
             "required_endorsers": [],
         }),
@@ -244,7 +244,7 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
     );
 }
 
-// `binding_source` not in `allow_binding_sources` → reject.
+// `binding_source` not in `allowed_binding_sources` → reject.
 #[test]
 fn delivery_binding_policy_rejects_disallowed_binding_source() {
     let mut state = ProjectionState::new();
@@ -254,8 +254,8 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["invite", "organization_policy"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["invite", "organization_policy"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": [],
             "required_endorsers": [],
         }),
@@ -287,8 +287,8 @@ fn delivery_binding_policy_rejects_missing_service_acceptance() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit", "invite"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit", "invite"],
+            "did_document_default_allowed": false,
             // Sentinel ["*"] lifts only the recipient allow-list dimension so
             // this test exercises the service_acceptance_ref check.
             "allowed_recipient_services": ["*"],
@@ -423,7 +423,7 @@ fn direct_conversation_join_without_bootstrap_reason_still_requires_policy() {
 }
 
 // Even when a policy exists, `did_document_default` is rejected unless
-// `allow_did_document_default=true`. Spec §5.1.3 — organization /
+// `did_document_default_allowed=true`. Spec §5.1.3 — organization /
 // compliance Realms MUST set this to false.
 #[test]
 fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
@@ -436,9 +436,9 @@ fn delivery_binding_policy_rejects_did_document_default_when_disabled() {
         json!({
             // Note: did_document_default deliberately included in the
             // source allow-list to test that the explicit
-            // `allow_did_document_default` toggle still gates it.
-            "allow_binding_sources": ["did_document_default", "explicit"],
-            "allow_did_document_default": false,
+            // `did_document_default_allowed` toggle still gates it.
+            "allowed_binding_sources": ["did_document_default", "explicit"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": [],
             "required_endorsers": [],
         }),
@@ -476,8 +476,8 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": ["did:web:principal.acme.example"],
             "required_endorsers": [],
             // Lexicographic comparison is fine here — frontier strings
@@ -532,8 +532,8 @@ fn delivery_binding_handover_stale_when_frontier_absent() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": ["did:web:principal.acme.example"],
             "required_endorsers": [],
             "policy_frontier": "ak:frontier:02000000",
@@ -571,11 +571,11 @@ fn delivery_binding_policy_event_projects_cell_value() {
         &mut state,
         &hlc,
         json!({
-            "allow_binding_sources": ["explicit", "invite"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit", "invite"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": ["did:web:principal.acme.example"],
             "required_endorsers": ["did:web:acme.example"],
-            "allow_unroutable_membership": false,
+            "unroutable_membership_allowed": false,
             "rebind_authorization": "member_and_admin",
             "policy_frontier": "ak:frontier:02000000"
         }),

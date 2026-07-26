@@ -11,7 +11,7 @@ pub struct RawDidDocumentJson(pub serde_json::Value);
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub struct IdentityRegistryDescription {
     pub protocol_version: String,
-    pub service_type: String,
+    pub service_kind: String,
     pub service_id: Did,
     pub trust_domain: String,
     pub registry_mode: String,
@@ -135,7 +135,7 @@ pub(crate) async fn identity_describe(
 
     json_ok(IdentityRegistryDescription {
         protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
-        service_type: "identity_registry".to_owned(),
+        service_kind: "identity_registry".to_owned(),
         service_id,
         trust_domain: state.config().trust_domain.clone(),
         registry_mode: "development_local".to_owned(),

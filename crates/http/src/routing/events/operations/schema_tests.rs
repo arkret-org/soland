@@ -25,7 +25,7 @@ mod invite_create_schema_tests {
             "invitee": "did:web:bob.example",
             "invite_delivery_target": {
                 "recipient_service_id": "did:web:local.host",
-                "recipient_service_type": "principal_server"
+                "recipient_service_kind": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "expires_at": "2026-06-14T10:00:00.000Z"
@@ -269,7 +269,7 @@ mod key_backup_active_series_schema_tests {
             json!({
                 "schema": "ak.schema.key_backup_active_series.v1",
                 "actor_id": "did:web:alice.example",
-                "backup_class": "mls_history",
+                "backup_kind": "mls_history",
                 "active_series_id": "ak:backup_series:01904100-0000-7000-8000-0000000007a1",
                 "series_pointer_version": 1,
                 "previous_series_ids": [],
@@ -285,7 +285,7 @@ mod key_backup_active_series_schema_tests {
                     "signed_fields": [
                         "schema",
                         "actor_id",
-                        "backup_class",
+                        "backup_kind",
                         "active_series_id",
                         "series_pointer_version",
                         "previous_series_ids",
@@ -357,7 +357,7 @@ mod realm_key_share_schema_tests {
 
     fn member_device_share_payload() -> serde_json::Value {
         json!({
-            "share_class": "member_device",
+            "share_kind": "member_device",
             "recipient_principal_id": "did:web:bob.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-0000000000b1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-0000000000a1",
@@ -519,7 +519,7 @@ mod realm_plaintext_visible_services_schema_tests {
             json!({
                 "services": [{
                     "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                    "service_type": "principal_server",
+                    "service_kind": "principal_server",
                     "data_classes": ["message_content", "notification_summary"],
                     "purposes": ["message_index", "notification_fanout"],
                     "visibility": "private_plaintext"
@@ -846,7 +846,7 @@ mod spec_sync_validator_tests {
             json!({
                 "object": {
                     "id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                    "morph_type": "document",
+                    "morph_kind": "document",
                     "schema_refs": ["ak.schema.morph.v1"],
                     "metadata": {"title": "Spec"},
                     "encrypted_content": {"version": 1}
@@ -860,7 +860,7 @@ mod spec_sync_validator_tests {
             json!({
                 "object": {
                     "id": "ak:morph:01904100-0000-7000-8000-000000000001",
-                    "morph_type": "document",
+                    "morph_kind": "document",
                     "schema_refs": ["ak.schema.morph.v1"],
                     "content": {},
                     "encrypted_content": {}
@@ -1379,30 +1379,30 @@ mod derived_relation_and_morph_immutability_tests {
         );
     }
 
-    // morph.md §4 line 149 — morph_type is immutable after create.
+    // morph.md §4 line 149 — morph_kind is immutable after create.
     #[test]
-    fn morph_update_morph_type_is_immutable() {
+    fn morph_update_morph_kind_is_immutable() {
         let bare = op(
             arkret_wire::events::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000c",
-                "patch": {"morph_type": "task"}
+                "patch": {"morph_kind": "task"}
             }),
         );
         assert_eq!(
             validate_morph_update_payload(&bare),
-            Err("morph_type_immutable")
+            Err("morph_kind_immutable")
         );
         let enveloped = op(
             arkret_wire::events::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000c",
-                "patch": {"morph_type": {"$op": "set", "value": "task"}}
+                "patch": {"morph_kind": {"$op": "set", "value": "task"}}
             }),
         );
         assert_eq!(
             validate_morph_update_payload(&enveloped),
-            Err("morph_type_immutable")
+            Err("morph_kind_immutable")
         );
     }
 

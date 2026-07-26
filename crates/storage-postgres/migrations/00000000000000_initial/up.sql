@@ -5,7 +5,7 @@
 CREATE TABLE public.account_datas (
     id uuid NOT NULL,
     actor_id text NOT NULL,
-    data_type text NOT NULL,
+    account_data_key text NOT NULL,
     payload jsonb NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -166,7 +166,7 @@ CREATE TABLE public.applet_registrations (
     manifest jsonb NOT NULL,
     package jsonb,
     namespaces jsonb,
-    allow_ghost_actors boolean DEFAULT false NOT NULL,
+    ghost_actors_allowed boolean DEFAULT false NOT NULL,
     status text NOT NULL,
     registered_at timestamp with time zone NOT NULL,
     revoked_at timestamp with time zone,
@@ -206,14 +206,14 @@ CREATE TABLE public.audit_logs (
 CREATE TABLE public.backup_series (
     id uuid NOT NULL,
     actor_id text NOT NULL,
-    backup_class text NOT NULL,
+    backup_kind text NOT NULL,
     head_backup_id uuid,
     head_seq bigint DEFAULT 0 NOT NULL,
     frontier_ref text,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     retired_at timestamp with time zone,
-    CONSTRAINT backup_series_backup_class_check CHECK ((backup_class = ANY (ARRAY['did_recovery'::text, 'secret_storage'::text, 'mls_history'::text, 'external'::text]))),
+    CONSTRAINT backup_series_backup_class_check CHECK ((backup_kind = ANY (ARRAY['did_recovery'::text, 'secret_storage'::text, 'mls_history'::text, 'external'::text]))),
     CONSTRAINT backup_series_head_seq_check CHECK ((head_seq >= 0))
 );
 
@@ -513,9 +513,9 @@ CREATE TABLE public.events (
 CREATE TABLE public.federation_operations (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
-    object_type text NOT NULL,
+    object_kind text NOT NULL,
     object_id text,
-    operation_type text NOT NULL,
+    operation_kind text NOT NULL,
     payload jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );
@@ -563,7 +563,7 @@ CREATE TABLE public.federation_frontier_exchange (
 CREATE TABLE public.invite_receive_policies (
     id text NOT NULL,
     policy_payload jsonb NOT NULL,
-    blocked_subjects text[] DEFAULT '{}'::text[] NOT NULL,
+    denied_subjects text[] DEFAULT '{}'::text[] NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
@@ -601,7 +601,7 @@ CREATE TABLE public.key_backups (
     id uuid NOT NULL,
     actor_id text,
     device_id text,
-    backup_class text,
+    backup_kind text,
     backup_version text,
     payload jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
@@ -832,7 +832,7 @@ CREATE TABLE public.notifications (
     source_ref text,
     strand_id text,
     track_name text,
-    notification_type text NOT NULL,
+    notification_kind text NOT NULL,
     event_kind text,
     source_actor_id text,
     priority text DEFAULT 'normal'::text NOT NULL,
@@ -910,7 +910,7 @@ BEGIN
     INSERT INTO public.notifications (
         id, recipient_id, controller_account_id, recipient_service_id,
         source_account_artifact_kind, source_account_artifact_id,
-        notification_type, priority, state, projection_action,
+        notification_kind, priority, state, projection_action,
         projection_data, created_at, updated_at
     ) VALUES (
         notification_id, recipient_id, account_id, service_id,
@@ -956,7 +956,7 @@ CREATE TABLE public.policy_documents (
     owner_id text NOT NULL,
     scope text NOT NULL,
     subject_ref text NOT NULL,
-    policy_type text NOT NULL,
+    policy_kind text NOT NULL,
     document jsonb NOT NULL,
     version integer DEFAULT 0 NOT NULL,
     signed_by_id text,
@@ -1017,7 +1017,7 @@ CREATE TABLE public.projection_events (
     event_id uuid NOT NULL,
     realm_id uuid NOT NULL,
     event_kind text NOT NULL,
-    operation_type text NOT NULL,
+    operation_kind text NOT NULL,
     operation_id uuid,
     sender_id text,
     payload jsonb NOT NULL,
@@ -1066,7 +1066,7 @@ CREATE TABLE public.projection_strands (
 CREATE TABLE public.projection_morphs (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,
-    morph_type text NOT NULL,
+    morph_kind text NOT NULL,
     title text,
     state text DEFAULT 'active'::text NOT NULL,
     state_changed_at timestamp with time zone,
@@ -1342,7 +1342,7 @@ CREATE TABLE public.service_identity (
 );
 
 CREATE TABLE public.service_identity_registrations (
-    service_type text NOT NULL,
+    service_kind text NOT NULL,
     public_base text NOT NULL,
     service_id text NOT NULL,
     version_id text NOT NULL,
@@ -1350,7 +1350,7 @@ CREATE TABLE public.service_identity_registrations (
     outcome jsonb NOT NULL,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL,
-    CONSTRAINT service_identity_registrations_pkey PRIMARY KEY (service_type, public_base),
+    CONSTRAINT service_identity_registrations_pkey PRIMARY KEY (service_kind, public_base),
     CONSTRAINT service_identity_registrations_service_id_key UNIQUE (service_id)
 );
 
@@ -1360,7 +1360,7 @@ ALTER TABLE ONLY public.account_datas
     ADD CONSTRAINT account_datas_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.account_datas
-    ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, data_type);
+    ADD CONSTRAINT account_datas_actor_data_type_key UNIQUE (actor_id, account_data_key);
 
 ALTER TABLE ONLY public.accounts
     ADD CONSTRAINT accounts_pkey PRIMARY KEY (id);
@@ -1705,11 +1705,11 @@ CREATE INDEX audit_logs_actor_idx ON public.audit_logs USING btree (actor_id, cr
 
 CREATE INDEX audit_logs_space_idx ON public.audit_logs USING btree (realm_id);
 
-CREATE UNIQUE INDEX backup_series_actor_class_uniq ON public.backup_series USING btree (actor_id, backup_class) WHERE (retired_at IS NULL);
+CREATE UNIQUE INDEX backup_series_actor_class_uniq ON public.backup_series USING btree (actor_id, backup_kind) WHERE (retired_at IS NULL);
 
 CREATE INDEX backup_series_actor_idx ON public.backup_series USING btree (actor_id);
 
-CREATE INDEX backup_series_class_idx ON public.backup_series USING btree (backup_class);
+CREATE INDEX backup_series_class_idx ON public.backup_series USING btree (backup_kind);
 
 CREATE INDEX blobs_sha256_idx ON public.blobs USING btree (sha256);
 
@@ -1769,7 +1769,7 @@ CREATE INDEX events_space_created_idx ON public.events USING btree (realm_id, cr
 
 CREATE INDEX events_thread_created_idx ON public.events USING btree (thread_id, created_at, id) WHERE (thread_id IS NOT NULL);
 
-CREATE INDEX federation_operations_object_type_idx ON public.federation_operations USING btree (object_type);
+CREATE INDEX federation_operations_object_type_idx ON public.federation_operations USING btree (object_kind);
 
 CREATE INDEX federation_operations_space_idx ON public.federation_operations USING btree (realm_id, created_at);
 
@@ -1823,7 +1823,7 @@ CREATE INDEX multisig_pending_space_idx ON public.multisig_pending USING btree (
 
 CREATE INDEX notifications_recipient_idx ON public.notifications USING btree (recipient_id, created_at DESC);
 
-CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_id, source_event_id, notification_type) WHERE (source_event_id IS NOT NULL);
+CREATE UNIQUE INDEX notifications_event_source_key ON public.notifications USING btree (recipient_id, source_event_id, notification_kind) WHERE (source_event_id IS NOT NULL);
 
 CREATE UNIQUE INDEX notifications_account_artifact_key ON public.notifications USING btree (controller_account_id, recipient_service_id, source_account_artifact_kind, source_account_artifact_id) WHERE (controller_account_id IS NOT NULL);
 
@@ -1841,7 +1841,7 @@ CREATE INDEX pending_agent_drafts_state_idx ON public.pending_agent_drafts USING
 
 CREATE INDEX policy_documents_owner_idx ON public.policy_documents USING btree (owner_id);
 
-CREATE INDEX policy_documents_scope_subject_idx ON public.policy_documents USING btree (scope, subject_ref, policy_type);
+CREATE INDEX policy_documents_scope_subject_idx ON public.policy_documents USING btree (scope, subject_ref, policy_kind);
 
 CREATE INDEX projection_circle_members_actor_idx ON public.projection_circle_members USING btree (actor_id);
 
@@ -1875,7 +1875,7 @@ CREATE INDEX projection_morphs_scope_circle_id_idx ON public.projection_morphs U
 
 CREATE INDEX projection_morphs_state_idx ON public.projection_morphs USING btree (state);
 
-CREATE INDEX projection_morphs_type_idx ON public.projection_morphs USING btree (morph_type);
+CREATE INDEX projection_morphs_type_idx ON public.projection_morphs USING btree (morph_kind);
 
 CREATE INDEX projection_spaces_parent_idx ON public.projection_spaces USING btree (parent_ref) WHERE (parent_ref IS NOT NULL);
 

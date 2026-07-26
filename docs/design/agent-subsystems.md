@@ -119,7 +119,7 @@ CREATE TABLE notification (
     recipient_id      TEXT NOT NULL,             -- actor DID(可为 agent principal)
     realm_id          TEXT NOT NULL,
     source_event_id   TEXT NOT NULL,
-    notification_type TEXT NOT NULL,             -- mention | reply | assignment | reaction | watch
+    notification_kind TEXT NOT NULL,             -- mention | reply | assignment | reaction | watch
     reasons           JSONB NOT NULL DEFAULT '[]'::jsonb,  -- 合并的 reason set
     preview           JSONB,                     -- 按 history visibility 裁剪后的预览
     created_at        TIMESTAMPTZ NOT NULL,

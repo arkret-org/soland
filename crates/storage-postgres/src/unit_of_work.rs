@@ -114,14 +114,14 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     .transpose()?;
                 projections_inserted += sql_query(
                     "INSERT INTO projection_events \
-                     (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at, received_at) \
+                     (event_id, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
                      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
                      ON CONFLICT (event_id) DO NOTHING",
                 )
                 .bind::<Uuid, _>(event_id)
                 .bind::<Uuid, _>(realm_id)
                 .bind::<Text, _>(&projection.event_kind)
-                .bind::<Text, _>(&projection.operation_type)
+                .bind::<Text, _>(&projection.operation_kind)
                 .bind::<Nullable<Uuid>, _>(operation_id)
                 .bind::<Nullable<Text>, _>(&projection.sender)
                 .bind::<Jsonb, _>(&projection.payload)

@@ -340,7 +340,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
             "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
-                "scheme": "mls-rfc9420",
+                "scheme": "mls_rfc9420",
                 "version": "1.0",
                 "group_id": "base64url",
                 "epoch": 12,
@@ -647,7 +647,7 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
                     morph_id: morph_id.to_owned(),
                     realm_id: realm_id.to_owned(),
                     scope_circle_id,
-                    morph_type: "task".to_owned(),
+                    morph_kind: "task".to_owned(),
                     title: Some("Task".to_owned()),
                     fields: std::collections::BTreeMap::new(),
                     schema_refs: Vec::new(),
@@ -815,7 +815,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
             "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
-                "scheme": "mls-rfc9420",
+                "scheme": "mls_rfc9420",
                 "version": "1.0",
                 "group_id": "base64url",
                 "epoch": 12,
@@ -1862,7 +1862,7 @@ fn data_event_e2ee_object_with_refs(
             "strand_id": DATA_EVENT_STRAND,
             "track_name": "main",
             "encrypted_content": {
-                "scheme": "mls-rfc9420",
+                "scheme": "mls_rfc9420",
                 "version": "1.0",
                 "group_id": "group.01js0mls0000000000000000",
                 "epoch": 7,

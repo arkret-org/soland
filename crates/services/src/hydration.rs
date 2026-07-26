@@ -590,7 +590,7 @@ async fn hydrate_canonical_realm_bootstraps(
             };
             let effect = if index == 1 {
                 staged.apply_validated_realm_founding_grant(&operation, operation.created_at)
-            } else if index > 1 && operation.object_type.as_str().starts_with("ak.realm.") {
+            } else if index > 1 && operation.object_kind.as_str().starts_with("ak.realm.") {
                 staged.apply_validated_realm_bootstrap_facet(&operation)
             } else {
                 staged.apply(&operation, hydration_hlc)
@@ -895,7 +895,7 @@ pub async fn hydrate_projections_from_persistence(
                     morph_id: record.morph_id,
                     realm_id: record.realm_id,
                     scope_circle_id: record.scope_circle_id,
-                    morph_type: record.morph_type,
+                    morph_kind: record.morph_kind,
                     title: record.title,
                     fields: record
                         .fields

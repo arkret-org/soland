@@ -241,7 +241,7 @@ async fn mimi_provider_facade_contracts_work() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(well_known["service_type"], "mimi_provider_facade");
+    assert_eq!(well_known["service_kind"], "mimi_provider_facade");
     assert_eq!(
         well_known["mimi"]["protocol_draft"],
         "draft-ietf-mimi-protocol-06"

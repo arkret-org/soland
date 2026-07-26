@@ -24,8 +24,8 @@ impl ProjectionState {
             };
 
         let actor_id = record.actor_id.as_str().to_owned();
-        let backup_class = backup_class_wire(record.backup_class).to_owned();
-        let pointer_key = (actor_id.clone(), backup_class.clone());
+        let backup_kind = backup_class_wire(record.backup_kind).to_owned();
+        let pointer_key = (actor_id.clone(), backup_kind.clone());
         let current_head = self
             .key_backup_active_series
             .get(&pointer_key)
@@ -52,7 +52,7 @@ impl ProjectionState {
 
         let projection = SolandKeyBackupActiveSeries {
             actor_id: actor_id.clone(),
-            backup_class: backup_class.clone(),
+            backup_kind: backup_kind.clone(),
             active_series_id: active_series_id.clone(),
             series_pointer_version: head.series_pointer_version,
             previous_series_ids,
@@ -63,7 +63,7 @@ impl ProjectionState {
             extra: record.extra.clone(),
             event_id: operation.operation_id.to_string(),
         };
-        let subject = active_series_subject(&actor_id, &backup_class);
+        let subject = active_series_subject(&actor_id, &backup_kind);
         if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
             "ak:cell:{KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY}:{subject}"
         )) {
@@ -74,7 +74,7 @@ impl ProjectionState {
 
         ProjectionEffect::KeyBackupActiveSeriesProjected {
             actor_id,
-            backup_class,
+            backup_kind,
             active_series_id,
         }
     }
@@ -82,18 +82,18 @@ impl ProjectionState {
     pub fn key_backup_active_series(
         &self,
         actor_id: &str,
-        backup_class: &str,
+        backup_kind: &str,
     ) -> Option<&SolandKeyBackupActiveSeries> {
         self.key_backup_active_series
-            .get(&(actor_id.to_owned(), backup_class.to_owned()))
+            .get(&(actor_id.to_owned(), backup_kind.to_owned()))
     }
 
     pub fn key_backup_active_series_head(
         &self,
         actor_id: &str,
-        backup_class: &str,
+        backup_kind: &str,
     ) -> Option<arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead>{
-        self.key_backup_active_series(actor_id, backup_class)
+        self.key_backup_active_series(actor_id, backup_kind)
             .and_then(soland_active_series_head)
     }
 }
@@ -105,7 +105,7 @@ fn soland_active_series_head(
 > {
     Some(arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead {
         actor_id: arkret_identifiers::Did::new(current.actor_id.clone()).ok()?,
-        backup_class: arkret_models_crypto::BackupClass::try_from(current.backup_class.as_str()).ok()?,
+        backup_kind: arkret_models_crypto::BackupKind::try_from(current.backup_kind.as_str()).ok()?,
         active_series_id: arkret_identifiers::BackupSeriesId::new(current.active_series_id.clone())
             .ok()?,
         series_pointer_version: current.series_pointer_version,
@@ -125,15 +125,15 @@ fn rejected(reason: &str) -> ProjectionEffect {
     }
 }
 
-fn backup_class_wire(backup_class: arkret_models_crypto::BackupClass) -> &'static str {
-    match backup_class {
-        arkret_models_crypto::BackupClass::DidRecovery => "did_recovery",
-        arkret_models_crypto::BackupClass::SecretStorage => "secret_storage",
-        arkret_models_crypto::BackupClass::MlsHistory => "mls_history",
+fn backup_class_wire(backup_kind: arkret_models_crypto::BackupKind) -> &'static str {
+    match backup_kind {
+        arkret_models_crypto::BackupKind::DidRecovery => "did_recovery",
+        arkret_models_crypto::BackupKind::SecretStorage => "secret_storage",
+        arkret_models_crypto::BackupKind::MlsHistory => "mls_history",
     }
 }
 
-fn active_series_subject(actor_id: &str, backup_class: &str) -> String {
-    arkret_wire::composite_subject(&[actor_id, backup_class])
+fn active_series_subject(actor_id: &str, backup_kind: &str) -> String {
+    arkret_wire::composite_subject(&[actor_id, backup_kind])
         .expect("string cell-subject parts always have canonical JSON encoding")
 }

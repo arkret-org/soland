@@ -166,7 +166,7 @@ impl ContactStore for PgContactStore {
 }
 // ── Pg-backed invite-receive policy store ────────────────────────────────
 // Durable backing for per-subject `invite_receive_policy` overrides. The full
-// `InviteReceivePolicy` is persisted as JSONB; `blocked_subjects`
+// `InviteReceivePolicy` is persisted as JSONB; `denied_subjects`
 // is duplicated into a TEXT[] column for cheap hard-block lookups.
 pub struct PgInviteReceivePolicyStore {
     pub pool: PgPool,
@@ -227,8 +227,8 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
         let payload = serde_json::to_value(policy).map_err(|error| {
             PersistenceError::Internal(format!("invite_receive_policy payload encode: {error}"))
         })?;
-        let blocked_subjects = policy
-            .blocked_subjects
+        let denied_subjects = policy
+            .denied_subjects
             .iter()
             .map(|did| did.as_str().to_owned())
             .collect::<Vec<_>>();
@@ -237,16 +237,16 @@ impl InviteReceivePolicyStore for PgInviteReceivePolicyStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO invite_receive_policies \
-             (id, policy_payload, blocked_subjects, updated_at) \
+             (id, policy_payload, denied_subjects, updated_at) \
              VALUES ($1, $2, $3, NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
                 policy_payload = EXCLUDED.policy_payload, \
-                blocked_subjects = EXCLUDED.blocked_subjects, \
+                denied_subjects = EXCLUDED.denied_subjects, \
                 updated_at = NOW()",
         )
         .bind::<Text, _>(&subject_id)
         .bind::<Jsonb, _>(&payload)
-        .bind::<Array<Text>, _>(&blocked_subjects)
+        .bind::<Array<Text>, _>(&denied_subjects)
         .execute(&mut *conn)
         .await
         .map(|_| ())

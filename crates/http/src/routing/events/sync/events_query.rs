@@ -1165,7 +1165,7 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
         "payload": row.get("payload").cloned().unwrap_or_else(|| json!({})),
         "unsigned": {
             "projection_only": true,
-            "operation_type": row.get("operation_type").cloned().unwrap_or(Value::Null),
+            "operation_kind": row.get("operation_kind").cloned().unwrap_or(Value::Null),
             "operation_id": row.get("operation_id").cloned().unwrap_or(Value::Null),
             "sender": row.get("sender").cloned().unwrap_or(Value::Null),
         },

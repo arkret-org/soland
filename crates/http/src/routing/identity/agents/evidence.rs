@@ -7,7 +7,8 @@ use arkret_models_collaboration::agent_signer_evidence::{
     AgentAuthorizationStatus, AgentAuthorizationTransitionWitness, AgentSignerEvidence,
     AgentSignerEvidenceBundle, AgentSignerEvidenceQueryFailure,
     AgentSignerEvidenceQueryFailureReason, AgentSignerEvidenceQueryOutcome,
-    AgentSignerEvidenceQueryRequest, AgentSignerEvidenceQuerySelector, AgentSigningKeyBinding,
+    AgentSignerEvidenceQueryRequestBodyBody, AgentSignerEvidenceQuerySelector,
+    AgentSigningKeyBinding,
 };
 use arkret_state::lattice::CellState;
 use arkret_wire::{DidUrl, Event, NonEmptyString, NotarySig, Seal};
@@ -75,7 +76,7 @@ struct AuthorizationTransition {
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent_signer_evidence.query"))]
 pub(super) async fn query_agent_signer_evidence(
     aa: AuthArgs,
-    body: JsonBody<AgentSignerEvidenceQueryRequest>,
+    body: JsonBody<AgentSignerEvidenceQueryRequestBodyBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<AgentSignerEvidenceQueryOutcome> {

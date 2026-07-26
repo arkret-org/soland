@@ -4,7 +4,7 @@ const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-0000000000f1";
 
 fn encrypted_payload(event_kind: &str) -> Value {
-    encrypted_payload_with_scheme(event_kind, "mls-rfc9420", "MLS")
+    encrypted_payload_with_scheme(event_kind, "mls_rfc9420", "MLS")
 }
 
 fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str) -> Value {
@@ -149,7 +149,7 @@ fn pin_note_accepts_exporter_aead_encrypted_projection_payload() {
     seed_pin_target(&mut state, &hlc);
     let note = encrypted_payload_with_scheme(
         arkret_wire::events::EventKind::PIN_ADD,
-        "mls-exporter-aead-v1",
+        "mls_exporter_aead_v1",
         "MLS-EXPORTER-AEAD",
     );
 
@@ -177,7 +177,7 @@ fn pin_note_rejects_exporter_aead_with_mls_key_algorithm() {
     seed_pin_target(&mut state, &hlc);
     let note = encrypted_payload_with_scheme(
         arkret_wire::events::EventKind::PIN_ADD,
-        "mls-exporter-aead-v1",
+        "mls_exporter_aead_v1",
         "MLS",
     );
 

@@ -149,7 +149,7 @@ pub struct RegisterAccountCommand {
 #[derive(Clone, Debug)]
 pub struct AccountDataState {
     pub actor_id: String,
-    pub data_type: String,
+    pub account_data_key: String,
     pub payload: Value,
     pub updated_at: DateTime<Utc>,
 }
@@ -159,11 +159,11 @@ pub trait AccountDataPort: Send + Sync {
     async fn entry(
         &self,
         actor_id: &str,
-        data_type: &str,
+        account_data_key: &str,
     ) -> ServiceResult<Option<AccountDataState>>;
     async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>>;
     async fn save_entry(&self, entry: AccountDataState) -> ServiceResult<()>;
-    async fn delete_entry(&self, actor_id: &str, data_type: &str) -> ServiceResult<()>;
+    async fn delete_entry(&self, actor_id: &str, account_data_key: &str) -> ServiceResult<()>;
 }
 
 #[derive(Clone)]
@@ -719,9 +719,9 @@ impl AccountDataService {
     pub async fn entry(
         &self,
         actor_id: &str,
-        data_type: &str,
+        account_data_key: &str,
     ) -> ServiceResult<Option<AccountDataState>> {
-        self.account_data.entry(actor_id, data_type).await
+        self.account_data.entry(actor_id, account_data_key).await
     }
 
     pub async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>> {
@@ -732,8 +732,10 @@ impl AccountDataService {
         self.account_data.save_entry(entry).await
     }
 
-    pub async fn delete_entry(&self, actor_id: &str, data_type: &str) -> ServiceResult<()> {
-        self.account_data.delete_entry(actor_id, data_type).await
+    pub async fn delete_entry(&self, actor_id: &str, account_data_key: &str) -> ServiceResult<()> {
+        self.account_data
+            .delete_entry(actor_id, account_data_key)
+            .await
     }
 }
 

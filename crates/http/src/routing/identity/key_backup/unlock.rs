@@ -285,9 +285,9 @@ pub(super) fn validate_key_backup_unlock_proof_shape(
                 .unwrap_or_default(),
         ),
         (
-            "backup_class",
+            "backup_kind",
             backup
-                .get("backup_class")
+                .get("backup_kind")
                 .and_then(Value::as_str)
                 .unwrap_or_default(),
         ),

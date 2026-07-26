@@ -379,7 +379,7 @@ async fn append_account_deactivation_propagation_state(
             event_id: crate::ids::generate_event_id(),
             realm_id: soland_services::identity::principal_control_realm_for_did(did),
             event_kind: "ak.account.status".to_owned(),
-            operation_type: "account_status_deactivation_propagation".to_owned(),
+            operation_kind: "account_status_deactivation_propagation".to_owned(),
             operation_id: None,
             sender: Some(changed_by.to_owned()),
             payload: payload.clone(),

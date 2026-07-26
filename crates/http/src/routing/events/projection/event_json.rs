@@ -19,7 +19,7 @@ pub fn projection_event_json(event: &ProjectionEventRecord) -> serde_json::Value
         "message_id": message_id_from_event_id(&event.event_id),
         "realm_id": event.realm_id,
         "event_kind": event.event_kind,
-        "operation_type": event.operation_type,
+        "operation_kind": event.operation_kind,
         "operation_id": event.operation_id,
         "sender": event.sender,
         "payload": event.payload,
@@ -50,7 +50,7 @@ pub fn operation_event_id(operation: &Operation) -> String {
 }
 
 pub fn operation_type_string(operation: &Operation) -> String {
-    serde_json::to_value(&operation.operation_type)
+    serde_json::to_value(&operation.operation_kind)
         .ok()
         .and_then(|value| value.as_str().map(ToOwned::to_owned))
         .unwrap_or_else(|| "create".to_owned())

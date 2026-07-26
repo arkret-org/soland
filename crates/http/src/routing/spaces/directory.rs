@@ -42,12 +42,12 @@ use arkret_models_discovery::{
     DirectorySearchUsersRequestBody, DirectorySubjectHandleList, DirectoryTargetResolutionOutcome,
     DirectoryUserSearchOutcome, DirectoryWithdrawOutcome, DirectoryWithdrawRequestBody,
     ObjectPreview, ObjectPreviewId, OrganizationPreview, RealmJoinCandidate,
-    RealmJoinCandidateRole, RealmJoinCandidateServiceType, RealmJoinCandidateSource,
+    RealmJoinCandidateRole, RealmJoinCandidateServiceKind, RealmJoinCandidateSource,
     RealmJoinMethod, RealmMemberCountBucket, RealmMemberCountBucketLabel, RealmPreview,
     ServiceDescribe, TargetKind, UserSearchOutcome,
 };
 use arkret_models_identity::claim_presentation::{AgentSelectorClaim, validate_agent_slug};
-use arkret_models_identity::delivery_binding::{DeliveryMode, RecipientServiceType};
+use arkret_models_identity::delivery_binding::{DeliveryMode, RecipientServiceKind};
 use arkret_models_identity::handle::{HandleClaimKind, HandleHintBindingSource};
 use arkret_models_identity::handle_claim::DeliveryBindingHint;
 use arkret_models_identity::{
@@ -58,8 +58,8 @@ use arkret_server::{
 };
 use arkret_signatures::Ed25519MoveSigner;
 use arkret_wire::{
-    AGENT_SELECTOR_CLAIM_SCHEMA, Audience, JoinRule, LinkType, MoveSigner, PayloadProof, RealmRef,
-    TargetDescriptor, parse_address, proof_kind, target_digest,
+    AGENT_SELECTOR_CLAIM_SCHEMA, AddressLinkKind, Audience, JoinRule, MoveSigner, PayloadProof,
+    RealmRef, TargetDescriptor, parse_address, proof_kind, target_digest,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -104,7 +104,7 @@ use organization_resolution::*;
 use preview_token::*;
 use realm_resolution::*;
 
-const DIRECTORY_RESOURCE_TYPES: &[DirectoryResourceKind] = &[
+const DIRECTORY_RESOURCE_KINDS: &[DirectoryResourceKind] = &[
     DirectoryResourceKind::Realm,
     DirectoryResourceKind::Organization,
     DirectoryResourceKind::Actor,
@@ -178,7 +178,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
     let description = ServiceDescribe {
         service_id,
         trust_domain,
-        service_type: arkret_wire::ServiceType::DirectoryService,
+        service_kind: arkret_wire::ServiceKind::DirectoryService,
         protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         profile_bindings: Default::default(),
@@ -208,7 +208,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         rate_limit_policy: Some(arkret_models_discovery::service_description::RateLimitPolicy::unspecified()),
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
-        resource_types: DIRECTORY_RESOURCE_TYPES.to_vec(),
+        resource_kinds: DIRECTORY_RESOURCE_KINDS.to_vec(),
         discovery_profiles: supported_profiles,
         restricted_query_proof: Some(false),
         ingest_modes: vec![arkret_models_discovery::service_description::DirectoryIngestMode::Push],
@@ -217,7 +217,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         default_ttl_seconds: Some(86_400),
         max_ttl_seconds: Some(604_800),
         revalidation_grace_seconds: Some(3_600),
-        accepted_resource_kinds: DIRECTORY_RESOURCE_TYPES.to_vec(),
+        accepted_resource_kinds: DIRECTORY_RESOURCE_KINDS.to_vec(),
         accepted_did_methods: vec![
             "did:web".to_owned(),
             "did:webvh".to_owned(),
@@ -260,10 +260,10 @@ mod tests {
     }
 
     #[test]
-    fn directory_describe_resource_types_exclude_private_message_search() {
-        assert!(DIRECTORY_RESOURCE_TYPES.contains(&DirectoryResourceKind::Realm));
-        assert!(DIRECTORY_RESOURCE_TYPES.contains(&DirectoryResourceKind::Organization));
-        assert!(DIRECTORY_RESOURCE_TYPES.contains(&DirectoryResourceKind::Actor));
+    fn directory_describe_resource_kinds_exclude_private_message_search() {
+        assert!(DIRECTORY_RESOURCE_KINDS.contains(&DirectoryResourceKind::Realm));
+        assert!(DIRECTORY_RESOURCE_KINDS.contains(&DirectoryResourceKind::Organization));
+        assert!(DIRECTORY_RESOURCE_KINDS.contains(&DirectoryResourceKind::Actor));
         assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.client_index.v1"));
         assert!(!DIRECTORY_DISCOVERY_PROFILES.contains(&"ak.profile.search.blind_index.v1"));
     }

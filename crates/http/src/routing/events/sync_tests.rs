@@ -605,7 +605,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         event_id: event_id.to_owned(),
         realm_id: ROSTER_REALM.to_owned(),
         event_kind: arkret_wire::events::EventKind::MLS_COMMIT.to_owned(),
-        operation_type: "event".to_owned(),
+        operation_kind: "event".to_owned(),
         operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
         sender: Some(ROSTER_ACTOR.to_owned()),
         payload: json!({
@@ -1392,7 +1392,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::events::EventKind::STRAND_UPDATE.to_owned(),
-            operation_type: "state".to_owned(),
+            operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
             payload: json!({
@@ -1446,7 +1446,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::events::EventKind::STRAND_UPDATE.to_owned(),
-            operation_type: "state".to_owned(),
+            operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
             payload: json!({

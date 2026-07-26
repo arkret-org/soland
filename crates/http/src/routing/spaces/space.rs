@@ -88,7 +88,7 @@ struct RealmExportEvent {
     event_id: String,
     realm_id: String,
     event_kind: String,
-    operation_type: String,
+    operation_kind: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     operation_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -102,8 +102,8 @@ struct RealmExportEvent {
 struct RealmExportOperation {
     operation_id: String,
     realm_id: String,
-    object_type: String,
-    operation_type: String,
+    object_kind: String,
+    operation_kind: String,
     payload: Value,
     #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
     created_at: DateTime<Utc>,
@@ -419,7 +419,7 @@ async fn export_realm(
             event_id: event.event_id,
             realm_id: event.realm_id,
             event_kind: event.event_kind,
-            operation_type: event.operation_type,
+            operation_kind: event.operation_kind,
             operation_id: event.operation_id,
             sender: event.sender,
             payload: event.payload,
@@ -435,8 +435,8 @@ async fn export_realm(
                 .map(|operation_id| RealmExportOperation {
                     operation_id: operation_id.clone(),
                     realm_id: event.realm_id.clone(),
-                    object_type: event.event_kind.clone(),
-                    operation_type: event.operation_type.clone(),
+                    object_kind: event.event_kind.clone(),
+                    operation_kind: event.operation_kind.clone(),
                     payload: event.payload.clone(),
                     created_at: event.created_at,
                 })
@@ -1167,7 +1167,7 @@ pub async fn prune_expired_typing(state: &AppState) {
     }
 }
 
-const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
+const ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PresenceVisibilityPolicy {
@@ -1182,7 +1182,7 @@ pub(crate) async fn presence_visibility_for_actor(
 ) -> PresenceVisibilityPolicy {
     match state
         .account_data()
-        .entry(actor, ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY)
+        .entry(actor, ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY)
         .await
     {
         Ok(None) => PresenceVisibilityPolicy::Public,
@@ -1312,7 +1312,7 @@ pub async fn typing_scope_allows_actor(
     Ok(())
 }
 
-const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
+const ACCOUNT_DATA_KEY_BLOCKLIST: &str = "ak.account.blocklist";
 
 async fn personal_blocklist_allows_actor(
     state: &AppState,
@@ -1324,7 +1324,7 @@ async fn personal_blocklist_allows_actor(
     }
     match state
         .account_data()
-        .entry(&session.actor, ACCOUNT_DATA_TYPE_BLOCKLIST)
+        .entry(&session.actor, ACCOUNT_DATA_KEY_BLOCKLIST)
         .await
     {
         Ok(None) => true,

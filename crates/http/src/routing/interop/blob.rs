@@ -1243,10 +1243,10 @@ fn validate_encrypted_attachment_metadata(
                 return Err("stream attachment envelope requires nonce_prefix");
             }
             if !envelope
-                .get("segment_size")
+                .get("segment_bytes")
                 .is_some_and(serde_json::Value::is_u64)
             {
-                return Err("stream attachment envelope requires integer segment_size");
+                return Err("stream attachment envelope requires integer segment_bytes");
             }
             if !envelope
                 .get("segment_count")
@@ -1734,14 +1734,14 @@ mod tests {
     #[test]
     fn attachment_envelope_stream_scheme_requires_stream_descriptor() {
         let digest = format!("sha256:{}", "0".repeat(64));
-        // Valid stream envelope: nonce_prefix + segment_size/count, no nonce.
+        // Valid stream envelope: nonce_prefix + segment_bytes/count, no nonce.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ak.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
-                "segment_size": 65536,
+                "segment_bytes": 65536,
                 "segment_count": 4,
                 "ciphertext_digest": digest,
             }))
@@ -1753,20 +1753,20 @@ mod tests {
                 "scheme": "ak.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
-                "segment_size": 65536,
+                "segment_bytes": 65536,
                 "segment_count": 4,
                 "ciphertext_digest": digest,
             }))
             .is_err()
         );
-        // Stream scheme but segment_size not an integer → rejected.
+        // Stream scheme but segment_bytes not an integer → rejected.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ak.blob.stream_aead.v1",
                 "alg": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
-                "segment_size": "65536",
+                "segment_bytes": "65536",
                 "segment_count": 4,
                 "ciphertext_digest": digest,
             }))

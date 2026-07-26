@@ -219,7 +219,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
             "object": {
                 "id": morph_id,
                 "realm_id": realm_id,
-                "morph_type": "task",
+                "morph_kind": "task",
                 "metadata": { "title": "Hydration morph" },
                 "created_by": "did:web:alice.example",
             }
@@ -253,7 +253,7 @@ async fn projection_morphs_endpoint_reports_lifecycle_state() {
         .find(|m| m["morph_id"] == morph_id)
         .expect("morph not in projection response");
     assert_eq!(row["state"], "active");
-    assert_eq!(row["morph_type"], "task");
+    assert_eq!(row["morph_kind"], "task");
 
     // Archive → state flips to `archived`.
     let archive_event = signed_morph_event(
@@ -357,7 +357,7 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
                     morph_id: morph_id.to_owned(),
                     realm_id: realm_id.to_owned(),
                     scope_circle_id,
-                    morph_type: "task".to_owned(),
+                    morph_kind: "task".to_owned(),
                     title: Some("Scoped task".to_owned()),
                     fields: Default::default(),
                     schema_refs: Vec::new(),
@@ -436,7 +436,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
             "object": {
                 "id": morph_id,
                 "realm_id": realm_id,
-                "morph_type": "document",
+                "morph_kind": "document",
                 "metadata": { "title": "Postmortem draft" },
                 "schema_refs": ["ak.schema.morph.v1"],
                 "facets": {
@@ -595,7 +595,7 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
     .unwrap();
     assert_eq!(body["document"]["morph_id"], morph_id);
     assert_eq!(body["document"]["realm_id"], realm_id);
-    assert_eq!(body["document"]["morph_type"], "document");
+    assert_eq!(body["document"]["morph_kind"], "document");
     assert_eq!(body["document"]["body"], updated_body);
     assert_eq!(body["document"]["fields"]["document"], updated_body);
     assert_eq!(body["document"]["schema_refs"][0], "ak.schema.morph.v1");
@@ -729,7 +729,7 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
                 morph_id: morph_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 scope_circle_id: None,
-                morph_type: "document".to_owned(),
+                morph_kind: "document".to_owned(),
                 title: Some("Reference audit".to_owned()),
                 fields,
                 schema_refs: Vec::new(),
@@ -1150,7 +1150,7 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
             "object": {
                 "id": morph_id,
                 "realm_id": DEMO_REALM_ID,
-                "morph_type": "task",
+                "morph_kind": "task",
                 "metadata": { "title": "Persistent Morph" },
                 "created_by": "did:web:alice.example",
             }
@@ -1191,5 +1191,5 @@ async fn projection_persistence_write_through_mirrors_lifecycle_events() {
         .unwrap()
         .expect("morph projection MUST be mirrored to persistence");
     assert_eq!(morph_row.state, "archived");
-    assert_eq!(morph_row.morph_type, "task");
+    assert_eq!(morph_row.morph_kind, "task");
 }

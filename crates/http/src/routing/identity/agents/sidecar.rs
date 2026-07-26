@@ -673,15 +673,14 @@ fn sidecar_access_readiness(
     controller_device_ready: bool,
     frontier_contested: bool,
 ) -> AgentSidecarAccessReadiness {
-    if pending
-        .iter()
-        .any(|item| item.stage == PendingSidecarAccessReconciliationStage::BackingScopeMembership)
-    {
+    if pending.iter().any(|item| {
+        item.provisioning_phase == PendingSidecarAccessReconciliationStage::BackingScopeMembership
+    }) {
         AgentSidecarAccessReadiness::AccessReconciliationPending
     } else if frontier_contested
         || pending.iter().any(|item| {
             matches!(
-                item.stage,
+                item.provisioning_phase,
                 PendingSidecarAccessReconciliationStage::MlsRemove
                     | PendingSidecarAccessReconciliationStage::EpochRotation
             )
@@ -772,7 +771,7 @@ pub(crate) fn validate_sidecar_exchange_control_event(
     actor_id: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if operation.object_type.as_str()
+    if operation.object_kind.as_str()
         != arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL
     {
         return Ok(());
@@ -818,7 +817,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if !matches!(
-        operation.object_type.as_str(),
+        operation.object_kind.as_str(),
         arkret_wire::events::EventKind::MLS_GENESIS
             | arkret_wire::events::EventKind::MLS_PROPOSAL
             | arkret_wire::events::EventKind::MLS_COMMIT
@@ -905,7 +904,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         .circles
         .get(&sidecar_projection.backing_circle_id)
         .and_then(|circle| circle.mls_group_ref.clone());
-    match operation.object_type.as_str() {
+    match operation.object_kind.as_str() {
         arkret_wire::events::EventKind::MLS_GENESIS => {
             if current_group.is_some()
                 || operation
@@ -1089,7 +1088,7 @@ async fn sidecar_view(
     let mut pending = Vec::new();
     let mut effective = Vec::<Did>::new();
     for agent_id in &desired {
-        let stage = if !circle_members.contains(agent_id) {
+        let provisioning_phase = if !circle_members.contains(agent_id) {
             Some((
                 PendingSidecarAccessReconciliationStage::BackingScopeMembership,
                 "backing_scope_membership_pending",
@@ -1147,11 +1146,11 @@ async fn sidecar_view(
             );
             None
         };
-        if let Some((stage, reason)) = stage {
+        if let Some((provisioning_phase, reason)) = provisioning_phase {
             pending.push(PendingSidecarAccessReconciliationItem {
                 agent_id: Did::new(agent_id.clone())
                     .map_err(|error| AppError::internal(format!("stored Agent id: {error}")))?,
-                stage,
+                provisioning_phase,
                 reason: NonEmptyString::new(reason).map_err(|error| {
                     AppError::internal(format!("reconciliation reason: {error}"))
                 })?,
@@ -1184,7 +1183,7 @@ async fn sidecar_view(
             agent_id: Did::new(obligation.actor_id.clone()).map_err(|error| {
                 AppError::internal(format!("stored Sidecar removal Agent id: {error}"))
             })?,
-            stage: PendingSidecarAccessReconciliationStage::MlsRemove,
+            provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
             reason: NonEmptyString::new("mls_remove_obligation_pending")
                 .expect("static reconciliation reason is non-empty"),
             membership_frontier: Some(membership_frontier),
@@ -1455,7 +1454,7 @@ mod tests {
     fn backing_membership_pending_takes_precedence_over_key_material() {
         let pending = PendingSidecarAccessReconciliationItem {
             agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
-            stage: PendingSidecarAccessReconciliationStage::BackingScopeMembership,
+            provisioning_phase: PendingSidecarAccessReconciliationStage::BackingScopeMembership,
             reason: NonEmptyString::new("backing_scope_membership_pending").unwrap(),
             membership_frontier: None,
         };
@@ -1478,7 +1477,7 @@ mod tests {
     fn pending_sidecar_removal_requires_epoch_update() {
         let pending = PendingSidecarAccessReconciliationItem {
             agent_id: Did::new("did:web:example.com:agents:assistant".to_owned()).unwrap(),
-            stage: PendingSidecarAccessReconciliationStage::MlsRemove,
+            provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
             reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
             membership_frontier: Some(vec![
                 EventId::new("ak:event:01964137-0000-7000-8000-000000000001").unwrap(),

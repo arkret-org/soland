@@ -4,7 +4,7 @@ use arkret_identifiers::{CellRef, Hash, MoveId, SealId};
 use arkret_models_crypto::{
     MaterializedMlsGovernanceProofBundle, MlsGovernanceBindingPayload,
     MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue, MlsGovernanceProofBundle,
-    MlsGovernanceProofRequest, build_mls_governance_proof_chunks,
+    MlsGovernanceProofRequestBodyBody, build_mls_governance_proof_chunks,
     derive_mls_discussion_metadata_digest, is_mls_membership_frontier_component,
 };
 use arkret_state::lattice::ordered_log::IssuedOp;
@@ -30,7 +30,7 @@ pub(super) async fn mls_governance_proof(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    body: JsonBody<MlsGovernanceProofRequest>,
+    body: JsonBody<MlsGovernanceProofRequestBodyBody>,
 ) -> JsonResult<MlsGovernanceProofBundle> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -983,7 +983,7 @@ pub(crate) async fn accept_federated_event_seal_path(
 
 async fn materialize_governance_proof(
     state: &AppState,
-    request: &MlsGovernanceProofRequest,
+    request: &MlsGovernanceProofRequestBodyBody,
 ) -> Result<MaterializedMlsGovernanceProofBundle, AppError> {
     let MaterializedRealmControl {
         events,

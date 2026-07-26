@@ -17,12 +17,12 @@ mod redaction_message;
 mod space_container;
 mod strand_morph;
 
-pub(super) fn make_operation(object_type: &str, realm_id: &str, payload: Value) -> Operation {
+pub(super) fn make_operation(object_kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
             .unwrap(),
         arkret_identifiers::RealmId::new(realm_id).unwrap(),
-        object_type,
+        object_kind,
         payload,
     )
 }

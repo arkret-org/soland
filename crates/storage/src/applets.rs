@@ -34,7 +34,7 @@ pub enum AppletTransactionReplayBegin {
 pub fn applet_registration_select_sql(suffix: &str) -> String {
     format!(
         "SELECT id, namespace, owner_actor_id, registry_did, bot_actor_id, portal_realm_id, \
-         capabilities, manifest, package, namespaces, allow_ghost_actors, status, \
+         capabilities, manifest, package, namespaces, ghost_actors_allowed, status, \
          registered_at, revoked_at, idempotency_key, install_body_digest, install_id, \
          install_response, install_execution, ghosts FROM applet_registrations {suffix}"
     )

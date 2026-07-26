@@ -1048,7 +1048,7 @@ async fn active_direct_conversation_rejects_invite_space_and_third_party_member(
             "invitee": "did:web:charlie.example",
             "invite_delivery_target": {
                 "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                "recipient_service_type": "principal_server"
+                "recipient_service_kind": "principal_server"
             },
             "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
         }),
@@ -2287,7 +2287,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
         arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
         json!({
             "value": {
-                "content_scheme": "mls-rfc9420"
+                "content_scheme": "mls_rfc9420"
             }
         }),
     );
@@ -2334,7 +2334,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
         arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
         json!({
             "value": {
-                "content_scheme": "mls-exporter-aead-v1"
+                "content_scheme": "mls_exporter_aead_v1"
             }
         }),
     );
@@ -2361,7 +2361,7 @@ async fn mls_prejoin_history_accepts_create_object_exporter_aead_content_scheme(
                 "title": "Prejoin history",
                 "history_visibility": "shared",
                 "encryption_profile": "mls_rfc9420",
-                "content_scheme": "mls-exporter-aead-v1"
+                "content_scheme": "mls_exporter_aead_v1"
             }
         }),
     );
@@ -2388,7 +2388,7 @@ async fn mls_prejoin_history_rejects_create_object_strict_content_scheme() {
                 "title": "Prejoin history",
                 "history_visibility": "shared",
                 "encryption_profile": "mls_rfc9420",
-                "content_scheme": "mls-rfc9420"
+                "content_scheme": "mls_rfc9420"
             }
         }),
     );
@@ -2447,7 +2447,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         projection.cells.insert(
             cell_id,
             CellState::Value(json!({
-                "content_scheme": "mls-rfc9420"
+                "content_scheme": "mls_rfc9420"
             })),
         );
     }
@@ -2496,7 +2496,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
         projection.cells.insert(
             cell_id,
             CellState::Value(json!({
-                "content_scheme": "mls-exporter-aead-v1",
+                "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "org_recovery_key",
                     "recovery_recipients": [{
@@ -2514,7 +2514,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
         "00000000d100",
         arkret_wire::events::EventKind::REALM_KEY_SHARE,
         json!({
-            "share_class": "realm_recovery_key",
+            "share_kind": "realm_recovery_key",
             "recipient_principal_id": recovery_principal,
             "recipient_verification_method": format!("{recovery_principal}#rrk-1"),
             "recovery_recipient_id": "rrk-1",
@@ -2562,7 +2562,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
                 history_sharing_policy: Some(json!({
                     "version": 1,
                     "default_key_share": "event_time_visibility",
-                    "pre_join_history": "allow_if_visibility_allows",
+                    "pre_join_history": "visibility_condition_allowed",
                     "allowed_key_sources": ["verified_member_device"],
                     "allowed_receiver_states": ["active_member"],
                     "audit": {
@@ -2635,7 +2635,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
         "00000000d300",
         arkret_wire::events::EventKind::REALM_KEY_SHARE,
         json!({
-            "share_class": "member_device",
+            "share_kind": "member_device",
             "recipient_principal_id": bob,
             "recipient_device_id": bob_device,
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d3d2",
@@ -2681,7 +2681,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         projection.cells.insert(
             cell_id,
             CellState::Value(json!({
-                "content_scheme": "mls-exporter-aead-v1",
+                "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
                     "mode": "org_recovery_key",
                     "recovery_recipients": [{
@@ -2699,7 +2699,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
         "00000000d200",
         arkret_wire::events::EventKind::REALM_KEY_SHARE,
         json!({
-            "share_class": "member_device",
+            "share_kind": "member_device",
             "recipient_principal_id": "did:web:stranger.example",
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",

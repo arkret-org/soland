@@ -48,8 +48,8 @@ pub(super) async fn register_package_install(
     let namespace = package_namespace(&package);
     let realm_id = effective_scope_realm_id(&commit.effective_scope);
     let approved_actions = actions_from_approved_scopes(&commit.approved_scopes);
-    let allow_ghost_actors =
-        allow_ghost_actors_for_install(&package, &approved_actions, commit.actor_policy.as_ref());
+    let ghost_actors_allowed =
+        ghost_actors_allowed_for_install(&package, &approved_actions, commit.actor_policy.as_ref());
 
     if let Some(existing) = applet_record(state, &applet_id).await? {
         if existing.idempotency_key.as_deref() == Some(idempotency_key.as_str()) {
@@ -153,7 +153,7 @@ pub(super) async fn register_package_install(
         package: Some(package.clone()),
         registration_epoch_evidence: package.registration_epoch_evidence.clone(),
         namespaces: Some(package.namespaces.clone()),
-        allow_ghost_actors,
+        ghost_actors_allowed,
         status: effective_status_wire.to_owned(),
         registered_at: now,
         revoked_at: None,
@@ -521,7 +521,7 @@ pub(super) async fn append_applet_registration_projection(
         event_id: event_id.to_owned(),
         realm_id,
         event_kind: arkret_wire::events::EventKind::APPLET_REGISTRATION.to_owned(),
-        operation_type: "applet_install_registration".to_owned(),
+        operation_kind: "applet_install_registration".to_owned(),
         operation_id: None,
         sender: Some(record.owner_actor_id.clone()),
         payload: registration_payload_from_package(package)?,
@@ -607,7 +607,7 @@ pub(super) async fn register_verified_applet(
         package: None,
         registration_epoch_evidence: None,
         namespaces: None,
-        allow_ghost_actors: false,
+        ghost_actors_allowed: false,
         status: "registered".to_owned(),
         registered_at: now,
         revoked_at: None,
@@ -683,7 +683,7 @@ pub(super) async fn append_portal_message(
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
         event_kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
-        operation_type: "applet_portal_ingress".to_owned(),
+        operation_kind: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(ghost.ghost_actor_id.clone()),
         payload: json!({
@@ -1006,7 +1006,7 @@ pub(super) fn approval_actions_for_install(approval: &AppletApprovalRequest) -> 
     approval
         .approve_actions
         .iter()
-        .filter(|action| approval.allow_ghost_actors || action.as_str() != GHOST_PROVISION_ACTION)
+        .filter(|action| approval.ghost_actors_allowed || action.as_str() != GHOST_PROVISION_ACTION)
         .cloned()
         .collect()
 }
@@ -1125,14 +1125,14 @@ pub(super) fn capability_constraints_for_scope(
         params.insert("circle_id".to_owned(), Value::String(circle_id.to_string()));
     }
     vec![CapabilityConstraint {
-        constraint_type: "effective_scope".to_owned(),
+        constraint_kind: "effective_scope".to_owned(),
         params: Some(params),
     }]
 }
 
 pub(super) fn e2ee_effect_for_package(package: &AppletPackage) -> E2eeEffect {
     E2eeEffect {
-        requires_mls_join: package.e2ee_policy.mls_join_requested.unwrap_or(false),
+        mls_join_required: package.e2ee_policy.mls_join_requested.unwrap_or(false),
         plaintext_access: "policy_declared".to_owned(),
         authorization_refs: None,
     }
@@ -1149,7 +1149,7 @@ fn e2ee_authorization_refs_for_install(
     if !package_requests_mls_join(package) {
         return Ok(Vec::new());
     }
-    if !e2ee_policy.is_some_and(|policy| policy.allow_mls_join.unwrap_or(false)) {
+    if !e2ee_policy.is_some_and(|policy| policy.mls_join_allowed.unwrap_or(false)) {
         return Err(AppError::capability_denied(
             "applet E2EE MLS join requires independent authorization",
         )
@@ -1192,7 +1192,7 @@ async fn append_applet_e2ee_authorization_projection(
         event_id: event_id.to_owned(),
         realm_id: record.portal_realm_id.clone(),
         event_kind: "ak.member.state".to_owned(),
-        operation_type: "applet_e2ee_join_authorization".to_owned(),
+        operation_kind: "applet_e2ee_join_authorization".to_owned(),
         operation_id: None,
         sender: Some(record.owner_actor_id.clone()),
         payload,
@@ -1213,7 +1213,7 @@ async fn append_applet_e2ee_authorization_projection(
 
 pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect {
     WidgetEffect {
-        allow_widget: package.widget.is_some(),
+        widget_allowed: package.widget.is_some(),
         policy_event_ref: None,
     }
 }
@@ -1387,7 +1387,7 @@ pub(super) fn package_namespace(package: &AppletPackage) -> String {
         .unwrap_or_else(|| safe_token(&package.applet_id))
 }
 
-pub(super) fn allow_ghost_actors_for_install(
+pub(super) fn ghost_actors_allowed_for_install(
     package: &AppletPackage,
     approved_actions: &[String],
     actor_policy: Option<&arkret_models_integration::applet_models::AppletActorPolicy>,
@@ -1615,7 +1615,7 @@ mod tests {
     }
 
     #[test]
-    fn allow_ghost_actors_uses_package_ghost_policy_enabled() {
+    fn ghost_actors_allowed_uses_package_ghost_policy_enabled() {
         let mut package = sample_package();
         package.ghost_policy = arkret_models_integration::applet::AppletGhostPolicy {
             enabled: true,
@@ -1630,7 +1630,7 @@ mod tests {
                 arkret_models_integration::applet_models::AppletGhostActorMode::PolicyDeclared,
             ),
         };
-        assert!(allow_ghost_actors_for_install(
+        assert!(ghost_actors_allowed_for_install(
             &package,
             &[GHOST_PROVISION_ACTION.to_owned()],
             Some(&actor_policy)
@@ -1641,7 +1641,7 @@ mod tests {
             accountability_template: Some("bot_actor_and_applet_registry".to_owned()),
             ..Default::default()
         };
-        assert!(!allow_ghost_actors_for_install(
+        assert!(!ghost_actors_allowed_for_install(
             &package,
             &[GHOST_PROVISION_ACTION.to_owned()],
             Some(&actor_policy)
@@ -1664,7 +1664,7 @@ mod tests {
             package: Some(package.clone()),
             registration_epoch_evidence: package.registration_epoch_evidence.clone(),
             namespaces: Some(package.namespaces.clone()),
-            allow_ghost_actors: true,
+            ghost_actors_allowed: true,
             status: "installed".to_owned(),
             registered_at: chrono::DateTime::parse_from_rfc3339("2026-06-22T00:00:00.000Z")
                 .unwrap()

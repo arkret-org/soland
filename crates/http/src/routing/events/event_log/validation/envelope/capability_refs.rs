@@ -419,7 +419,7 @@ pub(super) fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
     value
         .and_then(|value| value.get("scheme"))
         .and_then(Value::as_str)
-        == Some("mls-rfc9420")
+        == Some("mls_rfc9420")
 }
 
 pub(super) fn seal_view_declares_relaxed_e2ee(

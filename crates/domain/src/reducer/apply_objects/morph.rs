@@ -36,8 +36,8 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        let morph_type = object
-            .get("morph_type")
+        let morph_kind = object
+            .get("morph_kind")
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_owned();
@@ -76,7 +76,7 @@ impl ProjectionState {
             morph_id: morph_id.clone(),
             realm_id,
             scope_circle_id,
-            morph_type,
+            morph_kind,
             title,
             fields,
             schema_refs,
@@ -132,9 +132,9 @@ impl ProjectionState {
             if let Some(title) = patch_metadata_string_value(patch, "title") {
                 morph.title = title;
             }
-            // `morph.md` §4 (line 149): `morph_type` is immutable after
+            // `morph.md` §4 (line 149): `morph_kind` is immutable after
             // `ak.morph.create`. Admission rejects an update patch that names it
-            // (`morph_type_immutable`); the reducer never mutates the field so the
+            // (`morph_kind_immutable`); the reducer never mutates the field so the
             // invariant also holds for any event that bypasses admission.
             apply_morph_fields_patch(&mut morph.fields, patch);
         }

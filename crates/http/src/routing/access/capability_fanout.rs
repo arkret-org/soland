@@ -518,7 +518,7 @@ mod tests {
 
         assert_eq!(draft.event_id, EVENT);
         assert_eq!(
-            draft.operation.object_type,
+            draft.operation.object_kind,
             arkret_wire::events::EventKind::CAPABILITY_GRANT
         );
         assert_eq!(draft.realm_id, REALM);

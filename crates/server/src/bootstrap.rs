@@ -19,7 +19,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
 };
-use arkret_wire::ServiceType;
+use arkret_wire::ServiceKind;
 use ed25519_dalek::{Signature, Signer, SigningKey};
 use rand_chacha::rand_core::SeedableRng;
 use serde_json::{Value, json};
@@ -708,7 +708,7 @@ async fn restore_identity_bundle(
         method_evidence: json!({
             "mode": "service_identity_bundle_restore",
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
-            "service_type": registration_key.service_type().as_str(),
+            "service_kind": registration_key.service_kind().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id,
         }),
@@ -815,7 +815,7 @@ fn validate_registration_receipt_signature(
 fn registration_key(config: &AppConfig) -> anyhow::Result<ServiceRegistrationKey> {
     let public_base = CanonicalServiceUrl::canonicalize(&config.public_base_url)
         .map_err(|error| anyhow::anyhow!("invalid SOLAND_PUBLIC_BASE_URL: {error}"))?;
-    ServiceRegistrationKey::new(ServiceType::PrincipalServer, public_base)
+    ServiceRegistrationKey::new(ServiceKind::PrincipalServer, public_base)
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
@@ -1070,7 +1070,7 @@ async fn mint_local_service_identity(
         method_evidence: json!({
             "mode": "service_registration_provider",
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
-            "service_type": registration_key.service_type().as_str(),
+            "service_kind": registration_key.service_kind().as_str(),
             "public_base": registration_key.public_base().as_str(),
             "version_id": outcome.version_id,
             "self_provisioned": true,

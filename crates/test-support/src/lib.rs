@@ -16,7 +16,7 @@ use arkret_state::state::{
     CellRegistry, CellStore, MemoryCellStore, MemoryMoveStore, MemorySealStore, MoveStore,
     SealStore, StoreError, StoreResult, compute_state_root,
 };
-use arkret_wire::{Seal, ServiceType};
+use arkret_wire::{Seal, ServiceKind};
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures_util::stream::{self, BoxStream, StreamExt};
@@ -204,7 +204,7 @@ fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> 
 
 pub fn fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
     let registration_key = ServiceRegistrationKey::new(
-        ServiceType::PrincipalServer,
+        ServiceKind::PrincipalServer,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
             .expect("test public base must be canonicalizable"),
     )

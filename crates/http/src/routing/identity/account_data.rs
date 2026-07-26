@@ -12,7 +12,7 @@
 
 use arkret_identifiers::{Did, EventId, Hlc, RealmId};
 use arkret_models_identity::account::{
-    AccountDataDeleteOutcome, AccountDataEntry, AccountDataList, AccountDataReplaceRequestBody,
+    AccountDataDeleteOutcome, AccountDataList, AccountDataReplaceRequestBody, AccountDataRow,
 };
 use arkret_wire::Event;
 use salvo::http::StatusCode;
@@ -27,90 +27,90 @@ use super::{AuthArgs, now};
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
-const MAX_DATA_TYPE_LEN: usize = 256;
+const MAX_ACCOUNT_DATA_KEY_BYTES: usize = 256;
 const MAX_PAYLOAD_BYTES: usize = 64 * 1024;
 
 /// AKP-0008 / AKP-0009 (spec head 37ce729) — controller-private account-data
 /// types. Writers MUST be the controller principal (not their own agent
 /// runtime, not an applet-bound ghost).
-struct AccountDataTypeSpec {
-    data_type: &'static str,
+struct AccountDataKeySpec {
+    account_data_key: &'static str,
     /// When `true`, only the controller principal may write the entry.
     /// Agents / applets / service principals are rejected with
     /// `capability_denied` even if they hold a controller-scoped session.
     controller_private: bool,
 }
 
-const REGISTERED_ACCOUNT_DATA_TYPES: &[AccountDataTypeSpec] = &[
-    AccountDataTypeSpec {
-        data_type: "ak.agent.draft.v1",
+const REGISTERED_ACCOUNT_DATA_KEY_PATTERNS: &[AccountDataKeySpec] = &[
+    AccountDataKeySpec {
+        account_data_key: "ak.agent.draft.v1",
         controller_private: true,
     },
     // `ak.agent.sidecar_projection.v1` was removed from the account-data
     // registry on 2026-07-23: the exchange projection is a controller-device
     // local Event-fold cache and never an account-data surface
     // (zh/models/sidecar.md §7.2.4).
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_AGENT_SIDECAR_VIEW_STATE,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_REMINDER,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_REMINDER,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SCHEDULED_SEND,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SNOOZE,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SNOOZE,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SAVED,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SAVED,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_DRAFT,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_DRAFT,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_FILE_TRANSFER,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: arkret_wire::constants::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+    AccountDataKeySpec {
+        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SEARCH_INDEX_MANIFEST,
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: "ak.account.blocklist",
+    AccountDataKeySpec {
+        account_data_key: "ak.account.blocklist",
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: "ak.dnd_schedule",
+    AccountDataKeySpec {
+        account_data_key: "ak.dnd_schedule",
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: "ak.presence.preference",
+    AccountDataKeySpec {
+        account_data_key: "ak.presence.preference",
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: "ak.presence.visibility",
+    AccountDataKeySpec {
+        account_data_key: "ak.presence.visibility",
         controller_private: true,
     },
-    AccountDataTypeSpec {
-        data_type: "ak.push_rules",
+    AccountDataKeySpec {
+        account_data_key: "ak.push_rules",
         controller_private: true,
     },
 ];
 
-fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataTypeSpec> {
+fn registered_account_data_key_spec(account_data_key: &str) -> Option<&'static AccountDataKeySpec> {
     let canonical_type =
-        crate::routing::account_data_encryption::encrypted_account_data_prefix(data_type)
-            .unwrap_or(data_type);
-    REGISTERED_ACCOUNT_DATA_TYPES
+        crate::routing::account_data_encryption::encrypted_account_data_prefix(account_data_key)
+            .unwrap_or(account_data_key);
+    REGISTERED_ACCOUNT_DATA_KEY_PATTERNS
         .iter()
-        .find(|spec| spec.data_type == canonical_type)
+        .find(|spec| spec.account_data_key == canonical_type)
 }
 
 /// Controller-private account data never crosses to Agent runtime sessions:
@@ -122,23 +122,24 @@ fn registered_account_data_type(data_type: &str) -> Option<&'static AccountDataT
 /// as controller-private: new writes are already hard-rejected by the key
 /// validator, and treating legacy stored rows as controller-private keeps them
 /// out of agent-session list results and the account stream (fail closed).
-pub(crate) fn is_controller_private_account_data_key(data_type: &str) -> bool {
-    crate::routing::account_data_encryption::is_retired_encrypted_account_data_key(data_type)
-        || registered_account_data_type(data_type).is_some_and(|spec| spec.controller_private)
+pub(crate) fn is_controller_private_account_data_key(account_data_key: &str) -> bool {
+    crate::routing::account_data_encryption::is_retired_encrypted_account_data_key(account_data_key)
+        || registered_account_data_key_spec(account_data_key)
+            .is_some_and(|spec| spec.controller_private)
 }
 
-fn validate_registered_account_data_key(data_type: &str) -> Result<(), AppError> {
-    crate::routing::account_data_encryption::validate_encrypted_account_data_key(data_type)
+fn validate_registered_account_data_key(account_data_key: &str) -> Result<(), AppError> {
+    crate::routing::account_data_encryption::validate_encrypted_account_data_key(account_data_key)
         .map_err(|error| AppError::invalid_param(error.message()))
 }
 
 fn validate_private_account_data_content_for_actor(
     actor_id: &str,
-    data_type: &str,
+    account_data_key: &str,
     content: &Value,
 ) -> Result<(), AppError> {
     crate::routing::account_data_encryption::validate_encrypted_account_data_value_for_actor(
-        data_type,
+        account_data_key,
         content,
         Some(actor_id),
     )
@@ -146,9 +147,13 @@ fn validate_private_account_data_content_for_actor(
 }
 
 #[cfg(test)]
-fn validate_private_account_data_content(data_type: &str, content: &Value) -> Result<(), AppError> {
+fn validate_private_account_data_content(
+    account_data_key: &str,
+    content: &Value,
+) -> Result<(), AppError> {
     crate::routing::account_data_encryption::validate_encrypted_account_data_value(
-        data_type, content,
+        account_data_key,
+        content,
     )
     .map_err(|error| AppError::invalid_param(error.message()))
 }
@@ -157,37 +162,39 @@ pub(super) fn router() -> Router {
     Router::with_path("account_data")
         .get(list_account_data)
         .push(
-            Router::with_path("{data_type}")
+            Router::with_path("{account_data_key}")
                 .get(get_account_data)
                 .put(put_account_data)
                 .delete(delete_account_data),
         )
 }
 
-fn validate_data_type(data_type: &str) -> Result<(), AppError> {
-    if data_type.is_empty() {
-        return Err(AppError::invalid_param("data_type must not be empty"));
+fn validate_account_data_key(account_data_key: &str) -> Result<(), AppError> {
+    if account_data_key.is_empty() {
+        return Err(AppError::invalid_param(
+            "account_data_key must not be empty",
+        ));
     }
-    if data_type.len() > MAX_DATA_TYPE_LEN {
-        return Err(AppError::invalid_param("data_type too long"));
+    if account_data_key.len() > MAX_ACCOUNT_DATA_KEY_BYTES {
+        return Err(AppError::invalid_param("account_data_key too long"));
     }
     // Keys are dot-delimited namespaces (`ak.contacts.realm.<realm_id>` etc.).
     // Reject control chars / whitespace / path separators to keep them URL- and
     // log-safe; everything else (including the `:` in `ak:space:<uuid>`) is
     // permitted so the canonical wire keys round-trip.
-    if data_type.chars().any(|c| {
+    if account_data_key.chars().any(|c| {
         c.is_control() || c.is_whitespace() || c == '/' || c == '\\' || c == '?' || c == '#'
     }) {
         return Err(AppError::invalid_param(
-            "data_type contains forbidden character",
+            "account_data_key contains forbidden character",
         ));
     }
     Ok(())
 }
 
-fn entry_from(record: AccountDataState) -> AccountDataEntry {
-    AccountDataEntry {
-        data_type: record.data_type,
+fn entry_from(record: AccountDataState) -> AccountDataRow {
+    AccountDataRow {
+        account_data_key: record.account_data_key,
         content: record.payload,
         updated_at: record.updated_at,
     }
@@ -224,7 +231,7 @@ async fn session_is_agent_context(
 async fn persist_account_data_event(
     state: &AppState,
     session: &soland_services::identity::SessionIdentityState,
-    data_type: &str,
+    account_data_key: &str,
     content: Option<Value>,
 ) -> Result<(), AppError> {
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
@@ -257,7 +264,7 @@ async fn persist_account_data_event(
     let created_at = now();
     let mut payload = json!({
         "owner": session.actor,
-        "key": data_type,
+        "key": account_data_key,
         "updated_at": arkret_canonical::format_timestamp_canonical(created_at),
     });
     if let Some(content) = content {
@@ -320,7 +327,7 @@ async fn persist_account_data_event(
         envelope,
         realm_id.as_str(),
         &session.actor,
-        data_type,
+        account_data_key,
     )
     .await
     .map_err(|error| {
@@ -345,31 +352,35 @@ async fn put_account_data(
     depot: &mut Depot,
     req: &mut Request,
     res: &mut Response,
-    data_type: PathParam<String>,
+    account_data_key: PathParam<String>,
     body: JsonBody<AccountDataReplaceRequestBody>,
-) -> JsonResult<AccountDataEntry> {
+) -> JsonResult<AccountDataRow> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let data_type = data_type.into_inner();
-    validate_data_type(&data_type)?;
-    validate_registered_account_data_key(&data_type)?;
+    let account_data_key = account_data_key.into_inner();
+    validate_account_data_key(&account_data_key)?;
+    validate_registered_account_data_key(&account_data_key)?;
 
     // AKP-0008 / AKP-0009: registered personal-agent account-data types are
     // controller-private; native agent principals cannot write them directly,
     // and neither can an agent-granted session that presents the controller
     // as its actor.
-    if let Some(spec) = registered_account_data_type(&data_type)
+    if let Some(spec) = registered_account_data_key_spec(&account_data_key)
         && spec.controller_private
         && session_is_agent_context(state, &session).await?
     {
         return Err(AppError::capability_denied(format!(
             "{} is controller-private; agent runtimes cannot write it",
-            spec.data_type
+            spec.account_data_key
         )));
     }
 
     let body = body.into_inner();
-    validate_private_account_data_content_for_actor(&session.actor, &data_type, &body.content)?;
+    validate_private_account_data_content_for_actor(
+        &session.actor,
+        &account_data_key,
+        &body.content,
+    )?;
     // Server-side guard against runaway payloads. Canonical serialisation is
     // the client's job; we just cap the wire size to keep one bad client from
     // filling the row with megabytes of base64.
@@ -386,15 +397,15 @@ async fn put_account_data(
 
     let existed = state
         .account_data()
-        .entry(&session.actor, &data_type)
+        .entry(&session.actor, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .is_some();
 
-    persist_account_data_event(state, &session, &data_type, Some(body.content)).await?;
+    persist_account_data_event(state, &session, &account_data_key, Some(body.content)).await?;
     let record = state
         .account_data()
-        .entry(&session.actor, &data_type)
+        .entry(&session.actor, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
         .ok_or_else(|| AppError::internal("account_data Event projection is missing"))?;
@@ -403,7 +414,7 @@ async fn put_account_data(
         state,
         Some(&session.actor),
         "account_data.set",
-        serde_json::json!({"data_type": data_type}),
+        serde_json::json!({"account_data_key": account_data_key}),
         "accepted",
     )
     .await;
@@ -423,18 +434,18 @@ async fn get_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    data_type: PathParam<String>,
-) -> JsonResult<AccountDataEntry> {
+    account_data_key: PathParam<String>,
+) -> JsonResult<AccountDataRow> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let data_type = data_type.into_inner();
-    validate_data_type(&data_type)?;
-    validate_registered_account_data_key(&data_type)?;
+    let account_data_key = account_data_key.into_inner();
+    validate_account_data_key(&account_data_key)?;
+    validate_registered_account_data_key(&account_data_key)?;
 
     // Controller-private entries are indistinguishable from absent ones for
     // Agent runtime sessions (fail closed, no existence disclosure). Same
     // predicate as put/delete: agent grant marker OR native agent principal.
-    if is_controller_private_account_data_key(&data_type)
+    if is_controller_private_account_data_key(&account_data_key)
         && session_is_agent_context(state, &session).await?
     {
         return Err(AppError::not_found("not found"));
@@ -442,7 +453,7 @@ async fn get_account_data(
 
     match state
         .account_data()
-        .entry(&session.actor, &data_type)
+        .entry(&session.actor, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
@@ -474,7 +485,7 @@ async fn list_account_data(
         .map_err(|error| AppError::internal(error.to_string()))?
         .into_iter()
         .filter(|record| {
-            !(agent_context && is_controller_private_account_data_key(&record.data_type))
+            !(agent_context && is_controller_private_account_data_key(&record.account_data_key))
         })
         .map(entry_from)
         .collect();
@@ -491,35 +502,35 @@ async fn delete_account_data(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
-    data_type: PathParam<String>,
+    account_data_key: PathParam<String>,
 ) -> JsonResult<AccountDataDeleteOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let data_type = data_type.into_inner();
-    validate_data_type(&data_type)?;
-    validate_registered_account_data_key(&data_type)?;
+    let account_data_key = account_data_key.into_inner();
+    validate_account_data_key(&account_data_key)?;
+    validate_registered_account_data_key(&account_data_key)?;
 
-    if is_controller_private_account_data_key(&data_type)
+    if is_controller_private_account_data_key(&account_data_key)
         && session_is_agent_context(state, &session).await?
     {
         return Err(AppError::capability_denied(format!(
-            "{data_type} is controller-private; agent runtimes cannot delete it"
+            "{account_data_key} is controller-private; agent runtimes cannot delete it"
         )));
     }
 
-    persist_account_data_event(state, &session, &data_type, None).await?;
+    persist_account_data_event(state, &session, &account_data_key, None).await?;
 
     super::append_audit_log(
         state,
         Some(&session.actor),
         "account_data.delete",
-        serde_json::json!({"data_type": data_type}),
+        serde_json::json!({"account_data_key": account_data_key}),
         "accepted",
     )
     .await;
     json_ok(AccountDataDeleteOutcome {
         ok: true,
-        data_type,
+        account_data_key,
     })
 }
 
@@ -680,12 +691,12 @@ mod tests {
         }
     }
 
-    fn encrypted_envelope(data_type: &str) -> Value {
+    fn encrypted_envelope(account_data_key: &str) -> Value {
         serde_json::to_value(
             arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
                 "did:web:alice.example",
-                data_type,
+                account_data_key,
                 &json!({"private": true}),
                 [9u8; 24],
             )

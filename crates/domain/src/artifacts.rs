@@ -57,7 +57,7 @@ pub struct CellFamilyBinding {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OperationSurfaceGroup {
     pub surface: String,
-    pub tier: String,
+    pub surface_class: String,
     pub profile: Option<String>,
     pub operations: Vec<String>,
 }
@@ -225,7 +225,7 @@ pub fn operation_surface_groups() -> &'static [OperationSurfaceGroup] {
                 .flatten()
                 .filter_map(|entry| {
                     let surface = entry.get("surface").and_then(Value::as_str)?;
-                    let tier = entry.get("tier").and_then(Value::as_str)?;
+                    let surface_class = entry.get("surface_class").and_then(Value::as_str)?;
                     let profile = entry
                         .get("profile")
                         .and_then(Value::as_str)
@@ -239,7 +239,7 @@ pub fn operation_surface_groups() -> &'static [OperationSurfaceGroup] {
                         .collect::<Vec<_>>();
                     Some(OperationSurfaceGroup {
                         surface: surface.to_owned(),
-                        tier: tier.to_owned(),
+                        surface_class: surface_class.to_owned(),
                         profile,
                         operations,
                     })
@@ -410,7 +410,7 @@ mod tests {
         assert!(
             groups.iter().any(|group| {
                 group.surface == "events_sync"
-                    && group.tier == "core"
+                    && group.surface_class == "core"
                     && group
                         .operations
                         .iter()

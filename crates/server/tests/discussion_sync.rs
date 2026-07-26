@@ -212,7 +212,7 @@ async fn seed_pending_invite(
             invitee: Some(invitee.to_owned()),
             invite_delivery_target: Some(json!({
                 "recipient_service_id": state.service_id().clone(),
-                "recipient_service_type": "principal_server"
+                "recipient_service_kind": "principal_server"
             })),
             introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
             third_party_id: None,
@@ -411,7 +411,7 @@ async fn send_circle_scoped_encrypted_message(
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
         "encrypted_content": {
-            "scheme": "mls-rfc9420",
+            "scheme": "mls_rfc9420",
             "version": "1.0",
             "group_id": "circleGroup123",
             "epoch": 1,
@@ -732,7 +732,7 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         json!({
             "value": {
                 "content_encryption_floor": "e2ee_required",
-                "content_scheme": "mls-rfc9420",
+                "content_scheme": "mls_rfc9420",
                 "metadata_encryption_floor": "e2ee_required",
                 "policy_revision": 1
             }
@@ -749,7 +749,7 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         json!({
             "value": {
                 "content_encryption_floor": "e2ee_required",
-                "content_scheme": "mls-exporter-aead-v1",
+                "content_scheme": "mls_exporter_aead_v1",
                 "metadata_encryption_floor": "e2ee_required",
                 "policy_revision": 2
             }
@@ -794,7 +794,7 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         .expect("current pre-join policy-components event must be in the member baseline");
     assert_eq!(
         policy["payload"]["value"]["content_scheme"],
-        "mls-exporter-aead-v1"
+        "mls_exporter_aead_v1"
     );
 }
 

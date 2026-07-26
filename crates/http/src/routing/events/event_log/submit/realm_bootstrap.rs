@@ -172,7 +172,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .map_err(|error| {
             let operation = &operations[error.operation_index];
             let code = if !error.ignored
-                && operation.object_type.as_str()
+                && operation.object_kind.as_str()
                     == arkret_wire::events::EventKind::CAPABILITY_GRANT
             {
                 "invalid_realm_founding_grant"

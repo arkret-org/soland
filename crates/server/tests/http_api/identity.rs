@@ -188,7 +188,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
         vec!["web".to_owned(), "key".to_owned(), "webvh".to_owned()];
     let state = soland_test_support::app_state(config);
     let key = arkret_models_identity::service_identity::ServiceRegistrationKey::new(
-        arkret_wire::ServiceType::AuthServer,
+        arkret_wire::ServiceKind::AuthServer,
         arkret_models_identity::service_identity::CanonicalServiceUrl::new("https://auth.example/")
             .unwrap(),
     )
@@ -257,7 +257,7 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     );
 
     let fetched: arkret_models_identity::service_identity::ServiceRegistrationOutcome = TestClient::get(
-        "http://server/_arkret/root/identity/service-registrations?service_type=auth_server&public_base=https%3A%2F%2Fauth.example%2F",
+        "http://server/_arkret/root/identity/service-registrations?service_kind=auth_server&public_base=https%3A%2F%2Fauth.example%2F",
     )
     .add_header("authorization", "Bearer test-webvh-token", true)
     .send(&app_from_state(state.clone()))

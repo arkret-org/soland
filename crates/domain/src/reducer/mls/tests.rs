@@ -8,12 +8,12 @@ use serde_json::json;
 use super::*;
 use crate::reducer::{MlsEffect, ProjectionEffect, ProjectionState};
 
-fn op_at(secs: i64, object_type: &str, payload: serde_json::Value) -> Operation {
+fn op_at(secs: i64, object_kind: &str, payload: serde_json::Value) -> Operation {
     let mut op = Operation::create(
         OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000001")
             .expect("op id parses"),
         RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000000").expect("realm id parses"),
-        object_type,
+        object_kind,
         payload,
     );
     op.created_at = Utc.timestamp_opt(secs, 0).single().expect("ts in range");

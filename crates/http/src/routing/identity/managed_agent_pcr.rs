@@ -7,7 +7,7 @@ use arkret_models_collaboration::agent_operations::{
 use arkret_models_collaboration::event_sync::RealmSealFrontierView;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
 use arkret_models_crypto::{
-    BackupClass, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding,
+    BackupKind, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding,
     RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
 };
 use arkret_wire::Seal;
@@ -159,7 +159,7 @@ pub(crate) async fn validate_managed_agent_key_backup(
         }
         return Ok(());
     }
-    if backup.backup_class != BackupClass::MlsHistory
+    if backup.backup_kind != BackupKind::MlsHistory
         || backup.encryption.recipient_method != KeyBackupRecipientMethod::RecoveryPublicKey
         || backup.recovery_policy_ref.is_none()
         || backup.frontier_ref.is_none()
@@ -199,12 +199,12 @@ pub(crate) async fn validate_managed_agent_key_backup(
         if item.realm_id.as_ref() != Some(&binding.principal_control_realm_id)
             || item.epoch != Some(binding.managed_frontier_ref.mls_epoch)
             || !matches!(
-                item.item_type.as_str(),
+                item.item_kind.as_str(),
                 "mls_group_state" | "mls_epoch_secret" | "pending_welcome"
             )
         {
             return Err(schema_error(
-                "managed Agent PCR item realm, epoch, or item_type does not match its binding",
+                "managed Agent PCR item realm, epoch, or item_kind does not match its binding",
             ));
         }
         let record = managed_agent_record(state, binding.managed_principal_id.as_str()).await?;
@@ -228,7 +228,7 @@ pub(crate) async fn validate_managed_agent_key_backup(
                 "managed Agent PCR item mls_group_id does not match the current Realm MLS group",
             ));
         }
-        if item.item_type == "mls_group_state" {
+        if item.item_kind == "mls_group_state" {
             group_state_agents.insert(binding.managed_principal_id.as_str().to_owned());
         }
     }
@@ -258,7 +258,7 @@ pub(crate) async fn project_agent_pcr_recovery(
     let mut candidates = Vec::new();
     let mut mls_backups = Vec::new();
     for value in backups {
-        if value.get("backup_class").and_then(Value::as_str) != Some("mls_history") {
+        if value.get("backup_kind").and_then(Value::as_str) != Some("mls_history") {
             continue;
         }
         let backup: KeyBackup = serde_json::from_value(value).map_err(|error| {
@@ -500,7 +500,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     {
         return Err("key_backup_active_series_wrong_control_realm");
     }
-    let backup_class = record.backup_class.as_str().to_owned();
+    let backup_kind = record.backup_kind.as_str().to_owned();
     let series_exists = state
         .key_backups()
         .backups_for_actor(record.actor_id.as_str())
@@ -509,7 +509,7 @@ pub(crate) async fn validate_active_series_operation_authority(
         .iter()
         .any(|backup| {
             backup.get("actor_id").and_then(Value::as_str) == Some(record.actor_id.as_str())
-                && backup.get("backup_class").and_then(Value::as_str) == Some(backup_class.as_str())
+                && backup.get("backup_kind").and_then(Value::as_str) == Some(backup_kind.as_str())
                 && backup.get("series_id").and_then(Value::as_str)
                     == Some(record.active_series_id.as_str())
                 && backup.get("series_seq").and_then(Value::as_u64) == Some(0)

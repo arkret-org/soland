@@ -198,7 +198,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
         .add_header(
             "x-arkret-attachment-envelope",
             serde_json::json!({
-                "algorithm": "mls-rfc9420",
+                "algorithm": "mls_rfc9420",
                 "nonce": "nonce",
                 "key_ref": {"kid": "did:web:alice.example#device"},
                 "ciphertext_digest": "sha256:bad"

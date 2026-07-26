@@ -15,8 +15,8 @@ fn default_relation_profile(relation_kind: &str) -> RelationProfile {
         .unwrap_or(RelationCardinality::ManyToMany);
     RelationProfile {
         relation_kind: relation_kind.to_owned(),
-        from_type: None,
-        to_type: None,
+        from_kind: None,
+        to_kind: None,
         relation_scope: RelationScope::Realm,
         cardinality,
         dedupe_key: Vec::new(),
@@ -193,13 +193,13 @@ impl ProjectionState {
                 .map_err(|_| arkret_wire::ReasonCode::RelationProfileCardinalityConflict)?;
             candidate.validate_cardinality_consistency()?;
             if !self.relation_profile_matches_endpoint(
-                candidate.from_type.as_deref(),
+                candidate.from_kind.as_deref(),
                 relation.from_ref.as_deref(),
             ) {
                 continue;
             }
             if !self.relation_profile_matches_endpoint(
-                candidate.to_type.as_deref(),
+                candidate.to_kind.as_deref(),
                 relation.to_ref.as_deref(),
             ) {
                 continue;
@@ -554,7 +554,7 @@ impl ProjectionState {
     /// locally-known endpoint sits in a Realm other than the Relation's. Weak
     /// reference kinds (`references` / `mentions` / `derived_from` / …) MAY
     /// cross Realm and are not checked here (they take the §4.3 two-sided
-    /// capability path with projection-time `ReferenceProjectionStatus`).
+    /// capability path with projection-time `ReferenceProjectionState`).
     pub fn check_relation_cross_realm(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
             != Some(arkret_wire::events::EventKind::RELATION_CREATE)

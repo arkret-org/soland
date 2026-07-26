@@ -64,7 +64,7 @@ fn input(bypass_cache: bool) -> PolicyCheckRequestInput {
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
         )
         .unwrap(),
-        source_service_type: "principal_server".to_owned(),
+        source_service_kind: "principal_server".to_owned(),
         source_ip_digest: Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap(),
         signed_transport: true,
         event_preview: Value::Null,
@@ -111,7 +111,7 @@ fn wire_request(input: &PolicyCheckRequestInput) -> PolicyCheckRequestBody {
         request_canonical_digest: input.canonical_request_hash(),
         source: PolicyCheckSource {
             service_id: input.source_service_id.clone(),
-            service_type: input.source_service_type.clone(),
+            service_kind: input.source_service_kind.clone(),
             source_ip_digest: Some(input.source_ip_digest.clone()),
             signed_transport: input.signed_transport,
         },

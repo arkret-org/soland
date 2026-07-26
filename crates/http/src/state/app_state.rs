@@ -14,7 +14,7 @@ use arkret_models_identity::account::AccountRegistrationPolicy;
 #[cfg(test)]
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 #[cfg(test)]
-use arkret_wire::ServiceType;
+use arkret_wire::ServiceKind;
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -234,7 +234,7 @@ pub fn build_realm_directory(config: &AppConfig) -> RealmDirectoryService {
 #[cfg(test)]
 fn development_fixture_service_identity(config: &AppConfig) -> ServiceIdentityState {
     let registration_key = ServiceRegistrationKey::new(
-        ServiceType::PrincipalServer,
+        ServiceKind::PrincipalServer,
         CanonicalServiceUrl::canonicalize(&config.public_base_url)
             .expect("test/development public base must be canonicalizable"),
     )
@@ -589,7 +589,7 @@ impl AppState {
     /// Public Ed25519 verifying key for the current notary signing key.
     ///
     /// Used by the `ak.call.state` participant_binding verifier: in the
-    /// arkret-native self-signed deployment the binding `sig` is minted with
+    /// arkret_native self-signed deployment the binding `sig` is minted with
     /// the notary signing key (`routing::interop::webrtc`), so the receiver
     /// verifies against this key after anchoring `issuer_kid` to the current
     /// media_service epoch.
@@ -1969,7 +1969,7 @@ mod membership_hydration_tests {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775902".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
-                operation_type: "event".to_owned(),
+                operation_kind: "event".to_owned(),
                 operation_id: Some(
                     "ak:operation:019f0dd3-081c-7f03-b388-e0399e775903".to_owned(),
                 ),
@@ -1977,7 +1977,7 @@ mod membership_hydration_tests {
                 payload: serde_json::json!({
                     "schema": "ak.schema.key_backup_active_series.v1",
                     "actor_id": actor,
-                    "backup_class": "mls_history",
+                    "backup_kind": "mls_history",
                     "active_series_id": series_id,
                     "series_pointer_version": 1,
                     "previous_series_ids": [],
@@ -1994,7 +1994,7 @@ mod membership_hydration_tests {
                         "signed_fields": [
                             "schema",
                             "actor_id",
-                            "backup_class",
+                            "backup_kind",
                             "active_series_id",
                             "series_pointer_version",
                             "previous_series_ids",
@@ -2033,7 +2033,7 @@ mod membership_hydration_tests {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775904".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
-                operation_type: "event".to_owned(),
+                operation_kind: "event".to_owned(),
                 operation_id: Some(
                     "ak:operation:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
                 ),
@@ -2041,7 +2041,7 @@ mod membership_hydration_tests {
                 payload: serde_json::json!({
                     "schema": "ak.schema.key_backup_active_series.v1",
                     "actor_id": actor,
-                    "backup_class": "mls_history",
+                    "backup_kind": "mls_history",
                     "active_series_id": series_id,
                     "series_pointer_version": 3,
                     "previous_series_ids": [],
@@ -2055,7 +2055,7 @@ mod membership_hydration_tests {
                         "signature_algorithm": "Ed25519",
                         "signature": "AA",
                         "signed_fields": [
-                            "schema", "actor_id", "backup_class", "active_series_id",
+                            "schema", "actor_id", "backup_kind", "active_series_id",
                             "series_pointer_version", "previous_series_ids", "frontier_ref",
                             "issued_at"
                         ],
@@ -2100,7 +2100,7 @@ mod membership_hydration_tests {
                 event_id: event_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
-                operation_type: "event".to_owned(),
+                operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775904".to_owned()),
                 sender: Some(agent_id.to_owned()),
                 payload: serde_json::json!({
@@ -2120,7 +2120,7 @@ mod membership_hydration_tests {
                 event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::events::EventKind::AGENT_KEY_REVOKE.to_owned(),
-                operation_type: "event".to_owned(),
+                operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775906".to_owned()),
                 sender: Some(agent_id.to_owned()),
                 payload: serde_json::json!({
@@ -2138,7 +2138,7 @@ mod membership_hydration_tests {
                 event_id: replacement_event_id.to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
-                operation_type: "event".to_owned(),
+                operation_kind: "event".to_owned(),
                 operation_id: Some("ak:operation:019f0dd3-081c-7f03-b388-e0399e775908".to_owned()),
                 sender: Some(agent_id.to_owned()),
                 payload: serde_json::json!({

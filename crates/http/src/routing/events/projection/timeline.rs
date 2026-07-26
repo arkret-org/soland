@@ -13,7 +13,7 @@ pub fn projection_event_from_operation(
         event_id,
         realm_id: operation.realm_id.to_string(),
         event_kind: kinds::canonical_kind_string(operation),
-        operation_type: operation_type_string(operation),
+        operation_kind: operation_type_string(operation),
         operation_id: Some(operation.operation_id.to_string()),
         sender: operation
             .payload

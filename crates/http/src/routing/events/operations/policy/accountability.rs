@@ -293,7 +293,7 @@ pub(super) fn validate_disappearing_message_policy(
     }
     if !message_operation_is_encrypted(operation)
         && !policy
-            .get("allow_plaintext_realms")
+            .get("plaintext_realms_allowed")
             .and_then(Value::as_bool)
             .unwrap_or(false)
     {

@@ -1019,7 +1019,7 @@ async fn peer_claim_policy_authorized(
             )
             .map_err(|_| peer_claim_failed())?;
             if body.pair_key.as_ref() != Some(&expected_pair_key)
-                || body.allow_last_resort == Some(true)
+                || body.last_resort_allowed == Some(true)
                 || body.strand_id.is_none()
             {
                 return Ok(false);
@@ -2750,11 +2750,11 @@ fn unix_millis_datetime(timestamp_millis: i64) -> Result<DateTime<Utc>, AppError
 /// see from a federated envelope. The `operation_id` / `realm_id` are
 /// placeholders — the reducer reads only `payload` + `created_at` for
 /// MLS kinds.
-fn build_op(object_type: &str, payload: Value) -> Operation {
+fn build_op(object_kind: &str, payload: Value) -> Operation {
     let op_id =
         OperationId::new("ak:operation:01904100-0000-7000-8000-000000000001").expect("op id");
     let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000000").expect("realm id");
-    Operation::create(op_id, realm_id, object_type, payload)
+    Operation::create(op_id, realm_id, object_kind, payload)
 }
 
 #[cfg(test)]

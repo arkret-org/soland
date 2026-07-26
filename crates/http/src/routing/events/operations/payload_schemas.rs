@@ -226,7 +226,7 @@ pub(crate) const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] =
         "realm policy event requires value",
     )];
 pub(crate) const REALM_KEY_SHARE_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("share_class", "ak.realm_key.share requires share_class"),
+    PayloadRequirement::Required("share_kind", "ak.realm_key.share requires share_kind"),
     PayloadRequirement::Required(
         "recipient_principal_id",
         "ak.realm_key.share requires recipient_principal_id",

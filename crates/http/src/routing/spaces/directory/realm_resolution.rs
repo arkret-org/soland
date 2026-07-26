@@ -159,14 +159,14 @@ pub(super) async fn resolve_target(
     }
 
     let mut include_join_candidates = false;
-    match parsed.link_type {
-        LinkType::Reference => {
+    match parsed.address_link_kind {
+        AddressLinkKind::Reference => {
             if !realm_resolvable_to(state, &realm_entry, session.as_ref(), None, None).await {
                 return Err(AppError::not_found("not found"));
             }
             include_join_candidates = true;
         }
-        LinkType::Invite => {
+        AddressLinkKind::Invite => {
             let Some(token) = token else {
                 return Err(AppError::not_found("not found"));
             };
@@ -178,14 +178,14 @@ pub(super) async fn resolve_target(
                     token,
                     &parsed,
                     realm_entry.realm_id.as_str(),
-                    LinkType::Invite,
+                    AddressLinkKind::Invite,
                 )
             {
                 return Err(AppError::not_found("not found"));
             }
             include_join_candidates = true;
         }
-        LinkType::Preview => {
+        AddressLinkKind::Preview => {
             let Some(token) = token else {
                 return Err(AppError::not_found("not found"));
             };
@@ -207,7 +207,7 @@ pub(super) async fn resolve_target(
     let join_rule = realm_join_rule(state, realm_entry.realm_id.as_str());
     let target_kind = target_kind_for_address(&parsed);
     let realm_preview = realm_preview_for_policy_typed(state, &realm_entry).await?;
-    let policy_revision = if parsed.link_type == LinkType::Preview
+    let policy_revision = if parsed.address_link_kind == AddressLinkKind::Preview
         && let Some(meta) = state
             .realms()
             .realm_metadata(realm_entry.realm_id.as_str())
@@ -714,7 +714,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
     vec![RealmJoinCandidate {
         realm_id: realm_id_typed,
         service_id: Did::new(state.service_id().clone()).expect("service DID is validated"),
-        service_type: RealmJoinCandidateServiceType::PrincipalServer,
+        service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
         role: RealmJoinCandidateRole::Primary,
         endpoint: Some(state.config().public_base_url.clone()),
         operations: vec!["ak.self.events.command.submit".to_owned()],

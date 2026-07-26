@@ -159,7 +159,7 @@ mod reaction_and_window_policy_tests {
             Some(&redact),
             true,
         ));
-        // Past the 24h redact window — denied even with allow_redact_after_window.
+        // Past the 24h redact window — denied even with redact_after_window_allowed.
         assert!(!message_window_permits(
             true,
             chrono::Duration::hours(25),
@@ -180,7 +180,7 @@ mod reaction_and_window_policy_tests {
             None,
             false,
         ));
-        // Opted out: allow_redact_after_window=true → unbounded recall.
+        // Opted out: redact_after_window_allowed=true → unbounded recall.
         assert!(message_window_permits(
             true,
             chrono::Duration::minutes(16),

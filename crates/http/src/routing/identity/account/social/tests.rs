@@ -255,7 +255,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
 
     let message_id = crate::ids::generate("message");
     let encrypted_content: arkret_models_crypto::encrypted_envelope::EncryptedEnvelope = serde_json::from_value(json!({
-        "scheme": "mls-rfc9420",
+        "scheme": "mls_rfc9420",
         "version": "1.0",
         "group_id": "mls_test",
         "epoch": 1,

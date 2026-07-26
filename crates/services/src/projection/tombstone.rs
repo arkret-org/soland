@@ -25,7 +25,7 @@ const EXPIRY_DERIVED_FIELD_KEYS: &[&str] = &[
     "in_reply_to",
     "media",
     "mention_routing_hint",
-    "mention_sidecar_hash",
+    "mention_sidecar_digest",
     "mentions",
     "message_key",
     "message_key_ref",
@@ -557,7 +557,7 @@ mod tests {
             event_id: event_id.to_owned(),
             realm_id: realm_id.to_owned(),
             event_kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
-            operation_type: "create".to_owned(),
+            operation_kind: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
             payload: json!({
@@ -703,7 +703,7 @@ mod tests {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000a3".to_owned(),
             realm_id: realm_id.to_owned(),
             event_kind: arkret_wire::events::EventKind::PIN_ADD.to_owned(),
-            operation_type: "create".to_owned(),
+            operation_kind: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
             payload: json!({
@@ -737,7 +737,7 @@ mod tests {
             event_id: "ak:operation:01904100-0000-7000-8000-0000000000d3".to_owned(),
             realm_id: realm_id.to_owned(),
             event_kind: arkret_wire::events::EventKind::PIN_ADD.to_owned(),
-            operation_type: "create".to_owned(),
+            operation_kind: "create".to_owned(),
             operation_id: None,
             sender: Some("did:web:alice.example".to_owned()),
             payload: json!({

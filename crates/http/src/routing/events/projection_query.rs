@@ -44,7 +44,7 @@ use arkret_models_collaboration::http_bodies::{
     ProjectionStrandRow,
 };
 use arkret_models_collaboration::objects::query_projection::{
-    DocumentMorphProjectionOutcome, ReferenceProjectionStatus,
+    DocumentMorphProjectionOutcome, ReferenceProjectionState,
 };
 use arkret_policy::history_visibility::{event_time_history_visible, matching_restricted_rules};
 use arkret_wire::HistoryVisibility;
@@ -392,8 +392,8 @@ fn document_projection_document(
     document.insert("morph_id".to_owned(), Value::String(morph.morph_id.clone()));
     document.insert("realm_id".to_owned(), Value::String(morph.realm_id.clone()));
     document.insert(
-        "morph_type".to_owned(),
-        Value::String(morph.morph_type.clone()),
+        "morph_kind".to_owned(),
+        Value::String(morph.morph_kind.clone()),
     );
     if let Some(title) = &morph.title {
         document.insert("title".to_owned(), Value::String(title.clone()));
@@ -641,15 +641,15 @@ async fn document_relation_reference_status(
     snapshot: &DocumentRelationSnapshot,
     realm_id: &str,
     session: &SessionRecord,
-) -> ReferenceProjectionStatus {
+) -> ReferenceProjectionState {
     if !snapshot.target_projection_visible {
-        return ReferenceProjectionStatus::Locked;
+        return ReferenceProjectionState::Locked;
     }
     let Some(target_home_realm_id) = snapshot.target_home_realm_id.as_deref() else {
         return if snapshot.target_requires_projection {
-            ReferenceProjectionStatus::Locked
+            ReferenceProjectionState::Locked
         } else {
-            ReferenceProjectionStatus::Accessible
+            ReferenceProjectionState::Accessible
         };
     };
     if target_home_realm_id == realm_id {
@@ -661,18 +661,18 @@ async fn document_relation_reference_status(
         )
         .await
         {
-            ReferenceProjectionStatus::Accessible
+            ReferenceProjectionState::Accessible
         } else {
-            ReferenceProjectionStatus::Locked
+            ReferenceProjectionState::Locked
         };
     }
     if realm_id_accessible(state, target_home_realm_id, Some(session)).await
         && document_relation_target_row_visible(state, snapshot, target_home_realm_id, session)
             .await
     {
-        ReferenceProjectionStatus::LazyLink
+        ReferenceProjectionState::LazyLink
     } else {
-        ReferenceProjectionStatus::Locked
+        ReferenceProjectionState::Locked
     }
 }
 
@@ -703,12 +703,12 @@ async fn document_relation_target_row_visible(
 }
 
 fn document_relation_reference_projection(
-    status: ReferenceProjectionStatus,
+    status: ReferenceProjectionState,
     relation: &SolandRelationState,
 ) -> Value {
     let mut projection = serde_json::Map::new();
     projection.insert("status".to_owned(), json!(status));
-    if matches!(status, ReferenceProjectionStatus::LazyLink)
+    if matches!(status, ReferenceProjectionState::LazyLink)
         && let Some(source_event_digest) = relation.source_event_digest.as_deref()
     {
         projection.insert(
@@ -721,11 +721,11 @@ fn document_relation_reference_projection(
 
 fn document_relation_row(
     snapshot: &DocumentRelationSnapshot,
-    status: ReferenceProjectionStatus,
+    status: ReferenceProjectionState,
 ) -> Result<Value, AppError> {
     parse_projection_id::<RelationId>(&snapshot.relation.relation_id, "relations.relation_id")?;
     let reference_projection = document_relation_reference_projection(status, &snapshot.relation);
-    if status == ReferenceProjectionStatus::Accessible {
+    if status == ReferenceProjectionState::Accessible {
         return Ok(json!({
             "relation_id": snapshot.relation.relation_id.clone(),
             "relation_kind": snapshot.relation.relation_kind.clone(),
@@ -761,7 +761,7 @@ fn document_relation_row(
     );
     row.insert("reference_projection".to_owned(), reference_projection);
     match status {
-        ReferenceProjectionStatus::LazyLink => {
+        ReferenceProjectionState::LazyLink => {
             row.insert("lazy_link".to_owned(), Value::Bool(true));
             if let Some(source_event_id) = snapshot.relation.source_event_id.as_deref() {
                 row.insert(
@@ -770,10 +770,10 @@ fn document_relation_row(
                 );
             }
         }
-        ReferenceProjectionStatus::Locked => {
+        ReferenceProjectionState::Locked => {
             row.insert("locked".to_owned(), Value::Bool(true));
         }
-        ReferenceProjectionStatus::Accessible => {}
+        ReferenceProjectionState::Accessible => {}
     }
     Ok(Value::Object(row))
 }
@@ -1391,7 +1391,7 @@ async fn get_document_projection(
         let Some(morph) = proj.morphs.get(&morph_id).cloned() else {
             return Err(AppError::not_found("document Morph not found"));
         };
-        if morph.morph_type != "document" {
+        if morph.morph_kind != "document" {
             return Err(AppError::not_found("document Morph not found"));
         }
         if !projection_row_visible_to_session(
@@ -1485,7 +1485,7 @@ async fn list_morph_projections(
             Ok(ProjectionMorphRow {
                 morph_id: parse_projection_id::<MorphId>(&m.morph_id, "morph_id")?,
                 realm_id: parse_projection_id::<RealmId>(&m.realm_id, "realm_id")?,
-                morph_type: m.morph_type.clone(),
+                morph_kind: m.morph_kind.clone(),
                 state: projection_object_state(m.state),
                 title: m.title.clone(),
                 created_by: Some(parse_projection_id::<Did>(&m.created_by, "created_by")?),

@@ -173,7 +173,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                     "actions": ["ak.circle.member.manage"],
                     "resources": [{ "kind": "circle", "realm_id": REALM, "circle_id": CIRCLE_A }],
                     "constraints": [{
-                        "constraint_type": "scope_limitation",
+                        "constraint_kind": "scope_limitation",
                         "effect": "allow",
                         "allowed_circle_ids": [CIRCLE_A],
                     }],

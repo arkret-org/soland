@@ -223,7 +223,7 @@ pub(super) fn mimi_provider_directory_value(
             arkret_identifiers::Did::new(state.service_id().clone())
                 .expect("validated service_id must be a DID"),
         ),
-        service_type: "mimi_provider_facade".to_owned(),
+        service_kind: "mimi_provider_facade".to_owned(),
         supported_profiles: vec!["ak.profile.mimi_interop.v1".to_owned()],
         mimi: ProviderDirectoryMimi {
             protocol_draft: "draft-ietf-mimi-protocol-06".to_owned(),

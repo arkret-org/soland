@@ -97,8 +97,8 @@ pub fn document_declares_registration_key(
         .is_some_and(|services| {
             services.iter().any(|entry| {
                 entry.get("type").and_then(Value::as_str) == Some("ArkretService")
-                    && entry.get("serviceType").and_then(Value::as_str)
-                        == Some(key.service_type().as_str())
+                    && entry.get("serviceKind").and_then(Value::as_str)
+                        == Some(key.service_kind().as_str())
                     && entry.get("serviceEndpoint").and_then(Value::as_str)
                         == Some(key.public_base().as_str())
             })

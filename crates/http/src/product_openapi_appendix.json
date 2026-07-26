@@ -5349,9 +5349,9 @@
             }
           },
           {
-            "description": "Filter by backup_class (did_recovery / secret_storage / mls_history)",
+            "description": "Filter by backup_kind (did_recovery / secret_storage / mls_history)",
             "in": "query",
-            "name": "backup_class",
+            "name": "backup_kind",
             "required": false,
             "schema": {
               "type": "string"
@@ -15221,15 +15221,15 @@
               "null"
             ]
           },
-          "object_type": {
+          "object_kind": {
             "type": "string"
           },
           "operation_id": {
             "pattern": "^(ak:operation:.+|sha256:[0-9a-f]{64})$",
             "type": "string"
           },
-          "operation_type": {
-            "$ref": "#/components/schemas/arkret_wire.primitives.OperationType"
+          "operation_kind": {
+            "$ref": "#/components/schemas/arkret_wire.primitives.OperationKind"
           },
           "payload": {},
           "realm_id": {
@@ -15253,9 +15253,9 @@
           "schema",
           "operation_id",
           "type",
-          "operation_type",
+          "operation_kind",
           "realm_id",
-          "object_type",
+          "object_kind",
           "payload",
           "created_at"
         ],
@@ -15900,10 +15900,10 @@
       },
       "arkret_models_crypto.artifacts_keys.RecoveryShareCommitmentAlgorithm": {
         "enum": [
-          "feldman-vss-sha256",
-          "pedersen-vss-sha256",
-          "share-hash-sha256",
-          "share-hash-blake3"
+          "feldman_vss_sha256",
+          "pedersen_vss_sha256",
+          "share_hash_sha256",
+          "share_hash_blake3"
         ],
         "type": "string"
       },
@@ -15924,7 +15924,7 @@
         ],
         "type": "object"
       },
-      "arkret_models_crypto.key_backup.BackupClass": {
+      "arkret_models_crypto.key_backup.BackupKind": {
         "description": "Backup class for key backup envelopes (key-management.md §7.1).",
         "enum": [
           "did_recovery",
@@ -15959,7 +15959,7 @@
                   }
                 ]
               },
-              "item_type": {
+              "item_kind": {
                 "type": "string"
               },
               "last_event_id": {
@@ -16017,7 +16017,7 @@
               }
             },
             "required": [
-              "item_type"
+              "item_kind"
             ],
             "type": "object"
           }
@@ -16037,8 +16037,8 @@
             "pattern": "^did:[a-z0-9]+:[^\\s#?]+$",
             "type": "string"
           },
-          "backup_class": {
-            "$ref": "#/components/schemas/arkret_models_crypto.key_backup.BackupClass"
+          "backup_kind": {
+            "$ref": "#/components/schemas/arkret_models_crypto.key_backup.BackupKind"
           },
           "backup_id": {
             "pattern": "^ak:backup:[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
@@ -16118,7 +16118,7 @@
         "required": [
           "backup_id",
           "actor_id",
-          "backup_class",
+          "backup_kind",
           "backup_version",
           "created_at",
           "ciphertext_digest",
@@ -17946,8 +17946,8 @@
                   "null"
                 ]
               },
-              "resource_types": {
-                "description": "Directory-service overlay: resource classes indexed by\n`ak.find.directory.query.describe`. Required when\n`service_type == \"directory_service\"`.",
+              "resource_kinds": {
+                "description": "Directory-service overlay: resource classes indexed by\n`ak.find.directory.query.describe`. Required when\n`service_kind == \"directory_service\"`.",
                 "items": {
                   "$ref": "#/components/schemas/arkret_models_discovery.service_description.DirectoryResourceKind"
                 },
@@ -17973,8 +17973,8 @@
                 "pattern": "^did:[a-z0-9]+:[^\\s#?]+$",
                 "type": "string"
               },
-              "service_type": {
-                "$ref": "#/components/schemas/arkret_wire.generated.service_types.ServiceType"
+              "service_kind": {
+                "$ref": "#/components/schemas/arkret_wire.generated.service_kinds.ServiceKind"
               },
               "snapshot_frontier": {
                 "description": "Frontier of the most recent snapshot the service can serve from\n(empty means snapshot-assisted resolution is unavailable).",
@@ -18051,7 +18051,7 @@
             "required": [
               "service_id",
               "trust_domain",
-              "service_type",
+              "service_kind",
               "protocol_version",
               "supported_profiles",
               "supported_operations",
@@ -18329,7 +18329,7 @@
         ],
         "type": "string"
       },
-      "arkret_models_identity.delivery_binding.RecipientServiceType": {
+      "arkret_models_identity.delivery_binding.RecipientServiceKind": {
         "enum": [
           "principal_server"
         ],
@@ -18366,7 +18366,7 @@
         "type": "string"
       },
       "arkret_models_identity.handle.HandleClaimKind": {
-        "description": "Protocol kind of handle claim (`claim_kind` in the wire schema).\n\nR3.5 wire-breaking: the draft-era `claim_type` / `class` discriminators\nare forbidden. The draft-era `service_handle` value is removed.\nService-readable names / resource labels need their own service /\nresource schema; organization-assigned user / principal handles use\n`organization_handle`.",
+        "description": "Protocol kind of handle claim (`claim_kind` in the wire schema).\n\nR3.5 wire-breaking: the draft-era `claim_kind` / `class` discriminators\nare forbidden. The draft-era `service_handle` value is removed.\nService-readable names / resource labels need their own service /\nresource schema; organization-assigned user / principal handles use\n`organization_handle`.",
         "enum": [
           "handle_binding",
           "organization_handle"
@@ -18416,8 +18416,8 @@
             "pattern": "^did:[a-z0-9]+:[^\\s#?]+$",
             "type": "string"
           },
-          "recipient_service_type": {
-            "$ref": "#/components/schemas/arkret_models_identity.delivery_binding.RecipientServiceType"
+          "recipient_service_kind": {
+            "$ref": "#/components/schemas/arkret_models_identity.delivery_binding.RecipientServiceKind"
           },
           "service_acceptance_ref": {
             "type": [
@@ -18770,7 +18770,7 @@
             "minimum": 0,
             "type": "integer"
           },
-          "tree_size": {
+          "leaf_count": {
             "format": "uint64",
             "minimum": 0,
             "type": "integer"
@@ -18781,7 +18781,7 @@
           "leaf_digest",
           "audit_path",
           "leaf_index",
-          "tree_size"
+          "leaf_count"
         ],
         "type": "object"
       },
@@ -19012,7 +19012,7 @@
           }
         ]
       },
-      "arkret_wire.generated.service_types.ServiceType": {
+      "arkret_wire.generated.service_kinds.ServiceKind": {
         "enum": [
           "agent_runtime",
           "applet_service",
@@ -19353,7 +19353,7 @@
         ],
         "type": "string"
       },
-      "arkret_wire.primitives.OperationType": {
+      "arkret_wire.primitives.OperationKind": {
         "enum": [
           "create",
           "update",
@@ -19578,7 +19578,7 @@
               "null"
             ]
           },
-          "blocked_principal_services": {
+          "denied_principal_services": {
             "items": {
               "pattern": "^did:[a-z0-9]+:[^\\s#?]+$",
               "type": "string"
@@ -19598,7 +19598,7 @@
               }
             ]
           },
-          "forbidden_introduction_kinds": {
+          "deployment_denied_introduction_kinds": {
             "items": {
               "type": "string"
             },
@@ -19614,7 +19614,7 @@
               }
             ]
           },
-          "permitted_introduction_kinds": {
+          "deployment_allowed_introduction_kinds": {
             "items": {
               "type": "string"
             },
@@ -23013,7 +23013,7 @@
               "null"
             ]
           },
-          "operation_type": {
+          "operation_kind": {
             "type": "string"
           },
           "realm_id": {
@@ -23030,7 +23030,7 @@
           "event_id",
           "realm_id",
           "event_kind",
-          "operation_type",
+          "operation_kind",
           "created_at"
         ],
         "type": "object"
@@ -25935,7 +25935,7 @@
           "policy_id": {
             "type": "string"
           },
-          "policy_type": {
+          "policy_kind": {
             "type": "string"
           },
           "scope": {
@@ -25954,7 +25954,7 @@
           "owner",
           "scope",
           "subject_ref",
-          "policy_type",
+          "policy_kind",
           "payload",
           "active",
           "updated_at"
@@ -26091,7 +26091,7 @@
               "null"
             ]
           },
-          "policy_type": {
+          "policy_kind": {
             "type": "string"
           },
           "resource": {},
@@ -26105,7 +26105,7 @@
         "required": [
           "scope",
           "subject_ref",
-          "policy_type",
+          "policy_kind",
           "effect"
         ],
         "type": "object"

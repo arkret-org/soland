@@ -746,7 +746,7 @@ impl ProjectionState {
     /// `ak.component.realm.policy_components.v1` cell, falling back to the
     /// create-log genesis value. `None` means no scheme has been negotiated
     /// yet — callers treat that as the application-message default
-    /// (`mls-rfc9420`). Drives the one-way `content_scheme` ratchet in
+    /// (`mls_rfc9420`). Drives the one-way `content_scheme` ratchet in
     /// `apply_realm_policy_components`.
     pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
         self.realm_policy_components_cell_value(realm_id)

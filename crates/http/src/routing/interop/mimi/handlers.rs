@@ -167,7 +167,7 @@ pub(super) async fn mimi_notify(
         event_id: event_id.clone(),
         realm_id: realm_id.clone(),
         event_kind: "ak.open.mimi.command.notify".to_owned(),
-        operation_type: "mimi_facade_notify".to_owned(),
+        operation_kind: "mimi_facade_notify".to_owned(),
         operation_id: None,
         sender: None,
         payload: json!({
@@ -894,7 +894,7 @@ pub(super) async fn mimi_report_abuse(
         event_id: report_event_id.clone(),
         realm_id: realm_id.clone(),
         event_kind: "ak.self.moderation.report".to_owned(),
-        operation_type: "mimi_facade_report".to_owned(),
+        operation_kind: "mimi_facade_report".to_owned(),
         operation_id: None,
         sender: Some(reporter.to_owned()),
         payload: Value::Object(projection_payload),

@@ -322,14 +322,14 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "morph create",
             kind: arkret_wire::events::EventKind::MORPH_CREATE,
             // morph_create_payload wraps the full Morph object (morph.schema.json):
-            // required {id, schema, realm_id, schema_refs, morph_type, stage, created_by,
+            // required {id, schema, realm_id, schema_refs, morph_kind, stage, created_by,
             // created_at}.
             payload: json!({"object": {
                 "id": "ak:morph:01904100-0000-7000-8000-7191ddd787e5",
                 "schema": "ak.schema.morph.v1",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "schema_refs": ["ak.schema.morph.v1"],
-                "morph_type": "task",
+                "morph_kind": "task",
                 "stage": "draft",
                 "created_by": "did:web:alice.example",
                 "created_at": "2026-05-20T00:00:00.000Z",

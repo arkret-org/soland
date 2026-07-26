@@ -318,7 +318,7 @@ impl AccountLifecycleStore for MemoryAccountLifecycleStore {
     }
 }
 // In-memory contact store
-/// In-memory `(actor, data_type) -> AccountDataRecord` table. Mirrors the
+/// In-memory `(actor, account_data_key) -> AccountDataRecord` table. Mirrors the
 /// `account_datas` Pg table on the same composite key.
 pub(crate) struct MemoryAccountDataStore {
     data: Arc<Mutex<BTreeMap<(String, String), AccountDataRecord>>>,
@@ -335,24 +335,26 @@ impl AccountDataStore for MemoryAccountDataStore {
     async fn get(
         &self,
         actor: &str,
-        data_type: &str,
+        account_data_key: &str,
     ) -> PersistenceResult<Option<AccountDataRecord>> {
         let data = self.data.lock();
-        Ok(data.get(&(actor.to_owned(), data_type.to_owned())).cloned())
+        Ok(data
+            .get(&(actor.to_owned(), account_data_key.to_owned()))
+            .cloned())
     }
 
     async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         data.insert(
-            (record.actor.clone(), record.data_type.clone()),
+            (record.actor.clone(), record.account_data_key.clone()),
             record.clone(),
         );
         Ok(())
     }
 
-    async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
+    async fn delete(&self, actor: &str, account_data_key: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock();
-        data.remove(&(actor.to_owned(), data_type.to_owned()));
+        data.remove(&(actor.to_owned(), account_data_key.to_owned()));
         Ok(())
     }
 

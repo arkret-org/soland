@@ -118,7 +118,7 @@ fn normalize_selector_object(selector: &Value, realm_id: &str) -> Option<String>
         "blob" => selector_string_field(selector, "blob_ref")
             .map(ToOwned::to_owned)
             .or_else(|| Some("blob".to_owned())),
-        "object" => selector_string_field(selector, "object_type")
+        "object" => selector_string_field(selector, "object_kind")
             .map(ToOwned::to_owned)
             .or_else(|| Some("object".to_owned())),
         _ => None,
@@ -149,14 +149,14 @@ fn engine_constraints_from_body(body: &Value) -> Vec<crate::capability::Constrai
         .filter_map(|constraint| {
             serde_json::from_value(constraint.clone()).ok().or_else(|| {
                 let mut canonical = constraint.as_object()?.clone();
-                if canonical.get("constraint_type").and_then(Value::as_str)
+                if canonical.get("constraint_kind").and_then(Value::as_str)
                     != Some("scope_limitation")
                     || !canonical.contains_key("allowed_circle_ids")
                 {
                     return None;
                 }
                 canonical.insert(
-                    "constraint_type".to_owned(),
+                    "constraint_kind".to_owned(),
                     Value::String("allowed_circle_ids".to_owned()),
                 );
                 serde_json::from_value(Value::Object(canonical)).ok()
@@ -331,14 +331,14 @@ fn validate_agent_subject_grant_constraints(
 
 /// A registry `required_constraints` token is satisfied when some declared
 /// constraint object either carries a field of that name or names it as its
-/// `constraint_type`.
+/// `constraint_kind`.
 fn grant_has_constraint(body: &Value, token: &str) -> bool {
     let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {
         return false;
     };
     constraints.iter().any(|constraint| {
         constraint.get(token).is_some()
-            || constraint.get("constraint_type").and_then(Value::as_str) == Some(token)
+            || constraint.get("constraint_kind").and_then(Value::as_str) == Some(token)
     })
 }
 
@@ -454,11 +454,11 @@ fn body_effective_expires_at(body: &Value) -> Option<chrono::DateTime<chrono::Ut
     let constraint_expiry = value_array_field(body, "constraints")
         .into_iter()
         .filter_map(|constraint| {
-            let constraint_type = constraint
-                .get("constraint_type")
+            let constraint_kind = constraint
+                .get("constraint_kind")
                 .and_then(Value::as_str)
                 .or_else(|| constraint.get("type").and_then(Value::as_str));
-            if constraint_type != Some("temporal") {
+            if constraint_kind != Some("temporal") {
                 return None;
             }
             constraint
@@ -480,11 +480,11 @@ fn body_max_delegation_depth(body: &Value) -> Option<u32> {
     value_array_field(body, "constraints")
         .into_iter()
         .filter_map(|constraint| {
-            let constraint_type = constraint
-                .get("constraint_type")
+            let constraint_kind = constraint
+                .get("constraint_kind")
                 .and_then(Value::as_str)
                 .or_else(|| constraint.get("type").and_then(Value::as_str));
-            if constraint_type != Some("delegation_control") {
+            if constraint_kind != Some("delegation_control") {
                 return None;
             }
             constraint
@@ -1352,7 +1352,7 @@ impl ProjectionState {
 mod agent_key_tests {
     use arkret_event_draft::Operation;
     use arkret_identifiers::{OperationId, RealmId};
-    use arkret_wire::OperationType;
+    use arkret_wire::OperationKind;
     use serde_json::json;
 
     use crate::reducer::{ProjectionState, SolandRealmState};
@@ -1363,16 +1363,16 @@ mod agent_key_tests {
     const GRANT_2: &str = "ak:grant:01970000-0000-7000-8000-0000000000a2";
     const GRANT_3: &str = "ak:grant:01970000-0000-7000-8000-0000000000a3";
 
-    fn op(kind_object_type: &str, payload: serde_json::Value) -> Operation {
+    fn op(object_kind: &str, payload: serde_json::Value) -> Operation {
         Operation {
             schema: "ak.schema.operation.v1".to_owned(),
             operation_id: OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000ff")
                 .unwrap(),
-            record_type: "operation".to_owned(),
-            operation_type: OperationType::Create,
+            record_kind: "operation".to_owned(),
+            operation_kind: OperationKind::Create,
             realm_id: RealmId::new(REALM.to_owned()).unwrap(),
             object_id: None,
-            object_type: kind_object_type.to_owned(),
+            object_kind: object_kind.to_owned(),
             payload,
             refs: Vec::new(),
             idempotency_key: None,
@@ -1876,7 +1876,7 @@ mod delegation_cycle_tests {
                 G_A,
                 "did:web:alice.example",
                 "did:web:alice.example",
-                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 1 }]),
+                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 1 }]),
             ),
             chrono::Utc::now(),
         );
@@ -1891,7 +1891,7 @@ mod delegation_cycle_tests {
             &delegate_op_with_constraints(
                 G_C,
                 G_A,
-                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 0 }]),
+                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 0 }]),
             ),
             chrono::Utc::now(),
         );
@@ -1910,7 +1910,7 @@ mod delegation_cycle_tests {
                 G_A,
                 "did:web:alice.example",
                 "did:web:alice.example",
-                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 0 }]),
+                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 0 }]),
             ),
             chrono::Utc::now(),
         );
@@ -1918,7 +1918,7 @@ mod delegation_cycle_tests {
             &delegate_op_with_constraints(
                 G_B,
                 G_A,
-                json!([{ "constraint_type": "delegation_control", "max_delegation_depth": 0 }]),
+                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 0 }]),
             ),
             chrono::Utc::now(),
         );

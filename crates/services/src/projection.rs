@@ -825,12 +825,12 @@ impl ProjectionService {
         let mut founding_grant_id = None;
         for (index, operation) in operations.iter().enumerate() {
             let effect = if index == 1
-                && operation.object_type.as_str()
+                && operation.object_kind.as_str()
                     == arkret_wire::events::EventKind::CAPABILITY_GRANT
             {
                 staged.apply_validated_realm_founding_grant(operation, operation.created_at)
-            } else if operation.object_type.as_str().starts_with("ak.realm.")
-                && operation.object_type.as_str() != arkret_wire::events::EventKind::REALM_CREATE
+            } else if operation.object_kind.as_str().starts_with("ak.realm.")
+                && operation.object_kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE
             {
                 staged.apply_validated_realm_bootstrap_facet(operation)
             } else {
@@ -1331,17 +1331,17 @@ impl ProjectionService {
     pub fn key_backup_active_series(
         &self,
         actor_id: &str,
-        backup_class: &str,
+        backup_kind: &str,
     ) -> Option<
         arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
     > {
         let state = self.state.lock();
-        let row = state.key_backup_active_series(actor_id, backup_class)?;
+        let row = state.key_backup_active_series(actor_id, backup_kind)?;
         Some(
             arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries {
             schema: "ak.schema.key_backup_active_series.v1".to_owned(),
             actor_id: arkret_identifiers::Did::new(row.actor_id.clone()).ok()?,
-            backup_class: arkret_models_crypto::BackupClass::try_from(row.backup_class.as_str())
+            backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
                 .ok()?,
             active_series_id: arkret_identifiers::BackupSeriesId::new(row.active_series_id.clone())
                 .ok()?,
@@ -1782,7 +1782,7 @@ fn morph_write_through_record(
         morph_id: row.morph_id.clone(),
         realm_id: row.realm_id.clone(),
         scope_circle_id: row.scope_circle_id.clone(),
-        morph_type: row.morph_type.clone(),
+        morph_kind: row.morph_kind.clone(),
         title: row.title.clone(),
         fields: Value::Object(
             row.fields

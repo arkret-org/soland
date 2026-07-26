@@ -137,8 +137,8 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())?;
         Some(serde_json::json!({
-            "allow_binding_sources": ["explicit"],
-            "allow_did_document_default": false,
+            "allowed_binding_sources": ["explicit"],
+            "did_document_default_allowed": false,
             "allowed_recipient_services": [recipient_service_id],
             "required_endorsers": [],
         }))

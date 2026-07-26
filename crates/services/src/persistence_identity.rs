@@ -274,12 +274,12 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
     async fn entry(
         &self,
         actor_id: &str,
-        data_type: &str,
+        account_data_key: &str,
     ) -> crate::ServiceResult<Option<crate::identity::AccountDataState>> {
         Ok(self
             .0
             .account_data()
-            .get(actor_id, data_type)
+            .get(actor_id, account_data_key)
             .await?
             .map(application_account_data))
     }
@@ -306,7 +306,7 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
             .account_data()
             .put(&soland_storage::AccountDataRecord {
                 actor: entry.actor_id,
-                data_type: entry.data_type,
+                account_data_key: entry.account_data_key,
                 payload: entry.payload,
                 updated_at: entry.updated_at,
             })
@@ -314,8 +314,15 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
         Ok(())
     }
 
-    async fn delete_entry(&self, actor_id: &str, data_type: &str) -> crate::ServiceResult<()> {
-        self.0.account_data().delete(actor_id, data_type).await?;
+    async fn delete_entry(
+        &self,
+        actor_id: &str,
+        account_data_key: &str,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .account_data()
+            .delete(actor_id, account_data_key)
+            .await?;
         Ok(())
     }
 }
@@ -325,7 +332,7 @@ fn application_account_data(
 ) -> crate::identity::AccountDataState {
     crate::identity::AccountDataState {
         actor_id: record.actor,
-        data_type: record.data_type,
+        account_data_key: record.account_data_key,
         payload: record.payload,
         updated_at: record.updated_at,
     }

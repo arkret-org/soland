@@ -249,11 +249,11 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
 }
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
-    let object_type = operation.object_type.as_str();
-    if artifacts::active_local_operation_event_kinds().contains(object_type)
-        || object_type == CONFLICT_REPAIR
+    let object_kind = operation.object_kind.as_str();
+    if artifacts::active_local_operation_event_kinds().contains(object_kind)
+        || object_kind == CONFLICT_REPAIR
     {
-        Some(object_type)
+        Some(object_kind)
     } else {
         None
     }
@@ -261,7 +261,7 @@ pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
 
 pub fn canonical_kind_string(operation: &Operation) -> String {
     canonical_kind_for_operation(operation)
-        .unwrap_or(operation.object_type.as_str())
+        .unwrap_or(operation.object_kind.as_str())
         .to_owned()
 }
 

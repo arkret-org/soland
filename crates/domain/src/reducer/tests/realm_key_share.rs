@@ -10,7 +10,7 @@ const SENDER_DEVICE: &str = "ak:device:01904100-0000-7000-8000-0000000000a1";
 
 fn realm_key_share_payload(effective_scope: Value) -> Value {
     json!({
-        "share_class": "member_device",
+        "share_kind": "member_device",
         "recipient_principal_id": RECIPIENT,
         "recipient_device_id": RECIPIENT_DEVICE,
         "sender_device_id": SENDER_DEVICE,

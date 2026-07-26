@@ -11,7 +11,7 @@ fn active_series_payload() -> Value {
     json!({
         "schema": "ak.schema.key_backup_active_series.v1",
         "actor_id": ACTOR,
-        "backup_class": "secret_storage",
+        "backup_kind": "secret_storage",
         "active_series_id": ACTIVE_SERIES,
         "series_pointer_version": 1,
         "previous_series_ids": [PREVIOUS_SERIES],
@@ -28,7 +28,7 @@ fn active_series_payload() -> Value {
             "signed_fields": [
                 "schema",
                 "actor_id",
-                "backup_class",
+                "backup_kind",
                 "active_series_id",
                 "series_pointer_version",
                 "previous_series_ids",
@@ -62,10 +62,10 @@ fn key_backup_active_series_projects_pointer_and_cell() {
         effect,
         ProjectionEffect::KeyBackupActiveSeriesProjected {
             ref actor_id,
-            ref backup_class,
+            ref backup_kind,
             ref active_series_id,
         } if actor_id == ACTOR
-            && backup_class == "secret_storage"
+            && backup_kind == "secret_storage"
             && active_series_id == ACTIVE_SERIES
     ));
     let projected = state
@@ -102,7 +102,7 @@ fn key_backup_active_series_requires_complete_signed_fields() {
     payload["auth_data"]["signed_fields"] = json!([
         "schema",
         "actor_id",
-        "backup_class",
+        "backup_kind",
         "active_series_id",
         "series_pointer_version",
         "previous_series_ids",

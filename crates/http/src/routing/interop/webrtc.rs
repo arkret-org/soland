@@ -48,7 +48,7 @@ use crate::wire::{
 /// Spec-canonical RTC media surface. Mounted under the `self` trust segment by
 /// `interop::router()` so the only spec-registered media paths resolve at
 /// `/_arkret/self/rtc/ice-config` and `/_arkret/self/rtc/token` (see
-/// `contract-catalog.json` / the OpenAPI binding). Ephemeral call signaling is
+/// `contract-registry.json` / the OpenAPI binding). Ephemeral call signaling is
 /// the spec-registered `/_arkret/self/ephemeral` `ak.call.signal` relay (see
 /// `routing::events::sync::ephemeral`); the durable call model is the composite
 /// call-cell lattice. The legacy soland-internal `/_soland/self/webrtc/*`
@@ -68,7 +68,7 @@ struct IceConfigRequestContext {
     pub call_id: String,
     pub actor_id: Did,
     pub device_id: DeviceId,
-    pub force_turn: bool,
+    pub turn_required: bool,
 }
 
 #[endpoint(
@@ -96,7 +96,7 @@ async fn arkret_ice_config(
             call_id: body.call_id,
             actor_id: body.actor_id,
             device_id: body.device_id,
-            force_turn: matches!(body.mode, MediaIceMode::Turn),
+            turn_required: matches!(body.mode, MediaIceMode::Turn),
         },
     )
     .await
@@ -159,7 +159,7 @@ async fn issue_ice_config(
     // while crossing into the next bucket rotates it.
     let bucket_seconds: u32 = ICE_PSEUDONYM_BUCKET_SECONDS;
     let issued_at_bucket = floor_to_bucket(issued_at, bucket_seconds);
-    let force_turn = body.force_turn;
+    let turn_required = body.turn_required;
     // `webrtc-signaling.md` §4.1 — REST-style (draft-uberti) TURN credential.
     // username = `<expiry-unix>:<pairwise-pseudonym>`; the pseudonym keeps the
     // existing private-key-derived `ak_pseudonym_call_<16hex>` form (does not
@@ -190,7 +190,7 @@ async fn issue_ice_config(
         credential_type: None,
     }];
     ice_servers.push(turn_server.clone());
-    if force_turn {
+    if turn_required {
         ice_servers = vec![turn_server.clone()];
     }
     let mut response = MediaIceConfigOutcome {
@@ -205,7 +205,7 @@ async fn issue_ice_config(
         issued_at_bucket,
         bucket_seconds,
         expires_at: Some(expires_at),
-        force_turn,
+        turn_required,
         constraints: None,
         next_retry_at: None,
         signature: MediaIceConfigSignature {
@@ -378,7 +378,7 @@ enum MediaProviderKind {
 impl MediaProviderKind {
     fn parse(value: &str) -> Result<Self, AppError> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "arkret-native" => Ok(Self::ArkretNative),
+            "arkret_native" => Ok(Self::ArkretNative),
             "livekit" => Ok(Self::LiveKit),
             "mediasoup" => Ok(Self::Mediasoup),
             _ => Err(AppError::new(
@@ -391,7 +391,7 @@ impl MediaProviderKind {
 
     fn as_wire(self) -> &'static str {
         match self {
-            Self::ArkretNative => "arkret-native",
+            Self::ArkretNative => "arkret_native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -399,7 +399,7 @@ impl MediaProviderKind {
 
     fn token_prefix(self) -> &'static str {
         match self {
-            Self::ArkretNative => "arkret-native",
+            Self::ArkretNative => "arkret_native",
             Self::LiveKit => "livekit",
             Self::Mediasoup => "mediasoup",
         }
@@ -459,7 +459,7 @@ struct IssuedMediaToken {
 }
 
 /// Per-provider signing material handed to a [`MediaTokenIssuer`]. The
-/// ed25519 notary key signs the `arkret-native` / `mediasoup` envelopes;
+/// ed25519 notary key signs the `arkret_native` / `mediasoup` envelopes;
 /// LiveKit needs the deployment's API Key/Secret to emit a real LiveKit
 /// JWT (`bindings/livekit.md` §2).
 struct MediaTokenSigningContext<'a> {
@@ -767,7 +767,7 @@ async fn handle_rtc_token(
 
     json_ok(CallMediaTokenExchangeOutcome {
         focus_id: body.focus_id,
-        backend_type: focus.provider.as_wire().to_owned(),
+        backend_kind: focus.provider.as_wire().to_owned(),
         connect_url,
         backend_token: issued_token.backend_token,
         participant_identity,
@@ -1409,7 +1409,7 @@ mod tests {
     fn token_media_permissions_gate_screen_after_mute_adjustment() {
         let focus = MediaProviderConfig {
             provider: MediaProviderKind::ArkretNative,
-            focus_id: "ak:focus:arkret-native:test".to_owned(),
+            focus_id: "ak:focus:arkret_native:test".to_owned(),
             issuer_kid: "did:web:media.example#key-1".to_owned(),
             audience: "media".to_owned(),
             ttl_seconds: 300,

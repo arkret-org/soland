@@ -67,7 +67,7 @@ pub struct ProjectionState {
     /// `ak.invite.claim` converts them into DID-targeted claimed invites.
     pub invites: BTreeMap<String, InviteProjection>,
     /// Signed key-backup active-series records keyed by `(actor_id,
-    /// backup_class)`. Recovery MUST use this pointer instead of inferring the
+    /// backup_kind)`. Recovery MUST use this pointer instead of inferring the
     /// canonical series from list order or latest timestamp.
     pub key_backup_active_series: BTreeMap<(String, String), SolandKeyBackupActiveSeries>,
     /// Realm lifecycle state keyed by realm_id.
@@ -907,7 +907,7 @@ impl ProjectionState {
             Some(k) => k,
             None => {
                 tracing::error!(
-                    object_type = %operation.object_type,
+                    object_kind = %operation.object_kind,
                     operation_id = %operation.operation_id,
                     "lattice registry dispatch: unknown canonical kind for operation; \
                      dropping with bottom (reject)"

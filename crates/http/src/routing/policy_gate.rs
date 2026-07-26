@@ -70,7 +70,7 @@ pub(crate) async fn enforce_operation_policy_server(
 
     let policy_client = policy_client_for_state(state)?;
     let action = kinds::canonical_kind_for_operation(operation)
-        .unwrap_or(operation.object_type.as_str())
+        .unwrap_or(operation.object_kind.as_str())
         .to_owned();
     let resource = operation
         .object_id
@@ -205,7 +205,7 @@ async fn policy_request_for_operation(
         actor_id,
         action: action.to_owned(),
         source_service_id,
-        source_service_type: "soland".to_owned(),
+        source_service_kind: "soland".to_owned(),
         source_ip_digest: digest_value("policy-gate:no-source-ip")
             .map_err(PolicyGateRejection::forbidden_request)?,
         signed_transport: true,
@@ -213,7 +213,7 @@ async fn policy_request_for_operation(
         auth_context: json!({
             "surface": {"surface": "local_submit"},
             "operation_id": operation.operation_id.as_str(),
-            "object_type": operation.object_type.as_str(),
+            "object_kind": operation.object_kind.as_str(),
         }),
         expected_frontiers: zero_frontiers(),
         bypass_cache: false,

@@ -17,7 +17,7 @@ struct PolicyDocumentRow {
     #[diesel(sql_type = Text)]
     subject_ref: String,
     #[diesel(sql_type = Text)]
-    policy_type: String,
+    policy_kind: String,
     #[diesel(sql_type = Jsonb)]
     document: Value,
     #[diesel(sql_type = Bool)]
@@ -32,7 +32,7 @@ impl From<PolicyDocumentRow> for PolicyDocumentRecord {
             owner: row.owner,
             scope: row.scope,
             subject_ref: row.subject_ref,
-            policy_type: row.policy_type,
+            policy_kind: row.policy_kind,
             payload: row.document,
             active: row.active,
             updated_at: row.updated_at,
@@ -46,7 +46,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_kind, document, active, updated_at \
              FROM policy_documents WHERE id = $1",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(policy_id))
@@ -73,13 +73,13 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .map(ToOwned::to_owned);
         sql_query(
             "INSERT INTO policy_documents \
-             (id, owner_id, scope, subject_ref, policy_type, document, version, signed_by_id, active, updated_at) \
+             (id, owner_id, scope, subject_ref, policy_kind, document, version, signed_by_id, active, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) \
              ON CONFLICT (id) DO UPDATE SET \
                 owner_id = EXCLUDED.owner_id, \
                 scope = EXCLUDED.scope, \
                 subject_ref = EXCLUDED.subject_ref, \
-                policy_type = EXCLUDED.policy_type, \
+                policy_kind = EXCLUDED.policy_kind, \
                 document = EXCLUDED.document, \
                 version = EXCLUDED.version, \
                 signed_by_id = EXCLUDED.signed_by_id, \
@@ -90,7 +90,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
         .bind::<Text, _>(&record.owner)
         .bind::<Text, _>(&record.scope)
         .bind::<Text, _>(&record.subject_ref)
-        .bind::<Text, _>(&record.policy_type)
+        .bind::<Text, _>(&record.policy_kind)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Integer, _>(version)
         .bind::<Nullable<Text>, _>(&verification_method)
@@ -118,7 +118,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_kind, document, active, updated_at \
              FROM policy_documents WHERE owner_id = $1 ORDER BY updated_at ASC, id ASC",
         )
         .bind::<Text, _>(owner)
@@ -132,7 +132,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_kind, document, active, updated_at \
              FROM policy_documents ORDER BY updated_at ASC, id ASC",
         )
         .load::<PolicyDocumentRow>(&mut *conn).await
@@ -149,7 +149,7 @@ impl PolicyDocumentStore for PgPolicyDocumentStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows: Vec<PolicyDocumentRow> = sql_query(
-            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_type, document, active, updated_at \
+            "SELECT id AS policy_id, owner_id AS owner, scope, subject_ref, policy_kind, document, active, updated_at \
              FROM policy_documents WHERE active = TRUE ORDER BY updated_at ASC, id ASC",
         )
         .load::<PolicyDocumentRow>(&mut *conn).await

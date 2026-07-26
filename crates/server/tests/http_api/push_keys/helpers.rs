@@ -13,12 +13,12 @@ pub(crate) fn presence_event<'a>(sync: &'a Value, actor: &str) -> &'a Value {
         .expect("presence event present in account subscribe frame")
 }
 
-pub(crate) fn account_data_entry<'a>(sync: &'a Value, data_type: &str) -> Option<&'a Value> {
+pub(crate) fn account_data_entry<'a>(sync: &'a Value, account_data_key: &str) -> Option<&'a Value> {
     sync["account_data"]["events"]
         .as_array()
         .unwrap()
         .iter()
-        .find(|entry| entry["data_type"] == data_type)
+        .find(|entry| entry["account_data_key"] == account_data_key)
 }
 
 pub(crate) fn device_message_target(kind: &str, content: Value) -> Value {

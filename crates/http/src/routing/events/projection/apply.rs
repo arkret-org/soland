@@ -536,7 +536,7 @@ async fn project_accepted_operations_inner(
             tracing::warn!(
                 error = %error,
                 operation_id = %operation.operation_id,
-                object_type = %operation.object_type,
+                object_kind = %operation.object_kind,
                 "failed to persist accepted operation projection"
             );
         }
@@ -744,7 +744,7 @@ async fn project_realm_key_share_to_device(
         );
         return;
     }
-    // share_class=realm_recovery_key (recipient_device_id absent): the recipient is
+    // share_kind=realm_recovery_key (recipient_device_id absent): the recipient is
     // an offline recovery org delivered via the durable Event, not a to-device
     // queue (encryption-and-audit.md §2.10.8). No device message is enqueued.
     let RealmKeyShareTarget::MemberDevice {
@@ -1018,7 +1018,7 @@ mod tests {
         let recipient = "did:web:bob.example";
         let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000101";
         let payload = json!({
-            "share_class": "member_device",
+            "share_kind": "member_device",
             "recipient_principal_id": recipient,
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,
@@ -1091,7 +1091,7 @@ mod tests {
         let recipient = "did:web:bob.example";
         let recipient_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
         let payload = json!({
-            "share_class": "member_device",
+            "share_kind": "member_device",
             "recipient_principal_id": recipient,
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,

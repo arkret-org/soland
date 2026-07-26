@@ -30,7 +30,7 @@ use crate::routing::identity::device_messages::{
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
-const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
+const ACCOUNT_DATA_KEY_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
 pub(super) fn router() -> Router {
@@ -1348,7 +1348,7 @@ pub(super) async fn emit_consent_revoke_invalidation(
             event_id: ids::generate_event_id(),
             realm_id: soland_services::identity::principal_control_realm_for_did(holder),
             event_kind: "ak.vector.consent.cache_invalidation.v1".to_owned(),
-            operation_type: "consent_revoke_cache_invalidation".to_owned(),
+            operation_kind: "consent_revoke_cache_invalidation".to_owned(),
             operation_id: None,
             sender: Some(holder.to_owned()),
             payload: payload.clone(),
@@ -1421,7 +1421,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     }
     let Some(existing) = state
         .account_data()
-        .entry(holder, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
+        .entry(holder, ACCOUNT_DATA_KEY_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -1465,7 +1465,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     );
     let record = AccountDataState {
         actor_id: holder.to_owned(),
-        data_type: ACCOUNT_DATA_TYPE_INVITE_QUARANTINE.to_owned(),
+        account_data_key: ACCOUNT_DATA_KEY_INVITE_QUARANTINE.to_owned(),
         payload: Value::Object(object),
         updated_at: revoked_at,
     };
@@ -1481,7 +1481,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         ACCOUNT_DATA_UPDATE_TYPE,
         json!({
             "operation": "put",
-            "data_type": ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+            "account_data_key": ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
             "content": record.payload.clone(),
             "updated_at": record.updated_at,
         }),

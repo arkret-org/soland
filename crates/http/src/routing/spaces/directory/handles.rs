@@ -641,7 +641,7 @@ pub(super) async fn signed_handle_claim(
     let expires_at = created_at + chrono::Duration::hours(24);
     let member_delivery_binding = DeliveryBindingHint {
         recipient_service_id: signer_did.clone(),
-        recipient_service_type: RecipientServiceType::PrincipalServer,
+        recipient_service_kind: RecipientServiceKind::PrincipalServer,
         binding_source: HandleHintBindingSource::Explicit,
         delivery_modes: BTreeSet::from([
             DeliveryMode::Events,

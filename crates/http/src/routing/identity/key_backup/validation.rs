@@ -26,11 +26,11 @@ pub(super) fn is_sha_digest(value: &str) -> bool {
             .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
-pub(super) fn backup_class_wire(backup_class: BackupClass) -> &'static str {
-    match backup_class {
-        BackupClass::DidRecovery => "did_recovery",
-        BackupClass::SecretStorage => "secret_storage",
-        BackupClass::MlsHistory => "mls_history",
+pub(super) fn backup_class_wire(backup_kind: BackupKind) -> &'static str {
+    match backup_kind {
+        BackupKind::DidRecovery => "did_recovery",
+        BackupKind::SecretStorage => "secret_storage",
+        BackupKind::MlsHistory => "mls_history",
     }
 }
 
@@ -57,7 +57,7 @@ pub(super) fn validate_key_backup_body_typed(
     }
     validate_key_backup_encryption_typed(backup)?;
     validate_key_backup_domain_separation_typed(backup)?;
-    if backup.backup_class == BackupClass::MlsHistory {
+    if backup.backup_kind == BackupKind::MlsHistory {
         validate_mls_history_opaque_only_typed(backup)?;
     }
     validate_recovery_policy_ref_shape_typed(backup)?;
@@ -66,10 +66,10 @@ pub(super) fn validate_key_backup_body_typed(
         return Err(schema_error("key backup contents must not be empty"));
     }
     for item in &backup.contents {
-        if !KEY_BACKUP_CONTENT_TYPES.contains(&item.item_type.as_str()) {
+        if !KEY_BACKUP_CONTENT_TYPES.contains(&item.item_kind.as_str()) {
             return Err(schema_error(format!(
-                "unsupported key backup contents.item_type `{}`",
-                item.item_type
+                "unsupported key backup contents.item_kind `{}`",
+                item.item_kind
             )));
         }
     }
@@ -79,12 +79,12 @@ pub(super) fn validate_key_backup_body_typed(
 pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result<(), AppError> {
     match backup.encryption.recipient_method {
         KeyBackupRecipientMethod::PassphraseKdf => {
-            if backup.backup_class == BackupClass::DidRecovery {
+            if backup.backup_kind == BackupKind::DidRecovery {
                 return Err(schema_error(
                     "did_recovery key backups must not use passphrase_kdf alone; use recovery_public_key, or satisfy threshold/hardware factors in the recovery policy proof layer",
                 ));
             }
-            if backup.backup_class == BackupClass::MlsHistory {
+            if backup.backup_kind == BackupKind::MlsHistory {
                 return Err(schema_error(
                     "mls_history key backups must use secret_storage_key or recovery_public_key",
                 ));
@@ -115,8 +115,8 @@ pub(super) fn validate_key_backup_encryption_typed(backup: &KeyBackup) -> Result
         }
         KeyBackupRecipientMethod::SecretStorageKey => {
             if !matches!(
-                backup.backup_class,
-                BackupClass::MlsHistory | BackupClass::SecretStorage
+                backup.backup_kind,
+                BackupKind::MlsHistory | BackupKind::SecretStorage
             ) {
                 return Err(schema_error(
                     "secret_storage_key is only valid for mls_history or secret_storage key backups",
@@ -187,12 +187,12 @@ pub(super) fn validate_key_backup_domain_separation_typed(
     }
     let expected_hkdf_info = format!(
         "arkret-key-backup/{}/{}/v1",
-        backup_class_wire(backup.backup_class),
+        backup_class_wire(backup.backup_kind),
         domain.subdomain
     );
     if domain.hkdf_info != expected_hkdf_info {
         return Err(schema_error(
-            "domain_separation.hkdf_info does not match backup_class/subdomain",
+            "domain_separation.hkdf_info does not match backup_kind/subdomain",
         ));
     }
     let aad = &domain.aead_aad;
@@ -204,9 +204,9 @@ pub(super) fn validate_key_backup_domain_separation_typed(
             "domain_separation.aead_aad.actor_id must match actor_id",
         ));
     }
-    if aad.backup_class != backup.backup_class {
+    if aad.backup_kind != backup.backup_kind {
         return Err(schema_error(
-            "domain_separation.aead_aad.backup_class must match backup_class",
+            "domain_separation.aead_aad.backup_kind must match backup_kind",
         ));
     }
     if aad.backup_version != backup.backup_version {
@@ -229,20 +229,20 @@ pub(super) fn validate_key_backup_domain_separation_typed(
             "domain_separation.aead_aad.device_id must match device_id or recipient_key_ref",
         ));
     }
-    let expected_item_types: Vec<&str> = backup
+    let expected_item_kinds: Vec<&str> = backup
         .contents
         .iter()
-        .map(|item| item.item_type.as_str())
+        .map(|item| item.item_kind.as_str())
         .collect();
     if aad
-        .item_types
+        .item_kinds
         .iter()
         .map(String::as_str)
         .collect::<Vec<_>>()
-        != expected_item_types
+        != expected_item_kinds
     {
         return Err(schema_error(
-            "domain_separation.aead_aad.item_types must match contents[].item_type",
+            "domain_separation.aead_aad.item_kinds must match contents[].item_kind",
         ));
     }
     Ok(())
@@ -398,7 +398,7 @@ pub(super) fn typed_recovery_policy_ref(backup: &KeyBackup) -> Option<(&str, u64
 pub(super) fn validate_recovery_policy_ref_shape_typed(backup: &KeyBackup) -> Result<(), AppError> {
     let present = backup.recovery_policy_ref.is_some();
 
-    if backup.backup_class == BackupClass::DidRecovery && !present {
+    if backup.backup_kind == BackupKind::DidRecovery && !present {
         return Err(schema_error(
             "did_recovery key backups MUST carry recovery_policy_ref{policy_id, policy_version}",
         ));

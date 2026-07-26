@@ -111,7 +111,7 @@ mod tests {
             event_id: "ak:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
             realm_id: REALM_ID.to_owned(),
             event_kind: arkret_wire::events::EventKind::STRAND_UPDATE.to_owned(),
-            operation_type: "state".to_owned(),
+            operation_kind: "state".to_owned(),
             operation_id: Some(OPERATION_ID.to_owned()),
             sender: Some("did:web:bob.example".to_owned()),
             payload: json!({
@@ -138,7 +138,7 @@ mod tests {
             json!({
                 "services": [{
                     "service_id": service,
-                    "service_type": "principal_server",
+                    "service_kind": "principal_server",
                     "data_classes": ["message_content", "notification_summary"],
                     "purposes": ["projection"],
                     "visibility": "private_plaintext"
@@ -167,7 +167,7 @@ mod tests {
                     "title": "Plaintext Realm",
                     "plaintext_visible_services": [{
                         "service_id": service,
-                        "service_type": "principal_server",
+                        "service_kind": "principal_server",
                         "data_classes": ["message_content"],
                         "purposes": ["message_index"],
                         "visibility": "private_plaintext"

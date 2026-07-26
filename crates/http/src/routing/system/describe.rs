@@ -299,15 +299,15 @@ async fn database_ready(state: &AppState) -> bool {
 #[endpoint(operation_id = "ak.server.query.describe")]
 #[tracing::instrument(skip_all, fields(op = "ak.server.query.describe"))]
 async fn server_describe(
-    service_type: QueryParam<String, false>,
+    service_kind: QueryParam<String, false>,
     depot: &mut Depot,
 ) -> JsonResult<ServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    if let Some(service_type) = service_type.into_inner()
-        && service_type != arkret_wire::ServiceType::PrincipalServer.as_str()
+    if let Some(service_kind) = service_kind.into_inner()
+        && service_kind != arkret_wire::ServiceKind::PrincipalServer.as_str()
     {
         return Err(soland_http::error::AppError::invalid_param(format!(
-            "service_type {service_type:?} is not available on this binding"
+            "service_kind {service_kind:?} is not available on this binding"
         )));
     }
     json_ok(ServerDescribeOutcome(build_server_description(state)))
@@ -827,7 +827,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
 #[cfg(test)]
 mod tests {
     use arkret_models_discovery::service_description::ServiceDescribe;
-    use arkret_wire::{Did, ServiceType, TypedTrustDomainId};
+    use arkret_wire::{Did, ServiceKind, TypedTrustDomainId};
 
     use super::apply_claim_level_partition;
 
@@ -837,7 +837,7 @@ mod tests {
         let mut description = ServiceDescribe::development(
             Did::new("did:web:soland.example".to_owned()).unwrap(),
             TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
-            ServiceType::PrincipalServer,
+            ServiceKind::PrincipalServer,
         );
         apply_claim_level_partition(&mut description, &[], true);
         assert!(

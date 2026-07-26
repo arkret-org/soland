@@ -137,7 +137,7 @@ pub(crate) struct RealmEffectiveModerationPolicyOutcome {
     realm_policy: Option<RealmModerationPolicyOutcome>,
     #[serde(default)]
     effective_rules: Vec<Value>,
-    override_requires_organization_approval: bool,
+    override_organization_approval_required: bool,
     policy_merge_strategy: String,
     fanout: RealmModerationPolicyFanout,
 }
@@ -579,7 +579,7 @@ pub(crate) fn effective_policy_for_realm(
         organization_policy_layers: org_layers,
         realm_policy,
         effective_rules: effective_rules(state, realm_id),
-        override_requires_organization_approval: has_organization_inheritance,
+        override_organization_approval_required: has_organization_inheritance,
         // content-moderation.md §7 — when a Realm names more than one owning
         // organization, the inherited layers combine most-restrictively: a join
         // / write is denied if ANY owning organization denies it (union of deny

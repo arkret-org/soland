@@ -43,7 +43,7 @@ struct PeerEventsDescribeOutcome {
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct PeerEventsDescribeLimits {
-    max_batch_size: usize,
+    max_batch_item_count: usize,
     max_query_limit: usize,
     max_resolve: usize,
 }
@@ -94,7 +94,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
             "request-canonical-digest".to_owned(),
         ],
         limits: PeerEventsDescribeLimits {
-            max_batch_size: 100,
+            max_batch_item_count: 100,
             max_query_limit: MAX_PEER_EVENTS_QUERY_LIMIT,
             max_resolve: MAX_PEER_EVENTS_RESOLVE,
         },

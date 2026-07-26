@@ -29,7 +29,7 @@ struct AppletRegistrationRow {
     #[diesel(sql_type = Nullable<Jsonb>)]
     namespaces: Option<Value>,
     #[diesel(sql_type = Bool)]
-    allow_ghost_actors: bool,
+    ghost_actors_allowed: bool,
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Timestamptz)]
@@ -79,7 +79,7 @@ impl From<AppletRegistrationRow> for Value {
             "manifest": row.manifest,
             "package": row.package,
             "namespaces": row.namespaces,
-            "allow_ghost_actors": row.allow_ghost_actors,
+            "ghost_actors_allowed": row.ghost_actors_allowed,
             "status": row.status,
             "registered_at": row.registered_at,
             "revoked_at": row.revoked_at,
@@ -141,8 +141,8 @@ impl AppletStore for PgAppletStore {
         })?;
         let package = optional_record_value(&record, "package");
         let namespaces = optional_record_value(&record, "namespaces");
-        let allow_ghost_actors = record
-            .get("allow_ghost_actors")
+        let ghost_actors_allowed = record
+            .get("ghost_actors_allowed")
             .and_then(Value::as_bool)
             .unwrap_or(false);
         let status = required_record_str(&record, "status")?;
@@ -161,7 +161,7 @@ impl AppletStore for PgAppletStore {
         sql_query(
             "INSERT INTO applet_registrations \
              (id, namespace, owner_actor_id, registry_did, bot_actor_id, portal_realm_id, \
-              capabilities, manifest, package, namespaces, allow_ghost_actors, status, \
+              capabilities, manifest, package, namespaces, ghost_actors_allowed, status, \
               registered_at, revoked_at, idempotency_key, install_body_digest, install_id, \
               install_response, install_execution, ghosts, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
@@ -176,7 +176,7 @@ impl AppletStore for PgAppletStore {
               manifest = EXCLUDED.manifest, \
               package = EXCLUDED.package, \
               namespaces = EXCLUDED.namespaces, \
-              allow_ghost_actors = EXCLUDED.allow_ghost_actors, \
+              ghost_actors_allowed = EXCLUDED.ghost_actors_allowed, \
               status = EXCLUDED.status, \
               registered_at = EXCLUDED.registered_at, \
               revoked_at = EXCLUDED.revoked_at, \
@@ -198,7 +198,7 @@ impl AppletStore for PgAppletStore {
         .bind::<Jsonb, _>(&manifest)
         .bind::<Nullable<Jsonb>, _>(&package)
         .bind::<Nullable<Jsonb>, _>(&namespaces)
-        .bind::<Bool, _>(allow_ghost_actors)
+        .bind::<Bool, _>(ghost_actors_allowed)
         .bind::<Text, _>(&status)
         .bind::<Timestamptz, _>(registered_at)
         .bind::<Nullable<Timestamptz>, _>(revoked_at)

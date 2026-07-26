@@ -74,7 +74,7 @@ fn validate_key_backup_active_series_transition(
             .map_err(|_| "key_backup_active_series_schema_violation")?;
     let key = (
         record.actor_id.as_str().to_owned(),
-        record.backup_class.as_str().to_owned(),
+        record.backup_kind.as_str().to_owned(),
     );
     let current = heads.get(&key).cloned().or_else(|| {
         state

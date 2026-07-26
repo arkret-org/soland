@@ -19,7 +19,7 @@ async fn policy_check_and_validation_work() {
             "actor_id": "did:web:alice.example",
             "source": {
                 "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                "service_type": "soland",
+                "service_kind": "soland",
                 "signed_transport": true
             }
         }))
@@ -45,7 +45,7 @@ async fn policy_check_and_validation_work() {
         .json(&serde_json::json!({
             "scope": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "message.send",
+            "policy_kind": "message.send",
             "effect": "hard_deny"
         }))
         .send(&app_from_state(state.clone()))
@@ -60,11 +60,11 @@ async fn policy_check_and_validation_work() {
         .json(&serde_json::json!({
             "scope": "ak:realm:0196419b-0000-7000-8000-000000000000",
             "subject_ref": "did:web:alice.example",
-            "policy_type": "message.send",
+            "policy_kind": "message.send",
             "effect": "hard_deny",
             "actions": ["message.send"],
             // policy_resource_matches compares `resource.kind` against the
-            // request `source.service_type`; scope by `realm_id` only so the
+            // request `source.service_kind`; scope by `realm_id` only so the
             // realm-scoped policy matches the message.send check below.
             "resource": {"realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"},
             "obligations": [{"type": "audit", "level": "high"}]
@@ -96,7 +96,7 @@ async fn policy_check_and_validation_work() {
             "actor_id": "did:web:alice.example",
             "source": {
                 "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                "service_type": "soland",
+                "service_kind": "soland",
                 "signed_transport": true
             }
         }))
@@ -133,7 +133,7 @@ async fn policy_check_and_validation_work() {
             "actor_id": "did:web:alice.example",
             "source": {
                 "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                "service_type": "soland",
+                "service_kind": "soland",
                 "signed_transport": true
             }
         }))

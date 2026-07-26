@@ -169,7 +169,7 @@ async fn upsert_policy_document(
     if body.subject_ref != "*" && validate_did(&body.subject_ref).is_err() {
         return Err(AppError::invalid_param("invalid policy subject_ref"));
     }
-    if !is_valid_policy_type(&body.policy_type) || !is_supported_policy_effect(&body.effect) {
+    if !is_valid_policy_kind(&body.policy_kind) || !is_supported_policy_effect(&body.effect) {
         return Err(AppError::invalid_param("invalid policy type or effect"));
     }
     if let Err(message) = validate_canonical_json_value(&body.resource) {
@@ -208,7 +208,7 @@ async fn upsert_policy_document(
         owner: session.actor,
         scope: body.scope,
         subject_ref: body.subject_ref,
-        policy_type: body.policy_type,
+        policy_kind: body.policy_kind,
         payload: json!({
             "effect": body.effect,
             "actions": actions,
@@ -549,7 +549,7 @@ pub fn policy_document_to_response(policy: &PolicyDocumentRecord) -> PolicyDocum
         owner: policy.owner.clone(),
         scope: policy.scope.clone(),
         subject_ref: policy.subject_ref.clone(),
-        policy_type: policy.policy_type.clone(),
+        policy_kind: policy.policy_kind.clone(),
         payload: policy.payload.clone(),
         active: policy.active,
         updated_at: policy.updated_at,
@@ -603,7 +603,7 @@ fn matching_policy_decision(
 fn policy_matches_check(policy: &PolicyDocumentRecord, request: &PolicyCheckRequestBody) -> bool {
     policy_scope_matches(&policy.scope, request.realm_id.as_str())
         && policy_subject_matches(&policy.subject_ref, request.actor_id.as_str())
-        && (policy.policy_type == "*" || policy.policy_type == request.action)
+        && (policy.policy_kind == "*" || policy.policy_kind == request.action)
         && policy_actions_match(&policy.payload["actions"], &request.action)
         && policy_resource_matches(&policy.payload["resource"], request)
 }
@@ -644,7 +644,7 @@ fn policy_resource_matches(resource: &Value, request: &PolicyCheckRequestBody) -
         return false;
     }
     if let Some(kind) = resource.get("kind").and_then(|value| value.as_str())
-        && request.source.service_type != kind
+        && request.source.service_kind != kind
     {
         return false;
     }
@@ -745,7 +745,7 @@ pub fn is_valid_policy_scope(value: &str) -> bool {
     value == "*" || RealmId::new(value.to_owned()).is_ok()
 }
 
-pub fn is_valid_policy_type(value: &str) -> bool {
+pub fn is_valid_policy_kind(value: &str) -> bool {
     let value = value.trim();
     !value.is_empty()
         && value.len() <= 128
@@ -795,7 +795,7 @@ mod tests {
             request_canonical_digest: test_hash(),
             source: arkret_models_collaboration::governance::policy_check::PolicyCheckSource {
                 service_id: Did::new(source_service.to_owned()).unwrap(),
-                service_type: "soland".to_owned(),
+                service_kind: "soland".to_owned(),
                 source_ip_digest: Some(test_hash()),
                 signed_transport: true,
             },

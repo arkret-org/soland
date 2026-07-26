@@ -9,10 +9,10 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::RealmId;
 use arkret_models_collaboration::governance::join_policy::{
-    JoinApplicationAuditOutcome, JoinApplicationCancelRequest, JoinApplicationEntry,
+    JoinApplicationAuditOutcome, JoinApplicationCancelRequestBodyBody, JoinApplicationEntry,
     JoinApplicationGetOutcome, JoinApplicationListOutcome, JoinApplicationMutationOutcome,
-    JoinApplicationPrivateBody, JoinApplicationReviewRequest, JoinApplicationStatus,
-    JoinApplicationSubmitRequest, join_application_revision_digest,
+    JoinApplicationPrivateBody, JoinApplicationReviewRequestBodyBody, JoinApplicationStatus,
+    JoinApplicationSubmitRequestBodyBody, join_application_revision_digest,
 };
 use arkret_wire::Hash;
 use chrono::{Duration, Utc};
@@ -197,7 +197,7 @@ fn response_from_value(
 async fn submit_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
-    body: JsonBody<JoinApplicationSubmitRequest>,
+    body: JsonBody<JoinApplicationSubmitRequestBodyBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<JoinApplicationMutationOutcome> {
@@ -334,7 +334,7 @@ async fn review_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
     application_ref: PathParam<String>,
-    body: JsonBody<JoinApplicationReviewRequest>,
+    body: JsonBody<JoinApplicationReviewRequestBodyBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<JoinApplicationMutationOutcome> {
@@ -409,7 +409,7 @@ async fn cancel_join_application(
     aa: AuthArgs,
     realm_id: PathParam<RealmId>,
     application_ref: PathParam<String>,
-    body: JsonBody<JoinApplicationCancelRequest>,
+    body: JsonBody<JoinApplicationCancelRequestBodyBody>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<JoinApplicationMutationOutcome> {

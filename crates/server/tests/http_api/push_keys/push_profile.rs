@@ -692,7 +692,7 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .account_data()
         .put(&soland_storage::AccountDataRecord {
             actor: "did:web:alice.example".to_owned(),
-            data_type: "ak.presence.visibility".to_owned(),
+            account_data_key: "ak.presence.visibility".to_owned(),
             payload: serde_json::json!({
                 "encrypted_payload": {
                     "ciphertext": "opaque-presence-policy"
@@ -1173,7 +1173,7 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
 async fn ephemeral_call_signal_enforces_structural_contract() {
     // `webrtc-signaling.md` §5 — the /ephemeral relay structurally validates
     // ak.call.signal envelopes (device_id + proof present, payload
-    // {call_id, signal_type, seq} with a canonical signal_type incl.
+    // {call_id, signal_kind, seq} with a canonical signal_kind incl.
     // moderation). It does NOT cryptographically verify the proof (receiver's
     // job).
     let state = soland_test_support::app_state(test_config());
@@ -1197,7 +1197,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             .await
     };
 
-    let envelope = |signal_type: &str, with_device: bool, with_proof: bool| {
+    let envelope = |signal_kind: &str, with_device: bool, with_proof: bool| {
         let sent_at = chrono::Utc::now();
         let expires_at = sent_at + chrono::Duration::seconds(30);
         let mut env = serde_json::json!({
@@ -1208,7 +1208,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
             "payload": {
                 "call_id": call_id,
-                "signal_type": signal_type,
+                "signal_kind": signal_kind,
                 "seq": 1
             }
         });
@@ -1243,7 +1243,7 @@ async fn ephemeral_call_signal_enforces_structural_contract() {
     assert_eq!(accepted["accepted"], true, "accepted body: {accepted}");
     assert_eq!(accepted["kind"], "ak.call.signal");
 
-    // Non-canonical signal_type → invalid_param.
+    // Non-canonical signal_kind → invalid_param.
     let mut bad_type = post_signal(
         state.clone(),
         token.clone(),

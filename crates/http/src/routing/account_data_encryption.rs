@@ -2,50 +2,50 @@ use arkret_crypto::account_data_crypto::AccountDataEncryptedValue;
 use arkret_identifiers::{Did, RealmId};
 use serde_json::{Map, Value};
 
-const ACCOUNT_DATA_TYPE_AGENT_DRAFT: &str = "ak.agent.draft.v1";
-const ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
-const ACCOUNT_DATA_TYPE_BLOCKLIST: &str = "ak.account.blocklist";
-const ACCOUNT_DATA_TYPE_CLIENT_UI_STATE: &str = "ak.client.ui_state";
-const ACCOUNT_DATA_TYPE_COLLECTIONS_STICKERS: &str = "ak.collections.stickers";
-const ACCOUNT_DATA_TYPE_DND_SCHEDULE: &str = "ak.dnd_schedule";
-const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
-const ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE: &str = "ak.presence.preference";
-const ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
-const ACCOUNT_DATA_TYPE_PUSH_RULES: &str = "ak.push_rules";
-const ACCOUNT_DATA_TYPE_READ_RECEIPT_PREFERENCES: &str = "ak.read_receipt.preferences";
-const ACCOUNT_DATA_TYPE_TAGS_REALM: &str = "ak.tags.realm";
+const ACCOUNT_DATA_KEY_AGENT_DRAFT: &str = "ak.agent.draft.v1";
+const ACCOUNT_DATA_KEY_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
+const ACCOUNT_DATA_KEY_BLOCKLIST: &str = "ak.account.blocklist";
+const ACCOUNT_DATA_KEY_CLIENT_UI_STATE: &str = "ak.client.ui_state";
+const ACCOUNT_DATA_KEY_COLLECTIONS_STICKERS: &str = "ak.collections.stickers";
+const ACCOUNT_DATA_KEY_DND_SCHEDULE: &str = "ak.dnd_schedule";
+const ACCOUNT_DATA_KEY_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
+const ACCOUNT_DATA_KEY_PRESENCE_PREFERENCE: &str = "ak.presence.preference";
+const ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
+const ACCOUNT_DATA_KEY_PUSH_RULES: &str = "ak.push_rules";
+const ACCOUNT_DATA_KEY_READ_RECEIPT_PREFERENCES: &str = "ak.read_receipt.preferences";
+const ACCOUNT_DATA_KEY_TAGS_REALM: &str = "ak.tags.realm";
 
 const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
-    ACCOUNT_DATA_TYPE_BLOCKLIST,
-    ACCOUNT_DATA_TYPE_CLIENT_UI_STATE,
-    ACCOUNT_DATA_TYPE_COLLECTIONS_STICKERS,
-    ACCOUNT_DATA_TYPE_DND_SCHEDULE,
-    ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
-    ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE,
-    ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
-    ACCOUNT_DATA_TYPE_PUSH_RULES,
-    ACCOUNT_DATA_TYPE_READ_RECEIPT_PREFERENCES,
+    ACCOUNT_DATA_KEY_BLOCKLIST,
+    ACCOUNT_DATA_KEY_CLIENT_UI_STATE,
+    ACCOUNT_DATA_KEY_COLLECTIONS_STICKERS,
+    ACCOUNT_DATA_KEY_DND_SCHEDULE,
+    ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
+    ACCOUNT_DATA_KEY_PRESENCE_PREFERENCE,
+    ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY,
+    ACCOUNT_DATA_KEY_PUSH_RULES,
+    ACCOUNT_DATA_KEY_READ_RECEIPT_PREFERENCES,
 ];
 
 const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_CONTACTS_ACTOR,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_CONTACTS_REALM,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_REMINDER,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_SCHEDULED_SEND,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_SNOOZE,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_SAVED,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_DRAFT,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_FILE_TRANSFER,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_SEARCH_INDEX_MANIFEST,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_CONTACTS_ACTOR,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_CONTACTS_REALM,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_REMINDER,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_SCHEDULED_SEND,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_SNOOZE,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_SAVED,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_DRAFT,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_FILE_TRANSFER,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_SEARCH_INDEX_MANIFEST,
 ];
 
 // `ak.agent.sidecar_projection.v1` is intentionally absent: the exchange
 // projection is a controller-device-local fold cache and never registers an
 // account-data key surface (zh/models/sidecar.md §7.2.4).
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    ACCOUNT_DATA_TYPE_AGENT_DRAFT,
-    arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE,
-    ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION,
+    ACCOUNT_DATA_KEY_AGENT_DRAFT,
+    arkret_wire::constants::ACCOUNT_DATA_KEY_AGENT_SIDECAR_VIEW_STATE,
+    ACCOUNT_DATA_KEY_AGENT_PARTICIPATION,
 ];
 
 /// Account-data key prefixes that were removed from the registry and MUST stay
@@ -58,15 +58,15 @@ const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
 /// §7.2.4, forbidden-wire-fields.json `sidecar_exchange_binding`).
 const RETIRED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &["ak.agent.sidecar_projection.v1"];
 
-/// True when `data_type` is a retired private account-data key (bare prefix or
+/// True when `account_data_key` is a retired private account-data key (bare prefix or
 /// prefix with a `:`-delimited tail). Retired keys are rejected on write /
 /// read / delete, and legacy stored rows remain controller-private so agent
 /// sessions never observe them.
-pub(crate) fn is_retired_encrypted_account_data_key(data_type: &str) -> bool {
+pub(crate) fn is_retired_encrypted_account_data_key(account_data_key: &str) -> bool {
     RETIRED_ENCRYPTED_ACCOUNT_DATA_PREFIXES
         .iter()
         .any(|prefix| {
-            data_type
+            account_data_key
                 .strip_prefix(prefix)
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
         })
@@ -121,25 +121,25 @@ impl AccountDataEncryptionError {
     }
 }
 
-pub(crate) fn encrypted_account_data_prefix(data_type: &str) -> Option<&'static str> {
+pub(crate) fn encrypted_account_data_prefix(account_data_key: &str) -> Option<&'static str> {
     if let Some(key) = EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS
         .iter()
         .copied()
-        .find(|key| data_type == *key)
+        .find(|key| account_data_key == *key)
     {
         return Some(key);
     }
-    if data_type
-        .strip_prefix(ACCOUNT_DATA_TYPE_TAGS_REALM)
+    if account_data_key
+        .strip_prefix(ACCOUNT_DATA_KEY_TAGS_REALM)
         .is_some_and(|rest| rest.starts_with('.'))
     {
-        return Some(ACCOUNT_DATA_TYPE_TAGS_REALM);
+        return Some(ACCOUNT_DATA_KEY_TAGS_REALM);
     }
     if let Some(prefix) = SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES
         .iter()
         .copied()
         .find(|prefix| {
-            data_type
+            account_data_key
                 .strip_prefix(*prefix)
                 .is_some_and(|rest| rest.starts_with('.') || rest.starts_with(':'))
         })
@@ -150,31 +150,31 @@ pub(crate) fn encrypted_account_data_prefix(data_type: &str) -> Option<&'static 
         .iter()
         .copied()
         .find(|prefix| {
-            data_type
+            account_data_key
                 .strip_prefix(*prefix)
                 .is_some_and(|rest| rest.is_empty() || rest.starts_with(':'))
         })
 }
 
 pub(crate) fn validate_encrypted_account_data_key(
-    data_type: &str,
+    account_data_key: &str,
 ) -> Result<(), AccountDataEncryptionError> {
     // Retired prefixes are hard-rejected before any other rule so they can
     // never reach the unregistered-key fallback below (fail closed for new
     // writes, reads, and deletes alike).
-    if is_retired_encrypted_account_data_key(data_type) {
+    if is_retired_encrypted_account_data_key(account_data_key) {
         return Err(AccountDataEncryptionError::InvalidKeyPattern);
     }
-    if EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS.contains(&data_type) {
+    if EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS.contains(&account_data_key) {
         return Ok(());
     }
-    if data_type
-        .strip_prefix(ACCOUNT_DATA_TYPE_BLOCKLIST)
+    if account_data_key
+        .strip_prefix(ACCOUNT_DATA_KEY_BLOCKLIST)
         .is_some_and(|rest| rest.starts_with('.'))
     {
         return Err(AccountDataEncryptionError::InvalidKeyPattern);
     }
-    if let Some(realm_id) = data_type.strip_prefix("ak.tags.realm.") {
+    if let Some(realm_id) = account_data_key.strip_prefix("ak.tags.realm.") {
         return RealmId::new(realm_id.to_owned())
             .map(|_| ())
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
@@ -182,21 +182,21 @@ pub(crate) fn validate_encrypted_account_data_key(
     if SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES
         .iter()
         .any(|prefix| {
-            data_type
+            account_data_key
                 .strip_prefix(*prefix)
                 .is_some_and(|rest| rest.starts_with('.') || rest.starts_with(':'))
         })
     {
-        return arkret_models_collaboration::objects::productivity::validate_private_account_data_key(data_type)
+        return arkret_models_collaboration::objects::productivity::validate_private_account_data_key(account_data_key)
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
     }
-    if let Some(rest) = data_type
-        .strip_prefix(ACCOUNT_DATA_TYPE_AGENT_DRAFT)
+    if let Some(rest) = account_data_key
+        .strip_prefix(ACCOUNT_DATA_KEY_AGENT_DRAFT)
         .or_else(|| {
-            data_type
-                .strip_prefix(arkret_wire::constants::ACCOUNT_DATA_TYPE_AGENT_SIDECAR_VIEW_STATE)
+            account_data_key
+                .strip_prefix(arkret_wire::constants::ACCOUNT_DATA_KEY_AGENT_SIDECAR_VIEW_STATE)
         })
-        .or_else(|| data_type.strip_prefix(ACCOUNT_DATA_TYPE_AGENT_PARTICIPATION))
+        .or_else(|| account_data_key.strip_prefix(ACCOUNT_DATA_KEY_AGENT_PARTICIPATION))
     {
         return validate_agent_private_key_tail(rest);
     }
@@ -205,18 +205,18 @@ pub(crate) fn validate_encrypted_account_data_key(
 
 #[cfg(test)]
 pub(crate) fn validate_encrypted_account_data_value(
-    data_type: &str,
+    account_data_key: &str,
     value: &Value,
 ) -> Result<(), AccountDataEncryptionError> {
-    validate_encrypted_account_data_value_for_actor(data_type, value, None)
+    validate_encrypted_account_data_value_for_actor(account_data_key, value, None)
 }
 
 pub(crate) fn validate_encrypted_account_data_value_for_actor(
-    data_type: &str,
+    account_data_key: &str,
     value: &Value,
     expected_actor_id: Option<&str>,
 ) -> Result<(), AccountDataEncryptionError> {
-    if encrypted_account_data_prefix(data_type).is_none() {
+    if encrypted_account_data_prefix(account_data_key).is_none() {
         return Ok(());
     }
     let object = value
@@ -233,18 +233,18 @@ pub(crate) fn validate_encrypted_account_data_value_for_actor(
         reject_operation_plaintext_fields(object)?;
         for field in ["body", "encrypted_payload", "encrypted_content"] {
             if let Some(carrier) = object.get(field) {
-                return validate_encrypted_carrier(data_type, carrier, expected_actor_id);
+                return validate_encrypted_carrier(account_data_key, carrier, expected_actor_id);
             }
         }
         return Err(AccountDataEncryptionError::MissingEncryptedCarrier);
     }
     reject_content_plaintext_fields(object)?;
-    if validate_encrypted_carrier(data_type, value, expected_actor_id).is_ok() {
+    if validate_encrypted_carrier(account_data_key, value, expected_actor_id).is_ok() {
         return Ok(());
     }
     for field in ["encrypted_payload", "encrypted_content"] {
         if let Some(carrier) = object.get(field) {
-            return validate_encrypted_carrier(data_type, carrier, expected_actor_id);
+            return validate_encrypted_carrier(account_data_key, carrier, expected_actor_id);
         }
     }
     if object.contains_key("ciphertext") {
@@ -317,15 +317,15 @@ fn field_is_forbidden_plaintext(field: &str) -> bool {
 }
 
 fn validate_encrypted_carrier(
-    data_type: &str,
+    account_data_key: &str,
     value: &Value,
     expected_actor_id: Option<&str>,
 ) -> Result<(), AccountDataEncryptionError> {
-    validate_encrypted_envelope_metadata(data_type, value, expected_actor_id)
+    validate_encrypted_envelope_metadata(account_data_key, value, expected_actor_id)
 }
 
 fn validate_encrypted_envelope_metadata(
-    data_type: &str,
+    account_data_key: &str,
     value: &Value,
     expected_actor_id: Option<&str>,
 ) -> Result<(), AccountDataEncryptionError> {
@@ -334,7 +334,7 @@ fn validate_encrypted_envelope_metadata(
     arkret_crypto::account_data_crypto::validate_account_data_encrypted_value(
         &envelope,
         expected_actor_id.unwrap_or(&envelope.aad.actor_id),
-        data_type,
+        account_data_key,
     )
     .map_err(|_| AccountDataEncryptionError::InvalidEnvelopeMetadata)
 }
@@ -349,12 +349,12 @@ mod tests {
         "ak.saved.v1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA:BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"
     }
 
-    fn encrypted_envelope(data_type: &str) -> Value {
+    fn encrypted_envelope(account_data_key: &str) -> Value {
         serde_json::to_value(
             arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                 &[7u8; 32],
                 "did:web:alice.example",
-                data_type,
+                account_data_key,
                 &json!({"private": true}),
                 [9u8; 24],
             )
@@ -435,14 +435,14 @@ mod tests {
     #[test]
     fn standard_encrypted_account_data_requires_encrypted_carrier() {
         for key in [
-            ACCOUNT_DATA_TYPE_BLOCKLIST,
-            ACCOUNT_DATA_TYPE_CLIENT_UI_STATE,
-            ACCOUNT_DATA_TYPE_COLLECTIONS_STICKERS,
-            ACCOUNT_DATA_TYPE_DND_SCHEDULE,
-            ACCOUNT_DATA_TYPE_PRESENCE_VISIBILITY,
-            ACCOUNT_DATA_TYPE_PRESENCE_PREFERENCE,
-            ACCOUNT_DATA_TYPE_PUSH_RULES,
-            ACCOUNT_DATA_TYPE_READ_RECEIPT_PREFERENCES,
+            ACCOUNT_DATA_KEY_BLOCKLIST,
+            ACCOUNT_DATA_KEY_CLIENT_UI_STATE,
+            ACCOUNT_DATA_KEY_COLLECTIONS_STICKERS,
+            ACCOUNT_DATA_KEY_DND_SCHEDULE,
+            ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY,
+            ACCOUNT_DATA_KEY_PRESENCE_PREFERENCE,
+            ACCOUNT_DATA_KEY_PUSH_RULES,
+            ACCOUNT_DATA_KEY_READ_RECEIPT_PREFERENCES,
         ] {
             let err =
                 validate_encrypted_account_data_value(key, &json!({"enabled": true})).unwrap_err();
@@ -457,7 +457,7 @@ mod tests {
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
 
         let err = validate_encrypted_account_data_value(
-            ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+            ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
             &json!({"invite_event_id": "ak:event:0196419b-0000-7000-8000-000000000000"}),
         )
         .unwrap_err();

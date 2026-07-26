@@ -377,7 +377,7 @@ pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
 /// - Holding the broader `ak.message.revise` / `ak.message.redact` capability (or `*`), or being
 ///   the Realm owner, lifts the window entirely (admin override).
 /// - `message_redact_window` is authoritative for redact; otherwise redact shares the edit window
-///   unless `allow_redact_after_window` is set.
+///   unless `redact_after_window_allowed` is set.
 pub(super) async fn validate_message_edit_redact_window_policy(
     state: &AppState,
     operation: &Operation,
@@ -467,7 +467,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
             if let crate::authz::Constraint::Temporal {
                 message_edit_window,
                 message_redact_window,
-                allow_redact_after_window,
+                redact_after_window_allowed,
                 ..
             } = constraint
             {
@@ -480,7 +480,7 @@ pub(super) async fn validate_message_edit_redact_window_policy(
                     age,
                     message_edit_window.as_ref(),
                     message_redact_window.as_ref(),
-                    *allow_redact_after_window,
+                    *redact_after_window_allowed,
                 ) {
                     permitted = true;
                 }
@@ -505,7 +505,7 @@ pub(crate) fn message_window_permits(
     age: chrono::Duration,
     message_edit_window: Option<&arkret_policy::authz::ConstraintDuration>,
     message_redact_window: Option<&arkret_policy::authz::ConstraintDuration>,
-    allow_redact_after_window: bool,
+    redact_after_window_allowed: bool,
 ) -> bool {
     if is_redact {
         // Redact window is authoritative when declared.
@@ -514,7 +514,7 @@ pub(crate) fn message_window_permits(
         }
         // Otherwise redact is coupled to the edit window unless the grant
         // opts out (then recall is unbounded).
-        if allow_redact_after_window {
+        if redact_after_window_allowed {
             return true;
         }
         if let Some(window) = message_edit_window {

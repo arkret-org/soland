@@ -11,7 +11,7 @@ use arkret_canonical as canonical;
 use arkret_identifiers::{Did, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
     DisclosedOutcome, DisclosureLevel, DisclosurePolicy, IntroductionEvidence,
-    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequest,
+    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody,
     InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
     InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
     InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
@@ -55,7 +55,7 @@ use crate::wire::now;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
-const ACCOUNT_DATA_TYPE_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
+const ACCOUNT_DATA_KEY_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const ACTIVE_LOCATOR_LIMIT: usize = 16;
 const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
@@ -235,7 +235,7 @@ async fn peer_invites_submit(
     let state = depot.get_typed::<AppState>().expect("state injected");
     super::events::peer::validate_peer_request(state, req, true).await?;
     let delivery = req
-        .parse_json::<InviteDeliveryRequest>()
+        .parse_json::<InviteDeliveryRequestBodyBody>()
         .await
         .map_err(|_| AppError::bad_json("invalid ak.peer.invites.command.submit request body"))?;
     let body = serde_json::to_value(&delivery).map_err(|error| {
@@ -256,7 +256,7 @@ async fn peer_invites_submit(
     validate_invite_delivery_consistency(&body, &delivery, state)?;
 
     // The inviter is the actor that signed the durable `ak.invite.create`
-    // event; it is the `peer` we test `blocked_subjects` and the
+    // event; it is the `peer` we test `denied_subjects` and the
     // `consent_grant` evidence against (spec invite-addressing.md §2 / §5).
     let actor = body
         .pointer("/invite_event/actor_id")
@@ -442,7 +442,7 @@ async fn resolve_invite_locator(
         schema: arkret_wire::constants::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
         subject_id,
         recipient_service_id,
-        recipient_service_type: None,
+        recipient_service_kind: None,
         issued_at,
         expires_at,
         locator_ref_digest,
@@ -520,7 +520,7 @@ async fn persist_invite_quarantine_entry(
     subject: &str,
     source_service_id: &str,
     inviter: &str,
-    delivery: &InviteDeliveryRequest,
+    delivery: &InviteDeliveryRequestBodyBody,
     body: &Value,
     decision: &ReceiveDecision,
 ) -> Result<bool, AppError> {
@@ -590,7 +590,7 @@ async fn persist_invite_quarantine_entry(
 
     let account_data = state.account_data();
     let existing = account_data
-        .entry(subject, ACCOUNT_DATA_TYPE_INVITE_QUARANTINE)
+        .entry(subject, ACCOUNT_DATA_KEY_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut entries = existing
@@ -620,7 +620,7 @@ async fn persist_invite_quarantine_entry(
     });
     let record = AccountDataState {
         actor_id: subject.to_owned(),
-        data_type: ACCOUNT_DATA_TYPE_INVITE_QUARANTINE.to_owned(),
+        account_data_key: ACCOUNT_DATA_KEY_INVITE_QUARANTINE.to_owned(),
         payload,
         updated_at: received_at,
     };
@@ -635,7 +635,7 @@ async fn persist_invite_quarantine_entry(
         ACCOUNT_DATA_UPDATE_TYPE,
         json!({
             "operation": "put",
-            "data_type": ACCOUNT_DATA_TYPE_INVITE_QUARANTINE,
+            "account_data_key": ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
             "content": record.payload.clone(),
             "updated_at": record.updated_at,
         }),
@@ -707,7 +707,7 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
             // did:webvh-only red line: placeholder is never a did:web literal.
             Did::new("did:webvh:invalid.invalid".to_owned()).expect("placeholder did")
         }),
-        allowed_introduction_kinds: vec![
+        holder_allowed_introduction_kinds: vec![
             "locator_ref".to_owned(),
             "consent_grant".to_owned(),
             "shared_realm".to_owned(),
@@ -716,13 +716,13 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
         handle_claim_behavior: Some(InviteReceiveAction::Quarantine),
         unknown_invites: UnknownInviteAction::Drop,
         allowed_handle_domains: Vec::new(),
-        blocked_handle_domains: Vec::new(),
+        denied_handle_domains: Vec::new(),
         trusted_handle_issuers: Vec::new(),
         trusted_directory_services: Vec::new(),
         trusted_realm_ids: Vec::new(),
         trusted_principal_services: Vec::new(),
-        blocked_principal_services: Vec::new(),
-        blocked_subjects: Vec::new(),
+        denied_principal_services: Vec::new(),
+        denied_subjects: Vec::new(),
         disclosure: Some(DisclosurePolicy {
             high_trust: Some(DisclosureLevel::Outcome),
             discovery_trust: Some(DisclosureLevel::Opaque),
@@ -732,7 +732,7 @@ pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolic
 }
 
 /// Read the subject's private `invite_receive_policy`, falling back to the
-/// recommended default. `blocked_subjects` written by
+/// recommended default. `denied_subjects` written by
 /// `ak.self.contact.command.tombstone(block_peer)` are merged from the in-memory
 /// override store.
 pub(crate) fn resolve_invite_receive_policy(
@@ -824,10 +824,10 @@ fn evaluate_invite_receive(
     let now = now();
     let constraints = constraints_for_surface(state, ReceivePolicySurface::InviteDelivery);
 
-    // §5 — `blocked_subjects` hit: MUST drop and force opaque disclosure so
+    // §5 — `denied_subjects` hit: MUST drop and force opaque disclosure so
     // the blocklist cannot leak through the response side channel.
     if policy
-        .blocked_subjects
+        .denied_subjects
         .iter()
         .any(|did| did.as_str() == inviter)
     {
@@ -924,10 +924,10 @@ fn evaluate_invite_receive(
 
     let trust_tier = trust_tier_for_kind(effective_kind);
 
-    // §5 — allowlist gate. Evidence kinds not in `allowed_introduction_kinds`
+    // §5 — allowlist gate. Evidence kinds not in `holder_allowed_introduction_kinds`
     // MUST NOT notify; they fall through to the explicit/unknown behavior.
     let allowlisted = policy
-        .allowed_introduction_kinds
+        .holder_allowed_introduction_kinds
         .iter()
         .any(|kind| kind == effective_kind);
 
@@ -1069,7 +1069,7 @@ pub(crate) fn evaluate_contact_receive(
     };
 
     if policy
-        .blocked_subjects
+        .denied_subjects
         .iter()
         .any(|did| did.as_str() == requester)
         || principal_service_blocked(policy, constraints, source_service_id)
@@ -1083,7 +1083,7 @@ pub(crate) fn evaluate_contact_receive(
 
     let trust_tier = trust_tier_for_kind(effective_kind);
     let allowlisted = policy
-        .allowed_introduction_kinds
+        .holder_allowed_introduction_kinds
         .iter()
         .any(|kind| kind == effective_kind);
     let unknown_path =
@@ -1232,7 +1232,7 @@ fn kind_forbidden_by_constraints(
 ) -> bool {
     constraints.is_some_and(|constraints| {
         constraints
-            .forbidden_introduction_kinds
+            .deployment_denied_introduction_kinds
             .iter()
             .any(|kind| kind == effective_kind)
     })
@@ -1243,7 +1243,7 @@ fn kind_permitted_by_constraints(
     effective_kind: &str,
 ) -> bool {
     constraints
-        .and_then(|constraints| constraints.permitted_introduction_kinds.as_ref())
+        .and_then(|constraints| constraints.deployment_allowed_introduction_kinds.as_ref())
         .is_none_or(|kinds| kinds.iter().any(|kind| kind == effective_kind))
 }
 
@@ -1257,11 +1257,11 @@ fn principal_service_blocked(
     source_service_id: &str,
 ) -> bool {
     policy
-        .blocked_principal_services
+        .denied_principal_services
         .iter()
         .any(|did| did.as_str() == source_service_id)
         || constraints
-            .and_then(|constraints| constraints.blocked_principal_services.as_ref())
+            .and_then(|constraints| constraints.denied_principal_services.as_ref())
             .is_some_and(|blocked| did_in_list(source_service_id, blocked))
 }
 
@@ -1365,7 +1365,7 @@ fn handle_domain_allowed(
 ) -> bool {
     let domain = domain.to_ascii_lowercase();
     if policy
-        .blocked_handle_domains
+        .denied_handle_domains
         .iter()
         .any(|blocked| blocked.eq_ignore_ascii_case(&domain))
     {
@@ -1475,7 +1475,7 @@ fn member_delivery_candidate_valid(
 
 fn validate_invite_delivery_consistency(
     body: &Value,
-    delivery: &InviteDeliveryRequest,
+    delivery: &InviteDeliveryRequestBodyBody,
     state: &AppState,
 ) -> Result<(), AppError> {
     if delivery.invite_address.recipient_service_id.as_str() != state.service_id() {
@@ -1511,14 +1511,14 @@ fn validate_invite_delivery_consistency(
             "invite_event.payload.invite_delivery_target.recipient_service_id must equal invite_address.recipient_service_id",
         ));
     }
-    if let Some(service_type) = payload
+    if let Some(service_kind) = payload
         .get("invite_delivery_target")
-        .and_then(|target| target.get("recipient_service_type"))
+        .and_then(|target| target.get("recipient_service_kind"))
         .and_then(Value::as_str)
-        && service_type != "principal_server"
+        && service_kind != "principal_server"
     {
         return Err(super::events::peer::schema_violation(
-            "invite_delivery_target.recipient_service_type must be principal_server",
+            "invite_delivery_target.recipient_service_kind must be principal_server",
         ));
     }
     let evidence_digest =

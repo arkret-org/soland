@@ -1279,7 +1279,7 @@ async fn install_applet_package_with_approved_actions(
 ) -> Value {
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let applet_package = applet_package_wire_with_epoch_evidence(package);
-    let allow_ghost_actors = approve_actions
+    let ghost_actors_allowed = approve_actions
         .iter()
         .any(|action| action == "ak.applet.ghost.provision");
     let preview: Value = TestClient::post("http://server/_arkret/self/applets/install/preview")
@@ -1289,10 +1289,10 @@ async fn install_applet_package_with_approved_actions(
             "effective_scope": effective_scope,
             "approval_request": {
                 "approve_actions": approve_actions,
-                "allow_ghost_actors": allow_ghost_actors,
-                "allow_delegated_native_actors": false,
-                "allow_e2ee_join": false,
-                "allow_widget": false,
+                "ghost_actors_allowed": ghost_actors_allowed,
+                "delegated_native_actors_allowed": false,
+                "e2ee_join_allowed": false,
+                "widget_allowed": false,
             },
         }))
         .send(app)
@@ -1318,8 +1318,8 @@ async fn install_applet_package_with_approved_actions(
                 "bot_membership": "join",
                 "ghost_actor_mode": "policy_declared",
             },
-            "e2ee_policy": {"allow_mls_join": false},
-            "widget_policy": {"allow_widget": false},
+            "e2ee_policy": {"mls_join_allowed": false},
+            "widget_policy": {"widget_allowed": false},
         }))
         .send(app)
         .await

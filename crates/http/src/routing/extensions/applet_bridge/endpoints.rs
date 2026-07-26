@@ -8,7 +8,7 @@ use arkret_models_collaboration::http_bodies::AppletTransactionRequestBody;
 use arkret_models_integration::{
     AppletActorView, AppletInstallOutcome, AppletInstallPlan, AppletInstallPreviewRequestBody,
     AppletInstallRequestBody, AppletPingOutcome, AppletProtocolMetadata, AppletRealmView,
-    AppletRevokeOutcome, AppletTransactionOutcome, ExternalRef, FieldType,
+    AppletRevokeOutcome, AppletTransactionOutcome, ExternalRef, FieldDefinition,
     GhostActorProvisionOutcome, GhostActorProvisionRequestBody, ProtocolInstance,
 };
 use arkret_wire::AppletRevokeMode;
@@ -834,7 +834,7 @@ async fn protocol_metadata_endpoint(
         protocol: protocol.clone(),
         display_name: format!("{protocol} applet protocol"),
         icon_blob_ref: None,
-        field_types: [
+        field_definitions: [
             ("applet_id", true),
             ("service_id", false),
             ("status", false),
@@ -843,8 +843,8 @@ async fn protocol_metadata_endpoint(
         .map(|(name, required)| {
             (
                 name.to_owned(),
-                FieldType {
-                    r#type: "string".to_owned(),
+                FieldDefinition {
+                    value_kind: "string".to_owned(),
                     required: required.then_some(true),
                     enum_values: None,
                     description: None,

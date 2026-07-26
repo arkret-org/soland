@@ -2,7 +2,7 @@
 
 use arkret_identifiers::{BackupId, DeviceId, Did, EventId};
 use arkret_models_crypto::{
-    BackupClass, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
+    BackupKind, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
     KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupKdfName,
     KeyBackupRecipientMethod, KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
@@ -66,7 +66,7 @@ const KEY_BACKUP_CONTENT_TYPES: &[&str] = &[
 const KEY_BACKUP_AUTH_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "backup_id",
     "actor_id",
-    "backup_class",
+    "backup_kind",
     "backup_version",
     "series_id",
     "series_seq",
@@ -81,7 +81,7 @@ const KEY_BACKUP_UNLOCK_PROOF_SIGNED_FIELDS: &[&str] = &[
     "principal_id",
     "requesting_device_id",
     "backup_id",
-    "backup_class",
+    "backup_kind",
     "series_id",
     "ciphertext_digest",
     "proof_kind",
@@ -121,34 +121,34 @@ mod tests {
         })
     }
 
-    fn key_backup_body(backup_class: &str, item_type: &str, encryption: Value) -> Value {
+    fn key_backup_body(backup_kind: &str, item_kind: &str, encryption: Value) -> Value {
         let mut body = json!({
             "backup_id": BACKUP_ID,
             "actor_id": ACTOR,
             "device_id": DEVICE_ID,
-            "backup_class": backup_class,
+            "backup_kind": backup_kind,
             "backup_version": "kb_1",
             "created_at": "2026-05-30T00:00:00.000Z",
             "series_id": "ak:backup_series:01964137-0000-7000-8000-000000000001",
             "series_seq": 0,
             "encryption": encryption,
             "contents": [{
-                "item_type": item_type,
+                "item_kind": item_kind,
                 "secret_id": "test-secret"
             }],
             "ciphertext": "AAAA",
             "ciphertext_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
             "domain_separation": {
-                "hkdf_info": format!("arkret-key-backup/{backup_class}/test/v1"),
+                "hkdf_info": format!("arkret-key-backup/{backup_kind}/test/v1"),
                 "subdomain": "test",
                 "aead_aad": {
                     "schema": "ak.schema.key_backup.v1",
                     "actor_id": ACTOR,
                     "device_id": DEVICE_ID,
-                    "backup_class": backup_class,
+                    "backup_kind": backup_kind,
                     "backup_version": "kb_1",
                     "created_at": "2026-05-30T00:00:00.000Z",
-                    "item_types": [item_type]
+                    "item_kinds": [item_kind]
                 }
             },
             "auth_data": {
@@ -160,7 +160,7 @@ mod tests {
                 "signed_fields": [
                     "backup_id",
                     "actor_id",
-                    "backup_class",
+                    "backup_kind",
                     "backup_version",
                     "series_id",
                     "series_seq",
@@ -297,7 +297,7 @@ mod tests {
         json!([
             "backup_id",
             "actor_id",
-            "backup_class",
+            "backup_kind",
             "backup_version",
             "series_id",
             "series_seq",

@@ -23,7 +23,7 @@ pub(super) async fn preview_token_matches_policy(
     let Some(claim) = decode_preview_token(token) else {
         return false;
     };
-    if claim.get("link_type").and_then(Value::as_str) != Some("preview") {
+    if claim.get("address_link_kind").and_then(Value::as_str) != Some("preview") {
         return false;
     }
     if claim
@@ -55,18 +55,18 @@ pub(super) async fn preview_token_matches_policy(
     {
         return false;
     }
-    token_target_matches_claim(&claim, parsed, realm_id, LinkType::Preview)
+    token_target_matches_claim(&claim, parsed, realm_id, AddressLinkKind::Preview)
 }
 
 pub(super) fn optional_structured_token_target_matches(
     token: &str,
     parsed: &arkret_wire::object_address::ParsedAddress,
     realm_id: &str,
-    effective_link_type: LinkType,
+    effective_address_link_kind: AddressLinkKind,
 ) -> bool {
     match decode_preview_token(token) {
         Some(claim) if claim.get("target_digest").is_some() => {
-            token_target_matches_claim(&claim, parsed, realm_id, effective_link_type)
+            token_target_matches_claim(&claim, parsed, realm_id, effective_address_link_kind)
         }
         Some(_) => false,
         None => parsed.strand.is_none() && parsed.message.is_none(),
@@ -77,14 +77,14 @@ pub(super) fn token_target_matches_claim(
     claim: &Value,
     parsed: &arkret_wire::object_address::ParsedAddress,
     realm_id: &str,
-    effective_link_type: LinkType,
+    effective_address_link_kind: AddressLinkKind,
 ) -> bool {
     let Some(token_digest) = claim.get("target_digest").and_then(Value::as_str) else {
         return false;
     };
     let mut descriptor = TargetDescriptor::from_parsed(parsed);
     descriptor.set_realm_id(realm_id);
-    descriptor.link_type = effective_link_type;
+    descriptor.address_link_kind = effective_address_link_kind;
     target_digest(&descriptor)
         .ok()
         .as_deref()

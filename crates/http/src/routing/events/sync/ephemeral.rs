@@ -499,8 +499,8 @@ async fn admit_ephemeral_read_receipt(
 /// canonical client takes). We reuse the SDK
 /// [`arkret_models_collaboration::events_payloads::ephemeral::validate_call_signal_envelope`] as
 /// the single truth source for the required shape: `device_id` present, `proof` present, and
-/// `payload` deserialises into `{call_id, signal_type, seq}` with a
-/// `signal_type` drawn from the canonical [`arkret_wire::constants::CALL_SIGNAL_TYPES`]
+/// `payload` deserialises into `{call_id, signal_kind, seq}` with a
+/// `signal_kind` drawn from the canonical [`arkret_wire::constants::CALL_SIGNAL_KINDS`]
 /// set (which includes `moderation`).
 ///
 /// Boundary (FIN-F task 5 decision, unchanged): the relay does NOT perform

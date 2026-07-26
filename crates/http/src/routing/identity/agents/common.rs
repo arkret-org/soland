@@ -281,32 +281,33 @@ pub(super) fn agent_requested_participation_ceiling(
         .into_iter()
         .flatten()
         .any(|constraint| {
-            if constraint.get("constraint_type").and_then(Value::as_str) != Some("claim_based") {
+            if constraint.get("constraint_kind").and_then(Value::as_str) != Some("claim_based") {
                 return false;
             }
-            let controller_requirement = match constraint.get("subtype").and_then(Value::as_str) {
-                Some("approval") => {
-                    constraint
-                        .get("approval_required")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                        && (constraint.get("approval_relation").and_then(Value::as_str)
-                            == Some("controller")
-                            || constraint
-                                .get("controller_approval_required")
-                                .and_then(Value::as_bool)
-                                .unwrap_or(false))
-                }
-                Some("accountability") => {
-                    constraint
-                        .get("accountability_required")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                        && constraint.get("approval_relation").and_then(Value::as_str)
-                            == Some("controller")
-                }
-                _ => false,
-            };
+            let controller_requirement =
+                match constraint.get("constraint_subkind").and_then(Value::as_str) {
+                    Some("approval") => {
+                        constraint
+                            .get("approval_required")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                            && (constraint.get("approval_relation").and_then(Value::as_str)
+                                == Some("controller")
+                                || constraint
+                                    .get("controller_approval_required")
+                                    .and_then(Value::as_bool)
+                                    .unwrap_or(false))
+                    }
+                    Some("accountability") => {
+                        constraint
+                            .get("accountability_required")
+                            .and_then(Value::as_bool)
+                            .unwrap_or(false)
+                            && constraint.get("approval_relation").and_then(Value::as_str)
+                                == Some("controller")
+                    }
+                    _ => false,
+                };
             let applies_to_message_create = constraint
                 .get("applies_to_actions")
                 .and_then(Value::as_array)
@@ -509,10 +510,10 @@ mod requested_scope_tests {
     #[test]
     fn realm_grant_must_preserve_provision_constraints() {
         let mut mandatory = arkret_models_collaboration::governance::grant_constraint::GrantConstraint::new(
-            arkret_models_collaboration::governance::grant_constraint::GrantConstraintType::ClaimBased,
+            arkret_models_collaboration::governance::grant_constraint::GrantConstraintKind::ClaimBased,
             arkret_models_collaboration::governance::grant_constraint::GrantConstraintEffect::Allow,
         );
-        mandatory.subtype = Some(arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubtype::Approval);
+        mandatory.constraint_subkind = Some(arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind::Approval);
         mandatory.controller_approval_required = Some(true);
         let mandatory_value = serde_json::to_value(&mandatory).unwrap();
         let record = record_with_scope(json!({
@@ -548,8 +549,8 @@ mod requested_scope_tests {
         let record = record_with_scope(json!({
             "actions": [ACTION_EVENT_READ, ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
             "constraints": [{
-                "constraint_type": "claim_based",
-                "subtype": "accountability",
+                "constraint_kind": "claim_based",
+                "constraint_subkind": "accountability",
                 "effect": "allow",
                 "applies_to_actions": [ACTION_MESSAGE_CREATE],
                 "accountability_required": true,
@@ -581,8 +582,8 @@ mod requested_scope_tests {
         let wrong_action = record_with_scope(json!({
             "actions": [ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
             "constraints": [{
-                "constraint_type": "claim_based",
-                "subtype": "approval",
+                "constraint_kind": "claim_based",
+                "constraint_subkind": "approval",
                 "effect": "require_review",
                 "approval_required": true,
                 "approval_relation": "controller",

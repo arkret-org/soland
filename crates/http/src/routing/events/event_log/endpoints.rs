@@ -124,7 +124,10 @@ async fn events_describe(
         );
         limits.insert("max_prev_refs".to_owned(), json!(MAX_EVENT_PREV_REFS));
         limits.insert("max_refs".to_owned(), json!(MAX_EVENT_REFS));
-        limits.insert("max_batch_size".to_owned(), json!(MAX_EVENT_SUBMIT_BATCH));
+        limits.insert(
+            "max_batch_item_count".to_owned(),
+            json!(MAX_EVENT_SUBMIT_BATCH),
+        );
         limits.insert("max_resolve".to_owned(), json!(MAX_EVENT_RESOLVE));
         limits.insert("max_list_limit".to_owned(), json!(100));
     }

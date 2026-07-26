@@ -17,8 +17,8 @@ use arkret_models_collaboration::governance::authorization::{AuthzInviteList, Gr
 use arkret_models_collaboration::governance::grant_constraint::{
     CapabilityGrant, CapabilitySubject, GrantConstraint as WireGrantConstraint,
     GrantConstraintEffect as WireGrantConstraintEffect, GrantConstraintExtensionKey,
-    GrantConstraintSubtype as WireGrantConstraintSubtype,
-    GrantConstraintType as WireGrantConstraintType,
+    GrantConstraintKind as WireGrantConstraintKind,
+    GrantConstraintSubkind as WireGrantConstraintSubkind,
 };
 use arkret_models_collaboration::governance::invite_addressing::InviteDeliveryTarget;
 use arkret_models_collaboration::governance::operation_wire::Invite;
@@ -433,7 +433,7 @@ fn wire_constraint_from_authz_constraint(
     match constraint {
         Constraint::Decision { decision } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::ScopeLimitation,
+                WireGrantConstraintKind::ScopeLimitation,
                 wire_effect_from_decision(decision),
             );
             insert_constraint_extension(
@@ -446,27 +446,29 @@ fn wire_constraint_from_authz_constraint(
         }
         Constraint::Temporal {
             expires_at,
-            subtype,
+            constraint_subkind,
             message_edit_window,
             message_redact_window,
-            allow_redact_after_window,
+            redact_after_window_allowed,
         } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::Temporal,
+                WireGrantConstraintKind::Temporal,
                 WireGrantConstraintEffect::Allow,
             );
             wire.expires_at = expires_at;
-            if let Some(subtype) = subtype {
-                match subtype.as_str() {
-                    "edit_window" => wire.subtype = Some(WireGrantConstraintSubtype::EditWindow),
-                    "redact_window" => {
-                        wire.subtype = Some(WireGrantConstraintSubtype::RedactWindow)
+            if let Some(constraint_subkind) = constraint_subkind {
+                match constraint_subkind.as_str() {
+                    "edit_window" => {
+                        wire.constraint_subkind = Some(WireGrantConstraintSubkind::EditWindow)
                     }
-                    "window" => wire.subtype = Some(WireGrantConstraintSubtype::Window),
+                    "redact_window" => {
+                        wire.constraint_subkind = Some(WireGrantConstraintSubkind::RedactWindow)
+                    }
+                    "window" => wire.constraint_subkind = Some(WireGrantConstraintSubkind::Window),
                     _ => insert_constraint_extension(
                         &mut wire,
                         "x_soland_temporal_subtype",
-                        Value::String(subtype),
+                        Value::String(constraint_subkind),
                     )?,
                 }
             }
@@ -474,12 +476,12 @@ fn wire_constraint_from_authz_constraint(
                 message_edit_window.map(|duration| format!("{}{}", duration.value, duration.unit));
             wire.message_redact_window = message_redact_window
                 .map(|duration| format!("{}{}", duration.value, duration.unit));
-            wire.allow_redact_after_window = Some(allow_redact_after_window);
+            wire.redact_after_window_allowed = Some(redact_after_window_allowed);
             Ok(wire)
         }
         Constraint::AllowedCircleIds { allowed_circle_ids } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::ScopeLimitation,
+                WireGrantConstraintKind::ScopeLimitation,
                 WireGrantConstraintEffect::Allow,
             );
             wire.allowed_circle_ids = allowed_circle_ids.into_iter().collect();
@@ -489,16 +491,16 @@ fn wire_constraint_from_authz_constraint(
             allowed_session_ids,
         } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::ScopeLimitation,
+                WireGrantConstraintKind::ScopeLimitation,
                 WireGrantConstraintEffect::Allow,
             );
-            wire.subtype = Some(WireGrantConstraintSubtype::Session);
+            wire.constraint_subkind = Some(WireGrantConstraintSubkind::Session);
             wire.allowed_session_ids = allowed_session_ids.into_iter().collect();
             Ok(wire)
         }
         Constraint::AllowedObjectFacets { facets } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::TypeRestriction,
+                WireGrantConstraintKind::KindRestriction,
                 WireGrantConstraintEffect::Allow,
             );
             let mut unparsed = Vec::new();
@@ -522,10 +524,10 @@ fn wire_constraint_from_authz_constraint(
             period,
         } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::Quota,
+                WireGrantConstraintKind::Quota,
                 WireGrantConstraintEffect::Allow,
             );
-            wire.subtype = Some(WireGrantConstraintSubtype::Rate);
+            wire.constraint_subkind = Some(WireGrantConstraintSubkind::Rate);
             wire.max_operations = Some(max_operations);
             wire.period = Some(period);
             Ok(wire)
@@ -534,7 +536,7 @@ fn wire_constraint_from_authz_constraint(
             max_delegation_depth,
         } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::DelegationControl,
+                WireGrantConstraintKind::DelegationControl,
                 WireGrantConstraintEffect::Allow,
             );
             wire.max_delegation_depth = max_delegation_depth.map(u64::from);
@@ -546,7 +548,7 @@ fn wire_constraint_from_authz_constraint(
             registration_epoch,
         } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintType::DelegationControl,
+                WireGrantConstraintKind::DelegationControl,
                 WireGrantConstraintEffect::Allow,
             );
             insert_constraint_extension(

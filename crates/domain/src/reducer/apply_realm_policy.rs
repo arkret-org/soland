@@ -12,7 +12,7 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
     ) -> ProjectionEffect {
-        let kind = operation.object_type.as_str();
+        let kind = operation.object_kind.as_str();
         if kind == arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS {
             return self.apply_realm_policy_components(operation);
         }
@@ -216,7 +216,7 @@ impl ProjectionState {
         }
         // One-way `content_scheme` ratchet (realm-and-space.md history-sharing):
         // the negotiated content scheme MUST be monotonically non-decreasing
-        // (`mls-rfc9420` < `mls-exporter-aead-v1`). A present-but-unknown enum
+        // (`mls_rfc9420` < `mls_exporter_aead_v1`). A present-but-unknown enum
         // value is rejected outright. Like the encryption floors, a lower rank
         // — including dropping a previously-committed scheme by omission
         // (incoming rank 0 against a higher projected rank) — is a downgrade.
@@ -253,7 +253,7 @@ impl ProjectionState {
         // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
         // is reducer-derived from `ak.realm.policy_components`. Validate its
         // structural invariants and that `mode != none` is only declared on a
-        // `content_scheme=mls-exporter-aead-v1` Realm (else
+        // `content_scheme=mls_exporter_aead_v1` Realm (else
         // `durability_scheme_incompatible`). The effective scheme is the
         // incoming scheme when this same update sets it, else the projected one.
         if let Some(durability_policy) = durability_policy_field(&value)

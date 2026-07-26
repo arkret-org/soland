@@ -449,7 +449,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "timeout_ms": 5000,
             "strand_id": strand_id,
             "pair_key": pair_key,
-            "allow_last_resort": false
+            "last_resort_allowed": false
         }))
         .unwrap();
     let verification_method = format!("{}#{}", unsigned.requester, ALICE_SIGNING_DEVICE);
@@ -496,7 +496,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "timeout_ms": unsigned.timeout_ms,
             "strand_id": unsigned.strand_id,
             "pair_key": unsigned.pair_key,
-            "allow_last_resort": unsigned.allow_last_resort,
+            "last_resort_allowed": unsigned.last_resort_allowed,
             "requester_authorization": authorization
         }))
         .unwrap();

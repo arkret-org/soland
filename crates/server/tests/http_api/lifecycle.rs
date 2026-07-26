@@ -289,7 +289,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
             "object": {
                 "id": morph_id,
                 "realm_id": DEMO_REALM_ID,
-                "morph_type": "task",
+                "morph_kind": "task",
                 "metadata": { "title": "Backfill" },
                 "created_by": "did:web:alice.example",
             }
@@ -755,7 +755,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
             "object": {
                 "id": morph_id,
                 "realm_id": DEMO_REALM_ID,
-                "morph_type": "task",
+                "morph_kind": "task",
                 "metadata": { "title": "Sensitive task" },
                 "created_by": "did:web:alice.example",
             }

@@ -53,7 +53,7 @@ fn stamp_projection_operation_received_at(
     received_at: chrono::DateTime<chrono::Utc>,
 ) {
     if !matches!(
-        operation.object_type.as_str(),
+        operation.object_kind.as_str(),
         arkret_wire::events::EventKind::MEMBER_STATE
             | arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE
     ) {

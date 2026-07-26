@@ -344,7 +344,7 @@ pub(super) async fn submit_event_value_with_context(
             "actor_seq is older than the accepted actor frontier",
         )
         .with_details(
-            arkret_models_collaboration::event_sync::EventsActorCasConflictDetails {
+            arkret_models_collaboration::event_sync::EventsActorCasConflictProblem {
                 accepted: false,
                 current_frontier,
             },
@@ -1126,7 +1126,7 @@ pub(super) async fn submit_event_value_with_context(
                 event_id: event.event_id.clone(),
                 realm_id: event.realm_id.clone(),
                 event_kind: event.event_kind.clone(),
-                operation_type: event.operation_type.clone(),
+                operation_kind: event.operation_kind.clone(),
                 operation_id: event.operation_id.clone(),
                 sender: event.sender.clone(),
                 payload: event.payload.clone(),
@@ -1201,7 +1201,7 @@ pub(super) async fn submit_event_value_with_context(
                     "actor_seq is older than the accepted actor frontier",
                 )
                 .with_details(
-                    arkret_models_collaboration::event_sync::EventsActorCasConflictDetails {
+                    arkret_models_collaboration::event_sync::EventsActorCasConflictProblem {
                         accepted: false,
                         current_frontier,
                     },

@@ -315,7 +315,7 @@ impl FederationOperationsStore for PgFederationOperationsStore {
             PersistenceError::Internal(format!("federation operation serialize: {error}"))
         })?;
         let object_id = operation.object_id.clone();
-        let operation_type = serde_json::to_value(&operation.operation_type)
+        let operation_kind = serde_json::to_value(&operation.operation_kind)
             .ok()
             .and_then(|v| v.as_str().map(ToOwned::to_owned))
             .unwrap_or_else(|| "create".to_owned());
@@ -324,15 +324,15 @@ impl FederationOperationsStore for PgFederationOperationsStore {
         let realm_id_uuid = ids::typed_uuid_part_expect_internal(operation.realm_id.as_str());
         sql_query(
             "INSERT INTO federation_operations \
-             (id, realm_id, object_type, object_id, operation_type, payload, created_at) \
+             (id, realm_id, object_kind, object_id, operation_kind, payload, created_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7) \
              ON CONFLICT (id) DO NOTHING",
         )
         .bind::<SqlUuid, _>(operation_id_uuid)
         .bind::<SqlUuid, _>(realm_id_uuid)
-        .bind::<Text, _>(&operation.object_type)
+        .bind::<Text, _>(&operation.object_kind)
         .bind::<Nullable<Text>, _>(&object_id)
-        .bind::<Text, _>(&operation_type)
+        .bind::<Text, _>(&operation_kind)
         .bind::<Jsonb, _>(&payload)
         .bind::<Timestamptz, _>(operation.created_at)
         .execute(&mut *conn)

@@ -731,7 +731,7 @@ mod tests {
             controller,
             origin_device,
             ACCOUNT_DATA_UPDATE_TYPE,
-            json!({"data_type": "ak.account.blocklist", "content": {"private": true}}),
+            json!({"account_data_key": "ak.account.blocklist", "content": {"private": true}}),
         )
         .await;
 

@@ -640,7 +640,7 @@ fn circle_scoped_morph_preserves_scope_for_update_gates() {
                 "object": {
                     "id": MORPH_X,
                     "realm_id": REALM_A,
-                    "morph_type": "task",
+                    "morph_kind": "task",
                     "metadata": { "title": "Circle task" },
                     "scope_circle_id": CIRCLE_A,
                     "created_by": ALICE,

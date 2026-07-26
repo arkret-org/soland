@@ -405,17 +405,17 @@ impl AccountDataStore for PgAccountDataStore {
     async fn get(
         &self,
         actor: &str,
-        data_type: &str,
+        account_data_key: &str,
     ) -> PersistenceResult<Option<AccountDataRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT actor_id AS actor, data_type, payload, updated_at \
-             FROM account_datas WHERE actor_id = $1 AND data_type = $2",
+            "SELECT actor_id AS actor, account_data_key, payload, updated_at \
+             FROM account_datas WHERE actor_id = $1 AND account_data_key = $2",
         )
         .bind::<Text, _>(actor)
-        .bind::<Text, _>(data_type)
+        .bind::<Text, _>(account_data_key)
         .get_result::<AccountDataRow>(&mut *conn)
         .await
         .optional()
@@ -428,14 +428,14 @@ impl AccountDataStore for PgAccountDataStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "INSERT INTO account_datas (id, actor_id, data_type, payload, updated_at) \
+            "INSERT INTO account_datas (id, actor_id, account_data_key, payload, updated_at) \
              VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (actor_id, data_type) DO UPDATE SET payload = EXCLUDED.payload, \
+             ON CONFLICT (actor_id, account_data_key) DO UPDATE SET payload = EXCLUDED.payload, \
              updated_at = EXCLUDED.updated_at",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.actor)
-        .bind::<Text, _>(&record.data_type)
+        .bind::<Text, _>(&record.account_data_key)
         .bind::<Jsonb, _>(&record.payload)
         .bind::<Timestamptz, _>(record.updated_at)
         .execute(&mut *conn)
@@ -444,13 +444,13 @@ impl AccountDataStore for PgAccountDataStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn delete(&self, actor: &str, data_type: &str) -> PersistenceResult<()> {
+    async fn delete(&self, actor: &str, account_data_key: &str) -> PersistenceResult<()> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM account_datas WHERE actor_id = $1 AND data_type = $2")
+        sql_query("DELETE FROM account_datas WHERE actor_id = $1 AND account_data_key = $2")
             .bind::<Text, _>(actor)
-            .bind::<Text, _>(data_type)
+            .bind::<Text, _>(account_data_key)
             .execute(&mut *conn)
             .await
             .map(|_| ())
@@ -462,8 +462,8 @@ impl AccountDataStore for PgAccountDataStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT actor_id AS actor, data_type, payload, updated_at \
-             FROM account_datas WHERE actor_id = $1 ORDER BY data_type",
+            "SELECT actor_id AS actor, account_data_key, payload, updated_at \
+             FROM account_datas WHERE actor_id = $1 ORDER BY account_data_key",
         )
         .bind::<Text, _>(actor)
         .load::<AccountDataRow>(&mut *conn)
@@ -563,7 +563,7 @@ struct AccountDataRow {
     #[diesel(sql_type = Text)]
     actor: String,
     #[diesel(sql_type = Text)]
-    data_type: String,
+    account_data_key: String,
     #[diesel(sql_type = Jsonb)]
     payload: Value,
     #[diesel(sql_type = Timestamptz)]
@@ -573,7 +573,7 @@ impl From<AccountDataRow> for AccountDataRecord {
     fn from(row: AccountDataRow) -> Self {
         Self {
             actor: row.actor,
-            data_type: row.data_type,
+            account_data_key: row.account_data_key,
             payload: row.payload,
             updated_at: row.updated_at,
         }

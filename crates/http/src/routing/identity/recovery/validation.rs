@@ -170,15 +170,15 @@ pub(super) fn validate_recovery_receipt(
         .ok_or_else(|| AppError::invalid_param("proof_summary.proof_digest is required"))?
         .to_owned();
     // recovery-receipt.schema.json conditional reqs: threshold_recovery binds
-    // quorum_size + share_ids; device_quorum binds quorum_size.
+    // quorum_participant_count + share_ids; device_quorum binds quorum_participant_count.
     if matches!(proof_kind, "threshold_recovery" | "device_quorum")
         && proof_summary
-            .get("quorum_size")
+            .get("quorum_participant_count")
             .and_then(Value::as_u64)
             .is_none()
     {
         return Err(AppError::invalid_param(format!(
-            "proof_summary.quorum_size is required for kind `{proof_kind}`",
+            "proof_summary.quorum_participant_count is required for kind `{proof_kind}`",
         )));
     }
     if proof_kind == "threshold_recovery"
@@ -228,14 +228,14 @@ pub(super) fn validate_recovery_receipt(
             AppError::invalid_param("backup_classes_unlocked entries must be objects")
         })?;
         let class = obj
-            .get("backup_class")
+            .get("backup_kind")
             .and_then(Value::as_str)
             .ok_or_else(|| {
-                AppError::invalid_param("backup_classes_unlocked[].backup_class is required")
+                AppError::invalid_param("backup_classes_unlocked[].backup_kind is required")
             })?;
         if !matches!(class, "did_recovery" | "secret_storage" | "mls_history") {
             return Err(AppError::invalid_param(format!(
-                "backup_classes_unlocked[].backup_class `{class}` not in spec enum",
+                "backup_classes_unlocked[].backup_kind `{class}` not in spec enum",
             )));
         }
         for req in ["backup_id", "series_id", "ciphertext_digest"] {

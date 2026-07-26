@@ -213,7 +213,7 @@ async fn prepare_ghost_event(
                 event_id: event.event_id.clone(),
                 realm_id: event.realm_id.clone(),
                 event_kind: event.event_kind.clone(),
-                operation_type: event.operation_type.clone(),
+                operation_kind: event.operation_kind.clone(),
                 operation_id: event.operation_id.clone(),
                 sender: event.sender.clone(),
                 payload: event.payload.clone(),

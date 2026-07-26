@@ -91,7 +91,7 @@ fn message_content_from_payload(payload: &Value, scope_circle_id: Option<String>
             "in_reply_to",
             "mentions",
             "mention_routing_hint",
-            "mention_sidecar_hash",
+            "mention_sidecar_digest",
         ] {
             if !object.contains_key(key)
                 && let Some(value) = payload.get(key)

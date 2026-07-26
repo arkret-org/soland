@@ -28,7 +28,7 @@ struct NotificationRow {
     #[diesel(sql_type = Nullable<Text>)]
     track_name: Option<String>,
     #[diesel(sql_type = Text)]
-    notification_type: String,
+    notification_kind: String,
     #[diesel(sql_type = Nullable<Text>)]
     event_kind: Option<String>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -64,7 +64,7 @@ impl From<NotificationRow> for Value {
             "source_ref": row.source_ref,
             "strand_id": row.strand_id,
             "track_name": row.track_name,
-            "notification_type": row.notification_type,
+            "notification_kind": row.notification_kind,
             "event_kind": row.event_kind,
             "source_actor_id": row.source_actor_id,
             "priority": row.priority,
@@ -102,7 +102,7 @@ impl NotificationStore for PgNotificationStore {
         let recipient_id = get_str("recipient_id")?;
         let realm_id = get_str("realm_id")?;
         let source_event_id = get_str("source_event_id")?;
-        let notification_type = get_str("notification_type")?;
+        let notification_kind = get_str("notification_kind")?;
         let get_opt_str = |key: &str| -> Option<String> {
             record
                 .get(key)
@@ -124,10 +124,10 @@ impl NotificationStore for PgNotificationStore {
         sql_query(
             "INSERT INTO notifications \
              (id, recipient_id, realm_id, source_event_id, source_ref, strand_id, track_name, \
-              notification_type, event_kind, source_actor_id, priority, state, preview, \
+              notification_kind, event_kind, source_actor_id, priority, state, preview, \
               created_at, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW()) \
-             ON CONFLICT (recipient_id, source_event_id, notification_type) DO UPDATE SET \
+             ON CONFLICT (recipient_id, source_event_id, notification_kind) DO UPDATE SET \
               source_ref = EXCLUDED.source_ref, \
               strand_id = EXCLUDED.strand_id, \
               track_name = EXCLUDED.track_name, \
@@ -146,7 +146,7 @@ impl NotificationStore for PgNotificationStore {
         .bind::<Nullable<Text>, _>(source_ref.as_deref())
         .bind::<Nullable<Text>, _>(strand_id.as_deref())
         .bind::<Nullable<Text>, _>(track_name.as_deref())
-        .bind::<Text, _>(&notification_type)
+        .bind::<Text, _>(&notification_kind)
         .bind::<Nullable<Text>, _>(event_kind.as_deref())
         .bind::<Nullable<Text>, _>(source_actor_id.as_deref())
         .bind::<Text, _>(&priority)
@@ -184,7 +184,7 @@ impl NotificationStore for PgNotificationStore {
         sql_query(
             "INSERT INTO notifications \
              (id, recipient_id, controller_account_id, recipient_service_id, \
-              source_account_artifact_kind, source_account_artifact_id, notification_type, \
+              source_account_artifact_kind, source_account_artifact_id, notification_kind, \
               priority, state, projection_action, projection_data, created_at, updated_at) \
              VALUES ($1, $2, $3, $4, 'agent_runtime_approval', $5, 'agent', \
               'normal', 'unread', $6, $7, NOW(), NOW()) \
@@ -222,7 +222,7 @@ impl NotificationStore for PgNotificationStore {
             "SELECT id AS notification_id, recipient_id, realm_id, source_event_id, \
              controller_account_id, recipient_service_id, source_account_artifact_kind, \
              source_account_artifact_id, source_ref, \
-             strand_id, track_name, notification_type, event_kind, source_actor_id, priority, \
+             strand_id, track_name, notification_kind, event_kind, source_actor_id, priority, \
              state, preview, projection_action, projection_data, projection_position, \
              created_at, updated_at \
              FROM notifications WHERE recipient_id = $1 ORDER BY created_at DESC",
@@ -246,7 +246,7 @@ impl NotificationStore for PgNotificationStore {
         sql_query(
             "SELECT id AS notification_id, recipient_id, realm_id, source_event_id, \
              controller_account_id, recipient_service_id, source_account_artifact_kind, \
-             source_account_artifact_id, source_ref, strand_id, track_name, notification_type, \
+             source_account_artifact_id, source_ref, strand_id, track_name, notification_kind, \
              event_kind, source_actor_id, priority, state, preview, projection_action, \
              projection_data, projection_position, created_at, updated_at \
              FROM notifications \

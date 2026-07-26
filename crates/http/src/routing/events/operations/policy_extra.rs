@@ -417,21 +417,21 @@ pub(crate) async fn validate_realm_key_share_policy(
     >(projection_context_stripped_payload(&operation.payload))
     .map_err(|_| "policy_denied")?;
     // encryption-and-audit.md §2.10.8 — a `ak.realm_key.share` with
-    // `share_class=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
+    // `share_kind=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
     // sealing path: provider-initiated, the recipient is an OFFLINE recovery org
     // (NOT an MLS member, not in the ratchet tree). It MUST NOT be forced through
     // the member history-share gate (it would reject `not_member`). The canonical
-    // discriminator is the `share_class` field (event-payload.schema.json); an
+    // discriminator is the `share_kind` field (event-payload.schema.json); an
     // RRK-class share MUST validate as a declared `durability_policy`
     // recovery recipient or it is rejected.
     if matches!(
-        share.share_class,
+        share.share_kind,
         arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeyShareClass::RealmRecoveryKey
     ) {
         return validate_rrk_targeted_realm_key_share(state, operation.realm_id.as_str(), &share)
             .unwrap_or(Err("durability_recovery_recipient_unverified"));
     }
-    // share_class=member_device from here: the typed target names the device.
+    // share_kind=member_device from here: the typed target names the device.
     let RealmKeyShareTarget::MemberDevice {
         ref recipient_device_id,
     } = share.target

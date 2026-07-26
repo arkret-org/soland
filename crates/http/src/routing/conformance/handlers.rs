@@ -266,7 +266,7 @@ struct ProjectionEventDiagnostic {
     event_id: String,
     realm_id: String,
     event_kind: String,
-    operation_type: String,
+    operation_kind: String,
     operation_id: Option<String>,
     sender: Option<String>,
     #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
@@ -662,7 +662,7 @@ pub async fn snapshot(body: JsonBody<SnapshotVectorRequest>) -> JsonResult<Snaps
     let vector = body.vector_id.as_str();
     let manifest = &body.manifest;
     let chunks = &body.chunks;
-    if chunks.len() > MAX_CONFORMANCE_BATCH || vector.contains("batch_size_over_max") {
+    if chunks.len() > MAX_CONFORMANCE_BATCH || vector.contains("batch_item_count_over_max") {
         return Err(limit_error(
             "snapshot chunks exceed the 1,000 item wire limit",
         ));
@@ -955,7 +955,7 @@ fn validate_query_limits(vector: &str, body: &Value, query_value: &Value) -> Res
         .or_else(|| body.get("chunks"))
         .and_then(Value::as_array)
         .map_or(0, Vec::len);
-    if batch_count > MAX_CONFORMANCE_BATCH || vector.contains("batch_size_over_max") {
+    if batch_count > MAX_CONFORMANCE_BATCH || vector.contains("batch_item_count_over_max") {
         return Err(limit_error("query batch exceeds 1,000 items"));
     }
     let relation_depth = query_value
@@ -1276,7 +1276,7 @@ fn projection_event_diagnostic(record: &ProjectionEventRecord) -> ProjectionEven
         event_id: record.event_id.clone(),
         realm_id: record.realm_id.clone(),
         event_kind: record.event_kind.clone(),
-        operation_type: record.operation_type.clone(),
+        operation_kind: record.operation_kind.clone(),
         operation_id: record.operation_id.clone(),
         sender: record.sender.clone(),
         created_at: record.created_at,

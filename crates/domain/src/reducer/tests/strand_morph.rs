@@ -176,7 +176,7 @@ fn morph_lifecycle_round_trip() {
                 "object": {
                     "id": morph_id,
                     "realm_id": realm_id,
-                    "morph_type": "task",
+                    "morph_kind": "task",
                     "metadata": { "title": "Backfill" },
                     "created_by": "did:web:alice.example",
                 }
@@ -229,7 +229,7 @@ fn morph_lifecycle_preflight_rejects_illegal_transitions() {
                 "object": {
                     "id": morph_id,
                     "realm_id": realm_id,
-                    "morph_type": "task",
+                    "morph_kind": "task",
                     "metadata": { "title": "Backfill" },
                     "created_by": "did:web:alice.example",
                 }
@@ -504,7 +504,7 @@ fn redaction_with_morph_object_ref_flips_to_redacted() {
                 "object": {
                     "id": morph_id,
                     "realm_id": realm_id,
-                    "morph_type": "task",
+                    "morph_kind": "task",
                     "metadata": { "title": "Sensitive task" },
                     "created_by": "did:web:alice.example",
                 }
@@ -599,7 +599,7 @@ fn redaction_preflight_rejects_against_already_terminal() {
                 "object": {
                     "id": morph_id,
                     "realm_id": realm_id,
-                    "morph_type": "task",
+                    "morph_kind": "task",
                     "metadata": { "title": "Task" },
                     "created_by": "did:web:alice.example",
                 }

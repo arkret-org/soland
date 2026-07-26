@@ -389,7 +389,7 @@ struct MorphProjectionRow {
     #[diesel(sql_type = Nullable<SqlUuid>)]
     scope_circle_id: Option<Uuid>,
     #[diesel(sql_type = Text)]
-    morph_type: String,
+    morph_kind: String,
     #[diesel(sql_type = Nullable<Text>)]
     title: Option<String>,
     #[diesel(sql_type = Jsonb)]
@@ -423,7 +423,7 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
             scope_circle_id: row
                 .scope_circle_id
                 .map(|u| ids::format_typed_uuid("circle", &u)),
-            morph_type: row.morph_type,
+            morph_kind: row.morph_kind,
             title: row.title,
             fields: row.fields,
             schema_refs: row.schema_refs,
@@ -440,7 +440,7 @@ impl From<MorphProjectionRow> for MorphProjectionRecord {
         }
     }
 }
-const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, scope_circle_id, morph_type, title, fields, \
+const MORPH_PROJECTION_COLUMNS: &str = "id AS morph_id, realm_id, scope_circle_id, morph_kind, title, fields, \
      schema_refs, facets, versions, state, state_changed_at, created_by_id AS created_by, created_at, updated_by_id AS updated_by, \
      history_basis_seals, updated_at";
 #[async_trait]
@@ -466,13 +466,13 @@ impl MorphProjectionStore for PgMorphProjectionStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO projection_morphs \
-             (id, realm_id, scope_circle_id, morph_type, title, fields, schema_refs, facets, versions, \
+             (id, realm_id, scope_circle_id, morph_kind, title, fields, schema_refs, facets, versions, \
               state, state_changed_at, created_by_id, created_at, updated_by_id, history_basis_seals, updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) \
              ON CONFLICT (id) DO UPDATE SET \
                 realm_id = EXCLUDED.realm_id, \
                 scope_circle_id = EXCLUDED.scope_circle_id, \
-                morph_type = EXCLUDED.morph_type, \
+                morph_kind = EXCLUDED.morph_kind, \
                 title = EXCLUDED.title, \
                 fields = EXCLUDED.fields, \
                 schema_refs = EXCLUDED.schema_refs, \
@@ -492,7 +492,7 @@ impl MorphProjectionStore for PgMorphProjectionStore {
                 .as_deref()
                 .map(ids::typed_uuid_part_expect_internal),
         )
-        .bind::<Text, _>(&record.morph_type)
+        .bind::<Text, _>(&record.morph_kind)
         .bind::<Nullable<Text>, _>(&record.title)
         .bind::<Jsonb, _>(&record.fields)
         .bind::<Jsonb, _>(&record.schema_refs)
@@ -572,7 +572,7 @@ struct ProjectionEventRow {
     #[diesel(sql_type = Text)]
     event_kind: String,
     #[diesel(sql_type = Text)]
-    operation_type: String,
+    operation_kind: String,
     #[diesel(sql_type = Nullable<SqlUuid>)]
     operation_id: Option<Uuid>,
     #[diesel(sql_type = Nullable<Text>)]
@@ -590,7 +590,7 @@ impl From<ProjectionEventRow> for ProjectionEventRecord {
             event_id: ids::format_typed_uuid("event", &row.event_id),
             realm_id: ids::format_typed_uuid("realm", &row.realm_id),
             event_kind: row.event_kind,
-            operation_type: row.operation_type,
+            operation_kind: row.operation_kind,
             operation_id: row
                 .operation_id
                 .as_ref()
@@ -753,14 +753,14 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO projection_events \
-             (event_id, realm_id, event_kind, operation_type, operation_id, sender_id, payload, created_at, received_at) \
+             (event_id, realm_id, event_kind, operation_kind, operation_id, sender_id, payload, created_at, received_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
              ON CONFLICT (event_id) DO NOTHING",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.event_id))
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
         .bind::<Text, _>(&record.event_kind)
-        .bind::<Text, _>(&record.operation_type)
+        .bind::<Text, _>(&record.operation_kind)
         .bind::<Nullable<SqlUuid>, _>(
             record
                 .operation_id
@@ -788,7 +788,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at, received_at \
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
              FROM projection_events ORDER BY id",
         )
         .load::<ProjectionEventRow>(&mut *conn).await
@@ -804,7 +804,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at, received_at \
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
              FROM projection_events WHERE event_kind = $1 ORDER BY id",
         )
         .bind::<Text, _>(event_kind)
@@ -819,7 +819,7 @@ impl ProjectionEventStore for PgProjectionEventStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT event_id, realm_id, event_kind, operation_type, operation_id, sender_id AS sender, payload, created_at, received_at \
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
              FROM projection_events ORDER BY id LIMIT $1",
         )
         .bind::<BigInt, _>(limit as i64)

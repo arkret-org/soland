@@ -183,7 +183,7 @@ fn read_receipt_envelope(actor: &str, device_id: &str, event_id: &str, ttl_ms: i
         "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
         "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "payload": {
-            "receipt_type": "read",
+            "receipt_kind": "read",
             "schema": "ak.schema.read_receipt.v1",
             "realm_id": DEMO_REALM_ID,
             "actor_id": actor,

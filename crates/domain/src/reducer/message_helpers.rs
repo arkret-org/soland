@@ -123,7 +123,7 @@ pub(crate) fn message_content_from_payload(
             "in_reply_to",
             "mentions",
             "mention_routing_hint",
-            "mention_sidecar_hash",
+            "mention_sidecar_digest",
         ] {
             if !object.contains_key(key)
                 && let Some(value) = payload.get(key)

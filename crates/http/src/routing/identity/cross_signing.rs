@@ -506,10 +506,10 @@ fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
     [
         "/device_quorum/k",
         "/device_quorum/threshold",
-        "/device_quorum/quorum_size",
+        "/device_quorum/quorum_participant_count",
         "/proof_requirements/device_quorum/k",
         "/proof_requirements/device_quorum/threshold",
-        "/proof_requirements/device_quorum/quorum_size",
+        "/proof_requirements/device_quorum/quorum_participant_count",
     ]
     .iter()
     .find_map(|pointer| {

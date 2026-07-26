@@ -14,16 +14,16 @@ impl NotificationStore for MemoryNotificationStore {
     async fn put(&self, record: Value) -> PersistenceResult<()> {
         let recipient_id = record.get("recipient_id").and_then(Value::as_str);
         let source_event_id = record.get("source_event_id").and_then(Value::as_str);
-        let notification_type = record.get("notification_type").and_then(Value::as_str);
+        let notification_kind = record.get("notification_kind").and_then(Value::as_str);
         let mut data = self.data.lock();
-        if let (Some(recipient_id), Some(source_event_id), Some(notification_type)) =
-            (recipient_id, source_event_id, notification_type)
+        if let (Some(recipient_id), Some(source_event_id), Some(notification_kind)) =
+            (recipient_id, source_event_id, notification_kind)
             && let Some(existing) = data.iter_mut().find(|candidate| {
                 candidate.get("recipient_id").and_then(Value::as_str) == Some(recipient_id)
                     && candidate.get("source_event_id").and_then(Value::as_str)
                         == Some(source_event_id)
-                    && candidate.get("notification_type").and_then(Value::as_str)
-                        == Some(notification_type)
+                    && candidate.get("notification_kind").and_then(Value::as_str)
+                        == Some(notification_kind)
             })
         {
             let notification_id = existing

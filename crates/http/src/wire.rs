@@ -22,7 +22,7 @@ use arkret_models_discovery::{
     ClaimedProfileEntry, ServiceDescribe,
 };
 pub use arkret_models_discovery::{
-    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceType,
+    RealmJoinCandidate, RealmJoinCandidateRole, RealmJoinCandidateServiceKind,
     RealmJoinCandidateSource, RealmJoinMethod,
 };
 pub use arkret_models_identity::identity::IdentityResolveRequestBody;
@@ -424,7 +424,7 @@ pub struct UpsertPolicyDocumentRequestBody {
     pub policy_id: Option<String>,
     pub scope: String,
     pub subject_ref: String,
-    pub policy_type: String,
+    pub policy_kind: String,
     pub effect: String,
     #[serde(default)]
     pub actions: Vec<String>,
@@ -442,7 +442,7 @@ pub struct PolicyDocumentOutcome {
     pub owner: String,
     pub scope: String,
     pub subject_ref: String,
-    pub policy_type: String,
+    pub policy_kind: String,
     pub payload: Value,
     pub active: bool,
     #[serde(serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp")]
@@ -913,7 +913,7 @@ pub fn describe(
         trust_domain: trust_domain
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
-        service_type: arkret_wire::ServiceType::PrincipalServer,
+        service_kind: arkret_wire::ServiceKind::PrincipalServer,
         protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
@@ -960,7 +960,7 @@ pub fn describe(
         ),
         rate_limit_policy_id: None,
         egress_network_policy: Some(arkret_models_discovery::service_description::EgressNetworkPolicy::deny_private_defaults()),
-        resource_types: Vec::new(),
+        resource_kinds: Vec::new(),
         discovery_profiles: Vec::new(),
         restricted_query_proof: None,
         ingest_modes: Vec::new(),
@@ -1011,7 +1011,7 @@ pub fn describe(
             "ak.feature.blob.resumable_upload.tus.v1".to_owned(),
             "ak.feature.mls_last_resort_keypackage.v1".to_owned(),
             // encryption-and-audit.md §2.10.7 — advertise support for the
-            // history-shareable `mls-exporter-aead-v1` content scheme so clients
+            // history-shareable `mls_exporter_aead_v1` content scheme so clients
             // know late-joiner pre-join history decryption is reachable here.
             "ak.feature.mls_exporter_aead.v1".to_owned(),
             "org.arkret.soland.feature.blob.authenticated_download".to_owned(),
@@ -1175,13 +1175,13 @@ pub fn describe(
             "search": {
                 "directory": {
                     "operation_prefix": "ak.find.directory.",
-                    "resource_types": ["realm", "organization", "actor"],
+                    "resource_kinds": ["realm", "organization", "actor"],
                     "returns_message_hits": false,
                     "returns_snippets": false
                 },
                 "client_index": {
                     "profile": "ak.profile.search.client_index.v1",
-                    "manifest_account_data_type": "ak.search.index_manifest.v1",
+                    "manifest_account_data_key": "ak.search.index_manifest.v1",
                     "manifest_storage": "encrypted_private_account_data",
                     "shard_blob_purpose": "search_index_shard",
                     "shard_storage": "encrypted_blob_bytes",
@@ -1198,7 +1198,7 @@ pub fn describe(
             "personal_productivity": {
                 "reminders": {
                     "profile": "ak.profile.personal_productivity.v1",
-                    "account_data_type": "ak.reminders.v1",
+                    "account_data_key": "ak.reminders.v1",
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "server_action": "local_or_push_wake_only",
@@ -1208,7 +1208,7 @@ pub fn describe(
                 },
                 "scheduled_send": {
                     "profile": "ak.profile.personal_productivity.v1",
-                    "account_data_type": "ak.scheduled_send.v1",
+                    "account_data_key": "ak.scheduled_send.v1",
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "server_dispatches_message_create": false,
@@ -1219,7 +1219,7 @@ pub fn describe(
                 },
                 "snooze": {
                     "profile": "ak.profile.personal_productivity.v1",
-                    "account_data_type": "ak.snooze.v1",
+                    "account_data_key": "ak.snooze.v1",
                     "storage": "encrypted_private_account_data",
                     "plaintext_payload_accepted": false,
                     "target_key": "holder_derived_unlinkable",

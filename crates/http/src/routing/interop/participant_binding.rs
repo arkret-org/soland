@@ -333,7 +333,7 @@ pub(crate) fn verify_call_state_participant_bindings(
 
         // (d) signature — reconstruct the canonical signing input verbatim from
         // the wire fields and verify the detached Ed25519 signature. The
-        // arkret-native self-signed binding is minted with the notary key
+        // arkret_native self-signed binding is minted with the notary key
         // (`routing::interop::webrtc`), so verify against the notary verifying
         // key; a federated issuer with a resolvable DID is accepted when its
         // resolved key validates the same bytes.

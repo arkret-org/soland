@@ -66,7 +66,7 @@ pub enum ProjectionEffect {
     },
     KeyBackupActiveSeriesProjected {
         actor_id: String,
-        backup_class: String,
+        backup_kind: String,
         active_series_id: String,
     },
     RealmLifecycle {
@@ -289,7 +289,7 @@ pub enum ProjectionEffect {
     RealmKeyShareProjected {
         realm_id: String,
         recipient_principal_id: String,
-        /// Absent for `share_class=realm_recovery_key` (offline RRK recipient).
+        /// Absent for `share_kind=realm_recovery_key` (offline RRK recipient).
         recipient_device_id: Option<String>,
     },
     /// G3.S2 — `ak.realm.policy_server` projected into the

@@ -78,7 +78,7 @@ async fn fetch_chunked_mls_governance_proof(
     );
     object.insert("chunk_index".to_owned(), Value::from(0));
     object.remove("expected_bundle_digest");
-    let base_request: arkret_models_crypto::MlsGovernanceProofRequest =
+    let base_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
         serde_json::from_value(request_value).expect("typed chunk-0 proof request");
 
     let mut first_response =
@@ -145,7 +145,7 @@ async fn seed_agent_session_with_scopes(state: &AppState, token: &str, scopes: &
                     },
                     "constraints": {
                         "allowed_tracks": [],
-                        "allowed_data_classes": [],
+                        "allowed_data_labels": [],
                         "allowed_endpoints": [],
                     },
                     "capability_grant_refs": [],
@@ -1167,7 +1167,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     valid_request_value["trusted_anchor_seal_id"] =
         Value::String(bundle.trusted_anchor_seal_id.to_string());
     valid_request_value["chunk_index"] = Value::from(0);
-    let valid_request: arkret_models_crypto::MlsGovernanceProofRequest =
+    let valid_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
         serde_json::from_value(valid_request_value).expect("typed proof request");
 
     let mut unreachable_request = valid_request.clone();
@@ -1318,7 +1318,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "default_join_rule": "invite",
                 "history_visibility": "restricted",
                 "encryption_profile": "mls_rfc9420",
-                "content_scheme": "mls-rfc9420",
+                "content_scheme": "mls_rfc9420",
                 "security_class": "high_assurance",
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",
@@ -1594,7 +1594,7 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
         "invitee": "did:web:carol.example",
         "invite_delivery_target": {
             "recipient_service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-            "recipient_service_type": "principal_server"
+            "recipient_service_kind": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "expires_at": "2026-06-14T10:00:00.000Z"

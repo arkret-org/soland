@@ -644,7 +644,7 @@ async fn validate_direct_binding_event_refs(
             || request.mls_group_id.as_str() != payload.mls_group_id.as_str()
             || request.strand_id.as_ref() != Some(&payload.main_strand_id)
             || request.pair_key.as_ref() != Some(&payload.pair_key)
-            || request.allow_last_resort == Some(true)
+            || request.last_resort_allowed == Some(true)
         {
             return Err("peer_claim_receipt");
         }
@@ -914,7 +914,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
             "timeout_ms": 5000,
             "strand_id": reserved.main_strand_id,
             "pair_key": pair_key,
-            "allow_last_resort": false
+            "last_resort_allowed": false
         },
         "transport_binding": {
             "source_service_id": state.service_id(),
@@ -1759,7 +1759,7 @@ async fn prepare_reserved_direct_materialization(
         strand_payload,
     )?;
     // `ak.strand.create` writes the `ak.component.strand.object.v1` cell
-    // (contract-catalog `cell_writes`); there is no `strand.create` cell
+    // (contract-registry `cell_writes`); there is no `strand.create` cell
     // family. The envelope plane validation rejects unregistered families
     // once the submitted event carries a seal binding, so the drafted cell
     // MUST use the registered family.
@@ -2431,7 +2431,7 @@ pub(super) fn direct_member_join_operation(
         payload["delivery_status"] = json!("routable");
         payload["delivery_binding"] = json!({
             "recipient_service_id": recipient_service_id,
-            "recipient_service_type": "principal_server",
+            "recipient_service_kind": "principal_server",
             "binding_scope": "realm",
             "binding_source": "explicit",
             "delivery_modes": ["events", "sync", "to_device", "key_packages"],
@@ -2470,7 +2470,7 @@ fn direct_creator_member_rebind_payload(
     payload["delivery_status"] = json!("routable");
     payload["delivery_binding"] = json!({
         "recipient_service_id": state.service_id(),
-        "recipient_service_type": "principal_server",
+        "recipient_service_kind": "principal_server",
         "binding_scope": "realm",
         "binding_source": "explicit",
         "delivery_modes": ["events", "sync", "to_device", "key_packages"],

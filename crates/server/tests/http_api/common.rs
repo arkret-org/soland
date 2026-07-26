@@ -545,7 +545,7 @@ pub(crate) async fn seed_test_realm(
                 invitee: Some((*invitee).to_owned()),
                 invite_delivery_target: Some(serde_json::json!({
                     "recipient_service_id": state.service_id().clone(),
-                    "recipient_service_type": "principal_server"
+                    "recipient_service_kind": "principal_server"
                 })),
                 introduction_evidence_digest: Some(format!("sha256:{}", "1".repeat(64))),
                 third_party_id: None,
@@ -671,7 +671,7 @@ pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value
 
 pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
     serde_json::json!({
-        "scheme": "mls-rfc9420",
+        "scheme": "mls_rfc9420",
         "version": 1,
         "group_id": "ak:mls:test",
         "epoch": 1,
@@ -869,7 +869,7 @@ pub(crate) fn signed_message_event_envelope(
     if encrypted {
         let mut encrypted_payload = content;
         if let Some(object) = encrypted_payload.as_object_mut()
-            && object.get("scheme").and_then(Value::as_str) == Some("mls-rfc9420")
+            && object.get("scheme").and_then(Value::as_str) == Some("mls_rfc9420")
         {
             object.insert("version".to_owned(), Value::String("1.0".to_owned()));
             object.insert("group_id".to_owned(), Value::String("mls_test".to_owned()));

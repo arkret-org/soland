@@ -1208,7 +1208,7 @@ fn call_signal_envelope(
     actor: &str,
     device_id: &str,
     call_id: &str,
-    signal_type: &str,
+    signal_kind: &str,
     seq: u64,
 ) -> Value {
     let sent_at = chrono::Utc::now();
@@ -1222,7 +1222,7 @@ fn call_signal_envelope(
         "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "payload": {
             "call_id": call_id,
-            "signal_type": signal_type,
+            "signal_kind": signal_kind,
             "seq": seq,
             "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
         }
@@ -1301,7 +1301,7 @@ async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_dev
     );
     assert_eq!(bob_signals[0]["kind"], "ak.call.signal");
     assert_eq!(bob_signals[0]["payload"]["call_id"], call_id);
-    assert_eq!(bob_signals[0]["payload"]["signal_type"], "invite");
+    assert_eq!(bob_signals[0]["payload"]["signal_kind"], "invite");
     assert_eq!(bob_signals[0]["payload"]["seq"], 1);
     assert_eq!(bob_signals[0]["proof"]["kind"], "detached_jws");
     assert_eq!(bob_signals[0]["proof"]["alg"], "EdDSA");
@@ -1423,7 +1423,7 @@ async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
     assert!(
         bob_signals
             .iter()
-            .all(|signal| signal["payload"]["signal_type"] != "hangup"),
+            .all(|signal| signal["payload"]["signal_kind"] != "hangup"),
         "expired call signals must not be delivered"
     );
 }
@@ -1527,7 +1527,7 @@ async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
         1,
         "a new signal must still be delivered incrementally"
     );
-    assert_eq!(after_second[0]["payload"]["signal_type"], "answer");
+    assert_eq!(after_second[0]["payload"]["signal_kind"], "answer");
 
     // And it is not re-delivered on a subsequent incremental sync.
     let (after_second_repeat, _cursor) =

@@ -30,7 +30,7 @@ pub struct AppletRecord {
     #[serde(default)]
     pub namespaces: Option<AppletWireNamespaces>,
     #[serde(default)]
-    pub allow_ghost_actors: bool,
+    pub ghost_actors_allowed: bool,
     pub status: String,
     #[serde(
         serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",

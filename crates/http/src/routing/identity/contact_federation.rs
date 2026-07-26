@@ -190,7 +190,7 @@ async fn enqueue_signed_contact_fact(
             recipient_service_id: Did::new(recipient_service_id.to_owned()).map_err(|error| {
                 AppError::invalid_param(format!("invalid recipient_service_id: {error}"))
             })?,
-            recipient_service_type: Some("principal_server".to_owned()),
+            recipient_service_kind: Some("principal_server".to_owned()),
         },
         fact_kind,
         introduction_evidence,
@@ -735,7 +735,7 @@ async fn append_delivered_contact_fact_projection_event(
             event_id: contact_event_id.to_owned(),
             realm_id: soland_services::identity::principal_control_realm_for_did(issuer),
             event_kind: fact_kind.to_owned(),
-            operation_type: "delivered_contact_fact".to_owned(),
+            operation_kind: "delivered_contact_fact".to_owned(),
             operation_id: None,
             sender: Some(issuer.to_owned()),
             payload,

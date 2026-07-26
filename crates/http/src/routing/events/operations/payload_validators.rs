@@ -666,7 +666,7 @@ pub(crate) fn validate_morph_update_payload(operation: &Operation) -> Result<(),
 }
 
 /// `morph.md` §2 / §4 forbidden-wire guard for `ak.morph.update`:
-/// - `morph_type` is immutable after `ak.morph.create` (`morph_type_immutable`).
+/// - `morph_kind` is immutable after `ak.morph.create` (`morph_kind_immutable`).
 /// - the stage axis (`stage` / `stage_changed_at`) changes only via `ak.morph.stage.set`; writing
 ///   it through an update patch is `schema_violation`.
 /// - the reserved business-field set (`fields.stage` / `fields.lifecycle` / `fields.progress_state`
@@ -677,8 +677,8 @@ fn reject_forbidden_morph_update_patch(
 ) -> Result<(), &'static str> {
     const FORBIDDEN_FIELD: &[&str] = &["stage", "lifecycle", "progress_state", "stage_reason"];
     for (path, value) in patch {
-        if path == "morph_type" {
-            return Err("morph_type_immutable");
+        if path == "morph_kind" {
+            return Err("morph_kind_immutable");
         }
         if path == "stage" || path == "stage_changed_at" {
             return Err("morph_stage_patch_forbidden");
@@ -771,7 +771,7 @@ fn reject_morph_metadata_business_fields(
         "realm_id",
         "scope_circle_id",
         "schema_refs",
-        "morph_type",
+        "morph_kind",
         "facets",
         "fields",
         "stage",
@@ -1047,7 +1047,7 @@ mod tests {
     #[test]
     fn encrypted_payload_envelope_accepts_exporter_aead_scheme_binding() {
         let envelope = json!({
-            "scheme": "mls-exporter-aead-v1",
+            "scheme": "mls_exporter_aead_v1",
             "version": "1.0",
             "group_id": "Z3JvdXA",
             "epoch": 7u64,

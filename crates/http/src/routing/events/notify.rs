@@ -180,7 +180,7 @@ async fn put_notification(
     recipient_id: &str,
     realm_id: &str,
     source_event_id: &str,
-    notification_type: &str,
+    notification_kind: &str,
     event_kind: &str,
     source_ref: Option<&str>,
     strand_id: Option<&str>,
@@ -194,7 +194,7 @@ async fn put_notification(
         "recipient_id": recipient_id,
         "realm_id": realm_id,
         "source_event_id": source_event_id,
-        "notification_type": notification_type,
+        "notification_kind": notification_kind,
         "event_kind": event_kind,
         "priority": "normal",
         "state": "unread",
@@ -230,7 +230,7 @@ async fn put_message_notification(
     recipient_id: &str,
     realm_id: &str,
     source_event_id: &str,
-    notification_type: &str,
+    notification_kind: &str,
     strand_id: Option<&str>,
     source_actor_id: Option<&str>,
     source_ref: Option<&str>,
@@ -242,7 +242,7 @@ async fn put_message_notification(
         recipient_id,
         realm_id,
         source_event_id,
-        notification_type,
+        notification_kind,
         arkret_wire::events::EventKind::MESSAGE_CREATE,
         source_ref,
         strand_id,
@@ -298,7 +298,7 @@ pub(crate) async fn dispatch_message_notifications(
         .filter(|subject| !subject.trim().is_empty())
         .collect::<BTreeSet<_>>();
     // SPI-SOL-004 — mention-routing sidecar gate (push-notifications.md
-    // §4.5). Opaque `mention_sidecar_hash` tags on an encrypted message may
+    // §4.5). Opaque `mention_sidecar_digest` tags on an encrypted message may
     // only ever be consulted under an effective `recipient_registered_token`
     // policy; the effective hint is resolved BEFORE any sidecar consumption.
     // Hardened Realms (minimal-metadata + both audited E2EE profiles) and
@@ -309,7 +309,7 @@ pub(crate) async fn dispatch_message_notifications(
     // registry MUST be driven through
     // `mention_routing::drive_mention_routing_sidecar`, never directly.
     let sidecar_tag_count = payload
-        .get("mention_sidecar_hash")
+        .get("mention_sidecar_digest")
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or(0);
@@ -916,7 +916,7 @@ mod tests {
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
-                "mention_sidecar_hash": ["unregistered-opaque-tag"],
+                "mention_sidecar_digest": ["unregistered-opaque-tag"],
                 "encrypted": true,
                 "encrypted_content": {
                     "content_type": "ak.message.v1",
@@ -964,7 +964,7 @@ mod tests {
         assert_eq!(bob_notifications.len(), 1);
         assert_eq!(
             bob_notifications[0]
-                .get("notification_type")
+                .get("notification_kind")
                 .and_then(Value::as_str),
             Some("message")
         );
@@ -1012,7 +1012,7 @@ mod tests {
         assert_eq!(notifications.len(), 1);
         assert_eq!(
             notifications[0]
-                .get("notification_type")
+                .get("notification_kind")
                 .and_then(Value::as_str),
             Some("mention")
         );
@@ -1036,7 +1036,7 @@ mod tests {
         assert_eq!(notifications.len(), 1);
         assert_eq!(
             notifications[0]
-                .get("notification_type")
+                .get("notification_kind")
                 .and_then(Value::as_str),
             Some("assignment")
         );
@@ -1072,7 +1072,7 @@ mod tests {
             );
             assert_eq!(
                 notifications[0]
-                    .get("notification_type")
+                    .get("notification_kind")
                     .and_then(Value::as_str),
                 Some("schedule")
             );

@@ -438,7 +438,7 @@ pub(crate) fn did_recovery_backup_body(
     serde_json::json!({
         "backup_id": backup_id,
         "actor_id": principal_id,
-        "backup_class": "did_recovery",
+        "backup_kind": "did_recovery",
         "backup_version": "kb_1",
         "created_at": "2026-05-30T00:00:00.000Z",
         "series_id": "ak:backup_series:01964137-0000-7000-8000-0000000000c5",
@@ -460,13 +460,13 @@ pub(crate) fn did_recovery_backup_body(
                 "schema": "ak.schema.key_backup.v1",
                 "actor_id": principal_id,
                 "device_id": "did:web:alice.example#recovery",
-                "backup_class": "did_recovery",
+                "backup_kind": "did_recovery",
                 "backup_version": "kb_1",
                 "created_at": "2026-05-30T00:00:00.000Z",
-                "item_types": ["recovery_key_share"]
+                "item_kinds": ["recovery_key_share"]
             }
         },
-        "contents": [{ "item_type": "recovery_key_share", "secret_id": "test-secret" }],
+        "contents": [{ "item_kind": "recovery_key_share", "secret_id": "test-secret" }],
         "ciphertext": "AAAA",
         "ciphertext_digest":
             "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -479,7 +479,7 @@ pub(crate) fn did_recovery_backup_body(
             "signed_fields": [
                 "backup_id",
                 "actor_id",
-                "backup_class",
+                "backup_kind",
                 "backup_version",
                 "series_id",
                 "series_seq",

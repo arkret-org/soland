@@ -4,7 +4,7 @@ diesel::table! {
     account_datas (id) {
         id -> Uuid,
         actor_id -> Text,
-        data_type -> Text,
+        account_data_key -> Text,
         payload -> Jsonb,
         updated_at -> Timestamptz,
     }
@@ -168,7 +168,7 @@ diesel::table! {
         manifest -> Jsonb,
         package -> Nullable<Jsonb>,
         namespaces -> Nullable<Jsonb>,
-        allow_ghost_actors -> Bool,
+        ghost_actors_allowed -> Bool,
         status -> Text,
         registered_at -> Timestamptz,
         revoked_at -> Nullable<Timestamptz>,
@@ -213,7 +213,7 @@ diesel::table! {
     backup_series (id) {
         id -> Uuid,
         actor_id -> Text,
-        backup_class -> Text,
+        backup_kind -> Text,
         head_backup_id -> Nullable<Uuid>,
         head_seq -> Int8,
         frontier_ref -> Nullable<Text>,
@@ -466,9 +466,9 @@ diesel::table! {
     federation_operations (id) {
         id -> Uuid,
         realm_id -> Uuid,
-        object_type -> Text,
+        object_kind -> Text,
         object_id -> Nullable<Text>,
-        operation_type -> Text,
+        operation_kind -> Text,
         payload -> Jsonb,
         created_at -> Timestamptz,
     }
@@ -545,7 +545,7 @@ diesel::table! {
     invite_receive_policies (id) {
         id -> Text,
         policy_payload -> Jsonb,
-        blocked_subjects -> Array<Nullable<Text>>,
+        denied_subjects -> Array<Nullable<Text>>,
         updated_at -> Timestamptz,
     }
 }
@@ -576,7 +576,7 @@ diesel::table! {
         id -> Uuid,
         actor_id -> Nullable<Text>,
         device_id -> Nullable<Text>,
-        backup_class -> Nullable<Text>,
+        backup_kind -> Nullable<Text>,
         backup_version -> Nullable<Text>,
         payload -> Jsonb,
         created_at -> Timestamptz,
@@ -707,7 +707,7 @@ diesel::table! {
         source_ref -> Nullable<Text>,
         strand_id -> Nullable<Text>,
         track_name -> Nullable<Text>,
-        notification_type -> Text,
+        notification_kind -> Text,
         event_kind -> Nullable<Text>,
         source_actor_id -> Nullable<Text>,
         priority -> Text,
@@ -783,7 +783,7 @@ diesel::table! {
         owner_id -> Text,
         scope -> Text,
         subject_ref -> Text,
-        policy_type -> Text,
+        policy_kind -> Text,
         document -> Jsonb,
         version -> Int4,
         signed_by_id -> Nullable<Text>,
@@ -846,7 +846,7 @@ diesel::table! {
         event_id -> Uuid,
         realm_id -> Uuid,
         event_kind -> Text,
-        operation_type -> Text,
+        operation_kind -> Text,
         operation_id -> Nullable<Uuid>,
         sender_id -> Nullable<Text>,
         payload -> Jsonb,
@@ -860,7 +860,7 @@ diesel::table! {
     projection_morphs (id) {
         id -> Uuid,
         realm_id -> Uuid,
-        morph_type -> Text,
+        morph_kind -> Text,
         title -> Nullable<Text>,
         state -> Text,
         state_changed_at -> Nullable<Timestamptz>,
@@ -1150,8 +1150,8 @@ diesel::table! {
 }
 
 diesel::table! {
-    service_identity_registrations (service_type, public_base) {
-        service_type -> Text,
+    service_identity_registrations (service_kind, public_base) {
+        service_kind -> Text,
         public_base -> Text,
         service_id -> Text,
         version_id -> Text,

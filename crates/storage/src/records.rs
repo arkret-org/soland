@@ -235,7 +235,7 @@ pub struct WebvhLogRecord {
 
 /// Actor-private account data row (`ak.account_data.set` storage).
 ///
-/// One row per `(actor, data_type)`. `data_type` is the canonical wire key
+/// One row per `(actor, account_data_key)`. `account_data_key` is the canonical wire key
 /// (e.g. `ak.read_receipt.preferences`, `ak.contacts.actor.did:web:alice.example`,
 /// `ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000`). Soland
 /// treats the `payload` as an opaque encrypted blob — no schema validation
@@ -246,7 +246,7 @@ pub struct WebvhLogRecord {
 #[derive(Clone, Debug)]
 pub struct AccountDataRecord {
     pub actor: String,
-    pub data_type: String,
+    pub account_data_key: String,
     pub payload: Value,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -354,7 +354,7 @@ pub struct ProjectionEventRecord {
     pub realm_id: String,
     /// Canonical Arkret event kind (e.g. `ak.message.create`).
     pub event_kind: String,
-    pub operation_type: String,
+    pub operation_kind: String,
     pub operation_id: Option<String>,
     pub sender: Option<String>,
     pub payload: Value,
@@ -655,7 +655,7 @@ pub struct PolicyDocumentRecord {
     pub owner: String,
     pub scope: String,
     pub subject_ref: String,
-    pub policy_type: String,
+    pub policy_kind: String,
     pub payload: Value,
     pub active: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,

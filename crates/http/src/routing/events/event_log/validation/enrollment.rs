@@ -612,8 +612,8 @@ fn enrollment_authority_designation_from_document(
 ) -> Option<EnrollmentAuthorityDesignation> {
     if let Some(services) = did_document.get("service").and_then(Value::as_array) {
         for service in services {
-            let service_type = service.get("type").and_then(Value::as_str);
-            if service_type
+            let service_kind = service.get("type").and_then(Value::as_str);
+            if service_kind
                 != Some(
                     arkret_models_discovery::service_requirements::DID_SERVICE_DEVICE_ENROLLMENT_AUTHORITY,
                 )

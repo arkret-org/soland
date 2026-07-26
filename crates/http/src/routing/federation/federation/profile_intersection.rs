@@ -629,8 +629,8 @@ fn collect_constraint_kinds(
         Value::Object(object) => {
             for key in [
                 "constraint_kind",
-                "constraint_type",
-                "constraint_subtype",
+                "constraint_kind",
+                "constraint_subkind",
                 "evaluation_class",
                 "kind",
             ] {

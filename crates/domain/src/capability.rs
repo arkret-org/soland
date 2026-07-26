@@ -15,12 +15,12 @@ const RESOURCE_SELECTOR_KNOWN_FIELDS: &[&str] = &[
     "realm_id",
     "space_id",
     "circle_id",
-    "object_type",
+    "object_kind",
     "object_ref",
     "strand_id",
     "message_id",
     "morph_id",
-    "morph_type",
+    "morph_kind",
     "relation_kind",
     "relation_id",
     "view_id",
@@ -339,9 +339,9 @@ fn selector_uses_governance_wildcard(map: &Map<String, Value>) -> bool {
                 || selector_field_missing_or_wildcard(map, "realm_id")
         }
         Some("object") => {
-            let object_type = map.get("object_type").and_then(Value::as_str);
+            let object_kind = map.get("object_kind").and_then(Value::as_str);
             let object_ref = map.get("object_ref").and_then(Value::as_str);
-            let governance_type = matches!(object_type, Some("policy" | "schema"));
+            let governance_type = matches!(object_kind, Some("policy" | "schema"));
             let governance_ref = object_ref.is_some_and(|value| {
                 value.starts_with("ak:policy:") || value.starts_with("ak:schema:")
             });

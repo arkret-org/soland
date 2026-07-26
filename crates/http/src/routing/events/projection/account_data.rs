@@ -47,8 +47,8 @@ pub fn project_read_receipt_policy(state: &AppState, operation: &Operation) {
     state.projections().cache_cell(cell_id, value);
 }
 
-fn account_data_update_type(data_type: &str) -> &'static str {
-    if data_type == "ak.account.blocklist" {
+fn account_data_update_type(account_data_key: &str) -> &'static str {
+    if account_data_key == "ak.account.blocklist" {
         BLOCKLIST_UPDATE_TYPE
     } else {
         ACCOUNT_DATA_UPDATE_TYPE
@@ -94,7 +94,7 @@ pub(super) async fn project_account_data_set(
     source_device_id: &str,
     operation: &Operation,
 ) {
-    let Some(data_type) = operation
+    let Some(account_data_key) = operation
         .payload
         .get("key")
         .and_then(Value::as_str)
@@ -112,7 +112,7 @@ pub(super) async fn project_account_data_set(
         tracing::warn!(
             owner,
             origin,
-            data_type,
+            account_data_key,
             "ak.account_data.set owner does not match accepted operation origin"
         );
         return;
@@ -123,8 +123,12 @@ pub(super) async fn project_account_data_set(
         .and_then(Value::as_bool)
         .unwrap_or(false)
     {
-        if let Err(error) = state.account_data().delete_entry(owner, data_type).await {
-            tracing::warn!(%error, owner, data_type, "failed to tombstone account_data from event");
+        if let Err(error) = state
+            .account_data()
+            .delete_entry(owner, account_data_key)
+            .await
+        {
+            tracing::warn!(%error, owner, account_data_key, "failed to tombstone account_data from event");
             return;
         }
         if !source_device_id.is_empty() {
@@ -132,10 +136,10 @@ pub(super) async fn project_account_data_set(
                 state,
                 owner,
                 source_device_id,
-                account_data_update_type(data_type),
+                account_data_update_type(account_data_key),
                 json!({
                     "operation": "delete",
-                    "data_type": data_type,
+                    "account_data_key": account_data_key,
                     "deleted_at": operation.created_at,
                 }),
             )
@@ -154,12 +158,12 @@ pub(super) async fn project_account_data_set(
     };
     let record = AccountDataState {
         actor_id: owner.to_owned(),
-        data_type: data_type.to_owned(),
+        account_data_key: account_data_key.to_owned(),
         payload: content,
         updated_at: operation.created_at,
     };
     if let Err(error) = state.account_data().save_entry(record.clone()).await {
-        tracing::warn!(%error, owner, data_type, "failed to project account_data from event");
+        tracing::warn!(%error, owner, account_data_key, "failed to project account_data from event");
         return;
     }
     if !source_device_id.is_empty() {
@@ -167,10 +171,10 @@ pub(super) async fn project_account_data_set(
             state,
             owner,
             source_device_id,
-            account_data_update_type(data_type),
+            account_data_update_type(account_data_key),
             json!({
                 "operation": "put",
-                "data_type": data_type,
+                "account_data_key": account_data_key,
                 "content": record.payload.clone(),
                 "updated_at": record.updated_at,
             }),

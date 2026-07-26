@@ -106,7 +106,7 @@ fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
                 "content": {
                     "$op": "set",
                     "value": {
-                        "scheme": "mls-rfc9420",
+                        "scheme": "mls_rfc9420",
                         "group_id": "CK_space_01904100_0000_7000_8000_000000000001",
                         "epoch": 1,
                         "content_type": "application/vnd.arkret.strand.patch-value+json",

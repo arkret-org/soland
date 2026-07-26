@@ -179,7 +179,7 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
                 .with_wire_code("applet_effective_scope_mismatch"),
         );
     }
-    if !record.allow_ghost_actors {
+    if !record.ghost_actors_allowed {
         return Err(AppError::capability_denied(
             "applet install does not grant ghost actor provisioning",
         ));
@@ -393,7 +393,7 @@ pub(super) async fn provision_ghost(
         .await?
         .ok_or_else(|| AppError::not_found("applet is not registered"))?;
     ensure_not_revoked(&record)?;
-    if !record.allow_ghost_actors {
+    if !record.ghost_actors_allowed {
         return Err(AppError::capability_denied(
             "applet install does not grant ghost actor provisioning",
         ));

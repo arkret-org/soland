@@ -727,7 +727,7 @@ async fn contact_row_surfaces_invite_consent_grant_ref() {
 
 /// invite-addressing.md §5 — `GET`/`PUT /_arkret/self/invite-receive-policy`
 /// round-trip the subject's private policy through the same in-memory store
-/// the tombstone `blocked_subjects` writes to, and reject a mismatched
+/// the tombstone `denied_subjects` writes to, and reject a mismatched
 /// `subject_id` with an authorization error.
 #[tokio::test]
 async fn invite_receive_policy_get_set_round_trips() {
@@ -747,7 +747,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         .unwrap();
     assert_eq!(default_policy["subject_id"], alice);
     assert!(
-        default_policy["allowed_introduction_kinds"]
+        default_policy["holder_allowed_introduction_kinds"]
             .as_array()
             .unwrap()
             .iter()
@@ -758,10 +758,10 @@ async fn invite_receive_policy_get_set_round_trips() {
     let custom = serde_json::json!({
         "schema": default_policy["schema"],
         "subject_id": alice,
-        "allowed_introduction_kinds": ["consent_grant"],
+        "holder_allowed_introduction_kinds": ["consent_grant"],
         "explicit_address_behavior": "drop",
         "unknown_invites": "drop",
-        "blocked_subjects": [mallory],
+        "denied_subjects": [mallory],
     });
     let stored: Value = TestClient::put("http://server/_arkret/self/invite-receive-policy")
         .add_header("Authorization", format!("Bearer {alice_token}"), true)
@@ -772,7 +772,7 @@ async fn invite_receive_policy_get_set_round_trips() {
         .await
         .unwrap();
     assert_eq!(stored["explicit_address_behavior"], "drop");
-    assert_eq!(stored["blocked_subjects"][0], mallory);
+    assert_eq!(stored["denied_subjects"][0], mallory);
 
     // GET now reflects the stored override.
     let reread: Value = TestClient::get("http://server/_arkret/self/invite-receive-policy")
@@ -783,13 +783,13 @@ async fn invite_receive_policy_get_set_round_trips() {
         .await
         .unwrap();
     assert_eq!(reread["explicit_address_behavior"], "drop");
-    assert_eq!(reread["blocked_subjects"][0], mallory);
+    assert_eq!(reread["denied_subjects"][0], mallory);
 
     // A policy whose subject_id is not the session actor is rejected.
     let mismatched = serde_json::json!({
         "schema": default_policy["schema"],
         "subject_id": mallory,
-        "allowed_introduction_kinds": ["consent_grant"],
+        "holder_allowed_introduction_kinds": ["consent_grant"],
         "explicit_address_behavior": "quarantine",
         "unknown_invites": "drop",
     });

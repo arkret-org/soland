@@ -545,7 +545,7 @@ async fn admin_federation_items(state: &AppState) -> Vec<Value> {
                 "kind": "federation_operation",
                 "operation_id": operation.operation_id,
                 "realm_id": operation.realm_id,
-                "operation_type": operation.operation_type,
+                "operation_kind": operation.operation_kind,
                 "canonical_kind": kinds::canonical_kind_string(&operation),
                 "strand_id": strand_id_for_projection_event(&projected),
                 "track": discussion_track_for_projection_event(

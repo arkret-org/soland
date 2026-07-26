@@ -5,7 +5,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
 };
-use arkret_wire::ServiceType;
+use arkret_wire::ServiceKind;
 use ed25519_dalek::Signer;
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
@@ -67,7 +67,7 @@ pub(crate) async fn ensure(
         method_evidence: json!({
             "mode": "service_registration_provider",
             "operation": arkret_wire::ServiceOperationId::ROOT_IDENTITY_SERVICE_REGISTRATION_COMMAND_ENSURE,
-            "service_type": key.service_type().as_str(),
+            "service_kind": key.service_kind().as_str(),
             "public_base": key.public_base().as_str(),
             "version_id": outcome.version_id,
         }),
@@ -107,17 +107,17 @@ pub(crate) async fn ensure(
 pub(crate) async fn get(
     depot: &mut Depot,
     req: &mut Request,
-    service_type: QueryParam<String, true>,
+    service_kind: QueryParam<String, true>,
     public_base: QueryParam<String, true>,
 ) -> JsonResult<ServiceRegistrationOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     require_embedded_webvh_registration_bearer(state, req)?;
-    let service_type =
-        serde_json::from_value::<ServiceType>(Value::String(service_type.into_inner()))
-            .map_err(|error| AppError::invalid_param(format!("invalid service_type: {error}")))?;
+    let service_kind =
+        serde_json::from_value::<ServiceKind>(Value::String(service_kind.into_inner()))
+            .map_err(|error| AppError::invalid_param(format!("invalid service_kind: {error}")))?;
     let public_base = CanonicalServiceUrl::new(public_base.into_inner())
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    let key = ServiceRegistrationKey::new(service_type, public_base)
+    let key = ServiceRegistrationKey::new(service_kind, public_base)
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let outcome = state
         .dids()

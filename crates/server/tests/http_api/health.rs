@@ -38,7 +38,7 @@ async fn health_and_describe_work() {
         .await
         .unwrap();
     assert_eq!(describe["protocol_version"], "1.0");
-    assert_eq!(describe["service_type"], "principal_server");
+    assert_eq!(describe["service_kind"], "principal_server");
     assert!(
         !describe["supported_profiles"]
             .as_array()
@@ -302,15 +302,15 @@ async fn server_describe_accepts_only_its_selected_role() {
     let service = app_from_state(soland_test_support::app_state(test_config()));
 
     let selected: Value =
-        TestClient::get("http://server/_arkret/describe?service_type=principal_server")
+        TestClient::get("http://server/_arkret/describe?service_kind=principal_server")
             .send(&service)
             .await
             .take_json()
             .await
             .unwrap();
-    assert_eq!(selected["service_type"], "principal_server");
+    assert_eq!(selected["service_kind"], "principal_server");
 
-    let mut rejected = TestClient::get("http://server/_arkret/describe?service_type=auth_server")
+    let mut rejected = TestClient::get("http://server/_arkret/describe?service_kind=auth_server")
         .send(&service)
         .await;
     assert_eq!(rejected.status_code.unwrap().as_u16(), 400);

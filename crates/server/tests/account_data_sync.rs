@@ -76,11 +76,11 @@ async fn account_subscribe_frame(state: AppState, token: &str, query: &str) -> V
 async fn put_account_data(
     state: AppState,
     token: &str,
-    data_type: &str,
+    account_data_key: &str,
     content: Value,
 ) -> (StatusCode, Value) {
     let mut response = TestClient::put(format!(
-        "http://server/_arkret/self/account_data/{data_type}"
+        "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
     .json(&json!({ "content": content }))
@@ -302,10 +302,18 @@ fn projected_read_markers(state: &AppState, actor: &str, realm_id: Option<&str>)
         .collect()
 }
 
-fn encrypted_account_data_value(actor_id: &str, data_type: &str, plaintext: &Value) -> Value {
+fn encrypted_account_data_value(
+    actor_id: &str,
+    account_data_key: &str,
+    plaintext: &Value,
+) -> Value {
     serde_json::to_value(
         arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
-            &[7u8; 32], actor_id, data_type, plaintext, [9u8; 24],
+            &[7u8; 32],
+            actor_id,
+            account_data_key,
+            plaintext,
+            [9u8; 24],
         )
         .unwrap(),
     )
@@ -337,12 +345,12 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         "Alice Phone",
     )
     .await;
-    let data_type = "client.complement_probe.scalar";
+    let account_data_key = "client.complement_probe.scalar";
 
     let (first_status, first) = put_account_data(
         state.clone(),
         &desktop,
-        data_type,
+        account_data_key,
         json!({ "version": 1, "label": "first" }),
     )
     .await;
@@ -350,12 +358,12 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     assert_eq!(first["content"]["version"], 1);
 
     let (second_status, second) =
-        put_account_data(state.clone(), &desktop, data_type, json!("second")).await;
+        put_account_data(state.clone(), &desktop, account_data_key, json!("second")).await;
     assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
     assert_eq!(second["content"], "second");
 
     let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
-    let event = account_data_entry(&phone_sync, data_type)
+    let event = account_data_entry(&phone_sync, account_data_key)
         .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
     assert_eq!(
         event["kind"],
@@ -379,18 +387,18 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     state
         .test_persistence()
         .account_data()
-        .delete(&actor, data_type)
+        .delete(&actor, account_data_key)
         .await
         .expect("simulate rebuildable projection loss");
     let rebuilt_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     assert_eq!(
-        account_data_entry(&rebuilt_sync, data_type).map(|entry| &entry["payload"]["body"]),
+        account_data_entry(&rebuilt_sync, account_data_key).map(|entry| &entry["payload"]["body"]),
         Some(&json!("second")),
         "initial baseline must come from the durable Event store"
     );
 
     let mut delete = TestClient::delete(format!(
-        "http://server/_arkret/self/account_data/{data_type}"
+        "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {desktop}"), true)
     .send(&app_from_state(state.clone()))
@@ -400,7 +408,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     assert_eq!(delete_body["ok"], true);
 
     let after_delete = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
-    assert!(account_data_entry(&after_delete, data_type).is_none());
+    assert!(account_data_entry(&after_delete, account_data_key).is_none());
     let latest = state
         .test_persistence()
         .events()
@@ -415,7 +423,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
                     .get("payload")
                     .and_then(|payload| payload.get("key"))
                     .and_then(Value::as_str)
-                    == Some(data_type)
+                    == Some(account_data_key)
         })
         .max_by_key(|record| record.received_at)
         .expect("account_data tombstone Event remains durable");
@@ -518,7 +526,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
     assert!(
         stored_account_data
             .iter()
-            .any(|record| record.data_type == "ak.account.blocklist"),
+            .any(|record| record.account_data_key == "ak.account.blocklist"),
         "account_data projection must persist encrypted blocklist after accepted event: {stored_account_data:?}"
     );
 
@@ -545,7 +553,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         .find(|event| event["kind"] == "ak.account.blocklist.update")
         .expect("blocklist update fanout reaches Alice's sibling device");
     assert_eq!(
-        blocklist_event["content"]["data_type"],
+        blocklist_event["content"]["account_data_key"],
         "ak.account.blocklist"
     );
     assert_eq!(blocklist_event["content"]["content"], encrypted_blocklist);

@@ -91,8 +91,8 @@ fn normalize_read_receipt_payload(
 
         require_string_field(
             object,
-            "receipt_type",
-            arkret_wire::constants::READ_RECEIPT_TYPE,
+            "receipt_kind",
+            arkret_wire::constants::READ_RECEIPT_KIND,
         )?;
         require_string_field(
             object,

@@ -249,19 +249,19 @@ pub async fn probe_webvh_provider_describe(
 
 /// Validate a canonical ServiceDescribe body for use as a webvh resolver trust
 /// root. The four `service-describe.schema.json` required fields are checked:
-/// `service_type`, `service_id`, `trust_domain`, `supported_operations`.
+/// `service_kind`, `service_id`, `trust_domain`, `supported_operations`.
 fn validate_webvh_provider_describe(
     body: &Value,
     expected_service_id: Option<&str>,
     expected_trust_domain: Option<&str>,
 ) -> Result<(), String> {
-    let service_type = body
-        .get("service_type")
+    let service_kind = body
+        .get("service_kind")
         .and_then(Value::as_str)
-        .ok_or_else(|| "webvh provider describe missing service_type".to_owned())?;
-    if !matches!(service_type, "identity_registry" | "principal_server") {
+        .ok_or_else(|| "webvh provider describe missing service_kind".to_owned())?;
+    if !matches!(service_kind, "identity_registry" | "principal_server") {
         return Err(format!(
-            "webvh provider service_type must be an identity registry, got {service_type:?}"
+            "webvh provider service_kind must be an identity registry, got {service_kind:?}"
         ));
     }
     let service_id = body
@@ -547,10 +547,10 @@ mod tests {
 
     #[test]
     fn provider_describe_trust_handshake_accepts_canonical_identity_registry() {
-        // STA-07-002 — canonical ServiceDescribe shape: service_type +
+        // STA-07-002 — canonical ServiceDescribe shape: service_kind +
         // service_id + trust_domain + supported_operations.
         let describe = json!({
-            "service_type": "identity_registry",
+            "service_kind": "identity_registry",
             "service_id": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn provider_describe_trust_handshake_rejects_mismatch_and_dev() {
         let mut describe = json!({
-            "service_type": "identity_registry",
+            "service_kind": "identity_registry",
             "service_id": "did:web:starid.example",
             "trust_domain": "ak:trust_domain:example.net",
             "development_mode": false,

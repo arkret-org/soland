@@ -9,7 +9,7 @@ use crate::routing::interop::participant_binding;
 
 const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-c0ffeec0ffec";
 const CALL_ID: &str = "ak:call:01904100-0000-7000-8000-ca11ca11ca11";
-const FOCUS_ID: &str = "ak:focus:arkret-native:green";
+const FOCUS_ID: &str = "ak:focus:arkret_native:green";
 const ACTOR_ID: &str = "did:web:alice.example";
 const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 const ISSUER_KID: &str = "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#media-2026-06";
@@ -42,7 +42,7 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
             "service_id": service_id,
             "foci": [{
                 "focus_id": FOCUS_ID,
-                "backend": "arkret-native",
+                "backend": "arkret_native",
                 "issuer_kid": issuer_kid,
                 "connect_url": "wss://media.soland.local/native"
             }]
@@ -51,7 +51,7 @@ fn install_media_service_with_service_id(state: &AppState, service_id: &str, iss
 }
 
 /// Install a current-epoch media_service cell anchoring `issuer_kid` under
-/// the soland self service_id (the arkret-native self-signed deployment).
+/// the soland self service_id (the arkret_native self-signed deployment).
 fn install_media_service(state: &AppState, issuer_kid: &str) {
     install_media_service_with_service_id(
         state,

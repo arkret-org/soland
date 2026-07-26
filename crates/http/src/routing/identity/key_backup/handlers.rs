@@ -286,7 +286,7 @@ pub(super) async fn put_key_backup(
         )
         .with_wire_code("first_backup_gate_unsatisfied"));
     }
-    if backup.backup_class == BackupClass::DidRecovery {
+    if backup.backup_kind == BackupKind::DidRecovery {
         ensure_key_backup_writer_device_authorized(
             state,
             &session.actor,
@@ -371,11 +371,11 @@ pub(crate) async fn list_key_backups(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
-    backup_class: QueryParam<String, false>,
+    backup_kind: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsList> {
-    list_key_backups_impl(aa, cursor, series_id, backup_class, depot, req).await
+    list_key_backups_impl(aa, cursor, series_id, backup_kind, depot, req).await
 }
 
 #[salvo::oapi::endpoint(
@@ -390,30 +390,30 @@ pub(crate) async fn list_key_backups_admin(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
-    backup_class: QueryParam<String, false>,
+    backup_kind: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsList> {
-    list_key_backups_impl(aa, cursor, series_id, backup_class, depot, req).await
+    list_key_backups_impl(aa, cursor, series_id, backup_kind, depot, req).await
 }
 
 async fn list_key_backups_impl(
     aa: AuthArgs,
     cursor: QueryParam<String, false>,
     series_id: QueryParam<String, false>,
-    backup_class: QueryParam<String, false>,
+    backup_kind: QueryParam<String, false>,
     depot: &mut Depot,
     req: &mut Request,
 ) -> JsonResult<KeysBackupsList> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let series_filter = series_id.into_inner();
-    let backup_class_filter = backup_class.into_inner();
+    let backup_class_filter = backup_kind.into_inner();
     if let Some(class) = backup_class_filter.as_deref()
         && !KEY_BACKUP_CLASSES.contains(&class)
     {
         return Err(AppError::invalid_param(format!(
-            "unsupported backup_class `{class}`"
+            "unsupported backup_kind `{class}`"
         )));
     }
     let mut backups: Vec<Value> = state
@@ -430,7 +430,7 @@ async fn list_key_backups_impl(
             None => true,
         })
         .filter(|backup| match backup_class_filter.as_deref() {
-            Some(class) => backup.get("backup_class").and_then(Value::as_str) == Some(class),
+            Some(class) => backup.get("backup_kind").and_then(Value::as_str) == Some(class),
             None => true,
         })
         .collect();
@@ -511,7 +511,7 @@ pub(super) async fn unlock_key_backup(
             json!({
                 "access_kind": "key_backup_read",
                 "backup_id": backup_id.clone(),
-                "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
+                "backup_kind": backup.get("backup_kind").cloned().unwrap_or(Value::Null),
                 "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
                 "device_id": session.device_id.clone(),
                 "download_count": quota.count,
@@ -580,7 +580,7 @@ pub(super) async fn delete_key_backup(
             "access_kind": "key_backup_delete",
             "backup_id": backup_id.clone(),
             "device_id": session.device_id,
-            "backup_class": backup.get("backup_class").cloned().unwrap_or(Value::Null),
+            "backup_kind": backup.get("backup_kind").cloned().unwrap_or(Value::Null),
             "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
             "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),
         }),
