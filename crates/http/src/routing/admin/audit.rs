@@ -3,8 +3,7 @@
 //! Two disjoint mounts (no double-mounting; SOL-NAME-02):
 //!
 //! - Client ingest ([`ingest_router`], mounted at `/_soland/self/audit/*` under the session-PoP
-//!   hoop): `POST audit/user-action`, `POST audit/franking/verify`. Per-handler actor auth binds
-//!   writes to the authenticated actor.
+//!   hoop): `POST audit/franking/verify`.
 //! - Operator queries ([`ops_router`], mounted inside the `RequireAdmin` gated `/_soland/admin/*`
 //!   branch): `GET audit/events`, `GET audit/erasure-receipts`.
 //!
@@ -27,7 +26,6 @@ use super::{now, realm_has_member};
 use crate::ids;
 use crate::routing::system::extract::AuthArgs;
 use crate::state::AppState;
-use crate::wire::OkOutcome;
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct FrankingProofVerifyRequestBody {
@@ -80,20 +78,6 @@ struct AuditErasureReceiptPeerStatus {
     outcome: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AuditUserActionRequestBody {
-    #[serde(default)]
-    actor: Option<String>,
-    #[serde(default)]
-    action: Option<String>,
-    #[serde(default)]
-    outcome: Option<String>,
-    #[serde(default)]
-    note: Option<String>,
-    #[serde(default)]
-    recorded_at: Option<String>,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 struct AuditEventsOutcome {
     events: Vec<Value>,
@@ -102,9 +86,7 @@ struct AuditEventsOutcome {
 
 /// Client-facing audit ingest, mounted at `/_soland/self/audit/*`.
 pub(super) fn ingest_router() -> Router {
-    Router::new()
-        .push(Router::with_path("audit/franking/verify").post(verify_franking_proof))
-        .push(Router::with_path("audit/user-action").post(post_user_action))
+    Router::new().push(Router::with_path("audit/franking/verify").post(verify_franking_proof))
 }
 
 /// Operator audit queries, mounted inside the admin-gated
@@ -213,71 +195,6 @@ async fn audit_erasure_receipts(
             .collect()
     };
     json_ok(AuditErasureReceiptsOutcome { receipts })
-}
-
-/// Client self-service telemetry sink.
-///
-/// `POST /_soland/self/audit/user-action` (see [`ingest_router`]; the mount is
-/// `self`, not `admin`) accepts a user-action audit envelope shaped
-/// `{actor, action, outcome, note?, recorded_at}`.
-///
-/// The endpoint is authenticated; the posted `actor` MUST match the
-/// session actor (no cross-actor writes). The audit entry is appended
-/// via `append_audit_log` so it shows up in the same `audit/events`
-/// query a sodmin operator already runs.
-///
-/// This models a client logging *its own* user's actions, so there is no
-/// target field. Operator actions are not posted here: soland stamps those
-/// itself while handling the admin endpoint (see `admin/spec.rs`
-/// `admin_account_state_action`), binding the session actor and the target id
-/// rather than trusting a client-asserted copy.
-#[salvo::oapi::endpoint(
-    operation_id = "org.arkret.soland.audit.user_action",
-    tags("soland_admin")
-)]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.audit.user_action"))]
-async fn post_user_action(
-    aa: AuthArgs,
-    body: JsonBody<AuditUserActionRequestBody>,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<OkOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let actor = body
-        .actor
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    if actor.is_empty() {
-        return Err(AppError::invalid_param("actor is required"));
-    }
-    if actor != session.actor {
-        return Err(AppError::capability_denied(
-            "audit posts are limited to the authenticated actor",
-        ));
-    }
-    let action = body
-        .action
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-        .unwrap_or_default();
-    if action.is_empty() {
-        return Err(AppError::invalid_param("action is required"));
-    }
-    let outcome = body.outcome.as_deref().unwrap_or("ok");
-    let target = json!({
-        "kind": "user_action",
-        "note": body.note,
-        "recorded_at": body.recorded_at,
-    });
-    append_audit_log(state, Some(&actor), &action, target, outcome).await;
-    json_ok(OkOutcome { ok: true })
 }
 
 #[salvo::oapi::endpoint(operation_id = "org.arkret.soland.audit.events", tags("soland_admin"))]
