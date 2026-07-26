@@ -183,7 +183,6 @@ pub(in crate::routing) fn local_router() -> Router {
         Router::with_path("account")
             .push(Router::with_path("register").post(local_account_register))
             .push(Router::with_path("me").get(local_account_me))
-            .push(Router::with_path("export").get(lifecycle::export_account))
             .push(Router::with_path("deactivate").post(lifecycle::deactivate_account))
             .push(Router::with_path("erase").post(lifecycle::erase_account)),
     )
