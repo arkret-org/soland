@@ -288,24 +288,6 @@ async fn health_and_describe_work() {
             .iter()
             .any(|gap| gap == "RFC 9421 HTTP Message Signatures header emission")
     );
-    let private_rail_limitation = describe["limits"]["profile_status"]["limitations"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|limitation| limitation["area"] == "federation.private_inbound_rail")
-        .expect("private federation inbound rail limitation should remain described");
-    assert_eq!(private_rail_limitation["status"], "deployment_local_only");
-    assert_eq!(
-        private_rail_limitation["canonical_inbound"],
-        "/_arkret/peer/events"
-    );
-    assert!(
-        private_rail_limitation["private_paths"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|path| path == "/_soland/peer/federation/*")
-    );
     let full_gap = describe["limits"]["profile_status"]["principal_server_full_profile_gaps"]
         .as_array()
         .unwrap()
@@ -334,29 +316,6 @@ async fn server_describe_accepts_only_its_selected_role() {
     assert_eq!(rejected.status_code.unwrap().as_u16(), 400);
     let rejected: Value = rejected.take_json().await.unwrap();
     assert_eq!(rejected["error"]["code"], "invalid_param");
-}
-
-#[tokio::test]
-async fn private_federation_write_rail_is_local_only() {
-    let mut config = test_config();
-    config.development_mode = false;
-    let service = app_from_state(soland_test_support::app_state(config));
-
-    let mut response = TestClient::post("http://server/_soland/peer/federation/operations")
-        .json(&serde_json::json!({
-            "origin": "did:web:peer.example",
-            "destination": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-            "operations": []
-        }))
-        .send(&service)
-        .await;
-
-    assert_eq!(response.status_code.unwrap(), StatusCode::NOT_IMPLEMENTED);
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(
-        body["error"]["code"], "federation_interop_track_only",
-        "private federation write rail must fail closed before any interop parsing: {body}"
-    );
 }
 
 #[tokio::test]

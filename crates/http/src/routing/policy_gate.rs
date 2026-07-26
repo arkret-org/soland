@@ -15,12 +15,6 @@ use crate::ids;
 use crate::state::AppState;
 
 #[derive(Clone, Debug)]
-pub(crate) enum PolicyGateSurface {
-    LocalSubmit,
-    FederationInbound { origin_service_id: String },
-}
-
-#[derive(Clone, Debug)]
 pub(crate) struct PolicyGateRejection {
     pub status: StatusCode,
     pub code: String,
@@ -64,7 +58,6 @@ pub(crate) async fn enforce_operation_policy_server(
     state: &AppState,
     actor_id: &str,
     operation: &Operation,
-    surface: PolicyGateSurface,
 ) -> Result<(), PolicyGateRejection> {
     let realm_id = operation.realm_id.as_str();
     let realm_config = state
@@ -84,8 +77,7 @@ pub(crate) async fn enforce_operation_policy_server(
         .as_deref()
         .unwrap_or_else(|| operation.realm_id.as_str())
         .to_owned();
-    let policy_request =
-        policy_request_for_operation(state, actor_id, operation, &action, surface).await?;
+    let policy_request = policy_request_for_operation(state, actor_id, operation, &action).await?;
     let mut request_ctx = RequestContext {
         realm_id: realm_id.to_owned(),
         actor_id: actor_id.to_owned(),
@@ -173,7 +165,6 @@ async fn policy_request_for_operation(
     actor_id: &str,
     operation: &Operation,
     action: &str,
-    surface: PolicyGateSurface,
 ) -> Result<PolicyCheckRequestInput, PolicyGateRejection> {
     let realm_id = RealmId::new(operation.realm_id.to_string()).map_err(|error| {
         PolicyGateRejection::forbidden_request(format!(
@@ -191,12 +182,6 @@ async fn policy_request_for_operation(
             "operation preview serialization failed: {error}"
         ))
     })?;
-    let surface_value = match surface {
-        PolicyGateSurface::LocalSubmit => json!({"surface": "local_submit"}),
-        PolicyGateSurface::FederationInbound { origin_service_id } => {
-            json!({"surface": "federation_inbound", "origin_service_id": origin_service_id})
-        }
-    };
     let mut policy_doc_ids = state
         .governance()
         .active_policy_documents()
@@ -226,7 +211,7 @@ async fn policy_request_for_operation(
         signed_transport: true,
         event_preview,
         auth_context: json!({
-            "surface": surface_value,
+            "surface": {"surface": "local_submit"},
             "operation_id": operation.operation_id.as_str(),
             "object_type": operation.object_type.as_str(),
         }),

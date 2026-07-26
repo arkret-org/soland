@@ -3,7 +3,6 @@ use std::time::{Duration as StdDuration, Instant};
 use ed25519_dalek::{SigningKey, VerifyingKey};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
-use sha2::{Digest, Sha256};
 use soland_http::error::AppError;
 use soland_http::http_signature::{self, SignatureBaseComponent, SignatureWindowViolation};
 
@@ -69,184 +68,10 @@ pub(super) fn validate_federation_headers(
     Ok(())
 }
 
-pub(super) async fn verify_inbound_push_http_signature(
-    state: &AppState,
-    req: &mut Request,
-    body: &arkret_event_draft::federation_transaction::FederationPushOperationsRequestBody,
-) -> Result<(), AppError> {
-    verify_inbound_federation_http_signature(
-        state,
-        req,
-        body.origin.as_str(),
-        body.destination.as_str(),
-        "federation_push",
-    )
-    .await
-}
-
-pub(super) async fn verify_inbound_transaction_http_signature(
-    state: &AppState,
-    req: &mut Request,
-    body: &arkret_event_draft::federation_transaction::FederationTransactionRequestBody,
-) -> Result<(), AppError> {
-    verify_inbound_federation_http_signature(
-        state,
-        req,
-        body.origin.as_str(),
-        body.destination.as_str(),
-        "federation_transaction",
-    )
-    .await
-}
-
-async fn verify_inbound_federation_http_signature(
-    state: &AppState,
-    req: &mut Request,
-    body_origin: &str,
-    body_destination: &str,
-    metric_label: &'static str,
-) -> Result<(), AppError> {
-    http_signature::reject_content_encoding(req, || {
-        AppError::new(
-            soland_http::error::ErrorCode::SchemaViolation,
-            "federation signed JSON requests must not use Content-Encoding",
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?;
-    let body_bytes = req
-        .payload()
-        .await
-        .map_err(|error| {
-            AppError::bad_json(format!("unable to read federation request body: {error}"))
-        })?
-        .to_vec();
-    // Capture the bucket start as a plain local, run the synchronous verify
-    // body, then on failure pad the response timing asynchronously (no worker
-    // blocking) — see `apply_federation_auth_failure_delay`.
-    let started_at = Instant::now();
-    let outcome = verify_inbound_federation_http_signature_inner(
-        state,
-        req,
-        &body_bytes,
-        body_origin,
-        body_destination,
-        metric_label,
-    );
-    if outcome.is_err() {
-        apply_federation_auth_failure_delay(started_at).await;
-    }
-    outcome
-}
-
-fn verify_inbound_federation_http_signature_inner(
-    state: &AppState,
-    req: &Request,
-    body_bytes: &[u8],
-    body_origin: &str,
-    body_destination: &str,
-    metric_label: &'static str,
-) -> Result<(), AppError> {
-    let body_digests = http_signature::exact_body_digests(body_bytes);
-    let expected_content_digest = body_digests.content_digest;
-    let expected_request_digest = body_digests.request_digest;
-    validate_federation_request_binding(
-        &state.config().trust_domain,
-        req,
-        &expected_request_digest,
-    )?;
-
-    let content_digest = required_header(req, "content-digest")?;
-    if content_digest != expected_content_digest {
-        crate::metrics::record_digest_mismatch(&format!("{metric_label}_content_digest"));
-        return Err(signature_error(
-            "Content-Digest does not match federation canonical request body",
-        ));
-    }
-    let request_digest = required_header(req, "request-canonical-digest")?;
-    if request_digest != expected_request_digest {
-        crate::metrics::record_digest_mismatch(&format!("{metric_label}_request_digest"));
-        return Err(signature_error(
-            "Request-Canonical-Digest does not match federation canonical request body",
-        ));
-    }
-    http_signature::validate_canonical_json_body(body_bytes, |error| {
-        AppError::new(
-            soland_http::error::ErrorCode::SchemaViolation,
-            format!("federation request body is not canonical JSON: {error}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?;
-
-    let source_service_id = required_header(req, "source-service-id")?;
-    let destination_service_id = required_header(req, "destination-service-id")?;
-    let source_trust_domain = required_header(req, "source-trust-domain")?;
-    let destination_trust_domain = required_header(req, "destination-trust-domain")?;
-    if destination_service_id != body_destination || destination_service_id != *state.service_id() {
-        return Err(signature_error(
-            "Destination-Service-ID does not match the federation request destination",
-        ));
-    }
-    if destination_trust_domain != state.config().trust_domain {
-        return Err(signature_error(
-            "Destination-Trust-Domain does not match this service",
-        ));
-    }
-    // A deployment trust domain is the ServiceDescribe claim, not a value
-    // derivable from the service DID. The signed header is checked against the
-    // peer ServiceDescribe by the profile-intersection gate.
-    let target_uri = signature_target_uri(req, state);
-    let authority = signature_authority(req, state);
-    let endpoint_digest =
-        validate_destination_authority(state, req, &authority, &destination_service_id)?;
-    let method = req.method().as_str().to_owned();
-    let outer_params = signature_params(req, "signature-input")?;
-    validate_signature_params(&outer_params, &source_service_id, "outer")?;
-    let outer_base = federation_http_signature_base(
-        &method,
-        &target_uri,
-        &authority,
-        &content_digest,
-        &source_service_id,
-        &destination_service_id,
-        &source_trust_domain,
-        &destination_trust_domain,
-        &request_digest,
-        endpoint_digest.as_deref(),
-        &outer_params,
-    );
-    verify_signature_header(
-        state,
-        req,
-        "signature",
-        &source_service_id,
-        &outer_base,
-        "outer",
-    )?;
-
-    if source_service_id != body_origin {
-        verify_relay_inner_signature(
-            state,
-            req,
-            &method,
-            &target_uri,
-            &content_digest,
-            body_origin,
-            &source_service_id,
-            &destination_service_id,
-            &request_digest,
-        )?;
-    }
-
-    Ok(())
-}
-
 /// Verify the inbound RFC 9421 HTTP Message Signature for a spec-canonical
 /// `/_arkret/peer/*` request and enforce the local peer deny policy.
 ///
-/// Unlike [`verify_inbound_federation_http_signature`] (the private
-/// `/_soland/peer/federation/*` track, which carries a typed body with an
-/// `origin`/`destination` field and an optional relay-inner signature), the
-/// canonical peer surface authenticates purely on the federation trust headers:
+/// The canonical peer surface authenticates purely on the federation trust headers:
 /// the origin is the `source-service-id` header, so there is no relay-inner
 /// hop to verify. The function handles both bodied requests (POST submit /
 /// query_post / resolve / invites / contacts) and bodyless GETs (query /
@@ -394,76 +219,6 @@ fn verify_inbound_peer_http_signature_inner(
     }
 
     Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn verify_relay_inner_signature(
-    state: &AppState,
-    req: &Request,
-    method: &str,
-    target_uri: &str,
-    content_digest: &str,
-    origin_service_id: &str,
-    relay_service_id: &str,
-    destination_service_id: &str,
-    request_digest: &str,
-) -> Result<(), AppError> {
-    let inner_params = signature_params(req, "relay-inner-signature-input")?;
-    validate_signature_params(&inner_params, origin_service_id, "relay inner")?;
-    let inner_base = http_signature::signature_base(
-        &[
-            SignatureBaseComponent::required("@method", method),
-            SignatureBaseComponent::required("@target-uri", target_uri),
-            SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("origin-service-id", origin_service_id),
-            SignatureBaseComponent::required("relay-service-id", relay_service_id),
-            SignatureBaseComponent::required("destination-service-id", destination_service_id),
-            SignatureBaseComponent::required("request-canonical-digest", request_digest),
-        ],
-        &inner_params,
-    );
-    verify_signature_header(
-        state,
-        req,
-        "relay-inner-signature",
-        origin_service_id,
-        &inner_base,
-        "relay inner",
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn federation_http_signature_base(
-    method: &str,
-    target_uri: &str,
-    authority: &str,
-    content_digest: &str,
-    source_service_id: &str,
-    destination_service_id: &str,
-    source_trust_domain: &str,
-    destination_trust_domain: &str,
-    request_digest: &str,
-    destination_service_endpoint_digest: Option<&str>,
-    signature_params: &str,
-) -> String {
-    http_signature::signature_base(
-        &[
-            SignatureBaseComponent::required("@method", method),
-            SignatureBaseComponent::required("@target-uri", target_uri),
-            SignatureBaseComponent::required("@authority", authority),
-            SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("source-service-id", source_service_id),
-            SignatureBaseComponent::required("destination-service-id", destination_service_id),
-            SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
-            SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
-            SignatureBaseComponent::required("request-canonical-digest", request_digest),
-            SignatureBaseComponent::optional(
-                "destination-service-endpoint-digest",
-                destination_service_endpoint_digest,
-            ),
-        ],
-        signature_params,
-    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -640,18 +395,6 @@ fn verify_signature_header(
         },
         || verifying_key_for_service_id(state, service_id),
     )
-}
-
-pub(super) fn origin_key_state_digest_for_service(
-    state: &AppState,
-    service_id: &str,
-) -> Result<String, AppError> {
-    let verifying_key = verifying_key_for_service_id(state, service_id)?;
-    let mut hasher = Sha256::new();
-    hasher.update(b"soland:federation-origin-key-state:v1:");
-    hasher.update(service_id.as_bytes());
-    hasher.update(verifying_key.to_bytes());
-    Ok(format!("sha256:{}", hex::encode(hasher.finalize())))
 }
 
 fn verifying_key_for_service_id(

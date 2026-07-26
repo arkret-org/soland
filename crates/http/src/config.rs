@@ -473,15 +473,6 @@ pub struct AppConfig {
     /// Realm Event kinds.
     /// Env: `SOLAND_CANDIDATE_JOIN_POLICY` (default false).
     pub candidate_join_policy_enabled: bool,
-    /// Stream-F (Wave 2C) — cross-Principal-Server erasure-receipt
-    /// propagation window in milliseconds. After a
-    /// `ak.audit.erasure_receipt` is accepted, the federation fanout
-    /// worker waits up to this many ms for every peer to acknowledge.
-    /// Peers that don't respond inside the window flip the receipt's
-    /// top-level `fanout_status` to `incomplete`. Spec
-    /// `realm-and-space.md` §2.5.2: default 7 days (604_800_000 ms).
-    /// Env: `SOLAND_ERASURE_PROPAGATION_WINDOW_MS`.
-    pub erasure_propagation_window_ms: u64,
     /// P5 (5.4) — structured-logging output format. Defaults to
     /// [`LogFormat::Json`] in production (`SOLAND_DEVELOPMENT_MODE=false`)
     /// and [`LogFormat::Plain`] in development. Override at any time via
@@ -785,7 +776,6 @@ impl AppConfig {
             sovereign_enclave_enabled: false,
             sovereign_enclave_allowed_outbound_hosts: Vec::new(),
             candidate_join_policy_enabled: false,
-            erasure_propagation_window_ms: 604_800_000,
             log_format: LogFormat::Plain,
         }
     }
@@ -1005,12 +995,6 @@ impl AppConfig {
                 .unwrap_or(50)
                 .max(1);
         let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
-        // Stream-F (Wave 2C) — erasure-receipt fanout window. Default 7
-        // days per spec `realm-and-space.md` §2.5.2.
-        let erasure_propagation_window_ms = std::env::var("SOLAND_ERASURE_PROPAGATION_WINDOW_MS")
-            .ok()
-            .and_then(|value| value.trim().parse::<u64>().ok())
-            .unwrap_or(604_800_000);
         // G3.S9 — sovereign enclave toggle + outbound host allow-list.
         let sovereign_enclave_enabled = env_bool("SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
         let sovereign_enclave_allowed_outbound_hosts =
@@ -1090,7 +1074,6 @@ impl AppConfig {
             sovereign_enclave_enabled,
             sovereign_enclave_allowed_outbound_hosts,
             candidate_join_policy_enabled,
-            erasure_propagation_window_ms,
             log_format,
         })
     }

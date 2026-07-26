@@ -141,7 +141,6 @@ pub trait IdentityStoreRegistry: Send + Sync {
 
 /// Federation, retention, organization, and audit persistence registry.
 pub trait FederationGovernanceStoreRegistry: Send + Sync {
-    fn federation_transactions(&self) -> &dyn FederationTransactionStore;
     fn federation_outbox(&self) -> &dyn FederationOutboxStore;
     fn federation_frontier_exchange(&self) -> &dyn FederationFrontierExchangeStore;
     fn handle_releases(&self) -> &dyn HandleReleaseStore;

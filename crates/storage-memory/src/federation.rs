@@ -1,56 +1,9 @@
 use super::{
     Arc, BTreeMap, FederationFrontierExchangeRecord, FederationFrontierExchangeStore,
     FederationOperationsStore, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
-    FederationOutboxStore, FederationTransactionRecord, FederationTransactionStore, Mutex,
-    Operation, PersistenceResult, async_trait, frontier_exchange_failure_record,
-    frontier_exchange_success_record,
+    FederationOutboxStore, Mutex, Operation, PersistenceResult, async_trait,
+    frontier_exchange_failure_record, frontier_exchange_success_record,
 };
-// In-memory federation transaction replay store
-pub(crate) struct MemoryFederationTransactionStore {
-    data: Arc<Mutex<BTreeMap<(String, String), FederationTransactionRecord>>>,
-}
-impl MemoryFederationTransactionStore {
-    pub(crate) fn new() -> Self {
-        Self {
-            data: Arc::new(Mutex::new(BTreeMap::new())),
-        }
-    }
-}
-#[async_trait]
-impl FederationTransactionStore for MemoryFederationTransactionStore {
-    async fn get(
-        &self,
-        origin: &str,
-        txn_id: &str,
-    ) -> PersistenceResult<Option<FederationTransactionRecord>> {
-        let data = self.data.lock();
-        Ok(data.get(&(origin.to_owned(), txn_id.to_owned())).cloned())
-    }
-
-    async fn try_begin(&self, record: &FederationTransactionRecord) -> PersistenceResult<bool> {
-        let mut data = self.data.lock();
-        let key = (record.origin.clone(), record.txn_id.clone());
-        if data.contains_key(&key) {
-            return Ok(false);
-        }
-        data.insert(key, record.clone());
-        Ok(true)
-    }
-
-    async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()> {
-        let mut data = self.data.lock();
-        data.insert(
-            (record.origin.clone(), record.txn_id.clone()),
-            record.clone(),
-        );
-        Ok(())
-    }
-
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>> {
-        let data = self.data.lock();
-        Ok(data.values().cloned().collect())
-    }
-}
 // G3.S0 — in-memory outbound federation HTTP delivery queue.
 // Keyed by `id` (the row PK) with a secondary `(peer_did,
 // idempotency_key)` uniqueness guard implemented at insert time so the

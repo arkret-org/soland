@@ -33,10 +33,7 @@ use admin::audit::append_audit_log;
 use events::operations::validate_canonical_json_value;
 #[cfg(test)]
 use events::operations::validate_operation_semantics;
-use events::projection::{
-    accept_local_operations, ingest_federation_operations, operation_is_visible,
-    projection_event_from_operation, redaction_targets_from_operations,
-};
+use events::projection::{accept_local_operations, projection_event_from_operation};
 use events::strand::{
     discussion_track_for_projection_event, strand_id_for_projection_event, strand_id_from_realm_id,
     strand_projection_for_realm,

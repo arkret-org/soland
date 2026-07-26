@@ -48,30 +48,12 @@ pub struct StrandWatchProjection {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Stream-F (Wave 2C) — per-peer fanout status for a single
-/// `ak.audit.erasure_receipt`. One row per federation peer that has
-/// received content from the affected Realm.
-///
-/// `sent_at` is stamped when the receipt is enqueued into the
-/// federation outbox. `acked_at` is stamped when the peer's own
-/// follow-up `ak.audit.erasure_receipt` lands back referencing the
-/// same `receipt_id`. `outcome` mirrors the peer's reported wire
-/// outcome (`completed` / `partially_completed` /
-/// `blocked_by_legal_hold` / `scheduled` / `failed`). Spec
-/// `realm-and-space.md` §2.5.2.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct FanoutPeerStatus {
-    pub sent_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub acked_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub outcome: Option<String>,
-}
-
 /// Stream-F (Wave 1B) — `ak.audit.erasure_receipt` projection record.
 /// Mirrors a subset of the canonical `ak.schema.erasure_receipt.v1`
 /// payload (see
 /// `arkret-spec/spec/v1/artifacts/schemas/erasure-receipt.schema.json`).
-/// We only keep the fields the local audit / federation fanout layer
-/// actually consults — the rest of the payload (`proofs`,
+/// We only keep the fields the local audit layer actually consults — the
+/// rest of the payload (`proofs`,
 /// `erased_classes`, `retained_stub_digest`, …) round-trips through the
 /// raw `payload` blob for replay.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,27 +64,11 @@ pub struct ErasureReceiptRecord {
     pub subject_ref: Option<String>,
     pub outcome: String,
     pub storage_boundary: Option<String>,
-    /// Stream-F (Wave 2C) — affected Realm extracted from
-    /// `payload.scope.realm_id`. Used by the federation fanout pass to
-    /// pick the set of peers that have received content from the
-    /// affected Realm. `None` for purely account-scoped receipts (no
-    /// federation fanout needed in that case).
+    /// Affected Realm extracted from `payload.scope.realm_id`. `None` for
+    /// purely account-scoped receipts.
     pub scope_realm_id: Option<String>,
-    /// Cross-Principal-Server fanout status — `pending` until the
-    /// peer responses have all been collected, `complete` when every
-    /// recipient has acknowledged, `incomplete` when the
-    /// `erasure_propagation_window_ms` (default 7 days) lapses.
-    /// Stream-F (Wave 2C) — the timeout sweep in
-    /// `crate::routing::federation::erasure_fanout` flips this to
-    /// `incomplete` once `recorded_at + window < now` and any peer
-    /// in `peer_status` still has `acked_at.is_none()`.
+    /// Propagation status carried by the canonical receipt payload.
     pub fanout_status: String,
-    /// Stream-F (Wave 2C) — per-peer fanout state. Keyed by the
-    /// peer's `service_id` (canonical federation peer identity from
-    /// `config.federation_peers`). The reducer seeds one entry per
-    /// configured peer when the receipt is accepted; the federation
-    /// outbox stamps `sent_at` as soon as the row is enqueued.
-    pub peer_status: std::collections::BTreeMap<String, FanoutPeerStatus>,
     pub recorded_at: chrono::DateTime<chrono::Utc>,
     /// Raw payload preserved for replay / audit verifier round-trip.
     pub payload: Value,

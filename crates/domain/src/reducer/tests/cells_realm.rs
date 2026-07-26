@@ -515,11 +515,8 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
     );
 }
 
-/// Stream-F (Wave 2C) — `ak.audit.erasure_receipt` reducer pass
-/// extracts `scope.realm_id`, seeds an empty `peer_status` map,
-/// and stamps `fanout_status = "pending"`. The federation outbox
-/// enqueue + per-peer seeding is exercised by
-/// `crate::routing::federation::erasure_fanout::tests`.
+/// The `ak.audit.erasure_receipt` reducer pass extracts `scope.realm_id`
+/// and stamps the payload's default `fanout_status = "pending"`.
 #[test]
 fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
     let mut state = ProjectionState::new();
@@ -549,13 +546,9 @@ fn audit_erasure_receipt_records_scope_realm_id_and_pending_fanout() {
     assert_eq!(
         record.scope_realm_id.as_deref(),
         Some("ak:realm:01904100-0000-7000-8000-cfc039892036"),
-        "scope.realm_id MUST be extracted for the federation fanout pass"
+        "scope.realm_id MUST be extracted for receipt inspection"
     );
     assert_eq!(record.fanout_status, "pending");
-    // peer_status is seeded by the federation fanout helper
-    // (outside the reducer) so the in-reducer projection starts
-    // empty.
-    assert!(record.peer_status.is_empty());
 }
 
 #[test]

@@ -12,8 +12,6 @@
 //!
 //! All persistence access is mediated by `GovernanceService`.
 
-use std::collections::BTreeMap;
-
 use salvo::oapi::extract::{JsonBody, QueryParam};
 use salvo::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -66,16 +64,8 @@ struct AuditErasureReceiptItem {
     storage_boundary: Option<String>,
     scope_realm_id: Option<String>,
     fanout_status: String,
-    peer_status: BTreeMap<String, AuditErasureReceiptPeerStatus>,
     recorded_at: String,
     payload: Value,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct AuditErasureReceiptPeerStatus {
-    sent_at: Option<String>,
-    acked_at: Option<String>,
-    outcome: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
@@ -132,8 +122,8 @@ async fn verify_franking_proof(
 
 /// Spec `realm-and-space.md` §2.5.2 — exposes the
 /// `ak.audit.erasure_receipt` projection so verifiers / auditors can
-/// query the local receipt list (including `fanout_status` per-peer
-/// state and the timeout-triggered `incomplete` flip). Advertised via
+/// query the local receipt list, including the canonical `fanout_status`.
+/// Advertised via
 /// `/_arkret/describe.erasure_receipts_endpoint`.
 ///
 /// The endpoint is authentication-gated; reading the receipt list does
@@ -159,38 +149,17 @@ async fn audit_erasure_receipts(
         let proj = state.projections().snapshot();
         proj.erasure_receipts
             .iter()
-            .map(|r| {
-                let peer_status = r
-                    .peer_status
-                    .iter()
-                    .map(|(peer, status)| {
-                        (
-                            peer.clone(),
-                            AuditErasureReceiptPeerStatus {
-                                sent_at: status
-                                    .sent_at
-                                    .map(arkret_canonical::format_timestamp_canonical),
-                                acked_at: status
-                                    .acked_at
-                                    .map(arkret_canonical::format_timestamp_canonical),
-                                outcome: status.outcome.clone(),
-                            },
-                        )
-                    })
-                    .collect();
-                AuditErasureReceiptItem {
-                    receipt_id: r.receipt_id.clone(),
-                    issuer: r.issuer.clone(),
-                    subject_kind: r.subject_kind.clone(),
-                    subject_ref: r.subject_ref.clone(),
-                    outcome: r.outcome.clone(),
-                    storage_boundary: r.storage_boundary.clone(),
-                    scope_realm_id: r.scope_realm_id.clone(),
-                    fanout_status: r.fanout_status.clone(),
-                    peer_status,
-                    recorded_at: arkret_canonical::format_timestamp_canonical(r.recorded_at),
-                    payload: r.payload.clone(),
-                }
+            .map(|r| AuditErasureReceiptItem {
+                receipt_id: r.receipt_id.clone(),
+                issuer: r.issuer.clone(),
+                subject_kind: r.subject_kind.clone(),
+                subject_ref: r.subject_ref.clone(),
+                outcome: r.outcome.clone(),
+                storage_boundary: r.storage_boundary.clone(),
+                scope_realm_id: r.scope_realm_id.clone(),
+                fanout_status: r.fanout_status.clone(),
+                recorded_at: arkret_canonical::format_timestamp_canonical(r.recorded_at),
+                payload: r.payload.clone(),
             })
             .collect()
     };

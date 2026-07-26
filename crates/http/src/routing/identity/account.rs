@@ -144,9 +144,7 @@ pub(crate) use social::{
     retire_direct_bindings_for_operation, validate_direct_binding_operation,
 };
 mod lifecycle;
-// Re-export the lifecycle surface so external paths
-// (`crate::routing::identity::account::set_account_lifecycle_state`, etc.,
-// used by federation::erasure_fanout) stay stable after the SOL-07-002 split.
+// Re-export the lifecycle surface used by sibling routing modules.
 pub(crate) use lifecycle::{
     AccountLifecycleChange, deactivation_peer_service_targets_for_actor,
     set_account_lifecycle_state,

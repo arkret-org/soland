@@ -15,8 +15,8 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
-    AppletProjection, FanoutPeerStatus, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect,
-    ProjectionState, SolandMembershipState, SolandRealmState,
+    AppletProjection, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
+    SolandMembershipState, SolandRealmState,
 };
 use soland_storage::{JoinApplicationRecord, PersistenceResult, PersistenceStore};
 
@@ -155,13 +155,6 @@ pub struct ErasureReceiptView {
     pub receipt_id: Option<String>,
     pub scope_realm_id: Option<String>,
     pub payload: Value,
-}
-
-#[derive(Clone, Debug)]
-pub struct ErasurePeerDeliveryStatus {
-    pub sent_at: Option<DateTime<Utc>>,
-    pub acked_at: Option<DateTime<Utc>>,
-    pub outcome: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1508,73 +1501,6 @@ impl ProjectionService {
         if let Some(row) = self.state.lock().mls_key_packages.get_mut(keypackage_id) {
             row.consumed_at = Some(consumed_at);
         }
-    }
-
-    pub fn update_erasure_peer_status(
-        &self,
-        receipt_id: &str,
-        peer_status: BTreeMap<String, ErasurePeerDeliveryStatus>,
-    ) {
-        if let Some(record) = self
-            .state
-            .lock()
-            .erasure_receipts
-            .iter_mut()
-            .rev()
-            .find(|record| record.receipt_id.as_deref() == Some(receipt_id))
-        {
-            record.peer_status = peer_status
-                .into_iter()
-                .map(|(peer, status)| {
-                    (
-                        peer,
-                        FanoutPeerStatus {
-                            sent_at: status.sent_at,
-                            acked_at: status.acked_at,
-                            outcome: status.outcome,
-                        },
-                    )
-                })
-                .collect();
-        }
-    }
-
-    pub fn sweep_erasure_fanout_timeouts(
-        &self,
-        now: DateTime<Utc>,
-        window: chrono::Duration,
-    ) -> usize {
-        let mut state = self.state.lock();
-        let mut flipped = 0;
-        for receipt in &mut state.erasure_receipts {
-            if matches!(receipt.fanout_status.as_str(), "incomplete" | "complete")
-                || receipt.peer_status.is_empty()
-            {
-                continue;
-            }
-            if receipt
-                .peer_status
-                .values()
-                .all(|peer| peer.acked_at.is_some())
-            {
-                receipt.fanout_status = "complete".to_owned();
-                continue;
-            }
-            let age = now - receipt.recorded_at;
-            if age > window {
-                receipt.fanout_status = "incomplete".to_owned();
-                flipped += 1;
-                tracing::warn!(
-                    target = "erasure_fanout",
-                    receipt_id = ?receipt.receipt_id,
-                    window_ms = window.num_milliseconds(),
-                    age_ms = age.num_milliseconds(),
-                    unacked_peers = receipt.peer_status.values().filter(|peer| peer.acked_at.is_none()).count(),
-                    "erasure receipt federation fanout flipped to incomplete (timeout window lapsed)"
-                );
-            }
-        }
-        flipped
     }
 
     pub fn fold_realm_governance_seals(

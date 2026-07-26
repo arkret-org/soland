@@ -560,23 +560,6 @@ CREATE TABLE public.federation_frontier_exchange (
     updated_at bigint NOT NULL
 );
 
-CREATE TABLE public.federation_transactions (
-    id uuid NOT NULL,
-    source_service text NOT NULL,
-    txn_id text NOT NULL,
-    destination_service text NOT NULL,
-    realm_id uuid,
-    status text NOT NULL,
-    content_digest text NOT NULL,
-    origin_verification_method text,
-    service_binding_ref text,
-    origin_key_state_digest text,
-    local_peer_policy_digest text,
-    payload jsonb NOT NULL,
-    received_at timestamp with time zone DEFAULT now() NOT NULL,
-    processed_at timestamp with time zone
-);
-
 CREATE TABLE public.invite_receive_policies (
     id text NOT NULL,
     policy_payload jsonb NOT NULL,
@@ -1523,12 +1506,6 @@ ALTER TABLE ONLY public.federation_outbox
 ALTER TABLE ONLY public.federation_frontier_exchange
     ADD CONSTRAINT federation_frontier_exchange_pkey PRIMARY KEY (realm_id, peer_service_id);
 
-ALTER TABLE ONLY public.federation_transactions
-    ADD CONSTRAINT federation_transactions_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.federation_transactions
-    ADD CONSTRAINT federation_transactions_source_service_txn_id_key UNIQUE (source_service, txn_id);
-
 ALTER TABLE ONLY public.invite_receive_policies
     ADD CONSTRAINT invite_receive_policies_pkey PRIMARY KEY (id);
 
@@ -1803,10 +1780,6 @@ CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USIN
 CREATE INDEX federation_outbox_pending ON public.federation_outbox USING btree (delivered_at, next_attempt_at);
 
 CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
-
-CREATE INDEX federation_transactions_destination_received_idx ON public.federation_transactions USING btree (destination_service, received_at);
-
-CREATE INDEX federation_transactions_space_received_idx ON public.federation_transactions USING btree (realm_id, received_at);
 
 CREATE INDEX key_backups_account_idx ON public.key_backups USING btree (account_id);
 

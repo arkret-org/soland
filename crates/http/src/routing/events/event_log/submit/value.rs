@@ -518,13 +518,8 @@ pub(super) async fn submit_event_value_with_context(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             return Err(SubmitOneError::new(status, code, message));
         }
-        if let Err(rejection) = policy_gate::enforce_operation_policy_server(
-            state,
-            &parsed.actor_id,
-            operation,
-            PolicyGateSurface::LocalSubmit,
-        )
-        .await
+        if let Err(rejection) =
+            policy_gate::enforce_operation_policy_server(state, &parsed.actor_id, operation).await
         {
             return Err(SubmitOneError::new(
                 rejection.status,

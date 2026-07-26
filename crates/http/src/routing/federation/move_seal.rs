@@ -1,17 +1,4 @@
-//! Move / Seal wire endpoints.
-//!
-//! Surfaces:
-//! - `POST /_soland/peer/moves`   — submit a Move; verifier validates structural shape + signature
-//!   payload_digest + effect-shape against the cell registry, then stashes pending in
-//!   [`MoveStore`].
-//! - `POST /_soland/peer/seals` — submit a Seal; runs `apply_seal` end-to-end: structural →
-//!   predecessor known → delta coverage check → batch-verify Moves → atomic effect append →
-//!   recompute state_root → persist.
-//!
-//! Both endpoints back onto in-memory SDK store implementations on
-//! [`AppState`]. Production deployments will swap to Pg-backed
-//! implementations behind the same application service; handlers never
-//! receive the underlying Move/Seal/Cell stores or registry.
+//! Move / Seal verification, application, and local notary administration.
 //!
 //! JWS shape verification rejects mangled, empty, or sentinel signatures
 //! and validates the protected-header `alg`. In production mode, full
@@ -24,7 +11,7 @@ use arkret_identifiers::{MoveId, RealmId, SealId};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::lattice::SealedOp;
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
-use arkret_wire::{Event, Move, NotarySig, Seal, SealKind};
+use arkret_wire::{Event, NotarySig, Seal, SealKind};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -58,11 +45,11 @@ struct DeviceGenerationEventSealContext {
 /// - `Store` → [`ErrorCode::InternalError`] (durable-store IO failure).
 ///
 /// The resulting `AppError` is rendered with HTTP `409 Conflict` to match
-/// the prior in-handler mapping at `submit_seal` — the registry default
-/// for `SchemaViolation` is `422`, but seal-rejects are conceptually a
-/// causal / state-machine conflict so `409` is the historical wire status
-/// here. Call sites that need a different status can override after
-/// conversion via `.with_status(...)`.
+/// the peer-event admission mapping — the registry default for
+/// `SchemaViolation` is `422`, but seal rejects are conceptually a causal /
+/// state-machine conflict, so `409` remains the wire status here. Call sites
+/// that need a different status can override after conversion via
+/// `.with_status(...)`.
 fn app_error_from_seal_reject(reject: SealReject) -> AppError {
     let code = match &reject {
         SealReject::UnknownPredecessor
@@ -76,12 +63,6 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         SealReject::Store(_) => ErrorCode::InternalError,
     };
     AppError::new(code, reject.to_string()).with_status(StatusCode::CONFLICT)
-}
-
-pub(super) fn router() -> Router {
-    Router::new()
-        .push(Router::with_path("moves").post(submit_move))
-        .push(Router::with_path("seals").post(submit_seal))
 }
 
 pub(super) fn api_admin_router() -> Router {
@@ -1140,182 +1121,10 @@ pub(crate) async fn apply_inbound_seal(
         .map_err(app_error_from_seal_reject)
 }
 
-/// Response from `POST /_soland/peer/moves`.
-///
-/// `state` is one of `pending` / `rejected` so callers can distinguish
-/// "we've stashed it for the next notary batch" from "verifier said no
-/// before we even reached the queue".
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitMoveOutcome {
-    pub move_id: String,
-    pub state: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reason: Option<String>,
-}
-
-#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.moves.submit", tags("federation"))]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.moves.submit"))]
-async fn submit_move(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<Move>,
-) -> JsonResult<SubmitMoveOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    super::federation::ensure_private_inbound_write_rail_local(state)?;
-    let _session = aa.authenticated_session(state, req).await?;
-    let move_obj = body.into_inner();
-
-    // Verifier needs the per-Seal pre-state. For the submit-time
-    // pre-check we use the current effective state under the existing
-    // leaves; the actual deciding pre-state is computed by apply_seal
-    // when the notary signs the next batch. This catches obvious
-    // failures (bad sig, bad effect shape) early without committing
-    // the Move to sealed storage.
-    let pre_state = std::collections::BTreeMap::new();
-    let verifier = select_jws_verifier(state);
-    if let Err(reject) = state
-        .projections()
-        .verify_move(&move_obj, &pre_state, verifier)
-    {
-        return Ok(salvo::writing::Json(SubmitMoveOutcome {
-            move_id: move_obj.id.as_str().to_owned(),
-            state: "rejected".to_owned(),
-            reason: Some(reject.to_string()),
-        }));
-    }
-    // Replay-window check on Move.hlc.
-    // The hlc is part of canonical_bytes_for_id (signed envelope), so it
-    // can't be forged without invalidating verify_move; we trust it here.
-    // Window=0 (test config) bypasses entirely; per-cell-family overrides
-    // pick the tightest window across the Move's touched cells.
-    if let Err(reject) = crate::jws_verify::verify_replay_window_for_move(
-        &move_obj,
-        state.config().jws_replay_window_seconds,
-        &state.config().jws_replay_window_per_family,
-    ) {
-        return Ok(salvo::writing::Json(SubmitMoveOutcome {
-            move_id: move_obj.id.as_str().to_owned(),
-            state: "rejected".to_owned(),
-            reason: Some(format!("replay_window: {reject}")),
-        }));
-    }
-
-    state
-        .projections()
-        .put_pending_move(&move_obj)
-        .map_err(|e| {
-            AppError::new(ErrorCode::InternalError, e.to_string())
-                .with_status(StatusCode::INTERNAL_SERVER_ERROR)
-        })?;
-    super::federation::broadcast_move_to_peers(state, move_obj.id.as_str()).await;
-
-    json_ok(SubmitMoveOutcome {
-        move_id: move_obj.id.as_str().to_owned(),
-        state: "pending".to_owned(),
-        reason: None,
-    })
-}
-
-/// Response from `POST /_soland/peer/seals`.
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct SubmitSealOutcome {
-    pub seal_id: String,
-    pub accepted_move_ids: Vec<String>,
-    pub rejected_moves: Vec<RejectedMoveEntry>,
-    pub post_state_root: String,
-}
-
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct RejectedMoveEntry {
     pub move_id: String,
     pub reason: String,
-}
-
-#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.seals.submit", tags("federation"))]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.seals.submit"))]
-async fn submit_seal(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-    body: JsonBody<Seal>,
-) -> JsonResult<SubmitSealOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    super::federation::ensure_private_inbound_write_rail_local(state)?;
-    let _session = aa.authenticated_session(state, req).await?;
-    let seal = body.into_inner();
-
-    // The shared admission path selects the canonical Event rail for a
-    // B-model principal-control Realm and the legacy Move rail elsewhere.
-    // Device-generation Seals always receive real device-key verification,
-    // including in development mode.
-    let effect = apply_inbound_seal(state, &seal).await?;
-
-    let rejected = effect
-        .rejected_moves
-        .into_iter()
-        .map(|(id, reason)| RejectedMoveEntry {
-            move_id: id.as_str().to_owned(),
-            reason,
-        })
-        .collect();
-
-    // Refresh ProjectionState::cells from CellStore
-    // for the sealed Realm so cell-keyed read paths
-    // (read_receipt_policy / member.state / etc.) see the new effective
-    // state immediately. Lock failures are non-fatal — read paths fall
-    // back to the durable-event scan.
-    //
-    // Capture mls.epoch before the reload so we can detect a
-    // shift after the reload writes the new value.
-    let mls_epoch_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.mls.epoch.v1:{}",
-        seal.realm_id.as_str()
-    ))
-    .ok();
-    let prev_epoch_value: Option<serde_json::Value> = mls_epoch_cell
-        .as_ref()
-        .and_then(|cell_id| state.projections().cell_value(cell_id));
-    if let Err(error) = state.projections().reload_cells_from_store(&seal.realm_id) {
-        tracing::warn!(error = %error, "failed to refresh ProjectionState::cells after apply_seal");
-    }
-    // Post-apply_seal mid-stream control frames.
-    // 1. Frontier — every successful Seal advances the frontier.
-    let _ = state.publish_event_notification(crate::state::EventNotification::frontier(
-        seal.realm_id.as_str().to_owned(),
-        effect.seal.as_str().to_owned(),
-        effect.post_state_root.as_str().to_owned(),
-    ));
-    // 2. EpochRotation — only if mls.epoch cell value changed.
-    if let Some(cell_id) = mls_epoch_cell {
-        let new_epoch_value: Option<serde_json::Value> = {
-            let proj = state.projections().snapshot();
-            proj.cell_value(&cell_id).cloned()
-        };
-        if let Some(new_epoch) = new_epoch_value
-            && prev_epoch_value.as_ref() != Some(&new_epoch)
-        {
-            let _ =
-                state.publish_event_notification(crate::state::EventNotification::epoch_rotation(
-                    seal.realm_id.as_str().to_owned(),
-                    prev_epoch_value,
-                    new_epoch,
-                ));
-        }
-    }
-
-    super::federation::broadcast_seal_to_peers(state, effect.seal.as_str()).await;
-
-    json_ok(SubmitSealOutcome {
-        seal_id: effect.seal.as_str().to_owned(),
-        accepted_move_ids: effect
-            .accepted_move_ids
-            .into_iter()
-            .map(|m| m.as_str().to_owned())
-            .collect(),
-        rejected_moves: rejected,
-        post_state_root: effect.post_state_root.as_str().to_owned(),
-    })
 }
 
 /// Request body for `POST /_soland/admin/seals/sign`.
@@ -1329,8 +1138,8 @@ pub struct SignSealRequestBody {
     pub max_control_moves: Option<usize>,
 }
 
-/// Response body — mirrors `SubmitSealOutcome` but reports `None` when
-/// there were no pending Moves to seal.
+/// Response body for the local notary signing operation. `seal_id` remains
+/// absent when there were no pending Moves to seal.
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct SignSealOutcome {
     /// `true` if a Seal was published; `false` if nothing was pending.
@@ -1383,7 +1192,6 @@ async fn admin_sign_seal(
 
     match crate::notary::run_one_signing_pass(state, &realm, limit) {
         Ok(Some(outcome)) => {
-            super::federation::broadcast_seal_to_peers(state, outcome.seal_id.as_str()).await;
             let rejected = outcome
                 .rejected_moves
                 .into_iter()
@@ -1603,8 +1411,6 @@ mod seal_delta_tests {
 
 #[cfg(test)]
 mod tests {
-    use serde_json::json;
-
     use super::*;
 
     #[test]
@@ -1616,29 +1422,5 @@ mod tests {
         let s = serde_json::to_string(&r).unwrap();
         assert!(s.contains("move_id"));
         assert!(s.contains("reason"));
-    }
-
-    #[test]
-    fn submit_move_response_serializes_pending_without_reason() {
-        let r = SubmitMoveOutcome {
-            move_id: "sha256:11".to_owned(),
-            state: "pending".to_owned(),
-            reason: None,
-        };
-        let s = serde_json::to_string(&r).unwrap();
-        assert!(s.contains("\"state\":\"pending\""));
-        assert!(!s.contains("reason"));
-    }
-
-    #[test]
-    fn submit_move_response_includes_reason_on_reject() {
-        let r = SubmitMoveOutcome {
-            move_id: "sha256:22".to_owned(),
-            state: "rejected".to_owned(),
-            reason: Some("payload_digest mismatch".to_owned()),
-        };
-        let v = serde_json::to_value(&r).unwrap();
-        assert_eq!(v["state"], json!("rejected"));
-        assert_eq!(v["reason"], json!("payload_digest mismatch"));
     }
 }

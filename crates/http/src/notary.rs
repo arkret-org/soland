@@ -144,9 +144,9 @@ impl NotaryWorker {
 
         // Step 5: deterministic order + pre-flight verify. The signature
         // verifier is chosen by `select_jws_verifier` (production
-        // Ed25519 vs dev shape-only) — notary must use the same one
-        // submit_seal / submit_move use, otherwise pending Moves that
-        // passed admission could still be rejected at seal time.
+        // Ed25519 vs dev shape-only) — notary must use the same one as
+        // peer-event admission, otherwise pending Moves that passed admission
+        // could still be rejected at seal time.
         // Replay-window check (`Move.hlc`) is also enforced per Move so
         // long-pending Moves whose hlc has aged out get dropped instead
         // of resurrected into a fresh Seal.

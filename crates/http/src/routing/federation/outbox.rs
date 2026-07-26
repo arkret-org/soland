@@ -2,10 +2,9 @@
 //!
 //! ## Surface
 //!
-//! - [`enqueue_outbound`] — synchronous insert into the `federation_outbox` table. Called from
-//!   [`super::federation::broadcast_move_to_peers`] (and the symmetric seal helper) after the
-//!   per-peer transcript is persisted. Returns the row's [`FederationOutboxRecord`] (newly-inserted
-//!   or pre-existing when `(peer_did, idempotency_key)` already matched a prior row).
+//! - [`enqueue_outbound`] — synchronous insert into the `federation_outbox` table. Called by the
+//!   standard peer-event post-commit path. Returns the row's [`FederationOutboxRecord`] (newly
+//!   inserted or pre-existing when `(peer_did, idempotency_key)` already matched a prior row).
 //! - [`FederationDispatcher`] / [`spawn`] — background tokio task. Polls the outbox every
 //!   [`POLL_INTERVAL`], picks up to [`POLL_BATCH_LIMIT`] rows whose `next_attempt_at <= now`, POSTs
 //!   each one to its peer with the spec-required headers, and writes the resulting delivery state
