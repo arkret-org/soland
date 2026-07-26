@@ -1353,13 +1353,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     create.created_at = created_at;
     create.executed_by = Some(Did::new(controller_id).unwrap());
     create.authorization_ref = Some(agent_record.controller_authorization_ref.clone());
-    create.effects = vec![
-        arkret_bootstrap::managed_agent_principal_control_create_effect(
-            &create.realm_id,
-            create.actor_seq,
-        )
-        .unwrap(),
-    ];
+    create.effects = arkret_bootstrap::realm_create_effects(&create).unwrap();
     let signer = ControllerSealSigner {
         did: Did::new(controller_id).unwrap(),
         verification_method: format!("{controller_id}#{}", super::agents::CONTROLLER_DEVICE_ID),

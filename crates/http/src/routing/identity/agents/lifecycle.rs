@@ -1208,7 +1208,6 @@ fn validate_agent_key_revocation_event(
         &payload,
         std::slice::from_ref(&authorized_event_ref),
         &event.event_id,
-        event.actor_seq,
     )
     .map_err(|error| {
         AppError::invalid_param(format!(

@@ -732,13 +732,12 @@ fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<()
     .map_err(|error| {
         AppError::invalid_param(format!("authorize_event.payload invalid: {error}"))
     })?;
-    let expected =
-        arkret_event_draft::agent_key_authorize_effects(&payload, &event.event_id, event.actor_seq)
-            .map_err(|error| {
-                AppError::invalid_param(format!(
-                    "authorize_event canonical Agent key effects invalid: {error}"
-                ))
-            })?;
+    let expected = arkret_event_draft::agent_key_authorize_effects(&payload, &event.event_id)
+        .map_err(|error| {
+            AppError::invalid_param(format!(
+                "authorize_event canonical Agent key effects invalid: {error}"
+            ))
+        })?;
     if event.effects != expected {
         return Err(AppError::invalid_param(
             "authorize_event.effects must exactly match the canonical Agent key authorization effects",

@@ -3,7 +3,8 @@ use std::future::Future;
 use std::sync::Arc;
 
 use arkret_identifiers::{CellRef, Did, Hash, MoveId, RealmId, SealId};
-use arkret_state::lattice::{CellState, SealedOp, ordered_log::IssuedOp};
+use arkret_state::lattice::ordered_log::IssuedOp;
+use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
     CellRegistry, CellStore, MoveStore, SealStore, SealedMoveRecord, StoreError, StoreResult,
     compute_state_root,

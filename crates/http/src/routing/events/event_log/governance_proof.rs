@@ -11,7 +11,9 @@ use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
 use arkret_state::state::{compute_state_root, control_event_set_root};
-use arkret_wire::move_event::{LatticeOp, LatticeOpType};
+#[cfg(test)]
+use arkret_wire::move_event::LatticeOp;
+use arkret_wire::move_event::LatticeOpType;
 use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event, NotarySig};
 use salvo::oapi::extract::JsonBody;
 
@@ -502,16 +504,17 @@ async fn materialize_realm_control(
             )
         })?;
     if realm_records.iter().any(|record| {
-        record
-            .envelope
-            .get("effects")
-            .and_then(serde_json::Value::as_array)
-            .is_some_and(|effects| {
-                effects.iter().any(|effect| {
-                    effect.get("cell").and_then(serde_json::Value::as_str)
-                        == Some(arkret_bootstrap::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
-                })
-            })
+        record.kind == arkret_wire::events::EventKind::REALM_CREATE
+            && record
+                .envelope
+                .pointer("/payload/object/fields/purpose")
+                .and_then(serde_json::Value::as_str)
+                == Some("principal_control")
+            && record
+                .envelope
+                .get("executed_by")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|executed_by| !executed_by.is_empty())
     }) {
         return materialize_managed_agent_realm_control(state, realm_id, &realm_records);
     }
@@ -684,11 +687,11 @@ async fn materialize_realm_control(
                     ),
                 )
             })?;
-        let has_reducer_derived_control_ops =
+        let requires_invite_membership_validation =
             event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT;
         if (event.effects.is_empty()
             && !identity_anchor_event_ids.contains(record.event_id.as_str())
-            && !has_reducer_derived_control_ops)
+            && !requires_invite_membership_validation)
             || event.seal_ref.is_some()
         {
             continue;
@@ -725,7 +728,7 @@ async fn materialize_realm_control(
                 "duplicate canonical Event digest in Realm control history",
             ));
         }
-        let invite_accept_from = if has_reducer_derived_control_ops {
+        let invite_accept_from = if requires_invite_membership_validation {
             let member_cell = CellRef::new(format!(
                 "ak:cell:ak.component.member.state.v1:{}",
                 event.actor_id
@@ -1284,15 +1287,6 @@ pub(crate) async fn first_generation_event_seal_requirement(
     Ok(requirement)
 }
 
-/// Expand the reducer-defined Realm genesis writes into the control-state
-/// operations covered by the create Event digest.
-///
-/// `ak.realm.create` atomically seeds the ordered create log, the creator's
-/// membership FSM cell, and the Realm notary cell. Those latter two writes are
-/// reducer semantics derived from the signed `payload.object`; clients are not
-/// required to duplicate them in `effects[]`. The proof materializer must
-/// therefore reconstruct the same three cells instead of treating the literal
-/// producer effect list as the complete reducer output.
 /// Canonical sealed effects for one Event, each tagged with the Event's actor.
 ///
 /// The issuer must travel with the op: `ordered_log` keys its slots by
@@ -1336,231 +1330,43 @@ fn canonical_event_sealed_ops(
             event.actor_id
         ))
         .map_err(proof_state_error)?;
-        let mut result = event
+        let member_effects = event
             .effects
             .iter()
-            .filter(|effect| effect.cell != member_cell)
-            .map(|effect| {
-                (
-                    effect.cell.clone(),
-                    SealedOp::new(move_id.clone(), effect.op.clone()),
-                )
-            })
+            .filter(|effect| effect.cell == member_cell)
             .collect::<Vec<_>>();
-        // The accepted invite is the signed authorization for the reducer's
-        // membership cascade. Some invitation flows explicitly materialize
-        // `invite`, while capability-only invitations leave the membership
-        // cell at its implicit `leave` value. Reconstruct the transition from
-        // the actual prior control state so both histories remain joinable.
-        result.push((
-            member_cell,
-            SealedOp::new(
-                move_id.clone(),
-                LatticeOp {
-                    op_type: LatticeOpType::Transition,
-                    tag: None,
-                    value: None,
-                    from: Some(serde_json::json!(from)),
-                    to: Some(serde_json::json!("join")),
-                    reason: Some("invite_accept".to_owned()),
-                    issuer_seq: None,
-                },
-            ),
-        ));
-        return Ok(result);
-    }
-    if event.kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE {
-        return Ok(event
-            .effects
-            .iter()
-            .map(|effect| {
-                (
-                    effect.cell.clone(),
-                    SealedOp::new(move_id.clone(), effect.op.clone()),
-                )
-            })
-            .collect());
-    }
-
-    let object = event
-        .payload
-        .get("object")
-        .and_then(serde_json::Value::as_object)
-        .ok_or_else(|| {
-            AppError::new(
+        let expected_from = serde_json::json!(from);
+        let expected_to = serde_json::json!("join");
+        if member_effects.len() != 1
+            || member_effects[0].op.op_type != LatticeOpType::Transition
+            || member_effects[0].op.from.as_ref() != Some(&expected_from)
+            || member_effects[0].op.to.as_ref() != Some(&expected_to)
+        {
+            return Err(AppError::new(
                 ErrorCode::StateMismatch,
-                "Realm create proof material is missing payload.object",
-            )
-        })?;
-    let created_by = object
-        .get("created_by")
-        .and_then(serde_json::Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                "Realm create proof material is missing created_by",
-            )
-        })?;
-    if created_by != event.actor_id.as_str() {
-        return Err(AppError::new(
-            ErrorCode::StateMismatch,
-            "Realm create proof material has created_by/actor_id drift",
-        ));
-    }
-    let notary = object.get("notary").cloned().ok_or_else(|| {
-        AppError::new(
-            ErrorCode::StateMismatch,
-            "Realm create proof material is missing the genesis notary value",
-        )
-    })?;
-    let notary_value = serde_json::from_value::<arkret_wire::notary::NotaryValue>(notary.clone())
-        .map_err(|error| {
-        AppError::new(
-            ErrorCode::StateMismatch,
-            format!("Realm create proof notary value is invalid: {error}"),
-        )
-    })?;
-    notary_value.validate().map_err(|error| {
-        AppError::new(
-            ErrorCode::StateMismatch,
-            format!("Realm create proof notary value is invalid: {error}"),
-        )
-    })?;
-
-    let create_cell = CellRef::new(format!(
-        "ak:cell:ak.component.realm.create.v1:{}",
-        event.realm_id.as_str()
-    ))
-    .map_err(proof_state_error)?;
-    let producer_create_cell = if object
-        .get("fields")
-        .and_then(serde_json::Value::as_object)
-        .and_then(|fields| fields.get("purpose"))
-        .and_then(serde_json::Value::as_str)
-        == Some("principal_control")
-    {
-        let principal_cell = CellRef::new(arkret_bootstrap::PRINCIPAL_CONTROL_CREATE_CELL)
-            .map_err(proof_state_error)?;
-        let managed_agent_cell =
-            CellRef::new(arkret_bootstrap::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL)
-                .map_err(proof_state_error)?;
-        let principal_count = event
-            .effects
-            .iter()
-            .filter(|effect| effect.cell == principal_cell)
-            .count();
-        let managed_agent_count = event
-            .effects
-            .iter()
-            .filter(|effect| effect.cell == managed_agent_cell)
-            .count();
-        match (principal_count, managed_agent_count) {
-            (1, 0) => principal_cell,
-            (0, 1) => managed_agent_cell,
-            _ => {
-                return Err(AppError::new(
-                    ErrorCode::StateMismatch,
-                    "Principal Control Realm create proof material must contain exactly one canonical create-log effect",
-                ));
-            }
+                "invite acceptance member effect does not match prior membership state",
+            ));
         }
-    } else {
-        create_cell.clone()
-    };
-    if !event
-        .effects
-        .iter()
-        .any(|effect| effect.cell == producer_create_cell)
-    {
-        return Err(AppError::new(
-            ErrorCode::StateMismatch,
-            "Realm create proof material omits the create-log effect",
-        ));
+    } else if event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE {
+        let expected = arkret_bootstrap::realm_create_effects(event).map_err(proof_state_error)?;
+        if event.effects != expected {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                "Realm create proof material does not carry the canonical four-effect set",
+            ));
+        }
     }
 
-    let notary_cell = CellRef::new(format!(
-        "ak:cell:ak.component.notary.v1:{}",
-        event.realm_id.as_str()
-    ))
-    .map_err(proof_state_error)?;
-    let member_cell = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{created_by}"))
-        .map_err(proof_state_error)?;
-    let mut entry = serde_json::Value::Object(object.clone());
-    if let Some(entry) = entry.as_object_mut() {
-        entry.insert(
-            "entry_id".to_owned(),
-            serde_json::Value::String(event.event_id.as_str().to_owned()),
-        );
-    }
-
-    let mut result = event
+    Ok(event
         .effects
         .iter()
-        .filter(|effect| {
-            effect.cell != producer_create_cell
-                && effect.cell != notary_cell
-                && effect.cell != member_cell
-        })
         .map(|effect| {
             (
                 effect.cell.clone(),
                 SealedOp::new(move_id.clone(), effect.op.clone()),
             )
         })
-        .collect::<Vec<_>>();
-    result.extend([
-        (
-            create_cell,
-            SealedOp::new(
-                move_id.clone(),
-                LatticeOp {
-                    op_type: LatticeOpType::Append,
-                    tag: None,
-                    value: Some(entry),
-                    from: None,
-                    to: None,
-                    reason: None,
-                    issuer_seq: Some(event.actor_seq),
-                },
-            ),
-        ),
-        (
-            member_cell,
-            SealedOp::new(
-                move_id.clone(),
-                LatticeOp {
-                    op_type: LatticeOpType::Transition,
-                    tag: None,
-                    value: None,
-                    // Realm creation is the sole bootstrap exception that
-                    // directly establishes creator membership. Model that
-                    // derived write from the membership FSM's normative
-                    // logical initial state (`leave`), not from `invite`.
-                    from: Some(serde_json::json!("leave")),
-                    to: Some(serde_json::json!("join")),
-                    reason: Some("realm_genesis".to_owned()),
-                    issuer_seq: None,
-                },
-            ),
-        ),
-        (
-            notary_cell,
-            SealedOp::new(
-                move_id.clone(),
-                LatticeOp {
-                    op_type: LatticeOpType::Set,
-                    tag: None,
-                    value: Some(notary),
-                    from: None,
-                    to: None,
-                    reason: None,
-                    issuer_seq: None,
-                },
-            ),
-        ),
-    ]);
-    Ok(result)
+        .collect())
 }
 
 fn proof_state_error(error: impl std::fmt::Display) -> AppError {
@@ -1581,7 +1387,7 @@ mod tests {
             arkret_wire::events::EventKind::REALM_CREATE,
             realm_id.clone(),
             actor_id.clone(),
-            1,
+            0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
             serde_json::json!({
                 "object": {
@@ -1593,27 +1399,22 @@ mod tests {
             }),
         )
         .unwrap();
-        event.effects = vec![
-            arkret_bootstrap::managed_agent_principal_control_create_effect(
-                &event.realm_id,
-                event.actor_seq,
-            )
-            .unwrap(),
-        ];
+        event.effects = arkret_bootstrap::realm_create_effects(&event).unwrap();
         event
     }
 
     #[test]
-    fn governance_materializer_accepts_managed_agent_create_marker() {
+    fn governance_materializer_accepts_explicit_managed_agent_create_effects() {
         let event = managed_agent_pcr_create();
         let move_id = MoveId::new(format!("sha256:{}", "11".repeat(32))).unwrap();
         let ops = canonical_event_ops(&event, &move_id, None).unwrap();
-        assert_eq!(ops.len(), 3);
-        assert!(ops.iter().any(|(cell, _)| {
-            cell.as_str() == format!("ak:cell:ak.component.realm.create.v1:{}", event.realm_id)
-        }));
+        assert_eq!(ops.len(), 4);
+        assert!(
+            ops.iter()
+                .any(|(cell, _)| { cell.as_str() == arkret_bootstrap::REALM_CREATE_CELL })
+        );
         assert!(ops.iter().all(|(cell, _)| {
-            cell.as_str() != arkret_bootstrap::MANAGED_AGENT_PRINCIPAL_CONTROL_CREATE_CELL
+            cell.as_str() != format!("ak:cell:ak.component.realm.create.v1:{}", event.realm_id)
         }));
     }
 
@@ -1641,10 +1442,10 @@ mod tests {
     }
 
     #[test]
-    fn governance_materializer_reconstructs_invite_accept_membership() {
+    fn governance_materializer_uses_signed_invite_accept_membership() {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000fade").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
-        let event = Event::new(
+        let mut event = Event::new(
             arkret_wire::events::EventKind::INVITE_ACCEPT,
             realm_id,
             actor_id.clone(),
@@ -1658,6 +1459,19 @@ mod tests {
         let move_id = MoveId::new(format!("sha256:{}", "33".repeat(32))).unwrap();
 
         for prior_state in ["leave", "invite"] {
+            event.effects = vec![arkret_wire::Effect {
+                cell: CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}"))
+                    .unwrap(),
+                op: LatticeOp {
+                    op_type: LatticeOpType::Transition,
+                    tag: None,
+                    value: None,
+                    from: Some(serde_json::json!(prior_state)),
+                    to: Some(serde_json::json!("join")),
+                    reason: Some("invite_accept".to_owned()),
+                    issuer_seq: None,
+                },
+            }];
             let ops = canonical_event_ops(&event, &move_id, Some(prior_state)).unwrap();
 
             assert_eq!(ops.len(), 1);

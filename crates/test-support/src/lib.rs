@@ -10,7 +10,8 @@ use arkret_identity::service_identity::{
     LocalServiceIdentity, ServiceIdentityKeyRef, ServiceIdentityState,
 };
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
-use arkret_state::lattice::{CellState, ordered_log::IssuedOp};
+use arkret_state::lattice::CellState;
+use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
     CellRegistry, CellStore, MemoryCellStore, MemoryMoveStore, MemorySealStore, MoveStore,
     SealStore, StoreError, StoreResult, compute_state_root,

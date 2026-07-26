@@ -481,6 +481,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     )
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
+    enforce_changed_multi_target_cell_contract(envelope, &kind)?;
     enforce_ordered_log_cell_contract(state, envelope, &kind, &realm_id, object)?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
@@ -620,6 +621,55 @@ async fn enforce_device_generation_fence(
     Ok(())
 }
 
+fn enforce_changed_multi_target_cell_contract(
+    envelope: &Value,
+    kind: &str,
+) -> Result<(), EventValidationError> {
+    if !matches!(
+        kind,
+        arkret_wire::events::EventKind::REALM_CREATE
+            | arkret_wire::events::EventKind::INVITE_CREATE
+            | arkret_wire::events::EventKind::INVITE_CANCEL
+            | arkret_wire::events::EventKind::INVITE_REVOKE
+            | arkret_wire::events::EventKind::CALL_STATE
+            | arkret_wire::events::EventKind::CALL_RECORDING_START
+    ) {
+        return Ok(());
+    }
+    let event =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("multi-target reducer input is not a valid Event Envelope: {error}"),
+            )
+        })?;
+    arkret_schema::validate_registered_cell_writes(&event).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            error.reason_code(),
+            error.to_string(),
+        )
+    })?;
+    if kind == arkret_wire::events::EventKind::REALM_CREATE {
+        let expected = arkret_bootstrap::realm_create_effects(&event).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "effects_payload_mismatch",
+                error.to_string(),
+            )
+        })?;
+        if event.effects != expected {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "effects_payload_mismatch",
+                "Realm create does not carry the canonical four-effect set",
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Re-derive the registry-declared cell and append value for single-target
 /// `ordered_log` reducer inputs.
 ///
@@ -649,13 +699,14 @@ fn enforce_ordered_log_cell_contract(
     // A kind that reaches here but cannot be parsed as a typed Event has
     // already failed shared envelope shape validation above; treat an
     // unparseable envelope as fail-closed rather than skipping the contract.
-    let event = serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("ordered-log reducer input is not a valid Event Envelope: {error}"),
-        )
-    })?;
+    let event =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("ordered-log reducer input is not a valid Event Envelope: {error}"),
+            )
+        })?;
     // device-lifecycle.md 13.0.1 pins the material digest to the Realm's active
     // digest_algorithm, so the contract cannot be checked without it.
     let suite_name = event_digest_suite(state, kind, realm_id, object)?;

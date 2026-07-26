@@ -136,8 +136,6 @@ mod tests {
         let operation = op(
             arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
-                "event_id": "ak:event:01904100-0000-7000-8000-000000000003",
-                "sender": "did:web:alice.example",
                 "services": [{
                     "service_id": service,
                     "service_type": "principal_server",

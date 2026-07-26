@@ -1709,11 +1709,17 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
             &[
                 (
                     parent_cell,
-                    strictness_issued(arkret_state::lattice::SealedOp::new(parent_move_id.clone(), parent_op)),
+                    strictness_issued(arkret_state::lattice::SealedOp::new(
+                        parent_move_id.clone(),
+                        parent_op,
+                    )),
                 ),
                 (
                     child_cell,
-                    strictness_issued(arkret_state::lattice::SealedOp::new(child_move_id.clone(), child_op)),
+                    strictness_issued(arkret_state::lattice::SealedOp::new(
+                        child_move_id.clone(),
+                        child_op,
+                    )),
                 ),
             ],
         )
@@ -1756,7 +1762,10 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     move_ids.push(grant_move_id.clone());
     ops.push((
         grant_cell,
-        strictness_issued(arkret_state::lattice::SealedOp::new(grant_move_id, grant_op)),
+        strictness_issued(arkret_state::lattice::SealedOp::new(
+            grant_move_id,
+            grant_op,
+        )),
     ));
 
     if include_covered_seal {
@@ -1774,7 +1783,10 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         move_ids.push(covered_move_id.clone());
         ops.push((
             covered_cell,
-            strictness_issued(arkret_state::lattice::SealedOp::new(covered_move_id, covered_op)),
+            strictness_issued(arkret_state::lattice::SealedOp::new(
+                covered_move_id,
+                covered_op,
+            )),
         ));
     }
 
@@ -1802,7 +1814,10 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         move_ids.push(policy_move_id.clone());
         ops.push((
             policy_cell,
-            strictness_issued(arkret_state::lattice::SealedOp::new(policy_move_id, policy_op)),
+            strictness_issued(arkret_state::lattice::SealedOp::new(
+                policy_move_id,
+                policy_op,
+            )),
         ));
     }
 

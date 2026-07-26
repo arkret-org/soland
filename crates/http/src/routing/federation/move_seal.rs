@@ -660,8 +660,10 @@ async fn try_apply_device_generation_event_seal(
             anchor_event_ids.insert(authorize_id.to_owned());
         }
     }
-    let mut new_ops: Vec<(arkret_identifiers::CellRef, arkret_state::lattice::ordered_log::IssuedOp)> =
-        Vec::new();
+    let mut new_ops: Vec<(
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::ordered_log::IssuedOp,
+    )> = Vec::new();
     for digest in &seal.delta {
         if quarantined.contains(digest.as_str()) {
             return Err(device_generation_fenced(

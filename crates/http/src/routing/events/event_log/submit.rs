@@ -1603,7 +1603,7 @@ mod managed_agent_pcr_batch_tests {
             arkret_wire::events::EventKind::REALM_CREATE,
             realm_id,
             agent_id,
-            1,
+            0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             json!({
                 "object": {
@@ -1618,13 +1618,7 @@ mod managed_agent_pcr_batch_tests {
         event.executed_by =
             Some(arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap());
         event.authorization_ref = Some("did:web:agent.example#managed-controller".to_owned());
-        event.effects = vec![
-            arkret_bootstrap::managed_agent_principal_control_create_effect(
-                &event.realm_id,
-                event.actor_seq,
-            )
-            .unwrap(),
-        ];
+        event.effects = arkret_bootstrap::realm_create_effects(&event).unwrap();
         serde_json::to_value(event).unwrap()
     }
 

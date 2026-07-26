@@ -178,6 +178,7 @@ async fn admin_get_cell(
     let bottom_policy = match binding.bottom_mode {
         arkret_state::state::BottomMode::Reject => "reject",
         arkret_state::state::BottomMode::Expose => "expose",
+        arkret_state::state::BottomMode::Inert => "inert",
     };
 
     let cell_state_opt = {
@@ -293,6 +294,7 @@ async fn admin_list_cells(
         let bottom_policy = match binding.bottom_mode {
             arkret_state::state::BottomMode::Reject => "reject",
             arkret_state::state::BottomMode::Expose => "expose",
+            arkret_state::state::BottomMode::Inert => "inert",
         };
         cells_out.push(state_response_from(
             &cell,

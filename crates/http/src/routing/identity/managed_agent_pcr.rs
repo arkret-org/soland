@@ -871,38 +871,25 @@ fn validate_agent_pcr_genesis_effect(
     envelope: &serde_json::Map<String, Value>,
     realm_id: &RealmId,
 ) -> Result<(), AppError> {
-    let actor_seq = envelope
-        .get("actor_seq")
-        .and_then(Value::as_u64)
-        .ok_or_else(|| schema_error("managed Agent PCR genesis actor_seq is missing"))?;
-    let effects = envelope
-        .get("effects")
-        .cloned()
-        .ok_or_else(|| schema_error("managed Agent PCR genesis effects are missing"))?;
-    let effects = serde_json::from_value::<Vec<arkret_wire::Effect>>(effects).map_err(|error| {
+    let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
+        .map_err(|error| {
+            schema_error(format!(
+                "managed Agent PCR genesis Event is invalid: {error}"
+            ))
+        })?;
+    if &event.realm_id != realm_id {
+        return Err(schema_error(
+            "managed Agent PCR genesis Realm differs from its account binding",
+        ));
+    }
+    let expected = arkret_bootstrap::realm_create_effects(&event).map_err(|error| {
         schema_error(format!(
-            "managed Agent PCR genesis effect is invalid: {error}"
+            "managed Agent PCR create effect set is invalid: {error}"
         ))
     })?;
-    let expected =
-        arkret_bootstrap::managed_agent_principal_control_create_effect(realm_id, actor_seq)
-            .map_err(|error| {
-                schema_error(format!(
-                    "managed Agent PCR create effect is invalid: {error}"
-                ))
-            })?;
-    if effects.len() != 1
-        || effects[0].cell != expected.cell
-        || effects[0].op.op_type != expected.op.op_type
-        || effects[0].op.value != expected.op.value
-        || effects[0].op.issuer_seq != expected.op.issuer_seq
-        || effects[0].op.tag.is_some()
-        || effects[0].op.from.is_some()
-        || effects[0].op.to.is_some()
-        || effects[0].op.reason.is_some()
-    {
+    if event.effects != expected {
         return Err(failed_precondition(
-            "managed Agent PCR genesis must carry the canonical delegated create-log effect",
+            "managed Agent PCR genesis must carry the canonical four-effect Realm create set",
             "managed_agent_pcr_create_effect_mismatch",
         ));
     }
@@ -1448,22 +1435,25 @@ mod tests {
     #[test]
     fn agent_pcr_genesis_requires_canonical_managed_create_effect() {
         let realm_id = RealmId::new(PCR).unwrap();
-        let effect =
-            arkret_bootstrap::managed_agent_principal_control_create_effect(&realm_id, 1).unwrap();
-        let envelope = json!({
-            "actor_seq": 1,
-            "effects": [effect],
-        });
+        let mut event = arkret_wire::Event::new(
+            arkret_wire::EventKind::REALM_CREATE,
+            realm_id.clone(),
+            Did::new(AGENT).unwrap(),
+            0,
+            arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
+            json!({"object": pcr_genesis()}),
+        )
+        .unwrap();
+        event.effects = arkret_bootstrap::realm_create_effects(&event).unwrap();
+        let envelope = serde_json::to_value(&event).unwrap();
         validate_agent_pcr_genesis_effect(envelope.as_object().unwrap(), &realm_id)
             .expect("canonical managed Agent PCR create effect must pass");
 
-        let legacy = json!({
-            "actor_seq": 1,
-            "effects": [{
-                "cell": format!("ak:cell:ak.component.realm.create.v1:{PCR}"),
-                "op": {"kind": "set", "value": pcr_genesis()},
-            }],
-        });
+        let mut legacy = envelope;
+        legacy["effects"] = json!([{
+            "cell": format!("ak:cell:ak.component.realm.create.v1:{PCR}"),
+            "op": {"kind": "set", "value": pcr_genesis()},
+        }]);
         assert!(validate_agent_pcr_genesis_effect(legacy.as_object().unwrap(), &realm_id).is_err());
     }
 

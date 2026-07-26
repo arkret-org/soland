@@ -1,13 +1,12 @@
 use arkret_event_draft::Operation;
+use arkret_models_collaboration::events_payloads::preview_realm_reaction::{
+    RealmKeyShareMaterial, RealmKeyShareTarget,
+};
 use arkret_models_collaboration::objects::read_receipts::{
     ReadReceiptPolicy, ReadReceiptPolicyChildViolation,
 };
 use serde_json::Value;
 use soland_services::operation_semantics::poll_id_from_content;
-
-use arkret_models_collaboration::events_payloads::preview_realm_reaction::{
-    RealmKeyShareMaterial, RealmKeyShareTarget,
-};
 
 use super::*;
 
@@ -674,7 +673,10 @@ fn realm_key_share_source(
     };
     if recipient_device_id == Some(share.sender_device_id.as_str()) {
         arkret_models_collaboration::governance::history_visibility::HistoryKeySource::OwnDevice
-    } else if matches!(share.material, RealmKeyShareMaterial::EncryptedKeyRef { .. }) {
+    } else if matches!(
+        share.material,
+        RealmKeyShareMaterial::EncryptedKeyRef { .. }
+    ) {
         arkret_models_collaboration::governance::history_visibility::HistoryKeySource::KeyBackup
     } else {
         arkret_models_collaboration::governance::history_visibility::HistoryKeySource::VerifiedMemberDevice
