@@ -92,8 +92,12 @@ pub struct ProjectionState {
     /// Per-cell effective state
     /// populated from the Move/Seal pipeline's `apply_seal` write-back.
     ///
-    /// Keyed by canonical `CellRef` (e.g.
+    /// Keyed by internal projection `CellRef` (e.g.
     /// `ak:cell:ak.component.realm.read_receipt_policy.v1:<realm_id>`).
+    /// Realm-singleton Event effects use the canonical subject `null` on wire;
+    /// this process-wide map replaces that subject with the Event `realm_id`
+    /// so singleton values from different Realms remain isolated. This
+    /// projection-only key does not participate in Move/Seal state roots.
     /// Each successful `apply_seal` call from peer-event admission or
     /// `crate::notary::NotaryWorker` calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for

@@ -45,6 +45,56 @@ fn cell_value_returns_none_for_bottom_state() {
     assert!(state.cell_value(&cell_id).is_none());
 }
 
+#[test]
+fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
+    const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-cfc039892037";
+    const FAMILY: &str = "ak.component.realm.delivery_binding_policy.v1";
+
+    let mut state = ProjectionState::new();
+    for (realm_id, binding_mode) in [(REALM_A, "direct"), (REALM_B, "relay")] {
+        let operation = make_operation(
+            arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            realm_id,
+            serde_json::json!({
+                "effects": [{
+                    "cell": format!("ak:cell:{FAMILY}:null"),
+                    "op": {
+                        "type": "set",
+                        "value": {"binding_mode": binding_mode}
+                    }
+                }]
+            }),
+        );
+
+        assert!(matches!(
+            state.apply_validated_realm_bootstrap_facet(&operation),
+            ProjectionEffect::RealmBootstrapFacetProjected { .. }
+        ));
+    }
+
+    assert_eq!(
+        state
+            .realm_delivery_binding_policy_cell_value(REALM_A)
+            .and_then(|value| value.get("binding_mode"))
+            .and_then(Value::as_str),
+        Some("direct")
+    );
+    assert_eq!(
+        state
+            .realm_delivery_binding_policy_cell_value(REALM_B)
+            .and_then(|value| value.get("binding_mode"))
+            .and_then(Value::as_str),
+        Some("relay")
+    );
+    let canonical_wire_cell =
+        CellRef::new(format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)).unwrap();
+    assert!(
+        state.cell(&canonical_wire_cell).is_none(),
+        "wire singleton key must not leak into the process-wide projection cache"
+    );
+}
+
 // ── Membership cache + FSM cell tests ──
 
 #[test]

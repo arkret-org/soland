@@ -114,10 +114,15 @@ pub(super) fn remove_rejected_claim_active_material(
 }
 
 fn federation_seal_prerequisites(state: &AppState, events: &[Event]) -> Result<Vec<Seal>, String> {
-    let mut pending = events
-        .iter()
-        .filter_map(|event| event.seal_ref.clone())
-        .collect::<Vec<_>>();
+    let mut pending = Vec::new();
+    for event in events {
+        if let Some(seal_ref) = &event.seal_ref {
+            pending.push(seal_ref.clone());
+        }
+        if let Some(seal_basis) = &event.seal_basis {
+            pending.extend(seal_basis.leaves.iter().cloned());
+        }
+    }
     let mut by_id = BTreeMap::new();
     while let Some(seal_id) = pending.pop() {
         if by_id.contains_key(&seal_id) {
@@ -298,8 +303,11 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             seals: seals.clone(),
             signer_key_evidence: signer_key_evidence.clone(),
             agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
-            idempotency_key: Some(idempotency_key.clone()),
         };
+        if let Err(error) = body.validate_federation_transport() {
+            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, %error, "peer Event batch violates the federation transport contract");
+            continue;
+        }
         let Some(payload_json) = canonical::canonical_json_bytes(&body)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -460,13 +468,23 @@ pub(super) async fn peer_event_fanout_records(
             continue;
         }
         peer_events.push(event.clone());
+        peer_events.sort_by_key(|event| {
+            match event
+                .kind
+                .descriptor()
+                .and_then(|descriptor| descriptor.plane)
+            {
+                Some("control") => 0_u8,
+                _ => 1_u8,
+            }
+        });
         let mut peer_signer_key_evidence = signer_key_evidence.clone();
         let mut evidence_methods = peer_signer_key_evidence
             .iter()
             .map(|evidence| evidence.verification_method.clone())
             .collect::<std::collections::BTreeSet<_>>();
         let mut dependency_evidence_failed = false;
-        for dependency in &peer_events[..peer_events.len().saturating_sub(1)] {
+        for dependency in &peer_events {
             let evidence =
                 match crate::jws_verify::federated_event_signer_evidence(state, dependency).await {
                     Ok(evidence) => evidence,
@@ -515,8 +533,11 @@ pub(super) async fn peer_event_fanout_records(
             seals,
             signer_key_evidence: peer_signer_key_evidence,
             agent_signer_evidence_bundle: peer_agent_signer_evidence_bundle,
-            idempotency_key: Some(idempotency_key.clone()),
         };
+        if let Err(error) = body.validate_federation_transport() {
+            tracing::warn!(event_id, peer_did = %peer.service_id, %error, "dynamic peer Event violates the federation transport contract");
+            continue;
+        }
         let payload = match canonical::canonical_json_bytes(&body)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
@@ -777,8 +798,8 @@ async fn realm_bootstrap_fanout_record(
         seals: Vec::new(),
         signer_key_evidence,
         agent_signer_evidence_bundle,
-        idempotency_key: Some(idempotency_key.clone()),
     };
+    body.validate_federation_transport().ok()?;
     let payload_json = canonical::canonical_json_bytes(&body)
         .ok()
         .and_then(|bytes| String::from_utf8(bytes).ok())?;

@@ -1441,6 +1441,11 @@ mod tests {
     }
 
     #[test]
+    fn media_provider_kind_rejects_legacy_alias() {
+        assert!(MediaProviderKind::parse("arkret-native").is_err());
+    }
+
+    #[test]
     fn media_epoch_accepts_spec_focus_id_without_private_prefix() {
         let epoch = parse_media_service_epoch(
             "ak:realm:01904100-0000-7000-8000-cfc039892063",

@@ -245,7 +245,6 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
         seals: Vec::new(),
         signer_key_evidence: Vec::new(),
         agent_signer_evidence_bundle: None,
-        idempotency_key: None,
     };
     let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
         &req.service_binding_ref,
@@ -279,7 +278,6 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
         seals: Vec::new(),
         signer_key_evidence: Vec::new(),
         agent_signer_evidence_bundle: None,
-        idempotency_key: None,
     };
 
     let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
@@ -313,7 +311,6 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
         seals: Vec::new(),
         signer_key_evidence: Vec::new(),
         agent_signer_evidence_bundle: None,
-        idempotency_key: None,
     };
 
     SolandEventsSubmitRequestBody::validate_federation_service_binding(&req.service_binding_ref)

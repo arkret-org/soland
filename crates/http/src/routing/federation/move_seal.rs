@@ -451,8 +451,23 @@ async fn try_apply_device_generation_event_seal(
     }
     let expected_control_root =
         control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
+    let completeness_events = context
+        .records
+        .iter()
+        .map(|record| {
+            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+                seal_admission_error(format!(
+                    "stored B-model Event {} is invalid: {error}",
+                    record.event_id
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected_completeness_root =
+        arkret_state::control_event_completeness_root(&completeness_events, &target)
+            .map_err(app_error_from_seal_reject)?;
     if seal.control_event_set_root != expected_control_root
-        || seal.completeness_root != expected_control_root
+        || seal.completeness_root != expected_completeness_root
     {
         return Err(seal_admission_error(
             "B-model Event Seal control/completeness root mismatch",
@@ -960,8 +975,14 @@ pub(crate) async fn apply_managed_agent_event_seal(
             "managed Agent PCR Seal coverage differs from canonical Event history",
         ));
     }
-    let expected_root = control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
-    if seal.control_event_set_root != expected_root || seal.completeness_root != expected_root {
+    let expected_control_root =
+        control_event_set_root(&target).map_err(app_error_from_seal_reject)?;
+    let expected_completeness_root =
+        arkret_state::control_event_completeness_root(&events, &target)
+            .map_err(app_error_from_seal_reject)?;
+    if seal.control_event_set_root != expected_control_root
+        || seal.completeness_root != expected_completeness_root
+    {
         return Err(seal_admission_error(
             "managed Agent PCR Seal control/completeness root mismatch",
         ));

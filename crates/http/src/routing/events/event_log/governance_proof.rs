@@ -110,6 +110,8 @@ async fn backfill_authoritative_event_seals(
     realm_id: &RealmId,
     joined: &BTreeMap<CellRef, CellState>,
     event_ops: &[(CellRef, IssuedOp)],
+    available_control_digests: &BTreeSet<MoveId>,
+    control_events: &[Event],
 ) -> Result<bool, AppError> {
     if !state.config().development_mode {
         return Ok(false);
@@ -179,6 +181,8 @@ async fn backfill_authoritative_event_seals(
         realm_id,
         &authority_dids,
         event_ops,
+        available_control_digests,
+        control_events,
         &outcome.seals,
     )
     .await?;
@@ -189,6 +193,11 @@ fn authoritative_notary_dids(
     _realm_id: &RealmId,
     joined: &BTreeMap<CellRef, CellState>,
 ) -> Result<Vec<String>, AppError> {
+    // `joined` is the portable control-state map used for Seal state-root
+    // verification, so its keys must remain byte-identical to signed Event
+    // effects. Realm-singleton cells therefore use the canonical `null` wire
+    // subject here. Only the process-wide ProjectionState cache rewrites that
+    // subject to `realm_id` to prevent cross-Realm aliasing.
     let notary_cell =
         CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned()).map_err(proof_state_error)?;
     let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
@@ -223,6 +232,8 @@ async fn apply_authoritative_event_seal_path(
     realm_id: &RealmId,
     authority_dids: &[String],
     event_ops: &[(CellRef, IssuedOp)],
+    available_control_digests: &BTreeSet<MoveId>,
+    control_events: &[Event],
     seals: &[arkret_wire::Seal],
 ) -> Result<(), AppError> {
     for seal in seals {
@@ -239,13 +250,6 @@ async fn apply_authoritative_event_seal_path(
                 "authoritative Event Seal path crosses Realm boundaries",
             ));
         }
-        crate::jws_verify::verify_replay_window(
-            &seal.hlc,
-            state.config().jws_replay_window_seconds,
-        )
-        .map_err(|error| {
-            proof_state_error(format!("authoritative Event Seal replay window: {error}"))
-        })?;
         if let Some(existing) = state
             .projections()
             .seal_by_id(&seal.id)
@@ -284,6 +288,16 @@ async fn apply_authoritative_event_seal_path(
                 "authoritative Event Seal delta repeats predecessor coverage",
             ));
         }
+        if seal
+            .delta
+            .iter()
+            .any(|digest| !available_control_digests.contains(digest))
+        {
+            return Err(AppError::new(
+                ErrorCode::DependencyMissing,
+                "authoritative Event Seal delta references a Control Event that is not accepted",
+            ));
+        }
         let mut target = current;
         target.extend(seal.delta.iter().cloned());
         let declared = seal
@@ -291,14 +305,19 @@ async fn apply_authoritative_event_seal_path(
             .iter()
             .cloned()
             .collect::<BTreeSet<_>>();
-        if declared.len() != seal.covered_event_digests.len() || declared != target {
+        if !seal.covered_event_digests.is_empty()
+            && (declared.len() != seal.covered_event_digests.len() || declared != target)
+        {
             return Err(proof_state_error(
                 "authoritative Event Seal coverage differs from predecessor coverage plus delta",
             ));
         }
         let expected_control_root = control_event_set_root(&target).map_err(proof_state_error)?;
+        let expected_completeness_root =
+            arkret_state::control_event_completeness_root(control_events, &target)
+                .map_err(proof_state_error)?;
         if seal.control_event_set_root != expected_control_root
-            || seal.completeness_root != expected_control_root
+            || seal.completeness_root != expected_completeness_root
         {
             return Err(proof_state_error(
                 "authoritative Event Seal control/completeness root mismatch",
@@ -467,9 +486,10 @@ async fn verify_authoritative_event_seal_signature(
         .await
     };
     result.map_err(|error| {
-        proof_state_error(format!(
-            "verify authoritative Event Seal signature: {error}"
-        ))
+        AppError::new(
+            ErrorCode::SignatureInvalid,
+            format!("verify authoritative Event Seal signature: {error}"),
+        )
     })
 }
 
@@ -805,6 +825,25 @@ async fn materialize_realm_control_with_transported_seals(
             "Realm has no accepted Control Event material",
         ));
     }
+    let completeness_events = realm_records
+        .iter()
+        .filter(|record| {
+            covered
+                .iter()
+                .any(|digest| digest.as_str() == record.canonical_digest)
+        })
+        .map(|record| {
+            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!(
+                        "covered Event {} is not a canonical envelope: {error}",
+                        record.event_id
+                    ),
+                )
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     let mut joined = BTreeMap::new();
     for (cell, ops) in ops_by_cell {
@@ -833,28 +872,49 @@ async fn materialize_realm_control_with_transported_seals(
         )
     })?;
     let covered_event_digests = covered.iter().cloned().collect::<Vec<_>>();
+    let completeness_root =
+        arkret_state::control_event_completeness_root(&completeness_events, &covered)
+            .map_err(proof_state_error)?;
     if let Some(seals) = transported_seals {
         let authority_dids = authoritative_notary_dids(realm_id, &joined)?;
-        apply_authoritative_event_seal_path(state, realm_id, &authority_dids, &event_ops, seals)
-            .await?;
+        apply_authoritative_event_seal_path(
+            state,
+            realm_id,
+            &authority_dids,
+            &event_ops,
+            &covered,
+            &completeness_events,
+            seals,
+        )
+        .await?;
     }
     let mut seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
         &covered_event_digests,
         &state_root,
+        &completeness_root,
         &event_ops,
         device_generation_seal_required,
         generation_fence.as_ref(),
     );
     if matches!(seal_view, Err(crate::notary::NotaryError::NotAuthorized(_)))
-        && backfill_authoritative_event_seals(state, realm_id, &joined, &event_ops).await?
+        && backfill_authoritative_event_seals(
+            state,
+            realm_id,
+            &joined,
+            &event_ops,
+            &covered,
+            &completeness_events,
+        )
+        .await?
     {
         seal_view = crate::notary::ensure_materialized_event_seal(
             state,
             realm_id,
             &covered_event_digests,
             &state_root,
+            &completeness_root,
             &event_ops,
             device_generation_seal_required,
             generation_fence.as_ref(),
@@ -936,11 +996,20 @@ fn materialize_managed_agent_realm_control(
             "managed Agent PCR material resolved to a different Realm",
         ));
     }
+    let managed_covered = material
+        .covered_event_digests
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let completeness_root =
+        arkret_state::control_event_completeness_root(&events, &managed_covered)
+            .map_err(proof_state_error)?;
     let seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
         &material.covered_event_digests,
         &material.state_root,
+        &completeness_root,
         &material.event_ops,
         true,
         None,
@@ -1409,6 +1478,25 @@ fn proof_state_error(error: impl std::fmt::Display) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
+        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000a11c").unwrap();
+        let notary = "did:web:notary.example";
+        let mut joined = BTreeMap::new();
+        joined.insert(
+            CellRef::new("ak:cell:ak.component.notary.v1:null".to_owned()).unwrap(),
+            CellState::Value(serde_json::json!({
+                "kind": "single_did",
+                "did": notary,
+            })),
+        );
+
+        assert_eq!(
+            authoritative_notary_dids(&realm_id, &joined).unwrap(),
+            vec![notary.to_owned()]
+        );
+    }
 
     fn managed_agent_pcr_create() -> Event {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();

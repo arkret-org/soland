@@ -849,6 +849,7 @@ pub fn ensure_materialized_event_seal(
     realm_id: &RealmId,
     covered_event_digests: &[MoveId],
     state_root: &Hash,
+    completeness_root: &Hash,
     event_ops: &[(CellRef, IssuedOp)],
     device_generation_seal_required: bool,
     generation_fence: Option<&FirstGenerationEventSealRequirement>,
@@ -923,6 +924,11 @@ pub fn ensure_materialized_event_seal(
                 "existing Seal state_root differs for the same Event coverage".to_owned(),
             ));
         }
+        if &head.completeness_root != completeness_root {
+            return Err(NotaryError::Construction(
+                "existing Seal completeness_root differs for the same Event coverage".to_owned(),
+            ));
+        }
         return materialized_event_seal_view(state, head.clone());
     }
 
@@ -960,7 +966,7 @@ pub fn ensure_materialized_event_seal(
         delta,
         control_event_set_root: control_root.clone(),
         state_root: state_root.clone(),
-        completeness_root: control_root,
+        completeness_root: completeness_root.clone(),
         notary_seq: predecessor_seals
             .iter()
             .map(|seal| seal.notary_seq)

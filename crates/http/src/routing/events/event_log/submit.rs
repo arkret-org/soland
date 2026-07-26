@@ -791,36 +791,167 @@ async fn accept_federated_seal_prerequisite(
     envelope: &Value,
     seals: &[arkret_wire::Seal],
 ) -> Result<(), AppError> {
-    let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) else {
-        return Ok(());
-    };
-    let seal_id = arkret_identifiers::SealId::new(seal_ref.to_owned())
-        .map_err(|error| AppError::invalid_param(format!("invalid seal_ref: {error}")))?;
-    if state
-        .projections()
-        .seal_by_id(&seal_id)
-        .map_err(|error| {
-            AppError::internal(format!("read transported Seal prerequisite: {error}"))
-        })?
-        .is_some()
+    let mut roots = Vec::new();
+    if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) {
+        roots.push(
+            arkret_identifiers::SealId::new(seal_ref.to_owned())
+                .map_err(|error| AppError::invalid_param(format!("invalid seal_ref: {error}")))?,
+        );
+    }
+    if let Some(leaves) = envelope
+        .get("seal_basis")
+        .and_then(|basis| basis.get("leaves"))
+        .and_then(Value::as_array)
     {
+        for leaf in leaves {
+            let leaf = leaf.as_str().ok_or_else(|| {
+                AppError::invalid_param("seal_basis.leaves must contain Seal ids")
+            })?;
+            roots.push(
+                arkret_identifiers::SealId::new(leaf.to_owned()).map_err(|error| {
+                    AppError::invalid_param(format!("invalid seal_basis leaf: {error}"))
+                })?,
+            );
+        }
+    }
+    if roots.is_empty() {
         return Ok(());
     }
-    let target_index = seals
-        .iter()
-        .position(|seal| seal.id == seal_id)
-        .ok_or_else(|| {
-            AppError::new(
+
+    let mut required = BTreeSet::new();
+    for root in &roots {
+        if state
+            .projections()
+            .seal_by_id(root)
+            .map_err(|error| {
+                AppError::internal(format!("read transported Seal prerequisite: {error}"))
+            })?
+            .is_some()
+        {
+            continue;
+        }
+        if !seals.iter().any(|seal| &seal.id == root) {
+            return Err(AppError::new(
                 ErrorCode::DependencyMissing,
-                "DataEvent seal_ref is absent from local state and federation seals[]",
+                "Event Seal prerequisite is absent from local state and federation seals[]",
+            ));
+        }
+        required.insert(root.clone());
+    }
+    if required.is_empty() {
+        return Ok(());
+    }
+    loop {
+        let before = required.len();
+        let predecessors = seals
+            .iter()
+            .filter(|seal| required.contains(&seal.id))
+            .flat_map(|seal| seal.predecessor_refs.iter().cloned())
+            .collect::<Vec<_>>();
+        required.extend(predecessors);
+        if required.len() == before {
+            break;
+        }
+    }
+    let relevant = seals
+        .iter()
+        .filter(|seal| required.contains(&seal.id))
+        .cloned()
+        .collect::<Vec<_>>();
+    for seal in &relevant {
+        if &seal.realm_id != realm_id {
+            return Err(AppError::new(
+                ErrorCode::SchemaViolation,
+                "federated Seal prerequisite belongs to another Realm",
+            ));
+        }
+        for predecessor in &seal.predecessor_refs {
+            if relevant
+                .iter()
+                .any(|candidate| &candidate.id == predecessor)
+            {
+                continue;
+            }
+            if state
+                .projections()
+                .seal_by_id(predecessor)
+                .map_err(|error| {
+                    AppError::internal(format!(
+                        "read transported Seal predecessor prerequisite: {error}"
+                    ))
+                })?
+                .is_none()
+            {
+                return Err(AppError::new(
+                    ErrorCode::DependencyMissing,
+                    "federated Seal prerequisite has a non-local missing predecessor",
+                ));
+            }
+        }
+    }
+    let event =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                format!(
+                    "federated Event is invalid while checking Seal dependency cycles: {error}"
+                ),
             )
         })?;
+    let event_is_local = state
+        .event_queries()
+        .has_canonical_event(event.event_id.as_str())
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "read canonical Event while checking Seal dependency cycles: {error}"
+            ))
+        })?;
+    if !event_is_local {
+        let event_digest =
+            arkret_identifiers::MoveId::new(event.event_digest().map_err(|error| {
+                AppError::new(
+                    ErrorCode::SchemaViolation,
+                    format!("federated Event digest failed: {error}"),
+                )
+            })?)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::SchemaViolation,
+                    format!("federated Event digest is not a canonical Move digest: {error}"),
+                )
+            })?;
+        if relevant.iter().any(|seal| {
+            seal.delta.contains(&event_digest) || seal.covered_event_digests.contains(&event_digest)
+        }) {
+            return Err(AppError::new(
+                ErrorCode::SchemaViolation,
+                "federated Event Seal prerequisite transitively covers the Event itself",
+            ));
+        }
+    }
     crate::routing::events::event_log::governance_proof::accept_federated_event_seal_path(
-        state,
-        realm_id,
-        &seals[..=target_index],
+        state, realm_id, &relevant,
     )
-    .await
+    .await?;
+    for root in roots {
+        if state
+            .projections()
+            .seal_by_id(&root)
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "read projected transported Seal prerequisite: {error}"
+                ))
+            })?
+            .is_none()
+        {
+            return Err(AppError::new(
+                ErrorCode::DependencyMissing,
+                "federated Event referenced Seal was not projected",
+            ));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) async fn submit_federation_events(
@@ -842,12 +973,13 @@ pub(crate) async fn submit_federation_events(
                 return;
             }
         };
-    if submit.validate_signer_key_evidence().is_err() {
+    if let Err(error) = submit.validate_federation_transport() {
+        tracing::debug!(%error, "federation transport contract rejected");
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "invalid federation signer evidence",
+            "invalid federation transport contract",
         );
         return;
     }
@@ -857,7 +989,6 @@ pub(crate) async fn submit_federation_events(
         seals,
         signer_key_evidence,
         agent_signer_evidence_bundle,
-        idempotency_key: _,
     } = submit;
     if seals.windows(2).any(|pair| {
         (pair[0].notary_seq, pair[0].id.as_str()) >= (pair[1].notary_seq, pair[1].id.as_str())
@@ -1297,6 +1428,12 @@ pub(crate) async fn submit_federation_events(
                 .await;
                 res.render(Json(outcome));
             }
+            Err(error) if error.code == "dependency_missing" => render_error(
+                res,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "federation_dependencies_pending",
+                "the atomic Realm founding unit is waiting for dependencies",
+            ),
             Err(error) => render_submit_one_error(res, error),
         }
         return;
@@ -1308,12 +1445,22 @@ pub(crate) async fn submit_federation_events(
                 != Some(arkret_wire::events::EventKind::INVITE_CREATE)
         })
     {
-        render_error(
-            res,
-            StatusCode::SERVICE_UNAVAILABLE,
-            "federation_dependencies_pending",
-            "the referenced Realm bootstrap has not arrived yet",
-        );
+        rejected.extend(events.iter().map(|event| {
+            EventsSubmitRejectedItem {
+                id: event_string_field_from_value(event, "event_id")
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                reason_code: "federation_dependencies_pending".to_owned(),
+                detail: Some("the referenced Realm bootstrap has not arrived yet".to_owned()),
+            }
+        }));
+        res.render(Json(events_submit_outcome(
+            EventsSubmitStatus::Partial,
+            Vec::new(),
+            Vec::new(),
+            rejected,
+            Vec::new(),
+            Some(super::super::sync::sync_token_for_state(state).await),
+        )));
         return;
     }
 
@@ -1375,13 +1522,14 @@ pub(crate) async fn submit_federation_events(
             {
                 Ok(()) => {}
                 Err("peer_claim_welcome_pending") => {
-                    render_error(
-                        res,
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "federation_dependencies_pending",
-                        "the Welcome peer claim ledger entry is not available yet",
-                    );
-                    return;
+                    rejected.push(EventsSubmitRejectedItem {
+                        id,
+                        reason_code: "federation_dependencies_pending".to_owned(),
+                        detail: Some(
+                            "the Welcome peer claim ledger entry is not available yet".to_owned(),
+                        ),
+                    });
+                    continue;
                 }
                 Err(_) => {
                     rejected.push(EventsSubmitRejectedItem {
@@ -1470,13 +1618,16 @@ pub(crate) async fn submit_federation_events(
         .await
         {
             tracing::debug!(%error, event_id = %id, "federation Seal prerequisite is unavailable");
-            render_error(
-                res,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "federation_dependencies_pending",
-                "a required signed Seal or its accepted Control Event ancestry is unavailable",
-            );
-            return;
+            rejected.push(EventsSubmitRejectedItem {
+                id,
+                reason_code: if error.code == ErrorCode::DependencyMissing {
+                    "federation_dependencies_pending".to_owned()
+                } else {
+                    error.wire_code().to_owned()
+                },
+                detail: Some(error.message.to_string()),
+            });
+            continue;
         }
         match submit_event_value_with_context(
             state,
@@ -1503,13 +1654,12 @@ pub(crate) async fn submit_federation_events(
             }
             Err(error) => {
                 if error.code == "dependency_missing" {
-                    render_error(
-                        res,
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "federation_dependencies_pending",
-                        "a predecessor Event has not arrived yet",
-                    );
-                    return;
+                    rejected.push(EventsSubmitRejectedItem {
+                        id,
+                        reason_code: "federation_dependencies_pending".to_owned(),
+                        detail: Some("a predecessor Event has not arrived yet".to_owned()),
+                    });
+                    continue;
                 }
                 if let Some(event_id) = error.quarantine_event_id {
                     quarantine.push(event_id);

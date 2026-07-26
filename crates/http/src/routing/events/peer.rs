@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_identifiers::{Did, EventId, RealmId};
 use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
 use arkret_models_collaboration::event_sync::{
-    EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody,
+    EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
 };
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
@@ -94,7 +94,7 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
             "request-canonical-digest".to_owned(),
         ],
         limits: PeerEventsDescribeLimits {
-            max_batch_item_count: 100,
+            max_batch_item_count: MAX_FEDERATED_EVENTS,
             max_query_limit: MAX_PEER_EVENTS_QUERY_LIMIT,
             max_resolve: MAX_PEER_EVENTS_RESOLVE,
         },

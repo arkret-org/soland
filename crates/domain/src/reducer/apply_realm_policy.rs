@@ -14,7 +14,9 @@ impl ProjectionState {
     /// SDK Event cell-contract validator has recomputed family, subject, plane,
     /// op and payload equality. This function deliberately consumes the exact
     /// wire effect carried on the projection Operation instead of maintaining a
-    /// second event-kind -> cell-family table in Soland.
+    /// second event-kind -> cell-family table in Soland. Realm-singleton cells
+    /// use `null` on wire, but this process-wide projection cache scopes them by
+    /// Realm so two Realms cannot overwrite one another.
     pub fn apply_validated_realm_bootstrap_facet(
         &mut self,
         operation: &Operation,
@@ -56,7 +58,26 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         };
-        let Ok(cell) = CellRef::new(cell.to_owned()) else {
+        let Ok(wire_cell) = CellRef::new(cell.to_owned()) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        };
+        let Ok(cell_id) = arkret_wire::CellId::from_ref(&wire_cell) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        };
+        if cell_id.subject() != arkret_wire::NULL_SUBJECT {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+            };
+        }
+        let Ok(cell) = CellRef::new(format!(
+            "ak:cell:{}:{}",
+            cell_id.component(),
+            operation.realm_id.as_str()
+        )) else {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };

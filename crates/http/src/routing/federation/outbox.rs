@@ -326,6 +326,126 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum PeerEventPartialRetry {
+    SameRequest,
+    Rebuilt {
+        payload_json: String,
+        idempotency_key: String,
+    },
+}
+
+fn peer_event_partial_retry(
+    endpoint: &str,
+    request_body: &str,
+    response_body: &str,
+) -> Option<PeerEventPartialRetry> {
+    if endpoint != "/_arkret/peer/events" {
+        return None;
+    }
+    let outcome: arkret_models_collaboration::http_bodies::EventsSubmitOutcome =
+        serde_json::from_str(response_body).ok()?;
+    if outcome.status != arkret_models_collaboration::http_bodies::EventsSubmitStatus::Partial
+        || outcome.rejected.is_empty()
+        || !outcome.quarantine.is_empty()
+        || outcome
+            .rejected
+            .iter()
+            .any(|item| item.reason_code != "federation_dependencies_pending")
+    {
+        return None;
+    }
+    if outcome.accepted.is_empty() && outcome.duplicate.is_empty() {
+        return Some(PeerEventPartialRetry::SameRequest);
+    }
+
+    let pending_ids = outcome
+        .rejected
+        .iter()
+        .map(|item| item.id.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut request: arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody =
+        serde_json::from_str(request_body).ok()?;
+    request
+        .events
+        .retain(|event| pending_ids.contains(event.event_id.as_str()));
+    if request.events.is_empty() {
+        return None;
+    }
+    request.signer_key_evidence.retain(|evidence| {
+        request
+            .events
+            .iter()
+            .any(|event| evidence.matches_event_proof(event, &evidence.verification_method))
+    });
+    if let Some(bundle) = &mut request.agent_signer_evidence_bundle {
+        bundle.evidence.retain(|evidence| {
+            let binding = &evidence.signing_key_binding;
+            request.events.iter().any(|event| {
+                event.applet_id.is_none()
+                    && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id
+                    && event.proofs.iter().any(|proof| {
+                        proof.verification_method == binding.verification_method.as_str()
+                    })
+            })
+        });
+        if bundle.evidence.is_empty() {
+            request.agent_signer_evidence_bundle = None;
+        }
+    }
+
+    let seals_by_id = request
+        .seals
+        .iter()
+        .map(|seal| (seal.id.clone(), seal))
+        .collect::<std::collections::BTreeMap<_, _>>();
+    let mut pending_seals = Vec::new();
+    for event in &request.events {
+        if let Some(seal_ref) = &event.seal_ref
+            && seals_by_id.contains_key(seal_ref)
+        {
+            pending_seals.push(seal_ref.clone());
+        }
+        if let Some(seal_basis) = &event.seal_basis {
+            pending_seals.extend(
+                seal_basis
+                    .leaves
+                    .iter()
+                    .filter(|seal_id| seals_by_id.contains_key(*seal_id))
+                    .cloned(),
+            );
+        }
+    }
+    let mut retained_seals = std::collections::BTreeSet::new();
+    while let Some(seal_id) = pending_seals.pop() {
+        if !retained_seals.insert(seal_id.clone()) {
+            continue;
+        }
+        if let Some(seal) = seals_by_id.get(&seal_id) {
+            pending_seals.extend(
+                seal.predecessor_refs
+                    .iter()
+                    .filter(|predecessor| seals_by_id.contains_key(*predecessor))
+                    .cloned(),
+            );
+        }
+    }
+    request
+        .seals
+        .retain(|seal| retained_seals.contains(&seal.id));
+    request.validate_federation_transport().ok()?;
+    let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
+    let payload_json = String::from_utf8(bytes.clone()).ok()?;
+    let idempotency_key = format!(
+        "ak:outbox:partial:{}",
+        arkret_canonical::sha256_digest(&bytes)
+    );
+    Some(PeerEventPartialRetry::Rebuilt {
+        payload_json,
+        idempotency_key,
+    })
+}
+
 /// Compute the next retry timestamp for a retryable failure. Doubles
 /// the backoff on each attempt and caps at 1h.
 fn next_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
@@ -510,11 +630,26 @@ impl FederationDispatcher {
                         "federation outbox delivery succeeded"
                     );
                 } else if (200..300).contains(&status) {
-                    self.mark_application_failure(
-                        &mut row,
-                        application_failure.expect("checked as present"),
-                    )
-                    .await;
+                    match peer_event_partial_retry(&row.endpoint, &row.payload_json, &body_text) {
+                        Some(PeerEventPartialRetry::SameRequest) => {
+                            self.schedule_retry(&mut row, status, true).await;
+                        }
+                        Some(PeerEventPartialRetry::Rebuilt {
+                            payload_json,
+                            idempotency_key,
+                        }) => {
+                            row.payload_json = payload_json;
+                            row.idempotency_key = idempotency_key;
+                            self.schedule_retry(&mut row, status, true).await;
+                        }
+                        None => {
+                            self.mark_application_failure(
+                                &mut row,
+                                application_failure.expect("checked as present"),
+                            )
+                            .await;
+                        }
+                    }
                 } else if is_retryable_status(status) {
                     let dependencies_pending = causal_dependencies_pending(&body_text);
                     self.schedule_retry(&mut row, status, dependencies_pending)
@@ -758,6 +893,87 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn all_pending_peer_event_partial_reuses_the_same_request() {
+        let response = r#"{
+            "status":"partial",
+            "accepted":[],
+            "rejected":[{
+                "id":"ak:event:019f0000-0000-7000-8000-000000000001",
+                "reason_code":"federation_dependencies_pending"
+            }]
+        }"#;
+        assert_eq!(
+            peer_event_partial_retry("/_arkret/peer/events", "not-read", response),
+            Some(PeerEventPartialRetry::SameRequest)
+        );
+    }
+
+    #[test]
+    fn partial_success_rebuilds_only_pending_events_with_a_new_header_key() {
+        let event = |suffix: &str| {
+            serde_json::json!({
+                "event_id": format!("ak:event:019f0000-0000-7000-8000-{suffix}"),
+                "kind": "ak.message.create",
+                "realm_id": "ak:realm:019f0000-0000-7000-8000-000000000000",
+                "actor_id": "did:web:alice.example",
+                "actor_seq": 1,
+                "created_at": "2026-07-26T00:00:00.000Z",
+                "prev_refs": [],
+                "payload": {},
+                "proofs": [{
+                    "kind": "detached_jws",
+                    "alg": "EdDSA",
+                    "verification_method": "did:web:alice.example#device-1",
+                    "event_digest": format!("sha256:{}", "a".repeat(64)),
+                    "created_at": "2026-07-26T00:00:00.000Z",
+                    "jws": "a..b"
+                }]
+            })
+        };
+        let request = serde_json::json!({
+            "service_binding_ref": {
+                "realm_id": "ak:realm:019f0000-0000-7000-8000-000000000000",
+                "realm_policy_digest": format!("sha256:{}", "b".repeat(64)),
+                "membership_frontier": [],
+                "delivery_binding_frontier": [],
+                "destination_service_kind": "principal_server",
+                "reducer_profile_digest": format!("sha256:{}", "c".repeat(64))
+            },
+            "events": [
+                event("000000000001"),
+                event("000000000002")
+            ]
+        });
+        let response = r#"{
+            "status":"partial",
+            "accepted":["ak:event:019f0000-0000-7000-8000-000000000001"],
+            "rejected":[{
+                "id":"ak:event:019f0000-0000-7000-8000-000000000002",
+                "reason_code":"federation_dependencies_pending"
+            }]
+        }"#;
+        let Some(PeerEventPartialRetry::Rebuilt {
+            payload_json,
+            idempotency_key,
+        }) = peer_event_partial_retry(
+            "/_arkret/peer/events",
+            &serde_json::to_string(&request).unwrap(),
+            response,
+        )
+        else {
+            panic!("expected a rebuilt partial retry");
+        };
+        let rebuilt: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
+        assert_eq!(rebuilt["events"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            rebuilt["events"][0]["event_id"],
+            "ak:event:019f0000-0000-7000-8000-000000000002"
+        );
+        assert!(rebuilt.get("idempotency_key").is_none());
+        assert!(idempotency_key.starts_with("ak:outbox:partial:sha256:"));
     }
 
     #[test]
