@@ -1,41 +1,18 @@
 use super::{
     FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
-    FederationTransactionRecord, Operation, PersistenceResult, async_trait,
+    Operation, PersistenceResult, async_trait,
 };
-/// Trait for durable federation transaction replay records.
-#[async_trait]
-pub trait FederationTransactionStore: Send + Sync {
-    async fn get(
-        &self,
-        origin: &str,
-        txn_id: &str,
-    ) -> PersistenceResult<Option<FederationTransactionRecord>>;
-    /// Atomically claim the `(origin, txn_id)` idempotency slot *before*
-    /// running any side-effecting ingest. Inserts `record` (a
-    /// `status="processing"` placeholder) only when no row exists yet —
-    /// `INSERT ... ON CONFLICT DO NOTHING` semantics. Returns `Ok(true)`
-    /// when this caller now owns the slot and must run the ingest plus the
-    /// finalising [`put`](Self::put); `Ok(false)` when another in-flight or
-    /// completed request already holds it. This closes the get→ingest→put
-    /// TOCTOU window: two concurrent deliveries of the same txn_id can
-    /// never both execute the operation batch.
-    async fn try_begin(&self, record: &FederationTransactionRecord) -> PersistenceResult<bool>;
-    async fn put(&self, record: &FederationTransactionRecord) -> PersistenceResult<()>;
-    async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationTransactionRecord>>;
-}
 /// G3.S0 — durable outbound federation HTTP delivery queue.
 ///
-/// Rows are inserted synchronously on the inbound write path
-/// (`routing::federation::federation::broadcast_move_to_peers` and
-/// `broadcast_seal_to_peers`); the `FederationDispatcher` background
-/// worker (`routing::federation::outbox::FederationDispatcher`) polls
-/// pending rows and posts them to peers.
+/// Rows are inserted synchronously by the standard peer-event post-commit
+/// path; the `FederationDispatcher` background worker
+/// (`routing::federation::outbox::FederationDispatcher`) polls pending rows
+/// and posts them to peers.
 ///
 /// Idempotency: `(peer_did, idempotency_key)` is UNIQUE. Callers that
-/// re-enqueue the same logical request (replay of an accepted Move /
-/// Seal on restart) MUST see `enqueue` return `Ok(false)` rather than
-/// a duplicate-row error; the worker treats the existing row as the
-/// authoritative delivery state.
+/// re-enqueue the same logical request MUST see `enqueue` return `Ok(false)`
+/// rather than a duplicate-row error; the worker treats the existing row as
+/// the authoritative delivery state.
 #[async_trait]
 pub trait FederationOutboxStore: Send + Sync {
     /// Insert a new outbox row. Returns `Ok(true)` if a fresh row was

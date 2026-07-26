@@ -1484,14 +1484,8 @@ impl ProjectionState {
     /// is durable; this projection cache backs the
     /// `erasure_receipts_endpoint` server-describe surface.
     ///
-    /// Stream-F (Wave 2C) — additionally extracts `scope.realm_id` so
-    /// the federation fanout pass can pick the affected Realm's peer
-    /// set, and seeds `peer_status` from the caller-supplied list (if
-    /// any). The actual peer push + per-peer status writes happen
-    /// outside the reducer in
-    /// `routing::federation::erasure_fanout::fanout_erasure_receipt`,
-    /// which is called from the projection write path with the
-    /// `AppState` handle.
+    /// `scope.realm_id` is retained so standard Event fanout consumers can
+    /// correlate the receipt with its affected Realm.
     pub(crate) fn apply_audit_erasure_receipt(
         &mut self,
         operation: &Operation,
@@ -1585,13 +1579,6 @@ impl ProjectionState {
             storage_boundary,
             scope_realm_id,
             fanout_status,
-            // Stream-F (Wave 2C) — `peer_status` is seeded by the
-            // federation fanout helper (which has the AppState
-            // handle and therefore access to `config.federation_peers`).
-            // The reducer itself runs without AppState, so we leave
-            // the map empty here and let the outer projection write
-            // path populate it via `seed_peer_status`.
-            peer_status: std::collections::BTreeMap::new(),
             recorded_at: now,
             payload: payload.clone(),
         });

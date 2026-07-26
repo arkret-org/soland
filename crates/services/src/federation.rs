@@ -11,23 +11,6 @@ use crate::ServiceResult;
 
 pub const FEDERATION_FRONTIER_STATUS_STALE_PEER: &str = "stale_peer";
 
-#[derive(Clone, Debug)]
-pub struct FederationTransactionRecord {
-    pub origin: String,
-    pub txn_id: String,
-    pub destination: String,
-    pub realm_id: Option<String>,
-    pub content_digest: String,
-    pub origin_verification_method: Option<String>,
-    pub service_binding_ref: Option<String>,
-    pub origin_key_state_digest: Option<String>,
-    pub local_peer_policy_digest: Option<String>,
-    pub status: String,
-    pub response: Value,
-    pub received_at: DateTime<Utc>,
-    pub processed_at: Option<DateTime<Utc>>,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FederationFrontierExchangeRecord {
     pub realm_id: String,
@@ -179,14 +162,6 @@ pub trait FederationOutboxPort: Send + Sync {
 
 #[async_trait]
 pub trait FederationStatePort: Send + Sync {
-    async fn transaction(
-        &self,
-        origin: &str,
-        txn_id: &str,
-    ) -> ServiceResult<Option<FederationTransactionRecord>>;
-    async fn begin_transaction(&self, record: &FederationTransactionRecord) -> ServiceResult<bool>;
-    async fn store_transaction(&self, record: &FederationTransactionRecord) -> ServiceResult<()>;
-    async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>>;
     async fn append_operation(&self, operation: Operation) -> ServiceResult<()>;
     async fn has_operation(&self, operation_id: &str) -> ServiceResult<bool>;
     async fn operations_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<Operation>>;
@@ -276,28 +251,6 @@ impl FederationService {
         self.outbox.deliveries().await
     }
 
-    pub async fn transaction(
-        &self,
-        origin: &str,
-        txn_id: &str,
-    ) -> ServiceResult<Option<FederationTransactionRecord>> {
-        self.state.transaction(origin, txn_id).await
-    }
-    pub async fn begin_transaction(
-        &self,
-        record: &FederationTransactionRecord,
-    ) -> ServiceResult<bool> {
-        self.state.begin_transaction(record).await
-    }
-    pub async fn store_transaction(
-        &self,
-        record: &FederationTransactionRecord,
-    ) -> ServiceResult<()> {
-        self.state.store_transaction(record).await
-    }
-    pub async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>> {
-        self.state.transactions().await
-    }
     pub async fn append_operation(&self, operation: Operation) -> ServiceResult<()> {
         self.state.append_operation(operation).await
     }
@@ -358,28 +311,6 @@ mod tests {
 
     #[async_trait]
     impl FederationStatePort for NoFederationState {
-        async fn transaction(
-            &self,
-            _origin: &str,
-            _txn_id: &str,
-        ) -> ServiceResult<Option<FederationTransactionRecord>> {
-            Ok(None)
-        }
-        async fn begin_transaction(
-            &self,
-            _record: &FederationTransactionRecord,
-        ) -> ServiceResult<bool> {
-            Ok(false)
-        }
-        async fn store_transaction(
-            &self,
-            _record: &FederationTransactionRecord,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn transactions(&self) -> ServiceResult<Vec<FederationTransactionRecord>> {
-            Ok(Vec::new())
-        }
         async fn append_operation(&self, _operation: Operation) -> ServiceResult<()> {
             Ok(())
         }

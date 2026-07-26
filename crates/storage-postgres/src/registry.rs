@@ -26,7 +26,6 @@ pub struct PgPersistenceStore {
     blobs: PgBlobStore,
     devices: PgDeviceInventoryStore,
     device_pairings: PgDevicePairingStore,
-    federation_transactions: PgFederationTransactionStore,
     federation_outbox: PgFederationOutboxStore,
     federation_frontier_exchange: PgFederationFrontierExchangeStore,
     handle_releases: PgHandleReleaseStore,
@@ -91,7 +90,6 @@ impl PgPersistenceStore {
             blobs: PgBlobStore { pool: pool.clone() },
             devices: PgDeviceInventoryStore { pool: pool.clone() },
             device_pairings: PgDevicePairingStore { pool: pool.clone() },
-            federation_transactions: PgFederationTransactionStore { pool: pool.clone() },
             federation_outbox: PgFederationOutboxStore { pool: pool.clone() },
             federation_frontier_exchange: PgFederationFrontierExchangeStore { pool: pool.clone() },
             handle_releases: PgHandleReleaseStore { pool: pool.clone() },
@@ -274,10 +272,6 @@ impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
 }
 
 impl FederationGovernanceStoreRegistry for PgPersistenceStore {
-    fn federation_transactions(&self) -> &dyn FederationTransactionStore {
-        &self.federation_transactions
-    }
-
     fn federation_outbox(&self) -> &dyn FederationOutboxStore {
         &self.federation_outbox
     }

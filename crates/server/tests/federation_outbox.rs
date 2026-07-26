@@ -354,7 +354,7 @@ async fn capture_signed_request() -> CapturedSignedRequestBody {
     let (peer_url, request_rx) = spawn_mock_peer();
     let state = soland_test_support::app_state(outbox_test_config());
 
-    // Enqueue one outbound row — same path broadcast_move_to_peers
+    // Enqueue one outbound row through the standard peer-event delivery path.
     // funnels through after computing the deterministic idempotency
     // key.
     let row = enqueue_outbound(

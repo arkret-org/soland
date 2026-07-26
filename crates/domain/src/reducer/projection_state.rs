@@ -94,8 +94,8 @@ pub struct ProjectionState {
     ///
     /// Keyed by canonical `CellRef` (e.g.
     /// `ak:cell:ak.component.realm.read_receipt_policy.v1:<realm_id>`).
-    /// Each successful apply_seal (`routing::federation::move_seal::submit_seal` or
-    /// `crate::notary::NotaryWorker`) calls
+    /// Each successful `apply_seal` call from peer-event admission or
+    /// `crate::notary::NotaryWorker` calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
     /// the affected Realm. Read handlers query via [`ProjectionState::cell`]
     /// / [`ProjectionState::cell_value`] for cell-keyed state lookups
@@ -829,10 +829,8 @@ impl ProjectionState {
 
     /// Reload the cells map for one Realm from the SDK CellStore + apply
     /// each cell's lattice. Called after every successful `apply_seal`
-    /// in the Move/Seal pipeline
-    /// (`routing::federation::move_seal::submit_seal` plus
-    /// `crate::notary::NotaryWorker`) to keep this projection cache
-    /// in sync with sealed cell state.
+    /// in the peer-event/notary pipeline to keep this projection cache in sync
+    /// with sealed cell state.
     ///
     /// This is the only write path into [`ProjectionState::cells`]; the
     /// durable-Event projection path (`apply()`) does NOT touch cells —

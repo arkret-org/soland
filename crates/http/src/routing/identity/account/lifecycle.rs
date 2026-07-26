@@ -1,156 +1,15 @@
-//! Account lifecycle handlers: export / deactivate / erase + erasure-receipt
+//! Account lifecycle handlers: deactivate / erase + erasure-receipt
 //! and state-change audit helpers. Split out of `account.rs` (SOL-07-002) as a
 //! cohesive unit; external paths preserved via `pub(crate) use` re-export in
 //! the parent module.
 
-use arkret_identifiers::{BlobRef, Did};
+use arkret_identifiers::Did;
 use arkret_models_collaboration::governance::erasure::{
     ErasedClass, ErasureOutcome, ErasureReceipt, ErasureReceiptProof, ErasureScope,
     ErasureStorageBoundary, ErasureSubject, ErasureSubjectKind,
 };
 
 use super::*;
-
-#[salvo::oapi::endpoint(operation_id = "org.arkret.soland.account.export", tags("identity"))]
-#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.account.export"))]
-pub(super) async fn export_account(
-    aa: AuthArgs,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AccountExportOutcome> {
-    // Spec: identity/account-lifecycle.md §8 — the export bundle MUST
-    // include account / profile / realms / messages / devices / audit_log
-    // facets. We assemble each from the existing persistence stores; the
-    // bundle is shipped as a single JSON blob, and a `org.arkret.soland.audit.exported`
-    // audit entry records the operation so subsequent governance reviews
-    // can see who requested an export.
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
-    let actor = session.actor.clone();
-
-    let account = state
-        .identities()
-        .account(&actor)
-        .await
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    let profile = account.as_ref().map(|account| AccountExportProfile {
-        display_name: account.display_name.clone(),
-        bio: account.bio.clone(),
-        avatar_blob_ref: account.avatar_blob_ref.clone(),
-    });
-    let account_payload = account.map(|account| account_response(account, state));
-
-    let devices = state
-        .identities()
-        .devices_for_actor(&actor)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .map(|device| AccountExportDevice {
-            device_id: device.device_id,
-            display_name: device.display_name,
-            verification_state: device.verification_state,
-            created_at: arkret_canonical::format_timestamp_canonical(device.created_at),
-            revoked_at: device
-                .revoked_at
-                .map(arkret_canonical::format_timestamp_canonical),
-        })
-        .collect::<Vec<_>>();
-
-    let realms = state
-        .realms()
-        .realm_metadata_list()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|(_, meta)| meta.owner == actor)
-        .map(|(realm_id, meta)| AccountExportRealm {
-            realm_id,
-            discoverability: meta.discoverability,
-            history_visibility: meta.history_visibility,
-            created_at: arkret_canonical::format_timestamp_canonical(meta.created_at),
-        })
-        .collect();
-
-    // Append the audit entry FIRST so the export bundle (assembled
-    // immediately after) carries the org.arkret.soland.audit.exported row inline.
-    // After erasure the actor's session token is invalidated, so the
-    // export-bundle slot is the only path back to the audit trail.
-    append_audit_log(
-        state,
-        Some(&actor),
-        "org.arkret.soland.audit.exported",
-        json!({"actor": actor.clone()}),
-        "accepted",
-    )
-    .await;
-    let audit_log = state
-        .governance()
-        .audit_entries_for_actor(&actor)
-        .await
-        .unwrap_or_default();
-
-    json_ok(AccountExportOutcome {
-        did: actor,
-        exported_at: arkret_canonical::format_timestamp_canonical(now()),
-        account: account_payload,
-        profile,
-        realms,
-        devices,
-        // Messages — plaintext for own events, ciphertext-only for E2EE
-        // peers — lands when the projection event read API exposes a
-        // per-actor filter. v1 bundle keeps the slot for forward-compat.
-        messages: Vec::new(),
-        audit_log,
-        // The export bundle's v1 scope is `{ account, devices,
-        // audit_log }` plus the always-empty `messages` and `realms`
-        // collections; conversation history, contacts, and key backup
-        // state are reserved as explicit nulls for forward-compatible
-        // downstream deserializers.
-        conversation_history: None,
-        contacts: Vec::new(),
-        key_backup_state: None,
-    })
-}
-
-#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountExportOutcome {
-    pub did: String,
-    pub exported_at: String,
-    pub account: Option<SolandAccountRegisterOutcome>,
-    pub profile: Option<AccountExportProfile>,
-    pub realms: Vec<AccountExportRealm>,
-    pub devices: Vec<AccountExportDevice>,
-    pub messages: Vec<Value>,
-    pub audit_log: Vec<Value>,
-    pub conversation_history: Option<Value>,
-    pub contacts: Vec<String>,
-    pub key_backup_state: Option<Value>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountExportProfile {
-    pub display_name: Option<String>,
-    pub bio: Option<String>,
-    pub avatar_blob_ref: Option<BlobRef>,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountExportRealm {
-    pub realm_id: String,
-    pub discoverability: String,
-    pub history_visibility: String,
-    pub created_at: String,
-}
-
-#[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
-struct AccountExportDevice {
-    pub device_id: String,
-    pub display_name: Option<String>,
-    pub verification_state: String,
-    pub created_at: String,
-    pub revoked_at: Option<String>,
-}
 
 #[derive(Clone, Debug, Serialize, salvo::oapi::ToSchema)]
 pub(crate) struct AccountLifecycleChange {

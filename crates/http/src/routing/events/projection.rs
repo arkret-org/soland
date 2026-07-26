@@ -1,14 +1,13 @@
 //! Projection writers + read-side helpers.
 //!
 //! This is the in-process projection layer: ingestion of accepted operations
-//! (local service writes + federation push), per-Realm lifecycle materialization, the
+//! (local service writes + standard peer events), per-Realm lifecycle materialization, the
 //! `state.projection_events` log, redaction tombstones, read-side helpers,
 //! and the deterministic reducer fan-out owned by the projection application service.
 //!
 //! Surfaces:
-//! - **inbound**: local operation builders, `federation::federation_push_operations` and
-//!   `federation::federation_transaction` call `project_accepted_operations` and
-//!   `ingest_federation_operations` from here.
+//! - **inbound**: local operation builders and the standard peer-event handler call
+//!   `project_accepted_operations` and `ingest_federation_operations` from here.
 //! - **outbound**: event-query and account-subscribe handlers consume the projection event log and
 //!   typed SDK response models.
 //!

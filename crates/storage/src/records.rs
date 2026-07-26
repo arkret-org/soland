@@ -432,23 +432,6 @@ pub struct BlobRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct FederationTransactionRecord {
-    pub origin: String,
-    pub txn_id: String,
-    pub destination: String,
-    pub realm_id: Option<String>,
-    pub content_digest: String,
-    pub origin_verification_method: Option<String>,
-    pub service_binding_ref: Option<String>,
-    pub origin_key_state_digest: Option<String>,
-    pub local_peer_policy_digest: Option<String>,
-    pub status: String,
-    pub response: Value,
-    pub received_at: chrono::DateTime<chrono::Utc>,
-    pub processed_at: Option<chrono::DateTime<chrono::Utc>>,
-}
-
 /// G3.S0 — one outbound federation HTTP POST queued for the
 /// `FederationDispatcher` background worker. See
 /// `routing/federation/outbox.rs` for the worker loop and

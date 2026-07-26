@@ -1,12 +1,10 @@
 use std::collections::BTreeSet;
 
-use arkret_event_draft::Operation;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_policy::profile_semantics::{
     ProfileSemanticRequirements, collect_profile_semantic_requirements,
 };
 use serde_json::Value;
-use soland_services::operation_semantics as kinds;
 
 use crate::state::AppState;
 use crate::wire;
@@ -57,14 +55,6 @@ impl FederationProfileIntersection {
         atoms.capability_actions.clear();
         atoms.constraint_kinds.clear();
         atoms.requires_capability_semantics = false;
-        self.enforce_atoms(&atoms)
-    }
-
-    pub(crate) fn enforce_operation(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), FederationProfileGateRejection> {
-        let atoms = SemanticAtoms::from_operation(operation);
         self.enforce_atoms(&atoms)
     }
 
@@ -284,17 +274,6 @@ impl SemanticAtoms {
             atoms.schemas.insert(SCHEMA_EVENT_PAYLOAD.to_owned());
         }
         collect_payload_semantics(envelope.get("payload").unwrap_or(envelope), &mut atoms, 0);
-        atoms.finalize_risk_flags();
-        atoms
-    }
-
-    fn from_operation(operation: &Operation) -> Self {
-        let mut atoms = Self {
-            kind: Some(kinds::canonical_kind_string(operation)),
-            ..Self::default()
-        };
-        atoms.schemas.insert(SCHEMA_EVENT_PAYLOAD.to_owned());
-        collect_payload_semantics(&operation.payload, &mut atoms, 0);
         atoms.finalize_risk_flags();
         atoms
     }

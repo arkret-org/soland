@@ -1,9 +1,6 @@
-use std::collections::HashSet;
-
 use arkret_event_draft::Operation;
 use serde_json::json;
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
-use soland_services::operation_semantics as kinds;
 
 use super::*;
 
@@ -50,21 +47,6 @@ pub fn operation_event_id(operation: &Operation) -> String {
         .and_then(|value| value.as_str())
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| operation.operation_id.to_string())
-}
-
-pub fn redaction_targets_from_operations(operations: &[Operation]) -> HashSet<String> {
-    operations
-        .iter()
-        .filter(|operation| kinds::operation_is_redaction(operation))
-        .filter_map(|operation| {
-            soland_services::operation_semantics::message_redaction_target_ref(&operation.payload)
-        })
-        .collect()
-}
-
-pub fn operation_is_visible(operation: &Operation, redacted_events: &HashSet<String>) -> bool {
-    let event_id = operation_event_id(operation);
-    !kinds::operation_is_redaction(operation) && !redacted_events.contains(&event_id)
 }
 
 pub fn operation_type_string(operation: &Operation) -> String {

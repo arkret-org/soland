@@ -699,17 +699,6 @@ fn profile_limitations() -> Vec<Value> {
             "reason": "ak.gate.account.command.pair_device is served on the spec path for existing-device-authorized sibling registration. The old soland-local device pairing scaffold and approval family are removed; v1 core does not define a self/devices pairing-requests approval surface (service-http-binding.md §85, key-management.md §384, device-lifecycle.md §499). ak.gate.account.exchange.complete_oidc is delegated to the bridges deployment and not served here."
         }),
         json!({
-            "area": "federation.private_inbound_rail",
-            "status": "deployment_local_only",
-            "canonical_inbound": "/_arkret/peer/events",
-            "private_paths": [
-                "/_soland/peer/federation/*",
-                "/_soland/peer/moves",
-                "/_soland/peer/seals"
-            ],
-            "reason": "SPEC-CR-008 / federation.md §4.0 — the converged cross-deployment federation Event receive rail is the single protocol track POST /_arkret/peer/events (ak.peer.events.command.submit), which carries DataEvents and Control Moves (incl. Move/Anchor/Seal-bearing control events) as sealed Event Envelopes and is RFC 9421 service-signature gated. The /_soland/peer/* inbound *write* surface (transactions, operations push/backfill, moves/seals direct ingest) is fail-closed outside development_mode and is a deployment-local test/ops affordance only: it is not discoverable through describe/OpenAPI for remote peers and MUST NOT be relied on for cross-vendor interop. The read-only debug tracks (operations pull/frontier, realm-members, actor-events, seals pull) expose no interop write surface"
-        }),
-        json!({
             "area": "consent.scope_any_cross_service_cascade",
             "status": "partial_local_only",
             "spec": "T17",
@@ -1243,7 +1232,6 @@ pub fn describe(
                 "source": "arkret-spec/spec/v1/zh/conformance/scalability-constraints.md",
                 "max_event_bytes": MAX_EVENT_ENVELOPE_BYTES,
                 "max_events_batch_submit": MAX_EVENT_SUBMIT_BATCH,
-                "max_federation_transaction_events": 500,
                 "max_page_items": 100,
                 "max_prev_refs": MAX_EVENT_PREV_REFS,
                 "max_refs": MAX_EVENT_REFS,

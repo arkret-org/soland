@@ -80,46 +80,6 @@ fn persistence_pending_delivery(
     }
 }
 
-fn application_federation_transaction(
-    record: soland_storage::FederationTransactionRecord,
-) -> crate::federation::FederationTransactionRecord {
-    crate::federation::FederationTransactionRecord {
-        origin: record.origin,
-        txn_id: record.txn_id,
-        destination: record.destination,
-        realm_id: record.realm_id,
-        content_digest: record.content_digest,
-        origin_verification_method: record.origin_verification_method,
-        service_binding_ref: record.service_binding_ref,
-        origin_key_state_digest: record.origin_key_state_digest,
-        local_peer_policy_digest: record.local_peer_policy_digest,
-        status: record.status,
-        response: record.response,
-        received_at: record.received_at,
-        processed_at: record.processed_at,
-    }
-}
-
-fn persistence_federation_transaction(
-    record: &crate::federation::FederationTransactionRecord,
-) -> soland_storage::FederationTransactionRecord {
-    soland_storage::FederationTransactionRecord {
-        origin: record.origin.clone(),
-        txn_id: record.txn_id.clone(),
-        destination: record.destination.clone(),
-        realm_id: record.realm_id.clone(),
-        content_digest: record.content_digest.clone(),
-        origin_verification_method: record.origin_verification_method.clone(),
-        service_binding_ref: record.service_binding_ref.clone(),
-        origin_key_state_digest: record.origin_key_state_digest.clone(),
-        local_peer_policy_digest: record.local_peer_policy_digest.clone(),
-        status: record.status.clone(),
-        response: record.response.clone(),
-        received_at: record.received_at,
-        processed_at: record.processed_at,
-    }
-}
-
 fn application_frontier_exchange(
     record: soland_storage::FederationFrontierExchangeRecord,
 ) -> crate::federation::FederationFrontierExchangeRecord {
@@ -228,50 +188,6 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
 
 #[async_trait::async_trait]
 impl crate::federation::FederationStatePort for PersistenceFederationOutbox {
-    async fn transaction(
-        &self,
-        origin: &str,
-        txn_id: &str,
-    ) -> crate::ServiceResult<Option<crate::federation::FederationTransactionRecord>> {
-        Ok(self
-            .0
-            .federation_transactions()
-            .get(origin, txn_id)
-            .await?
-            .map(application_federation_transaction))
-    }
-    async fn begin_transaction(
-        &self,
-        record: &crate::federation::FederationTransactionRecord,
-    ) -> crate::ServiceResult<bool> {
-        Ok(self
-            .0
-            .federation_transactions()
-            .try_begin(&persistence_federation_transaction(record))
-            .await?)
-    }
-    async fn store_transaction(
-        &self,
-        record: &crate::federation::FederationTransactionRecord,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .federation_transactions()
-            .put(&persistence_federation_transaction(record))
-            .await?;
-        Ok(())
-    }
-    async fn transactions(
-        &self,
-    ) -> crate::ServiceResult<Vec<crate::federation::FederationTransactionRecord>> {
-        Ok(self
-            .0
-            .federation_transactions()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(application_federation_transaction)
-            .collect())
-    }
     async fn append_operation(
         &self,
         operation: arkret_event_draft::Operation,

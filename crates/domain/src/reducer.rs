@@ -12,16 +12,15 @@
 //! [`ProjectionState::apply`] is a direct match-on-canonical-kind
 //! dispatcher to inline projection helpers.
 //!
-//! The Move/Seal receive pipeline (`POST /_soland/peer/moves` /
-//! `POST /_soland/peer/seals`) routes through [`registry::LatticeKind`] /
-//! [`registry::LatticeRegistry`]. Concrete impls live in
+//! The standard peer-event receive pipeline routes through
+//! [`registry::LatticeKind`] / [`registry::LatticeRegistry`]. Concrete impls live in
 //! [`lattice_kinds`]; [`lattice_kinds::build_sdk_cell_registry`] feeds
 //! the SDK's `verify_move` / `apply_seal` pipeline. This is the
 //! protocol-canonical path; [`ProjectionState`]'s structured fields
 //! (`messages`, `reactions`, `read_cursors`, etc.) are an in-memory
 //! convenience cache populated from the durable Event-Envelope ingestion
-//! path that pre-dates the Move/Seal model. As Seal projection lands,
-//! the structured fields migrate to a single `cells` map.
+//! path. As Seal projection lands, the structured fields migrate to a
+//! single `cells` map.
 
 // SOL-07-005: strand/morph/circle/applet/agent `apply_*` reducers (additional
 // `impl ProjectionState` blocks) split out of this file.
@@ -134,15 +133,15 @@ pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
     AppletProjection, CallStateFieldHead, CapabilityDerivedState, CircleLifecycleState,
     CircleMembershipState, CircleProjection, DocumentVersionProjection, ErasureReceiptRecord,
-    FanoutPeerStatus, InviteProjection, KeyPackageLifetime, MessageExpiryAnchor,
-    MessageExpiryProjection, MessageExpiryProjectionState, MessageState, MlsCommitEpoch,
-    MlsCommitEpochKey, MlsKeyPackage, MlsRemoveObligation, MlsRemoveProposal, MlsWelcome,
-    MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState, PendingReplayEntry, PinProjection,
-    PollOptionState, PollState, ProjectedMessageView, PushRouteCellValue, PushRouteSubject,
-    ReactionState, ReadMarkerState, RealmInheritancePolicyState, RealmLinkState,
-    RealmOrganizationStatementState, RealmPolicyServerConfig, RedactionCellValue, RsvpProjection,
-    SidecarProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
-    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    InviteProjection, KeyPackageLifetime, MessageExpiryAnchor, MessageExpiryProjection,
+    MessageExpiryProjectionState, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
+    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection,
+    ObjectLifecycleState, PendingReplayEntry, PinProjection, PollOptionState, PollState,
+    ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
+    RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
+    RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SidecarProjection,
+    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
+    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, message_expiry_projection_from_value,
     message_expiry_projection_from_value_with_anchor,
 };
