@@ -2008,3 +2008,82 @@ async fn account_subscribe_waits_for_broadcast_before_returning_incremental_batc
         "woken delta MUST include the wake-up event: {woken}"
     );
 }
+
+#[tokio::test]
+async fn account_subscribe_omits_ordered_log_loser_and_exposes_conflict_diagnostic() {
+    let state = soland_test_support::app_state(test_config());
+    let alice = dev_token(state.clone()).await;
+    let actor_seq = 900_000;
+    let left = persist_test_message_with_actor_seq(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ordered-log left",
+        actor_seq,
+    )
+    .await;
+    let right = persist_test_message_with_actor_seq(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ordered-log right",
+        actor_seq,
+    )
+    .await;
+    let normal = persist_test_message_with_actor_seq(
+        &state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        "ordered-log normal",
+        actor_seq + 1,
+    )
+    .await;
+
+    let records = state
+        .test_persistence()
+        .events()
+        .snapshot_all()
+        .await
+        .unwrap();
+    let left_record = records
+        .iter()
+        .find(|record| record.event_id == left.event_id)
+        .unwrap();
+    let right_record = records
+        .iter()
+        .find(|record| record.event_id == right.event_id)
+        .unwrap();
+    let right_wins = matches!(
+        arkret_state::lattice::ordered_log::compare_canonical_digests(
+            &right_record.canonical_digest,
+            &left_record.canonical_digest,
+        ),
+        Some(std::cmp::Ordering::Greater)
+    );
+    let (winner, loser) = if right_wins {
+        (&right.event_id, &left.event_id)
+    } else {
+        (&left.event_id, &right.event_id)
+    };
+
+    let frame = account_subscribe_frame(state, Some(&alice), "catchup=true").await;
+    let timeline = &frame["realms"][DEMO_REALM_ID]["timeline"];
+    let event_ids = timeline["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|event| event["event_id"].as_str())
+        .collect::<Vec<_>>();
+    assert!(event_ids.contains(&winner.as_str()), "{frame}");
+    assert!(!event_ids.contains(&loser.as_str()), "{frame}");
+    assert!(event_ids.contains(&normal.event_id.as_str()), "{frame}");
+
+    let conflicts = timeline["ordered_log_conflicts"].as_array().unwrap();
+    let diagnostic = conflicts
+        .iter()
+        .find(|diagnostic| diagnostic["issuer_seq"] == actor_seq)
+        .unwrap_or_else(|| panic!("equivocation diagnostic missing: {frame}"));
+    assert_eq!(diagnostic["winner_event_id"], winner.as_str());
+    assert_eq!(diagnostic["loser_event_ids"], serde_json::json!([loser]));
+    assert_eq!(diagnostic["reason"], "issuer_equivocation");
+}

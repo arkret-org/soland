@@ -644,7 +644,6 @@ fn disclosed_outcome_str(outcome: DisclosedOutcome) -> String {
     match outcome {
         DisclosedOutcome::Delivered => "delivered",
         DisclosedOutcome::Blocked => "blocked",
-        DisclosedOutcome::Quarantined => "quarantined",
     }
     .to_owned()
 }

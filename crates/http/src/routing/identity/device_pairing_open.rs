@@ -17,7 +17,7 @@
 use arkret_identifiers::{DeviceId, EventId};
 use arkret_models_collaboration::governance::agent_artifacts::{DeviceMetadata, PublicKey};
 use arkret_models_collaboration::http_bodies::{
-    DevicePairingBootstrap, DevicePairingCode, DevicePairingRequestId,
+    DevicePairingBootstrap, DevicePairingCode, DevicePairingNonce, DevicePairingRequestId,
     DevicePairingResolveRequestBody, DevicePairingStageOutcome, DevicePairingStageRequestBody,
     DevicePairingState, DevicePairingStatusOutcome, DevicePairingStatusRequestBody,
 };
@@ -61,11 +61,6 @@ pub(super) async fn stage_device_pairing(
     reject_device_pairing_query(req)?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    if !is_base64url_non_empty(body.challenge_signature.trim()) {
-        return Err(AppError::invalid_param(
-            "challenge_signature must be non-empty base64url",
-        ));
-    }
     validate_new_device_pubkey(&body.new_device_pubkey)?;
     let new_device_pubkey = serde_json::to_value(&body.new_device_pubkey)
         .map_err(|error| AppError::invalid_param(format!("new_device_pubkey invalid: {error}")))?;
@@ -87,13 +82,17 @@ pub(super) async fn stage_device_pairing(
         DevicePairingRequestId::new(format!("device_pairing_request:{}", uuid::Uuid::now_v7()))
             .map_err(|error| AppError::internal(error.to_string()))?;
     let pairing_code = generate_pairing_code();
+    let gate_audience = gate_audience(&state.config().public_base_url)?;
+    let server_nonce = generate_pairing_nonce();
     let expires_at = now + chrono::Duration::minutes(DEVICE_PAIRING_TTL_MINUTES);
 
     let record = soland_services::identity::DevicePairingState {
         device_pairing_request_id: device_pairing_request_id.as_str().to_owned(),
         pairing_code: pairing_code.as_str().to_owned(),
         new_device_pubkey,
-        challenge_signature: body.challenge_signature.as_str().to_owned(),
+        client_nonce: body.client_nonce.as_str().to_owned(),
+        gate_audience: gate_audience.clone(),
+        server_nonce: server_nonce.as_str().to_owned(),
         display_name,
         device_metadata,
         state: "pending_authorization".to_owned(),
@@ -124,6 +123,8 @@ pub(super) async fn stage_device_pairing(
     json_ok(DevicePairingStageOutcome {
         device_pairing_request_id,
         pairing_code,
+        gate_audience,
+        server_nonce,
         expires_at,
     })
 }
@@ -173,10 +174,10 @@ pub(super) async fn resolve_device_pairing(
         .map_err(|error| {
             AppError::internal(format!("stored new_device_pubkey invalid: {error}"))
         })?;
-    let challenge_signature = arkret_wire::Base64UrlString::new(record.challenge_signature.clone())
-        .map_err(|error| {
-            AppError::internal(format!("stored challenge_signature invalid: {error}"))
-        })?;
+    let client_nonce = DevicePairingNonce::new(record.client_nonce.clone())
+        .map_err(|error| AppError::internal(format!("stored client_nonce invalid: {error}")))?;
+    let server_nonce = DevicePairingNonce::new(record.server_nonce.clone())
+        .map_err(|error| AppError::internal(format!("stored server_nonce invalid: {error}")))?;
     let display_name = record
         .display_name
         .as_deref()
@@ -203,7 +204,9 @@ pub(super) async fn resolve_device_pairing(
         pairing_code: DevicePairingCode::new(record.pairing_code)
             .map_err(|error| AppError::internal(format!("stored pairing_code invalid: {error}")))?,
         new_device_pubkey,
-        challenge_signature,
+        client_nonce,
+        gate_audience: record.gate_audience,
+        server_nonce,
         display_name,
         device_metadata,
         expires_at: record.expires_at,
@@ -306,6 +309,26 @@ fn generate_pairing_code() -> DevicePairingCode {
     DevicePairingCode::new(value).expect("generated code uses the normative alphabet")
 }
 
+fn generate_pairing_nonce() -> DevicePairingNonce {
+    use rand::RngExt;
+    let mut bytes = [0_u8; 16];
+    rand::rng().fill(&mut bytes);
+    DevicePairingNonce::new(URL_SAFE_NO_PAD.encode(bytes))
+        .expect("16 random bytes encode to the pairing nonce profile")
+}
+
+fn gate_audience(public_base_url: &str) -> Result<String, AppError> {
+    let url = reqwest::Url::parse(public_base_url)
+        .map_err(|error| AppError::internal(format!("public_base_url is invalid: {error}")))?;
+    let origin = url.origin().ascii_serialization();
+    if origin == "null" {
+        return Err(AppError::internal(
+            "public_base_url has no origin for device pairing",
+        ));
+    }
+    Ok(origin)
+}
+
 fn reject_device_pairing_query(req: &Request) -> Result<(), AppError> {
     if req.uri().query().is_none() {
         return Ok(());
@@ -340,13 +363,6 @@ fn decode_device_pairing_token(pairing_token: &str) -> Option<DevicePairingToken
 
 fn device_pairing_not_found() -> AppError {
     AppError::not_found("device pairing token not found")
-}
-
-fn is_base64url_non_empty(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-' || byte == b'_')
 }
 
 /// Validate the staged device key the same way `auth::device_pair` does before
@@ -396,6 +412,14 @@ mod tests {
                     .bytes()
                     .all(|byte| b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789".contains(&byte))
             );
+        }
+    }
+
+    #[test]
+    fn generated_pairing_nonce_has_128_bits_and_base64url_shape() {
+        for _ in 0..64 {
+            let nonce = generate_pairing_nonce();
+            assert_eq!(URL_SAFE_NO_PAD.decode(nonce.as_str()).unwrap().len(), 16);
         }
     }
 

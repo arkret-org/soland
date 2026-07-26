@@ -1695,6 +1695,7 @@ pub(crate) fn signed_relation_event(
     prev_refs: Vec<&str>,
 ) -> Value {
     let actor_seq = fixture_actor_seq(authoring_step);
+    payload["relation_id"] = Value::String(event_id.replacen("ak:event:", "ak:relation:", 1));
     payload = typed_relation_create_payload(payload);
     signed_canonical_event(
         event_id,
@@ -1709,6 +1710,8 @@ pub(crate) fn signed_relation_event(
 }
 
 fn typed_relation_create_payload(payload: Value) -> Value {
+    let relation_id = relation_payload_str(&payload, &["relation_id", "id"])
+        .expect("relation create payload requires relation_id");
     let kind = relation_payload_str(&payload, &["relation_kind", "kind"])
         .expect("relation create payload requires kind");
     let from_ref = relation_payload_str(&payload, &["from_ref", "from"])
@@ -1718,7 +1721,10 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let rank = relation_payload_str(&payload, &["rank"]);
     let mut typed =
         arkret_models_collaboration::governance::membership_invite::RelationCreatePayload::new(
-            kind, from_ref, to_ref,
+            relation_id,
+            kind,
+            from_ref,
+            to_ref,
         );
     if let Some(rank) = rank {
         typed = typed.with_rank(rank);
@@ -1813,6 +1819,17 @@ pub(crate) async fn persist_test_message(
     sender: &str,
     body: &str,
 ) -> MessageRecord {
+    let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
+    persist_test_message_with_actor_seq(state, realm_id, sender, body, actor_seq).await
+}
+
+pub(crate) async fn persist_test_message_with_actor_seq(
+    state: &AppState,
+    realm_id: &str,
+    sender: &str,
+    body: &str,
+    actor_seq: u64,
+) -> MessageRecord {
     let event_id = new_prefixed_uuid7("ak:event:");
     let record = MessageRecord {
         event_id: event_id.clone(),
@@ -1836,7 +1853,7 @@ pub(crate) async fn persist_test_message(
         sender,
         "01904100-0000-7000-8000-a11ce0000001",
         realm_id,
-        TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        actor_seq,
         Vec::new(),
         serde_json::json!({
             "strand_id": expected_strand_id_for_scope(realm_id),

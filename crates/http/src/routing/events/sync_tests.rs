@@ -2,6 +2,73 @@ use soland_services::delivery::TypingState;
 
 use super::*;
 
+fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
+    arkret_wire::Event::new(
+        arkret_wire::events::EventKind::MESSAGE_CREATE,
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001").unwrap(),
+        arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
+        actor_seq,
+        arkret_identifiers::Hlc::new(hlc).unwrap(),
+        json!({
+            "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+            "body": body,
+        }),
+    )
+    .unwrap()
+}
+
+#[test]
+fn timeline_ordered_log_equivocation_is_deterministic_visible_and_non_destructive() {
+    let left = ordered_log_message(7, "019041000000-0000-aabbcc01", "left");
+    let right = ordered_log_message(7, "019041000001-0000-aabbcc01", "right");
+    let normal = ordered_log_message(8, "019041000002-0000-aabbcc01", "normal");
+    let left_digest = left.event_digest().unwrap();
+    let right_digest = right.event_digest().unwrap();
+    let right_wins = matches!(
+        arkret_state::lattice::ordered_log::compare_canonical_digests(&right_digest, &left_digest,),
+        Some(std::cmp::Ordering::Greater)
+    );
+    let expected_winner = if right_wins {
+        right.event_id.clone()
+    } else {
+        left.event_id.clone()
+    };
+    let expected_loser = if right_wins {
+        left.event_id.clone()
+    } else {
+        right.event_id.clone()
+    };
+
+    let (visible, conflicts) = collapse_message_ordered_log_equivocations(vec![
+        (10, left),
+        (11, right),
+        (12, normal.clone()),
+    ]);
+
+    assert_eq!(visible.len(), 2, "one equivocation loser must be omitted");
+    assert!(
+        visible
+            .iter()
+            .any(|(_, event)| event.event_id == expected_winner)
+    );
+    assert!(
+        visible
+            .iter()
+            .any(|(_, event)| event.event_id == normal.event_id)
+    );
+    assert!(
+        !visible
+            .iter()
+            .any(|(_, event)| event.event_id == expected_loser)
+    );
+    assert_eq!(conflicts.len(), 1, "equivocation must be user-visible");
+    let diagnostic = &conflicts[0];
+    assert_eq!(diagnostic.reason, "issuer_equivocation");
+    assert_eq!(diagnostic.issuer_seq, 7);
+    assert_eq!(diagnostic.winner_event_id, expected_winner);
+    assert_eq!(diagnostic.loser_event_ids, vec![expected_loser]);
+}
+
 fn stream_cursor_handle_binding(
     principal_id: &str,
     device_id: &str,

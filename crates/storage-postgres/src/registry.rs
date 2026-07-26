@@ -230,20 +230,19 @@ impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
             "WITH claimed AS (\
                 UPDATE device_pairings SET \
                     state = 'authorized', \
-                    device_id = $5, \
-                    authorized_by_actor_id = $6, \
-                    authorized_event_ref = $7 \
+                    device_id = $4, \
+                    authorized_by_actor_id = $5, \
+                    authorized_event_ref = $6 \
                 WHERE device_pairing_request_id = $1 \
                     AND pairing_code = $2 \
                     AND new_device_pubkey = $3 \
-                    AND challenge_signature = $4 \
                     AND state = 'pending_authorization' \
-                    AND expires_at > $8 \
+                    AND expires_at > $7 \
                 RETURNING 1\
             ) \
             INSERT INTO devices \
                 (id, actor_id, device_id, payload, verification_state, created_at, updated_at, revoked_at) \
-            SELECT $9, $6, $5, $10, $11, $12, $13, $14 FROM claimed \
+            SELECT $8, $5, $4, $9, $10, $11, $12, $13 FROM claimed \
             ON CONFLICT (actor_id, device_id) DO UPDATE SET \
                 payload = EXCLUDED.payload, \
                 verification_state = EXCLUDED.verification_state, \
@@ -253,7 +252,6 @@ impl DevicePairingCommitUnitOfWork for PgPersistenceStore {
         .bind::<Text, _>(&commit.device_pairing_request_id)
         .bind::<Text, _>(&commit.pairing_code)
         .bind::<Jsonb, _>(&commit.new_device_pubkey)
-        .bind::<Text, _>(&commit.challenge_signature)
         .bind::<Text, _>(&commit.device.device_id)
         .bind::<Text, _>(&commit.authorized_by_actor_id)
         .bind::<Text, _>(&commit.authorized_event_ref)

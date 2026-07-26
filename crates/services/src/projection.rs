@@ -1366,11 +1366,10 @@ impl ProjectionService {
         if state.realm_policy_servers.remove(realm_id).is_none() {
             return false;
         }
-        if let Ok(cell_id) = CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_server.v1:{realm_id}"
-        )) {
-            state.cells.remove(&cell_id);
-        }
+        state.realm_null_subject_cells.remove(&(
+            realm_id.to_owned(),
+            "ak:cell:ak.component.realm.policy_server.v1:null".to_owned(),
+        ));
         true
     }
 

@@ -338,7 +338,6 @@ impl DevicePairingCommitUnitOfWork for SolandMemoryPersistenceStore {
             || pairing.expires_at <= commit.changed_at
             || pairing.pairing_code != commit.pairing_code
             || pairing.new_device_pubkey != commit.new_device_pubkey
-            || pairing.challenge_signature != commit.challenge_signature
             || commit.device.actor != commit.authorized_by_actor_id
         {
             return Ok(false);
@@ -582,7 +581,9 @@ mod device_pairing_commit_tests {
                 request_id.clone(),
                 "7H2K9M4Q".to_owned(),
                 public_key.clone(),
-                "Q0hBTExFTkdF".to_owned(),
+                "AAAAAAAAAAAAAAAAAAAAAA".to_owned(),
+                "https://account.example".to_owned(),
+                "BBBBBBBBBBBBBBBBBBBBBB".to_owned(),
                 None,
                 None,
                 "pending_authorization".to_owned(),
@@ -606,7 +607,6 @@ mod device_pairing_commit_tests {
             device_pairing_request_id: request_id.clone(),
             pairing_code: pairing_code.to_owned(),
             new_device_pubkey: public_key.clone(),
-            challenge_signature: "Q0hBTExFTkdF".to_owned(),
             device: device.clone(),
             authorized_by_actor_id: device.actor.clone(),
             authorized_event_ref: "ak:event:01964137-0000-7000-8000-00000000d001".to_owned(),

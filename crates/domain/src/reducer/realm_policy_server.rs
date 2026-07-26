@@ -16,7 +16,6 @@
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 use arkret_event_draft::Operation;
-use arkret_identifiers::CellRef;
 use arkret_state::lattice::CellState;
 use serde_json::Value;
 use url::Url;
@@ -118,22 +117,21 @@ pub fn apply_realm_policy_server(
 
     let now = operation.created_at;
 
-    // Cell write — `ak.component.realm.policy_server.v1` (cas-register,
-    // keyed by realm_id per SDK lattice_registry).
-    if let Ok(cell_id) = CellRef::new(format!(
-        "ak:cell:ak.component.realm.policy_server.v1:{realm_id}"
-    )) {
-        let value = serde_json::json!({
-            "realm_id": realm_id,
-            "policy_server_did": policy_server_did,
-            "policy_server_url": policy_server_url,
-            "cache_ttl_seconds": cache_ttl_seconds,
-            "timeout_ms": timeout_ms,
-            "on_timeout": on_timeout,
-            "updated_at": arkret_canonical::format_timestamp_canonical(now),
-        });
-        state.cells.insert(cell_id, CellState::Value(value));
-    }
+    // Null-subject Realm cells use the literal `null` wire subject and are
+    // scoped by the envelope Realm in the projection cache.
+    let cell_id = "ak:cell:ak.component.realm.policy_server.v1:null".to_owned();
+    let value = serde_json::json!({
+        "realm_id": realm_id,
+        "policy_server_did": policy_server_did,
+        "policy_server_url": policy_server_url,
+        "cache_ttl_seconds": cache_ttl_seconds,
+        "timeout_ms": timeout_ms,
+        "on_timeout": on_timeout,
+        "updated_at": arkret_canonical::format_timestamp_canonical(now),
+    });
+    state
+        .realm_null_subject_cells
+        .insert((realm_id.clone(), cell_id), CellState::Value(value));
 
     state.realm_policy_servers.insert(
         realm_id.clone(),
@@ -231,11 +229,9 @@ mod tests {
         assert_eq!(cfg.on_timeout, "fail_closed");
 
         // Cell projection.
-        let cell_id = CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_server.v1:{REALM_CHILD}"
-        ))
-        .unwrap();
-        let value = state.cell_value(&cell_id).expect("cell present");
+        let value = state
+            .realm_null_subject_cell_value(REALM_CHILD, "ak.component.realm.policy_server.v1")
+            .expect("cell present");
         assert_eq!(
             value.get("policy_server_did").and_then(Value::as_str),
             Some("did:web:policy.example.com")

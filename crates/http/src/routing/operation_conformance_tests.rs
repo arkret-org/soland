@@ -98,9 +98,15 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "relation create",
             kind: arkret_wire::events::EventKind::RELATION_CREATE,
-            // relation_create_payload: anyOf {relation} | {kind, from_ref, to_ref};
+            // relation_create_payload: oneOf {relation} |
+            // {relation_id, kind, from_ref, to_ref};
             // additionalProperties=false.
-            payload: json!({"kind": "blocks", "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb", "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+            payload: json!({
+                "relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b",
+                "kind": "blocks",
+                "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
+                "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"
+            }),
             valid: true,
         },
         OperationVector {
@@ -413,8 +419,8 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "applet discovery",
             kind: arkret_wire::events::EventKind::APPLET_DISCOVERY,
             payload: json!({
-                "service_id": "did:web:applet.example",
-                "manifest": {"version": 1},
+                "resource_id": "did:web:applet.example",
+                "value": {"manifest": {"version": 1}},
             }),
             valid: true,
         },

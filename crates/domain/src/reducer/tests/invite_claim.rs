@@ -77,14 +77,15 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
 }
 
 fn seed_invite(state: &mut ProjectionState, hlc: &ServerHlc, expires_at: &str) {
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::events::EventKind::INVITE_THIRD_PARTY,
-            REALM,
-            third_party_invite(expires_at),
-        ),
-        hlc,
+    let mut operation = make_operation(
+        arkret_wire::events::EventKind::INVITE_THIRD_PARTY,
+        REALM,
+        third_party_invite(expires_at),
     );
+    operation.created_at = chrono::DateTime::parse_from_rfc3339("2026-01-01T00:00:00.000Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let effect = state.apply(&operation, hlc);
     assert!(matches!(
         effect,
         ProjectionEffect::InviteStateChanged { ref state, .. } if state == "pending"
@@ -190,7 +191,7 @@ fn invite_claim_rejects_reused_claim_nonce() {
 }
 
 #[test]
-fn invite_claim_records_nonce_before_rejecting_bad_commitment() {
+fn invite_claim_rejects_bad_commitment_without_recording_nonce() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-commitment");
     seed_invite(&mut state, &hlc, "2099-01-01T00:00:00.000Z");
@@ -213,7 +214,7 @@ fn invite_claim_records_nonce_before_rejecting_bad_commitment() {
     ));
     let invite = state.invites.get(INVITE).expect("invite projected");
     assert_eq!(invite.state, "pending");
-    assert!(invite.claim_nonces.contains_key("nonce-bad-commitment"));
+    assert!(!invite.claim_nonces.contains_key("nonce-bad-commitment"));
 }
 
 #[test]
@@ -287,36 +288,39 @@ fn invite_claim_rejects_when_current_policy_no_longer_allows_bound_service() {
 }
 
 #[test]
-fn expired_invite_claim_cleans_active_token_material() {
+fn expired_claim_is_rejected_without_mutating_the_pending_invite() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("invite-claim-expiry");
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::events::EventKind::INVITE_THIRD_PARTY,
-            REALM,
-            third_party_invite("2000-01-01T00:00:00.000Z"),
-        ),
-        &hlc,
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::InviteStateChanged { ref state, .. } if state == "expired"
-    ));
-    let invite = state.invites.get(INVITE).expect("invite projected");
-    let third_party_id = invite.third_party_id.as_ref().expect("third_party_id");
-    assert!(third_party_id.get("token_commitment").is_none());
-    assert!(third_party_id.get("token_salt_id").is_none());
+    seed_invite(&mut state, &hlc, "2026-06-01T00:00:00.000Z");
 
-    let rejected = state.apply(
-        &make_operation(
-            arkret_wire::events::EventKind::INVITE_CLAIM,
-            REALM,
-            claim_payload("nonce-expired-001", TOKEN_COMMITMENT, SERVICE),
-        ),
-        &hlc,
+    let mut claim = make_operation(
+        arkret_wire::events::EventKind::INVITE_CLAIM,
+        REALM,
+        claim_payload("nonce-expired-001", TOKEN_COMMITMENT, SERVICE),
     );
+    claim.created_at = chrono::DateTime::parse_from_rfc3339("2026-06-02T00:00:00.000Z")
+        .unwrap()
+        .with_timezone(&chrono::Utc);
+    let rejected = state.apply(&claim, &hlc);
     assert!(matches!(
         rejected,
         ProjectionEffect::Rejected { ref reason } if reason == "expired_invite_token"
     ));
+    let invite = state.invites.get(INVITE).expect("invite remains projected");
+    assert_eq!(invite.state, "pending");
+    assert!(invite.claim_nonces.is_empty());
+    let third_party_id = invite
+        .third_party_id
+        .as_ref()
+        .expect("third_party_id remains");
+    assert_eq!(
+        third_party_id
+            .get("token_commitment")
+            .and_then(Value::as_str),
+        Some(TOKEN_COMMITMENT)
+    );
+    assert_eq!(
+        third_party_id.get("token_salt_id").and_then(Value::as_str),
+        Some("salt-1")
+    );
 }

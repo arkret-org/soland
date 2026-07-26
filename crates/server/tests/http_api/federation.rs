@@ -601,7 +601,6 @@ fn peer_submit_body(event: &Value) -> Value {
             "reducer_profile_digest": arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
         },
         "events": [wire_event],
-        "idempotency_key": format!("ak:outbox:event:{event_id}"),
     })
 }
 

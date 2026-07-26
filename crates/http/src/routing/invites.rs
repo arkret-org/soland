@@ -974,14 +974,7 @@ fn evaluate_invite_receive(
             .and_then(|d| d.low_trust.clone())
             .unwrap_or(DisclosureLevel::Opaque),
     };
-    let disclosed_outcome = match disclosure_level {
-        DisclosureLevel::Outcome => Some(match &action {
-            InviteReceiveAction::Notify => DisclosedOutcome::Delivered,
-            InviteReceiveAction::Quarantine => DisclosedOutcome::Quarantined,
-            InviteReceiveAction::Drop => DisclosedOutcome::Blocked,
-        }),
-        DisclosureLevel::Opaque => None,
-    };
+    let disclosed_outcome = disclosed_outcome_for_action(disclosure_level, &action);
 
     ReceiveDecision {
         action,
@@ -1125,14 +1118,7 @@ pub(crate) fn evaluate_contact_receive(
             .and_then(|d| d.low_trust.clone())
             .unwrap_or(DisclosureLevel::Opaque),
     };
-    let disclosed_outcome = match disclosure_level {
-        DisclosureLevel::Outcome => Some(match &action {
-            InviteReceiveAction::Notify => DisclosedOutcome::Delivered,
-            InviteReceiveAction::Quarantine => DisclosedOutcome::Quarantined,
-            InviteReceiveAction::Drop => DisclosedOutcome::Blocked,
-        }),
-        DisclosureLevel::Opaque => None,
-    };
+    let disclosed_outcome = disclosed_outcome_for_action(disclosure_level, &action);
     ReceiveDecision {
         action,
         effective_kind,
@@ -1163,6 +1149,23 @@ fn opaque_drop(effective_kind: &'static str) -> ReceiveDecision {
         effective_kind,
         trust_tier: TrustTier::Low,
         disclosed_outcome: None,
+    }
+}
+
+fn disclosed_outcome_for_action(
+    disclosure_level: DisclosureLevel,
+    action: &InviteReceiveAction,
+) -> Option<DisclosedOutcome> {
+    match (disclosure_level, action) {
+        (DisclosureLevel::Outcome, InviteReceiveAction::Notify) => {
+            Some(DisclosedOutcome::Delivered)
+        }
+        (DisclosureLevel::Outcome, InviteReceiveAction::Drop) => Some(DisclosedOutcome::Blocked),
+        // Quarantine is holder-private consent state. It is always represented
+        // externally by status=deferred without a disclosed_outcome, including
+        // on high-trust/outcome routes.
+        (DisclosureLevel::Outcome, InviteReceiveAction::Quarantine)
+        | (DisclosureLevel::Opaque, _) => None,
     }
 }
 
@@ -1580,6 +1583,25 @@ mod invite_locator_security_tests {
         assert_eq!(
             record.token_digest,
             format!("sha256:{}", sha256_hex(token.as_bytes()))
+        );
+    }
+
+    #[test]
+    fn quarantine_is_never_disclosed_even_on_outcome_routes() {
+        assert_eq!(
+            disclosed_outcome_for_action(
+                DisclosureLevel::Outcome,
+                &InviteReceiveAction::Quarantine
+            ),
+            None
+        );
+        assert_eq!(
+            disclosed_outcome_for_action(DisclosureLevel::Outcome, &InviteReceiveAction::Notify),
+            Some(DisclosedOutcome::Delivered)
+        );
+        assert_eq!(
+            disclosed_outcome_for_action(DisclosureLevel::Outcome, &InviteReceiveAction::Drop),
+            Some(DisclosedOutcome::Blocked)
         );
     }
 }

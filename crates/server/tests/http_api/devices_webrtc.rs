@@ -19,16 +19,52 @@ fn device_message_target(kind: &str, content: Value) -> Value {
 }
 
 fn pair_device_pubkey(device_id: &str) -> Value {
-    let mut seed = [0_u8; 32];
-    for (index, byte) in device_id.as_bytes().iter().take(32).enumerate() {
-        seed[index] = *byte;
-    }
-    let signing = SigningKey::from_bytes(&seed);
+    let signing = pair_device_signing_key(device_id);
     serde_json::json!({
         "kty": "OKP",
         "kid": device_id,
         "alg": "EdDSA",
-        "key": test_ed25519_multibase_public(&signing)
+        "key": URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())
+    })
+}
+
+fn pair_device_signing_key(device_id: &str) -> SigningKey {
+    let mut seed = [0_u8; 32];
+    for (index, byte) in device_id.as_bytes().iter().take(32).enumerate() {
+        seed[index] = *byte;
+    }
+    SigningKey::from_bytes(&seed)
+}
+
+fn account_device_pair_body(new_device_id: &str) -> Value {
+    let public_key_value = pair_device_pubkey(new_device_id);
+    let public_key = serde_json::from_value(public_key_value.clone()).unwrap();
+    let pairing_code =
+        arkret_models_collaboration::http_bodies::DevicePairingCode::new("7H2K9M4Q".to_owned())
+            .unwrap();
+    let challenge =
+        arkret_models_collaboration::http_bodies::DevicePairingToDeviceChallengeTranscript {
+            transaction_id: arkret_wire::NonEmptyString::new("txn-device-pair-fixture").unwrap(),
+            request_canonical_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "a".repeat(64)
+            ))
+            .unwrap(),
+            expires_at: chrono::Utc::now() + chrono::Duration::minutes(10),
+        };
+    let proof = arkret_signatures::device_pairing::sign_to_device_pairing_challenge(
+        &public_key,
+        &pairing_code,
+        "http://server",
+        &challenge,
+        &pair_device_signing_key(new_device_id),
+    )
+    .unwrap();
+    serde_json::json!({
+        "pairing_code": pairing_code,
+        "new_device_pubkey": public_key_value,
+        "challenge_proof": proof,
+        "challenge_transcript": challenge
     })
 }
 
@@ -38,13 +74,13 @@ async fn post_account_device_pair(
     new_device_id: &str,
     challenge_signature: &str,
 ) -> (StatusCode, Value) {
+    let mut body = account_device_pair_body(new_device_id);
+    if challenge_signature == "!" {
+        body["challenge_proof"]["signature"] = Value::String("!".to_owned());
+    }
     let mut response = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "pairing_code": "7H2K9M4Q",
-            "new_device_pubkey": pair_device_pubkey(new_device_id),
-            "challenge_signature": challenge_signature
-        }))
+        .json(&body)
         .send(&app_from_state(state))
         .await;
     let status = response.status_code.expect("device-pair status");
@@ -57,30 +93,24 @@ async fn account_device_pair_registers_sibling_via_canonical_gate_route() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
     let sibling = "ak:device:01904100-0000-7000-8000-9b04e0000008";
-    let sibling_pubkey = pair_device_pubkey(sibling);
-    let sibling_device_public_key = sibling_pubkey["key"].as_str().unwrap();
+    let sibling_device_public_key =
+        arkret_canonical::multibase::ed25519_pubkey_to_did_key_multibase(
+            pair_device_signing_key(sibling).verifying_key().as_bytes(),
+        );
+    let sibling_pair_body = account_device_pair_body(sibling);
 
     let unauthenticated = TestClient::post("http://server/_arkret/gate/account/device-pair")
-        .json(&serde_json::json!({
-            "pairing_code": "7H2K9M4Q",
-            "new_device_pubkey": sibling_pubkey.clone(),
-            "challenge_signature": "c2ln"
-        }))
+        .json(&sibling_pair_body)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
 
+    let mut sibling_pair_body = sibling_pair_body;
+    sibling_pair_body["display_name"] = Value::String("Paired Phone".to_owned());
+    sibling_pair_body["device_metadata"] = serde_json::json!({"platform": "ios"});
     let paired: Value = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "pairing_code": "7H2K9M4Q",
-            "new_device_pubkey": sibling_pubkey,
-            "challenge_signature": "c2ln",
-            "display_name": "Paired Phone",
-            "device_metadata": {
-                "platform": "ios"
-            }
-        }))
+        .json(&sibling_pair_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()
@@ -249,6 +279,7 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     let existing_token =
         dev_token_for_device(state.clone(), actor, existing_device, "Alice Desktop").await;
     let new_token = dev_token_for_device(state.clone(), actor, new_device, "Alice Browser").await;
+    let pair_body = account_device_pair_body(new_device);
     let request_content = serde_json::json!({
         "transaction_id": "txn-device-pair-1",
         "from_device": new_device,
@@ -259,10 +290,11 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "methods": ["ak.sas.v1", "ak.qr.v1"],
         "purpose": "same_principal_device_authorization",
         "pairing_code": "7H2K9M4Q",
-        "new_device_pubkey": pair_device_pubkey(new_device),
-        "challenge_signature": "c2ln",
+        "new_device_pubkey": pair_body["new_device_pubkey"],
+        "challenge_proof": pair_body["challenge_proof"],
+        "challenge_transcript": pair_body["challenge_transcript"],
         "gate_audience": "http://server",
-        "request_canonical_digest": "sha256:test",
+        "request_canonical_digest": format!("sha256:{}", "a".repeat(64)),
         "device_metadata": {
             "display_name": "Alice Browser",
             "platform": "browser"
@@ -307,8 +339,8 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
         "same_principal_device_authorization"
     );
     assert_eq!(
-        subscribe_messages[0]["content"]["new_device_pubkey"]["public_key"],
-        request_content["new_device_pubkey"]["public_key"]
+        subscribe_messages[0]["content"]["new_device_pubkey"]["key"],
+        request_content["new_device_pubkey"]["key"]
     );
     assert!(
         subscribe["to_device"]["ack_token"]
@@ -326,15 +358,12 @@ async fn to_device_pairing_request_reaches_existing_device_and_gate_pair_authori
     assert_eq!(pulled["messages"].as_array().unwrap().len(), 1);
     assert_eq!(pulled["messages"][0]["content"]["pairing_code"], "7H2K9M4Q");
 
+    let mut approved_body = pair_body;
+    approved_body["display_name"] = Value::String("Alice Browser".to_owned());
+    approved_body["device_metadata"] = request_content["device_metadata"].clone();
     let approved: Value = TestClient::post("http://server/_arkret/gate/account/device-pair")
         .add_header("authorization", format!("Bearer {existing_token}"), true)
-        .json(&serde_json::json!({
-            "pairing_code": "7H2K9M4Q",
-            "new_device_pubkey": request_content["new_device_pubkey"],
-            "challenge_signature": "c2ln",
-            "display_name": "Alice Browser",
-            "device_metadata": request_content["device_metadata"]
-        }))
+        .json(&approved_body)
         .send(&app_from_state(state.clone()))
         .await
         .take_json()

@@ -4,21 +4,18 @@ use super::*;
 
 const INVITE_STATE_PENDING: &str = "pending";
 const INVITE_STATE_CLAIMED: &str = "claimed";
-const INVITE_STATE_EXPIRED: &str = "expired";
 
 impl ProjectionState {
     pub(crate) fn apply_invite_third_party(
         &mut self,
         operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
+        admission_time: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
             != Some(arkret_wire::events::EventKind::INVITE_THIRD_PARTY)
         {
             return ProjectionEffect::Ignored;
         }
-        self.cleanup_expired_invites(now);
-
         let Some(payload) = operation.payload.as_object() else {
             return rejected("invite_payload_not_object");
         };
@@ -54,6 +51,9 @@ impl ProjectionState {
         let created_at = invite_string_field(payload, invite, "created_at", "created_at")
             .and_then(|value| parse_timestamp(&value))
             .unwrap_or(operation.created_at);
+        if expires_at <= admission_time || created_at > admission_time {
+            return rejected("expired_invite_token");
+        }
         let join_rule_snapshot = invite_value_field(payload, invite, "join_rule_snapshot")
             .cloned()
             .unwrap_or_else(|| json!({"join_rule": "invite"}));
@@ -78,7 +78,6 @@ impl ProjectionState {
                         existing.state.as_str(),
                         INVITE_STATE_PENDING | INVITE_STATE_CLAIMED
                     )
-                    && existing.expires_at > now
                     && existing
                         .third_party_id
                         .as_ref()
@@ -89,7 +88,7 @@ impl ProjectionState {
             return rejected("duplicate_token_commitment");
         }
 
-        let mut projection = InviteProjection {
+        let projection = InviteProjection {
             invite_id: invite_id.clone(),
             realm_id: realm_id.clone(),
             inviter,
@@ -102,9 +101,6 @@ impl ProjectionState {
             updated_at: created_at,
             claim_nonces: BTreeMap::new(),
         };
-        if expires_at <= now {
-            expire_invite_projection(&mut projection, now);
-        }
         let state = projection.state.clone();
         let invitee = projection.invitee.clone();
         self.invites.insert(invite_id.clone(), projection);
@@ -119,15 +115,13 @@ impl ProjectionState {
     pub(crate) fn apply_invite_claim(
         &mut self,
         operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
+        admission_time: chrono::DateTime<chrono::Utc>,
     ) -> ProjectionEffect {
         if crate::kinds::canonical_kind_for_operation(operation)
             != Some(arkret_wire::events::EventKind::INVITE_CLAIM)
         {
             return ProjectionEffect::Ignored;
         }
-        self.cleanup_expired_invites(now);
-
         let Some(payload) = operation.payload.as_object() else {
             return rejected("invite_claim_payload_not_object");
         };
@@ -172,14 +166,11 @@ impl ProjectionState {
                 return rejected("duplicate_conflict");
             }
             Some(_) => {}
-            None => {
-                invite
-                    .claim_nonces
-                    .insert(claim_nonce.clone(), operation.operation_id.to_string());
-            }
+            None => {}
         }
-        if invite.expires_at <= now {
-            expire_invite_projection(invite, now);
+        if !arkret_models_collaboration::governance::membership_invite::
+            invite_claim_within_canonical_expiry(admission_time, invite.expires_at)
+        {
             return rejected("expired_invite_token");
         }
         if invite.realm_id != operation.realm_id.as_str() {
@@ -214,7 +205,7 @@ impl ProjectionState {
             &invite.realm_id,
             &subject_id,
             &claim_nonce,
-            now,
+            admission_time,
             invite.expires_at,
             realm_policy_components.as_ref(),
         ) {
@@ -233,9 +224,12 @@ impl ProjectionState {
             return rejected(reason);
         }
 
+        invite
+            .claim_nonces
+            .insert(claim_nonce, operation.operation_id.to_string());
         invite.state = INVITE_STATE_CLAIMED.to_owned();
         invite.invitee = Some(subject_id.clone());
-        invite.updated_at = now;
+        invite.updated_at = admission_time;
         cleanup_third_party_projection(invite);
         self.members.insert(
             (invite.realm_id.clone(), subject_id.clone()),
@@ -248,9 +242,9 @@ impl ProjectionState {
                 recipient_service_id: None,
                 membership_event_ref: None,
                 delivery_binding_frontier: None,
-                invited_at: Some(now),
-                joined_at: now,
-                updated_at: now,
+                invited_at: Some(admission_time),
+                joined_at: admission_time,
+                updated_at: admission_time,
                 reason: None,
             },
         );
@@ -260,18 +254,6 @@ impl ProjectionState {
             realm_id: invite.realm_id.clone(),
             state: INVITE_STATE_CLAIMED.to_owned(),
             invitee: Some(subject_id),
-        }
-    }
-
-    pub(crate) fn cleanup_expired_invites(&mut self, now: chrono::DateTime<chrono::Utc>) {
-        for invite in self.invites.values_mut() {
-            if matches!(
-                invite.state.as_str(),
-                INVITE_STATE_PENDING | INVITE_STATE_CLAIMED
-            ) && invite.expires_at <= now
-            {
-                expire_invite_projection(invite, now);
-            }
         }
     }
 }
@@ -526,17 +508,6 @@ fn value_allowlists_service(value: &Value, service_id: &str) -> bool {
             }
         }),
         _ => false,
-    }
-}
-
-fn expire_invite_projection(invite: &mut InviteProjection, now: chrono::DateTime<chrono::Utc>) {
-    invite.state = INVITE_STATE_EXPIRED.to_owned();
-    invite.updated_at = now;
-    cleanup_third_party_projection(invite);
-    if let Some(third_party_id) = invite.third_party_id.as_mut()
-        && let Some(object) = third_party_id.as_object_mut()
-    {
-        object.remove("token_commitment");
     }
 }
 

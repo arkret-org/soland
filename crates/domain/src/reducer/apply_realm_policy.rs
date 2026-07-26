@@ -73,16 +73,10 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         }
-        let Ok(cell) = CellRef::new(format!(
-            "ak:cell:{}:{}",
-            cell_id.component(),
-            operation.realm_id.as_str()
-        )) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
-            };
-        };
-        let realm_cell_key = (operation.realm_id.to_string(), cell.as_str().to_owned());
+        let realm_cell_key = (
+            operation.realm_id.to_string(),
+            wire_cell.as_str().to_owned(),
+        );
         if self.realm_null_subject_cells.contains_key(&realm_cell_key) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
