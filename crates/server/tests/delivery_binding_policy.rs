@@ -45,6 +45,7 @@ fn join_op(member: &str, binding: Value) -> Operation {
         REALM_A,
         json!({
             "actor_id": member,
+            "sender": "did:web:admin.example",
             "membership": "join",
             "role": "member",
             "delivery_status": "routable",
@@ -360,6 +361,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
         REALM_A,
         json!({
             "actor_id": "did:web:bob.example",
+            "sender": "did:web:alice.example",
             "membership": "join",
             "role": "member",
             "reason": "direct_conversation_bootstrap",
@@ -383,6 +385,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
         REALM_A,
         json!({
             "actor_id": "did:web:carol.example",
+            "sender": "did:web:alice.example",
             "membership": "join",
             "role": "member",
             "reason": "direct_conversation_bootstrap",

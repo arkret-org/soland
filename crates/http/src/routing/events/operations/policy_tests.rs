@@ -50,7 +50,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         ))
         .unwrap(),
     );
-    let peer_join = op(
+    let mut peer_join = op(
         realm_id.clone(),
         "000000000692",
         arkret_wire::events::EventKind::MEMBER_STATE,
@@ -62,6 +62,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
         .to_value()
         .unwrap(),
     );
+    peer_join.payload["sender"] = json!("did:web:alice.example");
     let strand_create = op(
         realm_id.clone(),
         "000000000693",
@@ -2439,13 +2440,8 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         .expect("realm meta stored");
     {
         let mut projection = state.test_projection().lock();
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_components.v1:{}",
-            realm_id.as_str()
-        ))
-        .expect("valid policy_components cell ref");
-        projection.cells.insert(
-            cell_id,
+        projection.realm_policy_components_cells.insert(
+            realm_id.to_string(),
             CellState::Value(json!({
                 "content_scheme": "mls_rfc9420"
             })),
@@ -2488,13 +2484,8 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     // org RRK durability policy naming `recovery_principal` as a recipient.
     {
         let mut projection = state.test_projection().lock();
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_components.v1:{}",
-            realm_id.as_str()
-        ))
-        .expect("valid policy_components cell ref");
-        projection.cells.insert(
-            cell_id,
+        projection.realm_policy_components_cells.insert(
+            realm_id.to_string(),
             CellState::Value(json!({
                 "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {
@@ -2673,13 +2664,8 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
     .unwrap();
     {
         let mut projection = state.test_projection().lock();
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_components.v1:{}",
-            realm_id.as_str()
-        ))
-        .expect("valid policy_components cell ref");
-        projection.cells.insert(
-            cell_id,
+        projection.realm_policy_components_cells.insert(
+            realm_id.to_string(),
             CellState::Value(json!({
                 "content_scheme": "mls_exporter_aead_v1",
                 "durability_policy": {

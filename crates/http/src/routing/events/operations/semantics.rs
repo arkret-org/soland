@@ -1053,7 +1053,7 @@ mod tests {
             arkret_wire::events::EventKind::REALM_NOTARY,
             serde_json::json!({
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000099",
-                "notary": {"type": "single_did", "did": "did:web:notary.example"}
+                "notary": {"kind": "single_did", "did": "did:web:notary.example"}
             }),
         );
         assert_eq!(

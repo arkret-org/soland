@@ -23,6 +23,22 @@ impl ProjectionState {
         if member.is_empty() {
             return ProjectionEffect::Ignored;
         }
+        let current_state = self
+            .member(&realm_id, &member)
+            .map(|membership| membership.state.as_str())
+            .unwrap_or("leave");
+        let transition_allowed = matches!(
+            (current_state, new_state),
+            ("leave", "knock" | "join" | "ban")
+                | ("knock", "join" | "leave" | "ban")
+                | ("join", "join" | "leave" | "ban")
+                | ("ban", "leave")
+        );
+        if !transition_allowed {
+            return ProjectionEffect::Rejected {
+                reason: "invalid_membership_transition".to_owned(),
+            };
+        }
 
         // Spec 0a5ab85 (`membership_payload` conditional required) — when
         // `membership=join`, the payload MUST carry `actor_id` (above) +
@@ -637,7 +653,8 @@ impl ProjectionState {
     /// SOL-ORG-01 — the soland-local cell family that backs `ak.realm.update`
     /// mutable Realm metadata (owner / title / security_class /
     /// federation_policy) and its CAS-register / bottom / conflict-repair
-    /// mechanics. It is keyed by `realm_id` (singleton per Realm).
+    /// mechanics. Its wire subject is the literal `null`; `realm_id` is the
+    /// enclosing CellStore namespace and remains a side-band map key.
     ///
     /// This is deliberately NOT `ak.component.realm.organization.v1`: that
     /// cell family is the organization-authorized relationship statement
@@ -647,8 +664,8 @@ impl ProjectionState {
     /// dedicated cell family for `ak.realm.update`; the source of truth for
     /// Realm metadata is the `realm_states` object projection, and this cell
     /// only exists to drive the concurrent-update conflict resolution.
-    pub(crate) fn realm_metadata_cell_id(realm_id: &str) -> Option<CellRef> {
-        CellRef::new(format!("ak:cell:ak.component.realm.metadata.v1:{realm_id}")).ok()
+    pub(crate) fn realm_metadata_cell_id() -> Option<CellRef> {
+        CellRef::new(arkret_wire::REALM_METADATA_CELL.to_owned()).ok()
     }
 
     pub(crate) fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
@@ -665,7 +682,6 @@ impl ProjectionState {
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn realm_update_candidate_value(
         &self,
-        cell_id: &CellRef,
         operation: &Operation,
         now: chrono::DateTime<chrono::Utc>,
         owner: Option<&String>,
@@ -673,7 +689,7 @@ impl ProjectionState {
         security_class: Option<&String>,
         federation_policy: Option<&String>,
     ) -> Value {
-        let mut value = match self.cells.get(cell_id) {
+        let mut value = match self.realm_metadata_cells.get(operation.realm_id.as_str()) {
             Some(CellState::Value(Value::Object(existing))) => existing.clone(),
             _ => serde_json::Map::new(),
         };
@@ -708,8 +724,8 @@ impl ProjectionState {
         security_class: Option<&String>,
         federation_policy: Option<&String>,
     ) -> Option<ProjectionEffect> {
-        let cell_id = Self::realm_metadata_cell_id(realm_id)?;
-        match self.cells.get(&cell_id) {
+        let cell_id = Self::realm_metadata_cell_id()?;
+        match self.realm_metadata_cells.get(realm_id) {
             Some(CellState::Bottom(_)) => {
                 return Some(ProjectionEffect::Rejected {
                     reason: "cell_bottom_state".to_owned(),
@@ -728,7 +744,6 @@ impl ProjectionState {
                     return None;
                 }
                 let incoming = self.realm_update_candidate_value(
-                    &cell_id,
                     operation,
                     now,
                     owner,
@@ -757,7 +772,8 @@ impl ProjectionState {
                     ])),
                     escalated_at: None,
                 };
-                self.cells.insert(cell_id, CellState::Bottom(bottom));
+                self.realm_metadata_cells
+                    .insert(realm_id.to_owned(), CellState::Bottom(bottom));
                 return Some(ProjectionEffect::RealmLifecycle {
                     realm_id: realm_id.to_owned(),
                     action: "bottom_expose".to_owned(),
@@ -772,9 +788,10 @@ impl ProjectionState {
         match crate::kinds::canonical_kind_for_operation(operation) {
             Some(arkret_wire::events::EventKind::REALM_UPDATE) => {
                 let realm_id = operation.realm_id.to_string();
-                if let Some(cell_id) = Self::realm_metadata_cell_id(&realm_id)
-                    && matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_)))
-                {
+                if matches!(
+                    self.realm_metadata_cells.get(&realm_id),
+                    Some(CellState::Bottom(_))
+                ) {
                     return Err("cell_bottom_state");
                 }
                 Ok(())
@@ -796,7 +813,12 @@ impl ProjectionState {
             .and_then(Value::as_str)
             .ok_or("conflict_repair_missing_cell")?;
         let cell = CellRef::new(cell_id.to_owned()).map_err(|_| "conflict_repair_invalid_cell")?;
-        let Some(CellState::Bottom(bottom)) = self.cells.get(&cell) else {
+        let state = if cell.as_str() == arkret_wire::REALM_METADATA_CELL {
+            self.realm_metadata_cells.get(operation.realm_id.as_str())
+        } else {
+            self.cells.get(&cell)
+        };
+        let Some(CellState::Bottom(bottom)) = state else {
             return Err("cell_not_bottom");
         };
         let declared = conflict_heads_from_payload(&operation.payload);
@@ -860,8 +882,10 @@ impl ProjectionState {
             .unwrap_or(Value::Null);
         let value =
             augment_repair_winner_value(winner, &heads, operation.operation_id.as_str(), now);
-        self.cells.insert(cell, CellState::Value(value.clone()));
-        if let Some(realm_id) = realm_metadata_realm_id_from_cell(&cell_id) {
+        if cell.as_str() == arkret_wire::REALM_METADATA_CELL {
+            let realm_id = operation.realm_id.to_string();
+            self.realm_metadata_cells
+                .insert(realm_id.clone(), CellState::Value(value.clone()));
             if let Some(title) = value.get("title").and_then(Value::as_str) {
                 let entry = self
                     .realm_states
@@ -890,6 +914,7 @@ impl ProjectionState {
                 action: "conflict_repair".to_owned(),
             };
         }
+        self.cells.insert(cell, CellState::Value(value));
         ProjectionEffect::Ignored
     }
 
@@ -1092,13 +1117,10 @@ impl ProjectionState {
         // projected federation_policy is computed by taking the payload
         // value if present, otherwise the prior cell value.
         let effective_federation_policy = payload_federation_policy.clone().or_else(|| {
-            Self::realm_metadata_cell_id(&realm_id)
-                .and_then(|c| self.cell_value(&c).cloned())
-                .and_then(|v| {
-                    v.get("federation_policy")
-                        .and_then(Value::as_str)
-                        .map(ToOwned::to_owned)
-                })
+            self.realm_metadata_cell_value(&realm_id)
+                .and_then(|value| value.get("federation_policy"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
         });
         if matches!(effective_security_class.as_deref(), Some("high_assurance"))
             && matches!(effective_federation_policy.as_deref(), Some("open"))
@@ -1268,31 +1290,37 @@ impl ProjectionState {
         // for this canonical kind.
         match kind {
             k if k == arkret_wire::events::EventKind::REALM_CREATE => {
-                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                    "ak:cell:ak.component.realm.create.v1:{realm_id}"
-                )) {
-                    let entry = serde_json::json!({
-                        "object": payload_object.cloned(),
-                        "owner": owner,
-                        "title": title,
-                        "security_class": payload_security_class,
-                        "federation_policy": payload_federation_policy,
-                        "history_visibility": payload_history_visibility,
-                        "encryption_profile": payload_encryption_profile,
-                        "content_scheme": payload_content_scheme,
-                        "digest_algorithm": payload_digest_algorithm,
-                        "created_at": arkret_canonical::format_timestamp_canonical(now),
-                        "operation_id": operation.operation_id.as_str(),
-                    });
-                    self.cells
-                        .insert(cell_id, CellState::Value(Value::Array(vec![entry])));
+                let entry = serde_json::json!({
+                    "object": payload_object.cloned(),
+                    "owner": owner,
+                    "title": title,
+                    "security_class": payload_security_class,
+                    "federation_policy": payload_federation_policy,
+                    "history_visibility": payload_history_visibility,
+                    "encryption_profile": payload_encryption_profile,
+                    "content_scheme": payload_content_scheme,
+                    "digest_algorithm": payload_digest_algorithm,
+                    "created_at": arkret_canonical::format_timestamp_canonical(now),
+                    "operation_id": operation.operation_id.as_str(),
+                });
+                self.realm_create_cells.insert(
+                    realm_id.clone(),
+                    CellState::Value(Value::Array(vec![entry])),
+                );
+                if let Some(object) = payload_object {
+                    self.realm_metadata_cells.insert(
+                        realm_id.clone(),
+                        CellState::Value(Value::Object(object.clone())),
+                    );
+                    if let Some(join_rule) = object.get("default_join_rule").and_then(Value::as_str)
+                    {
+                        self.realm_join_rules
+                            .insert(realm_id.clone(), join_rule.to_owned());
+                    }
                 }
-                if let Some(notary) = payload_object.and_then(|object| object.get("notary"))
-                    && let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                        "ak:cell:ak.component.notary.v1:{realm_id}"
-                    ))
-                {
-                    self.cells.insert(cell_id, CellState::Value(notary.clone()));
+                if let Some(notary) = payload_object.and_then(|object| object.get("notary")) {
+                    self.realm_notary_cells
+                        .insert(realm_id.clone(), CellState::Value(notary.clone()));
                 }
                 if let Some(creator) = creator.as_deref() {
                     self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);
@@ -1303,105 +1331,106 @@ impl ProjectionState {
                 // owner / title / arbitrary other organization fields
                 // pulled from payload (fields the spec evolves can land
                 // here without changing soland code).
-                if let Some(cell_id) = Self::realm_metadata_cell_id(&realm_id) {
-                    // Start from the existing cell value so partial
-                    // updates retain previously-set fields.
-                    let mut value = match self.cells.get(&cell_id) {
-                        Some(CellState::Value(Value::Object(existing))) => existing.clone(),
-                        _ => serde_json::Map::new(),
-                    };
-                    if let Some(o) = owner.as_ref() {
-                        value.insert("owner".to_owned(), Value::String(o.clone()));
-                    }
-                    if let Some(t) = title.as_ref() {
-                        value.insert("title".to_owned(), Value::String(t.clone()));
-                    }
-                    if let Some(sc) = payload_security_class.as_ref() {
-                        value.insert("security_class".to_owned(), Value::String(sc.clone()));
-                    }
-                    if let Some(fp) = payload_federation_policy.as_ref() {
-                        value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
-                    }
-                    value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-                    value.insert(
-                        "operation_id".to_owned(),
-                        Value::String(operation.operation_id.as_str().to_owned()),
-                    );
-                    self.cells
-                        .insert(cell_id, CellState::Value(Value::Object(value)));
+                // Start from the existing cell value so partial updates
+                // retain previously-set fields.
+                let mut value = match self.realm_metadata_cells.get(&realm_id) {
+                    Some(CellState::Value(Value::Object(existing))) => existing.clone(),
+                    _ => serde_json::Map::new(),
+                };
+                if let Some(o) = owner.as_ref() {
+                    value.insert("owner".to_owned(), Value::String(o.clone()));
                 }
+                if let Some(t) = title.as_ref() {
+                    value.insert("title".to_owned(), Value::String(t.clone()));
+                }
+                if let Some(sc) = payload_security_class.as_ref() {
+                    value.insert("security_class".to_owned(), Value::String(sc.clone()));
+                }
+                if let Some(fp) = payload_federation_policy.as_ref() {
+                    value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
+                }
+                value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+                value.insert(
+                    "operation_id".to_owned(),
+                    Value::String(operation.operation_id.as_str().to_owned()),
+                );
+                self.realm_metadata_cells
+                    .insert(realm_id.clone(), CellState::Value(Value::Object(value)));
             }
             k if k == arkret_wire::events::EventKind::REALM_ARCHIVE => {
-                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                    "ak:cell:ak.component.realm.archive.v1:{realm_id}"
-                )) {
-                    let mut value = serde_json::Map::new();
-                    value.insert(
-                        "archived".to_owned(),
-                        operation
-                            .payload
-                            .get("archived")
-                            .cloned()
-                            .unwrap_or(Value::Bool(true)),
-                    );
-                    if let Some(reason) = operation.payload.get("reason").cloned() {
-                        value.insert("reason".to_owned(), reason);
-                    }
-                    value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-                    value.insert(
-                        "operation_id".to_owned(),
-                        Value::String(operation.operation_id.as_str().to_owned()),
-                    );
-                    self.cells
-                        .insert(cell_id, CellState::Value(Value::Object(value)));
+                let mut value = serde_json::Map::new();
+                value.insert(
+                    "archived".to_owned(),
+                    operation
+                        .payload
+                        .get("archived")
+                        .cloned()
+                        .unwrap_or(Value::Bool(true)),
+                );
+                if let Some(reason) = operation.payload.get("reason").cloned() {
+                    value.insert("reason".to_owned(), reason);
                 }
+                value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+                value.insert(
+                    "operation_id".to_owned(),
+                    Value::String(operation.operation_id.as_str().to_owned()),
+                );
+                self.realm_null_subject_cells.insert(
+                    (
+                        realm_id.clone(),
+                        "ak:cell:ak.component.realm.archive.v1:null".to_owned(),
+                    ),
+                    CellState::Value(Value::Object(value)),
+                );
             }
             k if k == arkret_wire::events::EventKind::REALM_FREEZE => {
-                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                    "ak:cell:ak.component.realm.freeze.v1:{realm_id}"
-                )) {
-                    let mut value = serde_json::Map::new();
-                    value.insert(
-                        "frozen".to_owned(),
-                        operation
-                            .payload
-                            .get("frozen")
-                            .cloned()
-                            .unwrap_or(Value::Bool(true)),
-                    );
-                    if let Some(reason) = operation.payload.get("reason").cloned() {
-                        value.insert("reason".to_owned(), reason);
-                    }
-                    if let Some(freeze_expires_at) =
-                        operation.payload.get("freeze_expires_at").cloned()
-                    {
-                        value.insert("freeze_expires_at".to_owned(), freeze_expires_at);
-                    }
-                    value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-                    value.insert(
-                        "operation_id".to_owned(),
-                        Value::String(operation.operation_id.as_str().to_owned()),
-                    );
-                    self.cells
-                        .insert(cell_id, CellState::Value(Value::Object(value)));
+                let mut value = serde_json::Map::new();
+                value.insert(
+                    "frozen".to_owned(),
+                    operation
+                        .payload
+                        .get("frozen")
+                        .cloned()
+                        .unwrap_or(Value::Bool(true)),
+                );
+                if let Some(reason) = operation.payload.get("reason").cloned() {
+                    value.insert("reason".to_owned(), reason);
                 }
+                if let Some(freeze_expires_at) = operation.payload.get("freeze_expires_at").cloned()
+                {
+                    value.insert("freeze_expires_at".to_owned(), freeze_expires_at);
+                }
+                value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
+                value.insert(
+                    "operation_id".to_owned(),
+                    Value::String(operation.operation_id.as_str().to_owned()),
+                );
+                self.realm_null_subject_cells.insert(
+                    (
+                        realm_id.clone(),
+                        "ak:cell:ak.component.realm.freeze.v1:null".to_owned(),
+                    ),
+                    CellState::Value(Value::Object(value)),
+                );
             }
             k if k == arkret_wire::events::EventKind::REALM_TOMBSTONE => {
                 // Stream-F (Wave 1B): tombstone writes its own terminal
                 // cell with `successor_realm_id` so peers hydrating from
                 // cells alone can distinguish migration from destroy.
-                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                    "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
-                )) {
-                    let value = serde_json::json!({
-                        "terminal_kind": "tombstoned",
-                        "tombstoned": true,
-                        "successor_realm_id": payload_successor_realm_id,
-                        "at": arkret_canonical::format_timestamp_canonical(now),
-                        "operation_id": operation.operation_id.as_str(),
-                    });
-                    self.cells.insert(cell_id, CellState::Value(value));
-                }
+                let value = serde_json::json!({
+                    "terminal_kind": "tombstoned",
+                    "tombstoned": true,
+                    "successor_realm_id": payload_successor_realm_id,
+                    "at": arkret_canonical::format_timestamp_canonical(now),
+                    "operation_id": operation.operation_id.as_str(),
+                });
+                self.realm_null_subject_cells.insert(
+                    (
+                        realm_id.clone(),
+                        "ak:cell:ak.component.realm.tombstone.v1:null".to_owned(),
+                    ),
+                    CellState::Value(value),
+                );
                 // Tombstone keeps child Space/Strand placement live:
                 // succession transfers the navigation surface to the
                 // successor Realm. Spec §2.5 row "tombstone" — no
@@ -1409,17 +1438,19 @@ impl ProjectionState {
             }
             k if k == arkret_wire::events::EventKind::REALM_DESTROY => {
                 // cas-register: terminal {destroyed: true, at: ts}.
-                if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-                    "ak:cell:ak.component.realm.destroy.v1:{realm_id}"
-                )) {
-                    let value = serde_json::json!({
-                        "terminal_kind": "destroyed",
-                        "destroyed": true,
-                        "at": arkret_canonical::format_timestamp_canonical(now),
-                        "operation_id": operation.operation_id.as_str(),
-                    });
-                    self.cells.insert(cell_id, CellState::Value(value));
-                }
+                let value = serde_json::json!({
+                    "terminal_kind": "destroyed",
+                    "destroyed": true,
+                    "at": arkret_canonical::format_timestamp_canonical(now),
+                    "operation_id": operation.operation_id.as_str(),
+                });
+                self.realm_null_subject_cells.insert(
+                    (
+                        realm_id.clone(),
+                        "ak:cell:ak.component.realm.destroy.v1:null".to_owned(),
+                    ),
+                    CellState::Value(value),
+                );
                 // Stream-F (Wave 1B): destroy cascade per spec
                 // §2.5.1 ¶6 + ¶7.
                 self.cascade_realm_destroy(&realm_id);

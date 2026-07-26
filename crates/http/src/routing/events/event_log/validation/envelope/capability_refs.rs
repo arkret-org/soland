@@ -423,16 +423,15 @@ pub(super) fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
 }
 
 pub(super) fn seal_view_declares_relaxed_e2ee(
-    realm: &RealmId,
+    _realm: &RealmId,
     state_at_ref: &std::collections::BTreeMap<
         arkret_identifiers::CellRef,
         arkret_state::lattice::CellState,
     >,
 ) -> bool {
-    let Ok(policy_cell) = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.policy_components.v1:{}",
-        realm.as_str()
-    )) else {
+    let Ok(policy_cell) = arkret_identifiers::CellRef::new(
+        "ak:cell:ak.component.realm.policy_components.v1:null".to_owned(),
+    ) else {
         return false;
     };
     let Some(arkret_state::lattice::CellState::Value(policy_components)) =

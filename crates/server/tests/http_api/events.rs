@@ -675,8 +675,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "notary_profile": "single_did",
             "digest_algorithm": "sha256",
             "notary": {
-                "type": "single_did",
-                "did": actor,
+                "kind": "single_did",
+                "did": state.service_id(),
                 "recovery_members": ["did:web:recovery.soland.local"],
                 "controller_organization": "did:web:organization.primary.soland.local",
                 "recovery_controller_organizations": ["did:web:organization.recovery.soland.local"]
@@ -684,7 +684,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
             "created_at": created_at
         }
     });
-    let cell = format!("ak:cell:ak.component.realm.create.v1:{realm_id}");
+    let cell = arkret_wire::REALM_CREATE_CELL;
     let mut event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-c7ea7e000001",
         "ak.realm.create",
@@ -696,13 +696,30 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         payload.clone(),
     );
     event["preconditions"] = serde_json::json!([{
-        "cell": cell.clone(),
+        "cell": cell,
         "predicate": {"op": "head_eq", "value": null}
     }]);
-    event["effects"] = serde_json::json!([{
-        "cell": cell,
-        "op": {"kind": "set", "value": payload["object"].clone()}
-    }]);
+    event["effects"] = serde_json::json!([
+        {
+            "cell": arkret_wire::REALM_METADATA_CELL,
+            "op": {"kind": "set", "value": payload["object"].clone()}
+        },
+        {
+            "cell": format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                payload["object"]["created_by"].as_str().unwrap()
+            ),
+            "op": {"kind": "transition", "from": "leave", "to": "join"}
+        },
+        {
+            "cell": cell,
+            "op": {"kind": "append", "value": realm_id, "issuer_seq": 0}
+        },
+        {
+            "cell": arkret_wire::REALM_NOTARY_CELL,
+            "op": {"kind": "set", "value": payload["object"]["notary"].clone()}
+        }
+    ]);
     resign_canonical_event(&mut event);
     // A create cannot be committed on its own: the founding grant is the
     // second member of the same atomic protocol unit.
@@ -730,7 +747,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
         "actions": [
             "ak.realm.admin",
             "ak.capability.grant",
-            "ak.capability.revoke"
+            "ak.capability.revoke",
+            "ak.realm_key.share"
         ],
         "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
         "resources": [{
@@ -788,7 +806,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
                  kind: &str,
                  family: &str,
                  value: Value| {
-        let cell = format!("ak:cell:{family}:{realm_id}");
+        let cell = format!("ak:cell:{family}:null");
         let mut event = signed_canonical_event(
             event_id,
             kind,
@@ -934,9 +952,10 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
                 serde_json::json!("listed"),
             ),
         ] {
-            let cell =
-                arkret_identifiers::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
-            assert_eq!(projection.cell_value(&cell), Some(&expected));
+            assert_eq!(
+                projection.realm_null_subject_cell_value(&realm_id, family),
+                Some(&expected)
+            );
         }
     }
     assert!(
@@ -974,7 +993,7 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
     assert_eq!(
         resolve_body["join_candidates"].as_array().map(Vec::len),
         Some(1),
-        "authorized resolution must materialize a join candidate Seal: {resolve_body}"
+        "the configured Realm notary must advertise a join candidate: {resolve_body}"
     );
     assert_eq!(
         resolve_body["realm_preview"]["title"], "Bootstrap effects realm",
@@ -1031,10 +1050,8 @@ async fn realm_create_with_bootstrap_effects_does_not_require_seal_basis() {
                 serde_json::json!("listed"),
             ),
         ] {
-            let cell =
-                arkret_identifiers::CellRef::new(format!("ak:cell:{family}:{realm_id}")).unwrap();
             assert_eq!(
-                restarted_projection.cell_value(&cell),
+                restarted_projection.realm_null_subject_cell_value(&realm_id, family),
                 Some(&expected),
                 "restart must rebuild bootstrap cell {family}"
             );
@@ -1340,7 +1357,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                     }
                 },
                 "notary": {
-                    "type": "single_did",
+                    "kind": "single_did",
                     "did": agent_id,
                     "recovery_members": [controller_id],
                     "controller_organization": controller_id,
@@ -1587,7 +1604,17 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
 async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    let realm_id = DEMO_REALM_ID;
+    let seeded = seed_test_realm(
+        &state,
+        "did:web:alice.example",
+        "Locator evidence invite",
+        None,
+        "invite_only",
+        &[],
+        &[],
+    )
+    .await;
+    let realm_id = seeded["realm_id"].as_str().unwrap().to_owned();
     let invite_id = new_prefixed_uuid7("ak:invite:");
     let payload = serde_json::json!({
         "invite_id": invite_id,
@@ -1597,18 +1624,29 @@ async fn invite_create_accepts_locator_evidence_digest_without_local_consent() {
             "recipient_service_kind": "principal_server"
         },
         "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-        "expires_at": "2026-06-14T10:00:00.000Z"
+        "expires_at": "2099-01-01T00:00:00.000Z"
     });
-    let event = signed_canonical_event(
+    let mut event = signed_canonical_event(
         "ak:event:01904100-0000-7000-8000-1e0c1a7e0001",
         "ak.invite.create",
         "did:web:alice.example",
         "01904100-0000-7000-8000-a11ce0000001",
-        realm_id,
+        &realm_id,
         0,
         Vec::new(),
         payload.clone(),
     );
+    attach_invite_create_effects(&mut event);
+    move_event_to_actor_realm_frontier(
+        &state,
+        &token,
+        "did:web:alice.example",
+        &realm_id,
+        &mut event,
+    )
+    .await;
+    event["seal_basis"] = seeded["seal_basis"].clone();
+    resign_canonical_event(&mut event);
 
     let submitted: Value = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)

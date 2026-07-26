@@ -7,7 +7,7 @@ use salvo::test::{ResponseExt, TestClient};
 use serde_json::{Value, json};
 use soland_domain::reducer::{
     CircleLifecycleState, CircleMembershipState, CircleProjection, ObjectLifecycleState,
-    StrandProjection,
+    SolandMembershipState, StrandProjection,
 };
 use soland_http::config::AppConfig;
 use soland_http::service;
@@ -88,6 +88,11 @@ async fn seed_realm(
     entry.public = true;
     entry.members.insert(owner_did);
     state.test_realms().lock().upsert(entry);
+    state
+        .test_projection()
+        .lock()
+        .realm_join_rules
+        .insert(realm_id.clone(), "public".to_owned());
 
     state
         .test_persistence()
@@ -226,6 +231,23 @@ async fn seed_pending_invite(
         })
         .await
         .unwrap();
+    state.test_projection().lock().members.insert(
+        (realm_id.to_owned(), invitee.to_owned()),
+        SolandMembershipState {
+            member: invitee.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "invite".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("routable".to_owned()),
+            recipient_service_id: Some(state.service_id().to_string()),
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: Some(now),
+            joined_at: now,
+            updated_at: now,
+            reason: None,
+        },
+    );
     invite_id
 }
 

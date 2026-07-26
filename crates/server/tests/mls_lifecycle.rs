@@ -147,6 +147,30 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
     *event = serde_json::to_value(typed).unwrap();
 }
 
+fn set_realm_create_effects(event: &mut Value) {
+    let verification_method = event["proofs"][0]["verification_method"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let mut typed: arkret_wire::Event = serde_json::from_value(event.clone()).unwrap();
+    typed.effects = arkret_bootstrap::realm_create_effects(&typed).unwrap();
+    typed.proofs.clear();
+    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        typed.actor_id.clone(),
+        verification_method.clone(),
+    );
+    let created_at = typed.created_at;
+    arkret_signatures::sign_event(
+        &mut typed,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .unwrap();
+    *event = serde_json::to_value(typed).unwrap();
+}
+
 async fn dev_token(state: AppState, actor: &str, device_id: &str, display: &str) -> String {
     let login: Value = TestClient::post("http://server/_soland/gate/auth/dev-login")
         .json(&json!({
@@ -410,7 +434,7 @@ async fn mls_lifecycle_end_to_end() {
     });
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
-    let realm_create = signed_event(
+    let mut realm_create = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e0",
         0,
         alice_did,
@@ -434,7 +458,7 @@ async fn mls_lifecycle_end_to_end() {
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
                 "notary": {
-                    "type": "single_did",
+                    "kind": "single_did",
                     "did": alice_did,
                     "recovery_members": ["did:web:recovery.example"],
                     "controller_organization": "did:web:organization.primary.example",
@@ -444,6 +468,7 @@ async fn mls_lifecycle_end_to_end() {
             }
         }),
     );
+    set_realm_create_effects(&mut realm_create);
     let grant_id = "ak:grant:01904100-0000-7000-8000-00000000e2ef";
     let grant_created_at = realm_create["created_at"].as_str().unwrap();
     let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant = serde_json::from_value(json!({
@@ -452,7 +477,12 @@ async fn mls_lifecycle_end_to_end() {
         "realm_id": realm_id,
         "issuer": alice_did,
         "subject": alice_did,
-        "actions": ["ak.realm.admin", "ak.capability.grant", "ak.capability.revoke"],
+        "actions": [
+            "ak.realm.admin",
+            "ak.capability.grant",
+            "ak.capability.revoke",
+            "ak.realm_key.share"
+        ],
         "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
         "resources": [{
             "kind": "realm",

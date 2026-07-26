@@ -1433,8 +1433,11 @@ mod tests {
     }
 
     #[test]
-    fn media_provider_kind_rejects_legacy_alias() {
-        assert!(MediaProviderKind::parse("arkret_native").is_err());
+    fn media_provider_kind_accepts_registered_arkret_native_backend() {
+        assert_eq!(
+            MediaProviderKind::parse("arkret_native").unwrap(),
+            MediaProviderKind::ArkretNative
+        );
     }
 
     #[test]

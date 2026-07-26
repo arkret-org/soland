@@ -259,13 +259,10 @@ mod tests {
     fn invite_acceptance_ref_reads_canonical_invite_ref() {
         let invite_id = "ak:invite:01904100-0000-7000-8000-000000000003";
         let operation = op(
-            arkret_wire::events::EventKind::MEMBER_STATE,
+            arkret_wire::events::EventKind::INVITE_ACCEPT,
             json!({
-                "actor_id": "did:web:bob.example",
-                "membership": "join",
-                "reason": "invite_accept",
+                "sender": "did:web:bob.example",
                 "invite_ref": invite_id,
-                "delivery_status": "unroutable"
             }),
         );
 

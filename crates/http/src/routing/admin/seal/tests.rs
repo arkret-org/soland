@@ -28,7 +28,7 @@ fn notary_value_from_cell_defaults_to_service_id_when_absent() {
 #[test]
 fn notary_value_from_cell_reads_authoritative_single_did_form() {
     let v = json!({
-        "type": "single_did",
+        "kind": "single_did",
         "did": "did:web:alice.example",
         "revocation_freshness_window_ms": 60000,
         "paused": false,
@@ -48,7 +48,7 @@ fn notary_value_from_cell_reads_authoritative_single_did_form() {
 #[test]
 fn notary_value_from_cell_reads_authoritative_threshold_form() {
     let v = json!({
-        "type": "threshold",
+        "kind": "threshold",
         "threshold": 2,
         "members": ["did:ak:a", "did:ak:b", "did:ak:c"],
         "forensic_attribution": "quorum_intersection",
@@ -160,7 +160,7 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
     }))
     .unwrap();
     let cell_value = notary_value_object_from_body(&body).unwrap();
-    assert_eq!(cell_value["type"], "threshold");
+    assert_eq!(cell_value["kind"], "threshold");
     // Authoritative wire shape: `threshold` (not `k`/`n`) + derived
     // `forensic_attribution` (2*2 > 3 → quorum_intersection). `n` is no
     // longer a wire field; the committee size is `members.len()`.
@@ -169,7 +169,7 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
     assert_eq!(cell_value["members"].as_array().unwrap().len(), 3);
     assert!(cell_value.get("k").is_none());
     assert!(cell_value.get("n").is_none());
-    assert!(cell_value.get("kind").is_none());
+    assert!(cell_value.get("type").is_none());
     assert!(cell_value.get("threshold_k").is_none());
     assert!(cell_value.get("threshold_dids").is_none());
 
@@ -188,10 +188,7 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
 #[test]
 fn notary_cell_for_builds_canonical_cell_ref() {
     let cell = notary_cell_for("ak:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
-    assert_eq!(
-        cell.as_str(),
-        "ak:cell:ak.component.notary.v1:ak:space:01904100-0000-7000-8000-2dd3431bd65a"
-    );
+    assert_eq!(cell.as_str(), arkret_wire::REALM_NOTARY_CELL);
 }
 
 #[test]

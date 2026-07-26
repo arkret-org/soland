@@ -415,7 +415,10 @@ pub(crate) async fn validate_realm_key_share_policy(
     let share = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
     >(projection_context_stripped_payload(&operation.payload))
-    .map_err(|_| "policy_denied")?;
+    .map_err(|error| {
+        tracing::debug!(%error, "realm key share projection payload parse failed");
+        "policy_denied"
+    })?;
     // encryption-and-audit.md §2.10.8 — a `ak.realm_key.share` with
     // `share_kind=realm_recovery_key` is the Realm Recovery Key (RRK) eager-
     // sealing path: provider-initiated, the recipient is an OFFLINE recovery org

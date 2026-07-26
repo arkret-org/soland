@@ -48,6 +48,30 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
     );
 }
 
+fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
+    let operation = op(
+        arkret_wire::events::EventKind::REALM_JOIN_RULE,
+        REALM_A,
+        json!({
+            "effects": [{
+                "cell": "ak:cell:ak.component.realm.join_rule.v1:null",
+                "op": {
+                    "type": "set",
+                    "value": join_rule
+                }
+            }]
+        }),
+    );
+    let effect = state.apply_validated_realm_bootstrap_facet(&operation);
+    assert!(
+        matches!(
+            effect,
+            ProjectionEffect::RealmBootstrapFacetProjected { .. }
+        ),
+        "join-rule projection must write the canonical Realm cell, got {effect:?}"
+    );
+}
+
 fn join_op(member: &str) -> Operation {
     op(
         arkret_wire::events::EventKind::MEMBER_STATE,
@@ -91,6 +115,7 @@ fn challenge_proof(gate_id: &str, issued_at: chrono::DateTime<Utc>) -> Value {
 fn principal_admission_allows_configured_did_method() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "public");
 
     apply_policy(
         &mut state,
@@ -137,6 +162,7 @@ fn principal_admission_denylist_wins_over_allowlist() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let blocked = "did:web:blocked.example";
+    apply_join_rule(&mut state, "public");
 
     apply_policy(
         &mut state,
@@ -232,10 +258,13 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 fn any_combinator_accepts_parent_membership_gate_without_challenge() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    let mut parent_join = member_state_op(REALM_PARENT, BOB, "join");
+    parent_join.payload["sender"] = json!("did:web:parent-admin.example");
     assert!(matches!(
-        state.apply(&member_state_op(REALM_PARENT, BOB, "join"), &hlc),
+        state.apply(&parent_join, &hlc),
         ProjectionEffect::MembershipChanged { .. }
     ));
+    apply_join_rule(&mut state, "restricted");
 
     apply_policy(
         &mut state,
@@ -276,10 +305,13 @@ fn any_combinator_accepts_parent_membership_gate_without_challenge() {
 fn all_combinator_requires_parent_membership_and_challenge_proof() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    let mut parent_join = member_state_op(REALM_PARENT, BOB, "join");
+    parent_join.payload["sender"] = json!("did:web:parent-admin.example");
     assert!(matches!(
-        state.apply(&member_state_op(REALM_PARENT, BOB, "join"), &hlc),
+        state.apply(&parent_join, &hlc),
         ProjectionEffect::MembershipChanged { .. }
     ));
+    apply_join_rule(&mut state, "restricted");
 
     apply_policy(
         &mut state,
@@ -327,6 +359,13 @@ fn cooldown_gate_denies_independently_of_any_combinator() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let leave_at = Utc::now() - Duration::minutes(10);
+    apply_join_rule(&mut state, "public");
+    let mut initial_join = member_state_op(REALM_A, BOB, "join");
+    initial_join.created_at = leave_at - Duration::minutes(10);
+    assert!(matches!(
+        state.apply(&initial_join, &hlc),
+        ProjectionEffect::MembershipChanged { .. }
+    ));
     let mut leave = member_state_op(REALM_A, BOB, "leave");
     leave.created_at = leave_at;
     assert!(matches!(
@@ -373,6 +412,7 @@ fn cooldown_gate_denies_independently_of_any_combinator() {
 fn manual_review_gate_is_not_satisfied_by_automatic_join() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "restricted");
 
     apply_policy(
         &mut state,

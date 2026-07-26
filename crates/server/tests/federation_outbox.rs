@@ -45,7 +45,7 @@ struct CapturedSignedRequestBody {
 /// that the test reads the captured raw request from after the worker
 /// finishes its delivery pass.
 fn spawn_mock_peer() -> (String, mpsc::Receiver<String>) {
-    spawn_mock_peer_with_status("200 OK", br#"{"accepted":true}"#)
+    spawn_mock_peer_with_status("200 OK", br#"{"status":"accepted"}"#)
 }
 
 fn spawn_mock_peer_with_status(

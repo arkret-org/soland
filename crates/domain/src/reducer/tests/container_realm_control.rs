@@ -163,7 +163,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
                     "created_by": "did:web:alice.example",
                     "title": "Control Realm",
                     "digest_algorithm": "sha256",
-                    "notary": {"type": "single_did", "did": "did:web:notary.example"}
+                    "notary": {"kind": "single_did", "did": "did:web:notary.example"}
                 }
             }),
         ),
@@ -176,7 +176,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
             REALM_ID,
             serde_json::json!({
                 "realm_id": REALM_ID,
-                "notary": {"type": "single_did", "did": "did:web:new-notary.example"}
+                "notary": {"kind": "single_did", "did": "did:web:new-notary.example"}
             }),
         ),
         &hlc,
@@ -185,10 +185,14 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
         notary,
         ProjectionEffect::RealmNotaryProjected { .. }
     ));
-    let notary_cell = CellRef::new(format!("ak:cell:ak.component.notary.v1:{REALM_ID}")).unwrap();
     assert_eq!(
         state
-            .cell_value(&notary_cell)
+            .realm_notary_cells
+            .get(REALM_ID)
+            .and_then(|state| match state {
+                CellState::Value(value) => Some(value),
+                CellState::Bottom(_) => None,
+            })
             .and_then(|value| value.get("did"))
             .and_then(Value::as_str),
         Some("did:web:new-notary.example")

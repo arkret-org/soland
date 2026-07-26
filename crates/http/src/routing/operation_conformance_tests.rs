@@ -189,7 +189,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
                 "notary": {
-                    "type": "single_did",
+                    "kind": "single_did",
                     "did": "did:web:alice.example",
                     "recovery_members": ["did:web:recovery.example"],
                     "controller_organization": "did:web:organization.primary.example",

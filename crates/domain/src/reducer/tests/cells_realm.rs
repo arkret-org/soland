@@ -51,6 +51,10 @@ fn cell_value_returns_none_for_bottom_state() {
 fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    state
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "public".to_owned());
 
     // `membership=join` MUST carry `delivery_status` per
     // arkret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
@@ -60,7 +64,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     state.apply(
         &make_operation(
             arkret_wire::events::EventKind::MEMBER_STATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            realm_id,
             serde_json::json!({
                 "actor_id": "did:web:alice",
                 "membership": "join",
@@ -73,10 +77,7 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
 
     // Structured cache populated with state="join" + role="admin".
     let m = state
-        .member(
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
-            "did:web:alice",
-        )
+        .member(realm_id, "did:web:alice")
         .expect("member entry should exist after join");
     assert_eq!(m.state, "join");
     assert_eq!(m.role, "admin");
@@ -88,79 +89,57 @@ fn membership_join_writes_both_structured_cache_and_fsm_cell() {
     );
 
     // members_of_realm only returns entries in `state="join"`.
-    assert_eq!(
-        state
-            .members_of_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
-            .len(),
-        1
-    );
+    assert_eq!(state.members_of_realm(realm_id).len(), 1);
 }
 
 #[test]
-fn ban_then_invite_round_trips_through_fsm_states() {
+fn bare_member_state_cannot_transition_ban_to_invite() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 
-    // join -> ban -> invite — full FSM lifecycle.
-    for membership in ["join", "ban"] {
-        state.apply(
-            &make_operation(
-                arkret_wire::events::EventKind::MEMBER_STATE,
-                "ak:realm:01904100-0000-7000-8000-cfc039892036",
-                serde_json::json!({
-                    "actor_id": "did:web:bob",
-                    "membership": membership,
-                    "role": "member"
-                }),
-            ),
-            &hlc,
-        );
-    }
+    state.apply(
+        &make_operation(
+            arkret_wire::events::EventKind::MEMBER_STATE,
+            realm_id,
+            serde_json::json!({
+                "actor_id": "did:web:bob",
+                "membership": "ban",
+                "role": "member"
+            }),
+        ),
+        &hlc,
+    );
 
     // After ban, Bob is in `members_in_state("ban")` and NOT in
     // `members_of_realm()` (which filters by `state="join"`).
-    assert_eq!(
-        state
-            .members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "ban")
-            .len(),
-        1
-    );
-    assert_eq!(
-        state
-            .members_of_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
-            .len(),
-        0
-    );
+    assert_eq!(state.members_in_state(realm_id, "ban").len(), 1);
+    assert_eq!(state.members_of_realm(realm_id).len(), 0);
     assert_eq!(
         state.member_fsm_state("did:web:bob").as_deref(),
         Some("ban")
     );
 
-    // invite returns the actor to the invite state.
-    state.apply(
+    // Only `ak.invite.create` may project `ban -> invite`; a bare
+    // `ak.member.state` write must be rejected.
+    let effect = state.apply(
         &make_operation(
             arkret_wire::events::EventKind::MEMBER_STATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            realm_id,
             serde_json::json!({"actor_id": "did:web:bob", "membership": "invite"}),
         ),
         &hlc,
     );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason.starts_with("invalid_membership_transition")
+    ));
     assert_eq!(
         state.member_fsm_state("did:web:bob").as_deref(),
-        Some("invite")
+        Some("ban")
     );
-    assert_eq!(
-        state
-            .members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "ban")
-            .len(),
-        0
-    );
-    assert_eq!(
-        state
-            .members_in_state("ak:realm:01904100-0000-7000-8000-cfc039892036", "invite")
-            .len(),
-        1
-    );
+    assert_eq!(state.members_in_state(realm_id, "ban").len(), 1);
 }
 
 #[test]
@@ -171,6 +150,9 @@ fn member_state_precondition_is_scoped_to_the_target_realm() {
 
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    state
+        .realm_join_rules
+        .insert(REALM_A.to_owned(), "public".to_owned());
     state.apply(
         &make_operation(
             arkret_wire::events::EventKind::MEMBER_STATE,
@@ -330,8 +312,8 @@ fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
     let second_id = second.operation_id.as_str().to_owned();
     state.apply(&second, &hlc);
 
-    let cell = ProjectionState::realm_metadata_cell_id(realm).unwrap();
-    let bottom = match state.cell(&cell) {
+    let cell = ProjectionState::realm_metadata_cell_id().unwrap();
+    let bottom = match state.realm_metadata_cells.get(realm) {
         Some(CellState::Bottom(bottom)) => bottom,
         other => panic!("expected bottom cell, got {other:?}"),
     };
@@ -446,12 +428,11 @@ fn realm_tombstone_writes_tombstone_cell_and_successor() {
         &hlc,
     );
 
-    let tombstone_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
-    ))
-    .unwrap();
     assert!(matches!(
-        state.cells.get(&tombstone_cell),
+        state.realm_null_subject_cells.get(&(
+            realm_id.to_owned(),
+            "ak:cell:ak.component.realm.tombstone.v1:null".to_owned()
+        )),
         Some(CellState::Value(value))
             if value.get("successor_realm_id").and_then(Value::as_str) == Some(successor)
     ));
@@ -489,12 +470,11 @@ fn realm_freeze_writes_freeze_cell_and_blocks_until_expiry() {
         &hlc,
     );
 
-    let cell_id = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.freeze.v1:{realm_id}"
-    ))
-    .unwrap();
     assert!(matches!(
-        state.cells.get(&cell_id),
+        state.realm_null_subject_cells.get(&(
+            realm_id.to_owned(),
+            "ak:cell:ak.component.realm.freeze.v1:null".to_owned()
+        )),
         Some(CellState::Value(value)) if value.get("frozen").and_then(Value::as_bool) == Some(true)
     ));
     assert!(
@@ -567,7 +547,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
                     "trust_domain": "ak:trust_domain:example.net",
                     "encryption_profile": "none",
                     "notary_profile": "single_did",
-                    "notary": {"type": "single_did", "did": "did:web:notary.example"}
+                    "notary": {"kind": "single_did", "did": "did:web:notary.example"}
                 }
             }),
         ),
@@ -587,13 +567,16 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
         state.member_fsm_state("did:web:alice").as_deref(),
         Some("join")
     );
-    let notary_cell =
-        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}"))
-            .unwrap();
     assert_eq!(
-        state.cell_value(&notary_cell),
+        state.realm_notary_cells.get(realm_id).and_then(|state| {
+            if let arkret_state::lattice::CellState::Value(value) = state {
+                Some(value)
+            } else {
+                None
+            }
+        }),
         Some(&serde_json::json!({
-            "type": "single_did",
+            "kind": "single_did",
             "did": "did:web:notary.example"
         }))
     );
@@ -609,7 +592,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
                     "trust_domain": "ak:trust_domain:example.net",
                     "encryption_profile": "none",
                     "notary_profile": "single_did",
-                    "notary": {"type": "single_did", "did": "did:web:notary.example"}
+                    "notary": {"kind": "single_did", "did": "did:web:notary.example"}
                 }
             }),
         ),
@@ -664,12 +647,8 @@ fn direct_conversation_role_reads_the_genesis_object_from_the_create_log() {
 
     let mut replayed_value = serde_json::to_value(projected).unwrap();
     replayed_value["entry_id"] = serde_json::json!("ak:event:01904100-0000-7000-8000-cfc039892037");
-    let cell_id = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.realm.create.v1:{realm_id}"
-    ))
-    .unwrap();
-    state.cells.insert(
-        cell_id,
+    state.realm_create_cells.insert(
+        realm_id.to_string(),
         arkret_state::lattice::CellState::Value(serde_json::json!([{
             "issuer": "did:web:alice.example",
             "issuer_seq": 1,
@@ -687,6 +666,209 @@ fn realm_metadata_cell_returns_none_for_uncreated_realm() {
     assert!(state.realm_metadata_cell_value(realm_id).is_none());
     assert!(state.realm_create_log(realm_id).is_none());
     assert!(!state.realm_is_destroyed(realm_id));
+}
+
+#[test]
+fn invite_entry_evaluates_principal_admission_hard_gate() {
+    let mut state = ProjectionState::new();
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892038";
+    let invitee = "did:web:denied.example";
+    state.realm_policy_components_cells.insert(
+        realm_id.to_owned(),
+        CellState::Value(serde_json::json!({
+            "join_policy": {
+                "combinator": "all",
+                "gates": [{
+                    "gate_id": "principal",
+                    "kind": "principal_admission",
+                    "auto_resolve": true,
+                    "denied_principal_dids": [invitee]
+                }]
+            }
+        })),
+    );
+    let operation = make_operation(
+        arkret_wire::events::EventKind::INVITE_CREATE,
+        realm_id,
+        serde_json::json!({
+            "invitee": invitee,
+            "sender": "did:web:inviter.example"
+        }),
+    );
+    assert_eq!(
+        state.check_membership_join_admission(&operation),
+        Err("gate_check_failed")
+    );
+}
+
+#[test]
+fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
+    let mut state = ProjectionState::new();
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892039";
+    let member = "did:web:alice.example";
+    state
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "public".to_owned());
+    state.members.insert(
+        (realm_id.to_owned(), member.to_owned()),
+        SolandMembershipState {
+            member: member.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "leave".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: None,
+            joined_at: chrono::Utc::now() - chrono::Duration::days(1),
+            updated_at: chrono::Utc::now() - chrono::Duration::minutes(1),
+            reason: None,
+        },
+    );
+    state.realm_policy_components_cells.insert(
+        realm_id.to_owned(),
+        CellState::Value(serde_json::json!({
+            "join_policy": {
+                "combinator": "all",
+                "gates": [
+                    {
+                        "gate_id": "cooldown",
+                        "kind": "cooldown",
+                        "auto_resolve": true,
+                        "min_interval_since_leave": "PT1H"
+                    },
+                    {
+                        "gate_id": "parent",
+                        "kind": "parent_membership",
+                        "auto_resolve": true,
+                        "membership_source_realm_ids": [
+                            "ak:realm:01904100-0000-7000-8000-cfc039892040"
+                        ],
+                        "require_min_membership": "join"
+                    }
+                ]
+            }
+        })),
+    );
+    let operation = make_operation(
+        arkret_wire::events::EventKind::MEMBER_STATE,
+        realm_id,
+        serde_json::json!({
+            "actor_id": member,
+            "sender": member,
+            "membership": "join",
+            "delivery_status": "unroutable"
+        }),
+    );
+    assert_eq!(
+        state.check_membership_join_admission(&operation),
+        Err("gate_check_failed")
+    );
+    state
+        .members
+        .get_mut(&(realm_id.to_owned(), member.to_owned()))
+        .unwrap()
+        .updated_at = operation.created_at - chrono::Duration::hours(2);
+    assert_eq!(state.check_membership_join_admission(&operation), Ok(()));
+}
+
+#[test]
+fn closed_entry_rejects_self_join_but_allows_authorized_writer_path() {
+    let mut state = ProjectionState::new();
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892041";
+    let member = "did:web:alice.example";
+    state
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "closed".to_owned());
+    let self_join = make_operation(
+        arkret_wire::events::EventKind::MEMBER_STATE,
+        realm_id,
+        serde_json::json!({
+            "actor_id": member,
+            "sender": member,
+            "membership": "join",
+            "delivery_status": "unroutable"
+        }),
+    );
+    assert_eq!(
+        state.check_membership_join_admission(&self_join),
+        Err("gate_check_failed")
+    );
+    let admin_join = make_operation(
+        arkret_wire::events::EventKind::MEMBER_STATE,
+        realm_id,
+        serde_json::json!({
+            "actor_id": member,
+            "sender": "did:web:admin.example",
+            "membership": "join",
+            "delivery_status": "unroutable"
+        }),
+    );
+    assert_eq!(state.check_membership_join_admission(&admin_join), Ok(()));
+    state.members.insert(
+        (realm_id.to_owned(), member.to_owned()),
+        SolandMembershipState {
+            member: member.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "join".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: Some("unroutable".to_owned()),
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: None,
+            joined_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            reason: None,
+        },
+    );
+    assert_eq!(
+        state.check_membership_join_admission(&self_join),
+        Ok(()),
+        "join-to-join delivery refresh is not Realm entry"
+    );
+}
+
+#[test]
+fn bare_member_state_cannot_leave_a_live_invite_state() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("invite-transition");
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892042";
+    let member = "did:web:alice.example";
+    state.members.insert(
+        (realm_id.to_owned(), member.to_owned()),
+        SolandMembershipState {
+            member: member.to_owned(),
+            realm_id: realm_id.to_owned(),
+            state: "invite".to_owned(),
+            role: "member".to_owned(),
+            delivery_status: None,
+            recipient_service_id: None,
+            membership_event_ref: None,
+            delivery_binding_frontier: None,
+            invited_at: Some(chrono::Utc::now()),
+            joined_at: chrono::Utc::now(),
+            updated_at: chrono::Utc::now(),
+            reason: None,
+        },
+    );
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::events::EventKind::MEMBER_STATE,
+            realm_id,
+            serde_json::json!({
+                "actor_id": member,
+                "sender": "did:web:admin.example",
+                "membership": "ban"
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { reason } if reason == "invalid_membership_transition"
+    ));
 }
 
 #[test]
@@ -715,11 +897,14 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
     use arkret_state::lattice::CellState;
     let mut state = ProjectionState::new();
     let cell_id = arkret_identifiers::CellRef::new(
-        "ak:cell:ak.component.realm.read_receipt_policy.v1:ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+        "ak:cell:ak.component.realm.read_receipt_policy.v1:null".to_owned(),
     )
     .unwrap();
-    state.cells.insert(
-        cell_id,
+    state.realm_null_subject_cells.insert(
+        (
+            "ak:realm:01904100-0000-7000-8000-cfc039892036".to_owned(),
+            cell_id.as_str().to_owned(),
+        ),
         CellState::Value(serde_json::json!({
             "disclosure": "required",
             "visibility": "members",

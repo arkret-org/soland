@@ -279,6 +279,10 @@ fn signed_event_with_prev_refs(
     )
     .expect("SDK Event builder accepts consent fixture");
     event.prev_refs = prev_refs;
+    if kind == arkret_wire::events::EventKind::REALM_CREATE {
+        event.effects =
+            arkret_bootstrap::realm_create_effects(&event).expect("canonical Realm create effects");
+    }
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         seed,
         actor_id,
@@ -378,7 +382,7 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
                 "notary": {
-                    "type": "single_did",
+                    "kind": "single_did",
                     "did": actor,
                     "recovery_members": ["did:web:recovery.soland.local"],
                     "controller_organization": "did:web:organization.primary.soland.local",
@@ -405,7 +409,8 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
         "actions": [
             "ak.realm.admin",
             "ak.capability.grant",
-            "ak.capability.revoke"
+            "ak.capability.revoke",
+            "ak.realm_key.share"
         ],
         "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
         "resources": [{

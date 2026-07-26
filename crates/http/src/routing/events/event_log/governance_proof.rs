@@ -186,14 +186,11 @@ async fn backfill_authoritative_event_seals(
 }
 
 fn authoritative_notary_dids(
-    realm_id: &RealmId,
+    _realm_id: &RealmId,
     joined: &BTreeMap<CellRef, CellState>,
 ) -> Result<Vec<String>, AppError> {
-    let notary_cell = CellRef::new(format!(
-        "ak:cell:ak.component.notary.v1:{}",
-        realm_id.as_str()
-    ))
-    .map_err(proof_state_error)?;
+    let notary_cell =
+        CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned()).map_err(proof_state_error)?;
     let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
         return Ok(Vec::new());
     };
@@ -1427,7 +1424,7 @@ mod tests {
                     "id": realm_id,
                     "created_by": actor_id,
                     "fields": {"purpose": "principal_control"},
-                    "notary": {"type": "single_did", "did": actor_id},
+                    "notary": {"kind": "single_did", "did": actor_id},
                 }
             }),
         )

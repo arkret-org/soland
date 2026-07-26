@@ -120,6 +120,25 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
     dev_login_token(state, actor, device_suffix).await
 }
 
+fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
+    let signer = Ed25519MoveSigner::from_did_key_seed(
+        [0x21; 32],
+        Did::new("did:web:alice.example").unwrap(),
+        "did:web:alice.example#extension-test-notary",
+    );
+    let seal = arkret_wire::Seal::sign_single(
+        arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap(),
+        Vec::new(),
+        Vec::new(),
+        arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+        arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce001").unwrap(),
+        &signer,
+    )
+    .unwrap();
+    state.test_put_seal(&seal).unwrap();
+    seal.seal_basis()
+}
+
 fn signed_ghost_provision_body(
     package: &AppletPackage,
     install: &Value,
@@ -128,6 +147,7 @@ fn signed_ghost_provision_body(
     tenant: &str,
     external_user_id: &str,
     display_name: Option<&str>,
+    seal_basis: &arkret_wire::SealBasis,
 ) -> Value {
     use arkret_models_collaboration::governance::accountability::{
         AccountabilityGrantPayload, AccountabilityScope, AccountabilityScopeKind,
@@ -192,6 +212,7 @@ fn signed_ghost_provision_body(
     .unwrap();
     accountability_event.applet_id = Some(applet_id.clone());
     accountability_event.authorization_ref = Some(authorization_ref.clone());
+    accountability_event.seal_basis = Some(seal_basis.clone());
     let event_grant: AccountabilityGrantPayload =
         serde_json::from_value(serde_json::to_value(&accountability_event.payload).unwrap())
             .unwrap();
@@ -412,6 +433,7 @@ async fn applet_install_package_registers_bot_projection_smoke() {
 async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let seal_basis = seed_extension_test_seal(&state);
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
@@ -443,6 +465,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         "T123",
         "U123",
         Some("Alice on Slack"),
+        &seal_basis,
     );
     let rejected_profile_ref = rejected_body["profile_event"]["event_id"]
         .as_str()
@@ -508,6 +531,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
         "T123",
         "U123",
         Some("Alice on Slack"),
+        &seal_basis,
     );
     let idempotency_key = format!("provision-{suffix}");
     let mut response = TestClient::post(format!(
@@ -646,6 +670,7 @@ async fn applet_ghost_actor_provision_writes_durable_profile_and_grant_events() 
 async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let seal_basis = seed_extension_test_seal(&state);
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
@@ -683,6 +708,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
         "T123",
         "U-denied",
         None,
+        &seal_basis,
     ))
     .send(&app)
     .await
@@ -696,6 +722,7 @@ async fn applet_ghost_actor_provision_requires_approved_ghost_scope() {
 async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let seal_basis = seed_extension_test_seal(&state);
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
@@ -729,6 +756,7 @@ async fn applet_ghost_actor_provision_rejects_actor_namespace_mismatch() {
         "T123",
         "U123",
         None,
+        &seal_basis,
     ))
     .send(&app)
     .await
@@ -929,6 +957,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 async fn applet_bridge_register_ghost_route_revoke_smoke() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    let seal_basis = seed_extension_test_seal(&state);
     let app = service(state.clone());
     let suffix = uuid::Uuid::now_v7().simple().to_string();
     let applet_id = arkret_identifiers::new_prefixed_uuid7("ak:applet:");
@@ -969,6 +998,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         "T-smoke",
         "ext-user-x",
         Some("External X"),
+        &seal_basis,
     ))
     .send(&app)
     .await;

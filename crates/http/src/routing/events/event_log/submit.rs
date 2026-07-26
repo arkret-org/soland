@@ -1677,7 +1677,7 @@ mod managed_agent_pcr_batch_tests {
                     "id": "ak:realm:01999999-0000-7000-8000-00000000cafe",
                     "created_by": "did:web:agent.example",
                     "fields": {"purpose": "principal_control"},
-                    "notary": {"type": "single_did", "did": "did:web:agent.example"},
+                    "notary": {"kind": "single_did", "did": "did:web:agent.example"},
                 }
             }),
         )

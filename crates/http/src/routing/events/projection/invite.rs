@@ -83,6 +83,17 @@ pub(super) async fn project_invite_accept_operation(
         tracing::warn!(invite_id = %invite_id, "ak.invite.accept on expired invite; ignored");
         return;
     }
+    if !state
+        .projections()
+        .invite_member_is_invited(record.realm_id.as_str(), &accepter)
+    {
+        tracing::warn!(
+            invite_id = %invite_id,
+            invitee = %accepter,
+            "ak.invite.accept requires member state invite"
+        );
+        return;
+    }
     record.status = "accepted".to_owned();
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
@@ -213,19 +224,59 @@ async fn project_invite_terminal_operation(
         );
         return;
     }
-    let terminal_status = if record
-        .expires_at
-        .is_some_and(|expires_at| expires_at <= operation.created_at)
-    {
-        "expired"
-    } else {
-        match terminal_event {
-            InviteTerminalEvent::Cancel if record.invitee.as_deref() == Some(origin.trim()) => {
-                "rejected"
-            }
-            InviteTerminalEvent::Cancel | InviteTerminalEvent::Revoke => "revoked",
-        }
+    let Some(terminal_status) = invite_terminal_transition_target(operation, &invite_id) else {
+        tracing::warn!(
+            invite_id = %invite_id,
+            "invite terminal event omits its lifecycle transition"
+        );
+        return;
     };
+    let expected_cancel_status = if record.invitee.as_deref() == Some(origin.trim()) {
+        "rejected"
+    } else {
+        "revoked"
+    };
+    let terminal_status_allowed = match terminal_event {
+        InviteTerminalEvent::Cancel => terminal_status == expected_cancel_status,
+        InviteTerminalEvent::Revoke => matches!(
+            terminal_status,
+            "revoked"
+                | "expired"
+                | "revoked_by_capability_loss"
+                | "revoked_by_inviter_left"
+                | "invalidated_by_rate_limit"
+        ),
+    };
+    if !terminal_status_allowed {
+        tracing::warn!(
+            invite_id = %invite_id,
+            status = %terminal_status,
+            "invite terminal event carries an invalid lifecycle target"
+        );
+        return;
+    }
+    let direct_invitee = record.invitee.clone();
+    if let Some(invitee) = direct_invitee.as_deref()
+        && operation.payload.get("invitee").and_then(Value::as_str) != Some(invitee)
+    {
+        tracing::warn!(
+            invite_id = %invite_id,
+            "direct invite terminal event has a missing or mismatched invitee"
+        );
+        return;
+    };
+    if let Some(invitee) = direct_invitee.as_deref()
+        && !state
+            .projections()
+            .invite_member_is_invited(record.realm_id.as_str(), invitee)
+    {
+        tracing::warn!(
+            invite_id = %invite_id,
+            invitee = %invitee,
+            "direct invite terminal event requires member state invite"
+        );
+        return;
+    }
     record.status = terminal_status.to_owned();
     record.updated_at = Some(operation.created_at);
     record.invite_token.clear();
@@ -233,6 +284,24 @@ async fn project_invite_terminal_operation(
     let realm_id = record.realm_id.clone();
     match invites.put(record).await {
         Ok(()) => {
+            if let Some(invitee) = direct_invitee.as_deref()
+                && !state.projections().project_invite_termination(
+                    operation,
+                    invitee,
+                    operation
+                        .payload
+                        .get("reason_code")
+                        .or_else(|| operation.payload.get("reason"))
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                )
+            {
+                tracing::warn!(
+                    invite_id = %invite_id,
+                    invitee = %invitee,
+                    "validated invite terminal projection unexpectedly lost its invite membership"
+                );
+            }
             touch_realm(state, &realm_id).await;
             tracing::info!(
                 invite_id = %invite_id,
@@ -246,6 +315,27 @@ async fn project_invite_terminal_operation(
             tracing::warn!(%error, invite_id = %invite_id, "failed to project invite terminal event")
         }
     }
+}
+
+fn invite_terminal_transition_target<'a>(
+    operation: &'a Operation,
+    invite_id: &str,
+) -> Option<&'a str> {
+    operation
+        .payload
+        .get("effects")
+        .and_then(Value::as_array)?
+        .iter()
+        .find(|effect| {
+            effect
+                .get("cell")
+                .and_then(Value::as_str)
+                .is_some_and(|cell| {
+                    cell == format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
+                })
+        })
+        .and_then(|effect| effect.pointer("/op/to"))
+        .and_then(Value::as_str)
 }
 
 pub(super) async fn project_invite_third_party_operation(state: &AppState, operation: &Operation) {
@@ -550,12 +640,7 @@ pub(super) async fn project_invite_create_operation(
             // `routable` state so subsequent Realm events can fan out to the
             // target service (federation.md §5.1); the membership state remains
             // `invite` until the invite-accept event is projected.
-            project_invited_delivery_binding(
-                state,
-                operation,
-                invitee.as_str(),
-                delivery_target.as_ref(),
-            );
+            project_invite_creation(state, operation, invitee.as_str(), delivery_target.as_ref());
             tracing::info!(
                 invite_id = %invite_id,
                 invitee = %invitee.as_str(),
@@ -568,25 +653,21 @@ pub(super) async fn project_invite_create_operation(
     }
 }
 
-fn project_invited_delivery_binding(
+fn project_invite_creation(
     state: &AppState,
     operation: &Operation,
     invitee: &str,
     delivery_target: Option<&Value>,
 ) {
-    let Some(recipient_service_id) = delivery_target
+    let recipient_service_id = delivery_target
         .and_then(|target| target.get("recipient_service_id"))
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|did| !did.is_empty())
-    else {
-        return;
-    };
-    state.projections().project_invited_delivery_binding(
-        operation,
-        invitee,
-        recipient_service_id.to_owned(),
-    );
+        .map(ToOwned::to_owned);
+    state
+        .projections()
+        .project_invite_creation(operation, invitee, recipient_service_id);
 }
 
 fn invite_id_for_operation(operation: &Operation) -> Option<String> {

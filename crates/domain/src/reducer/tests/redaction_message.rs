@@ -294,6 +294,10 @@ fn reaction_or_set_convergence() {
 fn membership_join_leave() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    state
+        .realm_join_rules
+        .insert(realm_id.to_owned(), "public".to_owned());
 
     // `membership=join` MUST carry `delivery_status` per
     // arkret-spec/spec/v1/zh/governance/join-policy.md §5.1.1.
@@ -304,7 +308,7 @@ fn membership_join_leave() {
     state.apply(
         &make_operation(
             arkret_wire::events::EventKind::MEMBER_STATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            realm_id,
             serde_json::json!({
                 "actor_id": "did:web:bob",
                 "membership": "join",
@@ -314,17 +318,12 @@ fn membership_join_leave() {
         ),
         &hlc,
     );
-    assert_eq!(
-        state
-            .members_of_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
-            .len(),
-        1
-    );
+    assert_eq!(state.members_of_realm(realm_id).len(), 1);
 
     state.apply(
         &make_operation(
             arkret_wire::events::EventKind::MEMBER_STATE,
-            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            realm_id,
             serde_json::json!({
                 "actor_id": "did:web:bob",
                 "membership": "leave"
@@ -332,12 +331,7 @@ fn membership_join_leave() {
         ),
         &hlc,
     );
-    assert_eq!(
-        state
-            .members_of_realm("ak:realm:01904100-0000-7000-8000-cfc039892036")
-            .len(),
-        0
-    );
+    assert_eq!(state.members_of_realm(realm_id).len(), 0);
 }
 
 #[test]

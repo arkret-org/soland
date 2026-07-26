@@ -516,11 +516,11 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         token_response["connect_url"],
         "wss://media.example/mediasoup"
     );
-    // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + type
+    // Spec `CallMediaTokenExchangeOutcome` required fields: focus_id + backend_kind
     // identify the chosen focus and its backend protocol; `todos` is not a
     // schema field and must not appear.
     assert_eq!(token_response["focus_id"], "ak:focus:mediasoup:blue");
-    assert_eq!(token_response["type"], "mediasoup");
+    assert_eq!(token_response["backend_kind"], "mediasoup");
     assert!(token_response.get("todos").is_none());
     assert_eq!(
         token_response["participant_binding"]["issuer_kid"],
@@ -941,7 +941,7 @@ async fn rtc_media_token_livekit_backend_token_carries_livekit_claims() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(token_response["type"], "livekit");
+    assert_eq!(token_response["backend_kind"], "livekit");
     assert_eq!(token_response["connect_url"], "wss://media.example/livekit");
 
     // `bindings/livekit.md` §2 — the backend_token is a real LiveKit JWT:

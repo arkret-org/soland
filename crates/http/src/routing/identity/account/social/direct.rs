@@ -1640,12 +1640,18 @@ async fn prepare_reserved_direct_materialization(
         arkret_wire::events::EventKind::REALM_CREATE,
         realm_payload,
     )?;
-    attach_create_cell_contract(
-        &mut realm_event,
-        "ak.component.realm.create.v1",
-        realm_id,
-        true,
-    )?;
+    realm_event.effects = arkret_bootstrap::realm_create_effects(&realm_event)
+        .map_err(|error| AppError::internal(format!("direct Realm effects invalid: {error}")))?;
+    realm_event.preconditions = vec![arkret_wire::move_event::Precondition {
+        cell: arkret_identifiers::CellRef::new(arkret_wire::REALM_CREATE_CELL.to_owned())
+            .map_err(|error| AppError::internal(format!("direct Realm cell invalid: {error}")))?,
+        predicate: arkret_wire::move_event::Predicate {
+            op: arkret_wire::move_event::PredicateOp::HeadEq,
+            value: Some(Value::Null),
+            values: None,
+            predicate_id: None,
+        },
+    }];
     realm_event
         .requirements
         .critical_extensions

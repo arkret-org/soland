@@ -1,13 +1,10 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, RealmId};
 use serde_json::{Value, json};
-use soland_services::events::{
-    RealmInviteState as RealmInviteRecord, RealmMetadata as RealmMetaRecord,
-};
+use soland_services::events::RealmMetadata as RealmMetaRecord;
 use soland_services::operation_semantics as kinds;
 
 use super::*;
-use crate::ids;
 use crate::state::{AppState, RealmDirectoryEntry};
 
 pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &Operation) {
@@ -261,11 +258,6 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         .and_then(|value| value.as_str())
         .unwrap_or(origin);
 
-    // Project an `invite` membership transition into a RealmInviteRecord so
-    // `GET /_arkret/self/authz/invites` can surface seed invites carried on the
-    // canonical event path (e.g. when the Realm bootstrap strand emits
-    // `ak.member.state{membership=invite}` for each seed member, per
-    // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6).
     tracing::debug!(
         membership = ?membership,
         member = %member,
@@ -273,77 +265,6 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         origin = %origin,
         "project_membership_operation"
     );
-    if membership == Some("invite")
-        && let Ok(invitee) = Did::new(member)
-    {
-        if crate::routing::spaces::space::realm_has_member_by_id(
-            state,
-            operation.realm_id.as_str(),
-            invitee.as_str(),
-        )
-        .await
-        {
-            tracing::debug!(
-                invitee = %invitee.as_str(),
-                realm_id = %operation.realm_id,
-                "seed-invite skipped: invitee is already a member"
-            );
-            return;
-        }
-        let invites = state.realm_invites();
-        let already_invited = invites
-            .snapshot_all()
-            .await
-            .unwrap_or_default()
-            .into_iter()
-            .any(|existing| {
-                existing.realm_id == operation.realm_id.as_str()
-                    && existing.invitee.as_deref() == Some(invitee.as_str())
-                    && existing.status == "pending"
-            });
-        if !already_invited {
-            let invite_id = ids::generate_invite_id();
-            let invite_token = crate::routing::generate_invite_token(
-                &invite_id,
-                operation.realm_id.as_str(),
-                invitee.as_str(),
-            );
-            let record = RealmInviteRecord {
-                invite_id: invite_id.clone(),
-                realm_id: operation.realm_id.to_string(),
-                inviter: origin.to_owned(),
-                invitee: Some(invitee.as_str().to_owned()),
-                invite_delivery_target: None,
-                introduction_evidence_digest: None,
-                third_party_id: None,
-                join_rule_snapshot: None,
-                invite_token,
-                status: "pending".to_owned(),
-                claim_nonces: std::collections::BTreeMap::new(),
-                expires_at: None,
-                created_at: operation.created_at,
-                updated_at: None,
-            };
-            match invites.put(record).await {
-                Ok(()) => tracing::info!(
-                    %invite_id,
-                    invitee = %invitee.as_str(),
-                    realm_id = %operation.realm_id,
-                    "projected seed-member invite via ak.member.state event"
-                ),
-                Err(error) => tracing::warn!(%error, "failed to project realm invite"),
-            }
-        } else {
-            tracing::debug!(
-                invitee = %invitee.as_str(),
-                realm_id = %operation.realm_id,
-                "seed-invite skipped: already pending"
-            );
-        }
-    }
-    if membership == Some("join") {
-        project_invite_acceptance(state, member, operation).await;
-    }
 
     let cascaded_agent_ids = if matches!(membership, Some("leave" | "ban")) {
         let agent_ids = state
@@ -401,27 +322,6 @@ pub async fn project_membership_operation(state: &AppState, origin: &str, operat
         return;
     }
     touch_realm(state, operation.realm_id.as_str()).await;
-}
-
-async fn project_invite_acceptance(state: &AppState, member: &str, operation: &Operation) {
-    let invites = state.realm_invites();
-    let Ok(records) = invites.snapshot_all().await else {
-        return;
-    };
-    for mut record in records {
-        if record.realm_id != operation.realm_id.as_str()
-            || record.invitee.as_deref() != Some(member)
-            || !matches!(record.status.as_str(), "pending" | "claimed")
-        {
-            continue;
-        }
-        record.status = "accepted".to_owned();
-        record.updated_at = Some(operation.created_at);
-        let invite_id = record.invite_id.clone();
-        if let Err(error) = invites.put(record).await {
-            tracing::warn!(%error, invite_id = %invite_id, "failed to mark invite accepted");
-        }
-    }
 }
 
 /// MID-2..6 (R3.1, arkret-spec @ 7157ee8) — projection write for

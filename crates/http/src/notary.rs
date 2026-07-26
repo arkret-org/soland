@@ -702,11 +702,8 @@ fn notary_profile_wire(value: &serde_json::Value) -> serde_json::Value {
     value
 }
 
-fn notary_cell_ref(realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::IdentifierError> {
-    CellRef::new(format!(
-        "ak:cell:ak.component.notary.v1:{}",
-        realm_id.as_str()
-    ))
+fn notary_cell_ref(_realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::IdentifierError> {
+    CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
 }
 
 fn zero_notary_sig_placeholder() -> Result<MoveSignature, NotaryError> {
@@ -1140,7 +1137,7 @@ mod tests {
         // profile in the cell object and are stripped by `notary_profile_wire`
         // before the strict (`deny_unknown_fields`) `NotaryValue` parse.
         let v = json!({
-            "type": "threshold",
+            "kind": "threshold",
             "threshold": 2,
             "members": ["did:ak:a", "did:ak:b", "did:ak:c"],
             "forensic_attribution": "quorum_intersection",

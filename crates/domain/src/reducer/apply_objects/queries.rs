@@ -243,16 +243,27 @@ impl ProjectionState {
 
     // ── Cell-keyed query helpers ──
 
+    pub fn realm_null_subject_cell_value(
+        &self,
+        realm_id: &str,
+        cell_family: &str,
+    ) -> Option<&Value> {
+        let cell_id = format!("ak:cell:{cell_family}:null");
+        match self
+            .realm_null_subject_cells
+            .get(&(realm_id.to_owned(), cell_id))
+        {
+            Some(CellState::Value(value)) => Some(value),
+            Some(CellState::Bottom(_)) | None => None,
+        }
+    }
+
     /// Read the effective `ak.realm.read_receipt_policy` value out of the
-    /// cells map. Returns `None` when:
+    /// Realm-scoped null-subject cell cache. Returns `None` when:
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.read_receipt_policy.v1:{realm_id}"
-        ))
-        .ok()?;
-        self.cell_value(&cell_id)
+        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.read_receipt_policy.v1")
     }
 
     // ── Realm lifecycle cell helpers ──
@@ -269,19 +280,17 @@ impl ProjectionState {
     /// `(organization_id, relationship)`. Mutable Realm metadata moved to its
     /// own `ak.component.realm.metadata.v1` cell.
     pub fn realm_metadata_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = ProjectionState::realm_metadata_cell_id(realm_id)?;
-        self.cell_value(&cell_id)
+        match self.realm_metadata_cells.get(realm_id)? {
+            CellState::Value(value) => Some(value),
+            CellState::Bottom(_) => None,
+        }
     }
 
     /// Read the `ak.component.realm.create.v1` ordered-log entries for the
     /// realm's genesis history. Returns `None` for realms with no create
     /// events (e.g. before first projection) or `Bottom` state.
     pub fn realm_create_log(&self, realm_id: &str) -> Option<&[Value]> {
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.create.v1:{realm_id}"
-        ))
-        .ok()?;
-        match self.cells.get(&cell_id)? {
+        match self.realm_create_cells.get(realm_id)? {
             CellState::Value(Value::Array(entries)) => Some(entries.as_slice()),
             _ => None,
         }
@@ -315,22 +324,14 @@ impl ProjectionState {
 
     /// True when the `ak.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
-        let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.destroy.v1:{realm_id}"
-        )) else {
-            return false;
-        };
-        matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
+        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.destroy.v1")
+            .is_some()
     }
 
     /// True when the `ak.component.realm.tombstone.v1` cell has a Value.
     pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
-        let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.tombstone.v1:{realm_id}"
-        )) else {
-            return false;
-        };
-        matches!(self.cells.get(&cell_id), Some(CellState::Value(_)))
+        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.tombstone.v1")
+            .is_some()
     }
 
     /// Stream-F (Wave 1B) — true if the Realm is in ANY terminal state
@@ -364,26 +365,20 @@ impl ProjectionState {
     }
 
     /// Read the projected `ak.component.realm.delivery_binding_policy.v1`
-    /// cas-register value, if any. R1.2 introduced a structured cache
-    /// for this cell so the wire-validation path in
-    /// `apply_membership` can fail-closed on routable joins when policy
-    /// is unset. Once the projection mirror table
-    /// for delivery_binding_policy lands, switch this from the generic
-    /// cells map to the structured cache.
+    /// cas-register value, if any. The wire cell id has a literal `null`
+    /// subject, so the enclosing Realm id is part of the cache namespace.
     pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.delivery_binding_policy.v1:{realm_id}"
-        ))
-        .ok()?;
-        self.cell_value(&cell_id)
+        self.realm_null_subject_cell_value(
+            realm_id,
+            "ak.component.realm.delivery_binding_policy.v1",
+        )
     }
 
     pub fn realm_policy_components_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"
-        ))
-        .ok()?;
-        self.cell_value(&cell_id)
+        match self.realm_policy_components_cells.get(realm_id)? {
+            CellState::Value(value) => Some(value),
+            CellState::Bottom(_) => None,
+        }
     }
 
     pub fn realm_join_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
@@ -400,23 +395,64 @@ impl ProjectionState {
         &self,
         operation: &Operation,
     ) -> Result<(), &'static str> {
-        if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::MEMBER_STATE)
-            || operation.payload.get("membership").and_then(Value::as_str) != Some("join")
+        let kind = crate::kinds::canonical_kind_for_operation(operation);
+        let (member, hard_gates_only) = match kind {
+            Some(arkret_wire::events::EventKind::MEMBER_STATE)
+                if operation.payload.get("membership").and_then(Value::as_str) == Some("join") =>
+            {
+                let member = operation
+                    .payload
+                    .get("actor_id")
+                    .or_else(|| operation.payload.get("member"))
+                    .or_else(|| operation.payload.get("member_id"))
+                    .or_else(|| operation.payload.get("subject"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty());
+                (member, false)
+            }
+            Some(arkret_wire::events::EventKind::INVITE_CREATE) => {
+                let member = operation
+                    .payload
+                    .pointer("/invite/invitee")
+                    .or_else(|| operation.payload.get("invitee"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty());
+                (member, true)
+            }
+            Some(arkret_wire::events::EventKind::INVITE_ACCEPT) => {
+                let member = operation
+                    .payload
+                    .get("sender")
+                    .or_else(|| operation.payload.get("invitee"))
+                    .and_then(Value::as_str)
+                    .filter(|value| !value.is_empty());
+                (member, true)
+            }
+            _ => return Ok(()),
+        };
+        let Some(member) = member else {
+            return Err("gate_check_failed");
+        };
+        if kind == Some(arkret_wire::events::EventKind::MEMBER_STATE)
+            && self
+                .member(operation.realm_id.as_str(), member)
+                .is_some_and(|membership| membership.state == "join")
         {
+            // `join -> join` refreshes an existing member's delivery binding;
+            // it is not a new Realm entry and therefore does not re-run entry
+            // gates or the Realm join rule.
             return Ok(());
         }
-        let Some(member) = operation
+        let join_rule =
+            (!hard_gates_only).then(|| self.realm_default_join_rule(operation.realm_id.as_str()));
+        let is_self_authored = operation
             .payload
-            .get("actor_id")
-            .or_else(|| operation.payload.get("member"))
-            .or_else(|| operation.payload.get("member_id"))
-            .or_else(|| operation.payload.get("subject"))
+            .get("sender")
             .and_then(Value::as_str)
-            .filter(|value| !value.is_empty())
-        else {
-            return Ok(());
-        };
+            .is_none_or(|sender| sender == member);
+        if join_rule.is_some_and(|rule| matches!(rule, "invite" | "closed")) && is_self_authored {
+            return Err("gate_check_failed");
+        }
         let Some(join_policy) = self.realm_join_policy_cell_value(operation.realm_id.as_str())
         else {
             return Ok(());
@@ -463,6 +499,14 @@ impl ProjectionState {
                 _ => {}
             }
         }
+        if hard_gates_only {
+            return Ok(());
+        }
+        if !join_rule
+            .is_some_and(|rule| matches!(rule, "knock" | "restricted" | "knock_restricted"))
+        {
+            return Ok(());
+        }
         let normal_gates = gates.iter().filter_map(Value::as_object).filter(|gate| {
             !matches!(
                 gate.get("kind").and_then(Value::as_str),
@@ -494,6 +538,23 @@ impl ProjectionState {
             }
             _ => Err("gate_check_failed"),
         }
+    }
+
+    pub fn realm_default_join_rule(&self, realm_id: &str) -> &str {
+        self.realm_join_rules
+            .get(realm_id)
+            .map(String::as_str)
+            .or_else(|| {
+                self.realm_create_log(realm_id)
+                    .and_then(|entries| entries.last())
+                    .and_then(|entry| {
+                        entry
+                            .pointer("/object/default_join_rule")
+                            .or_else(|| entry.get("default_join_rule"))
+                    })
+                    .and_then(Value::as_str)
+            })
+            .unwrap_or("invite")
     }
 
     fn cooldown_gate_blocks_join(
@@ -564,19 +625,11 @@ impl ProjectionState {
     }
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.disappearing_policy.v1:{realm_id}"
-        ))
-        .ok()?;
-        self.cell_value(&cell_id)
+        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.disappearing_policy.v1")
     }
 
     pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let cell_id = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.search_policy.v1:{realm_id}"
-        ))
-        .ok()?;
-        self.cell_value(&cell_id)
+        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.search_policy.v1")
     }
 
     /// Read the `policy_frontier` declared on the most recent
@@ -701,21 +754,17 @@ impl ProjectionState {
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
-        CellRef::new(format!(
-            "ak:cell:ak.component.realm.digest_suite.v1:{realm_id}"
-        ))
-        .ok()
-        .and_then(|cell_id| self.cell_value(&cell_id))
-        .and_then(|value| value.get("to_digest_algorithm"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-        .or_else(|| {
-            self.realm_create_log(realm_id)
-                .and_then(|entries| entries.last())
-                .and_then(|entry| entry.get("digest_algorithm"))
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
+        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.digest_suite.v1")
+            .and_then(|value| value.get("to_digest_algorithm"))
+            .and_then(Value::as_str)
+            .map(ToOwned::to_owned)
+            .or_else(|| {
+                self.realm_create_log(realm_id)
+                    .and_then(|entries| entries.last())
+                    .and_then(|entry| entry.get("digest_algorithm"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+            })
     }
 
     pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {
@@ -806,10 +855,9 @@ impl ProjectionState {
             return Some(v.to_owned());
         }
         // Fallback: check the create-log cell's last entry.
-        if let Ok(create_cell) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.create.v1:{realm_id}"
-        )) && let Some(arr) = self.cell_value(&create_cell).and_then(Value::as_array)
-            && let Some(last) = arr.last()
+        if let Some(last) = self
+            .realm_create_log(realm_id)
+            .and_then(|entries| entries.last())
             && let Some(s) = last.get("security_class").and_then(Value::as_str)
         {
             return Some(s.to_owned());

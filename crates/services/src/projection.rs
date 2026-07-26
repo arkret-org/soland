@@ -1654,11 +1654,18 @@ impl ProjectionService {
         }
     }
 
-    pub fn project_invited_delivery_binding(
+    pub fn invite_member_is_invited(&self, realm_id: &str, member: &str) -> bool {
+        self.state
+            .lock()
+            .member(realm_id, member)
+            .is_some_and(|membership| membership.state == "invite")
+    }
+
+    pub fn project_invite_creation(
         &self,
         operation: &Operation,
         invitee: &str,
-        recipient_service_id: String,
+        recipient_service_id: Option<String>,
     ) {
         let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();
@@ -1674,16 +1681,17 @@ impl ProjectionService {
             SolandMembershipState {
                 member: invitee.to_owned(),
                 realm_id: operation.realm_id.as_str().to_owned(),
-                state: previous
-                    .as_ref()
-                    .map(|member| member.state.clone())
-                    .unwrap_or_else(|| "invite".to_owned()),
+                state: "invite".to_owned(),
                 role: previous
                     .as_ref()
                     .map(|member| member.role.clone())
                     .unwrap_or_else(|| "member".to_owned()),
-                delivery_status: Some("routable".to_owned()),
-                recipient_service_id: Some(recipient_service_id),
+                delivery_status: Some(if recipient_service_id.is_some() {
+                    "routable".to_owned()
+                } else {
+                    "unroutable".to_owned()
+                }),
+                recipient_service_id,
                 membership_event_ref: Some(event_ref.clone()),
                 delivery_binding_frontier: Some(event_ref),
                 invited_at: previous
@@ -1695,6 +1703,49 @@ impl ProjectionService {
                 reason: None,
             },
         );
+        if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee}"))
+        {
+            state.cells.insert(
+                cell_id,
+                CellState::Value(Value::String("invite".to_owned())),
+            );
+        }
+    }
+
+    pub fn project_invite_termination(
+        &self,
+        operation: &Operation,
+        invitee: &str,
+        reason: Option<String>,
+    ) -> bool {
+        let mut state = self.state.lock();
+        let key = (operation.realm_id.to_string(), invitee.to_owned());
+        let Some(previous) = state.members.get(&key).cloned() else {
+            return false;
+        };
+        if previous.state != "invite" {
+            return false;
+        }
+        state.members.insert(
+            key,
+            SolandMembershipState {
+                state: "leave".to_owned(),
+                delivery_status: None,
+                recipient_service_id: None,
+                membership_event_ref: Some(projection_event_ref(operation)),
+                delivery_binding_frontier: previous.delivery_binding_frontier,
+                updated_at: operation.created_at,
+                reason,
+                ..previous
+            },
+        );
+        if let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee}"))
+        {
+            state
+                .cells
+                .insert(cell_id, CellState::Value(Value::String("leave".to_owned())));
+        }
+        true
     }
 }
 

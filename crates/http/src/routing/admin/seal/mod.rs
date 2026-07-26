@@ -5,9 +5,8 @@
 //!   single_did?|threshold_*?|open_set_members?|mixed_*?, revocation_freshness_window_ms?,
 //!   paused}`).
 //! - `POST /_soland/admin/realms/{realm_id}/notary/reconfigure` — submit a reconfig Control Move
-//!   that writes the new notary cell value (cas-register on
-//!   `ak:cell:ak.component.notary.v1:<realm_id>`). Server-side signs with admin's session-grant
-//!   key.
+//!   that writes the new notary cell value (cas-register on `ak:cell:ak.component.notary.v1:null`).
+//!   Server-side signs with admin's session-grant key.
 //! - `GET  /_soland/admin/realms/{realm_id}/bottom` — list cells whose join produced a `Bottom`
 //!   diagnostic.
 //! - `GET  /_soland/admin/bottom` — global cross-Realm list.
@@ -36,7 +35,6 @@
 
 use arkret_identifiers::{Did, Hlc, RealmId, SealId};
 use arkret_signatures::Ed25519MoveSigner;
-use salvo::http::StatusCode;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
@@ -170,11 +168,7 @@ pub(super) fn fresh_hlc(state: &AppState) -> Result<Hlc, AppError> {
 }
 
 /// Build the canonical notary cell ref for a Space.
-pub(super) fn notary_cell_for(realm_id: &str) -> Result<arkret_identifiers::CellRef, AppError> {
-    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")).map_err(
-        |e| {
-            app_error!(InvalidParam, "invalid realm_id `{realm_id}`: {e}")
-                .with_status(StatusCode::BAD_REQUEST)
-        },
-    )
+pub(super) fn notary_cell_for(_realm_id: &str) -> Result<arkret_identifiers::CellRef, AppError> {
+    arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
+        .map_err(|e| app_error!(InternalError, "invalid canonical Realm notary cell: {e}"))
 }

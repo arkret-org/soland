@@ -1,7 +1,7 @@
 //! HC-SOL-1/2 handle-claim ingest hardening.
 //!
 //! - HC-SOL-1: the `claim_kind` enum lost `service_handle`; v1 only allows `handle_binding` /
-//!   `organization_handle`. The retired `claim_kind` and `class` field names are rejected by this
+//!   `organization_handle`. The retired `claim_type` and `class` field names are rejected by this
 //!   typed validator.
 //! - HC-SOL-2: the claim `subject` MUST be a holder / principal DID, not a Realm `actor_id`
 //!   (`ak:actor:`), a server-local `account_id` (`ak:account:`), a service DID, or a generic
@@ -26,10 +26,10 @@ pub fn validate_handle_claim_ingest(claim: &Value) -> Result<(), WireRejection> 
 
 /// Reject `claim_kind=service_handle` and retired discriminator field names.
 pub fn validate_claim_kind(claim: &Value) -> Result<(), WireRejection> {
-    if claim.get("claim_kind").is_some() || claim.get("class").is_some() {
+    if claim.get("claim_type").is_some() || claim.get("class").is_some() {
         return Err(WireRejection::new(
             reasons::CLAIM_TYPE_UNSUPPORTED,
-            "claim_kind/class are forbidden on v1 handle claims; use claim_kind",
+            "claim_type/class are forbidden on v1 handle claims; use claim_kind",
         ));
     }
     let claim_kind = claim.get("claim_kind").and_then(Value::as_str);
@@ -96,7 +96,7 @@ mod tests {
 
     #[test]
     fn rejects_retired_claim_type_field_even_when_value_is_current() {
-        let claim = json!({"claim_kind": "handle_binding", "subject": "did:web:svc.example"});
+        let claim = json!({"claim_type": "handle_binding", "subject": "did:web:svc.example"});
         let err = validate_claim_kind(&claim).unwrap_err();
         assert_eq!(err.reason, reasons::CLAIM_TYPE_UNSUPPORTED);
     }

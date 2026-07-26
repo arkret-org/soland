@@ -531,6 +531,26 @@ pub(crate) async fn seed_test_realm(
         )
         .await
         .unwrap();
+    let seal_signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+        [21_u8; 32],
+        Did::new(owner.to_owned()).unwrap(),
+        format!("{owner}#test-realm-notary"),
+    );
+    let bootstrap_seal = arkret_wire::Seal::sign_single(
+        RealmId::new(realm_id.clone()).unwrap(),
+        Vec::new(),
+        Vec::new(),
+        arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0000-aabbccdd",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .unwrap(),
+        &seal_signer,
+    )
+    .unwrap();
+    state.test_put_seal(&bootstrap_seal).unwrap();
+    let seal_basis = bootstrap_seal.seal_basis();
 
     for invitee in invitees {
         let invite_id = new_prefixed_uuid7("ak:invite:");
@@ -566,6 +586,7 @@ pub(crate) async fn seed_test_realm(
         "realm_id": realm_id,
         "owner": owner,
         "members": [{"did": owner}],
+        "seal_basis": seal_basis,
         "deleted": false
     })
 }
@@ -829,6 +850,26 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
     )
     .expect("SDK Event signer re-signs mutated HTTP fixture");
     *event = serde_json::to_value(typed).expect("re-signed fixture serializes");
+}
+
+pub(crate) fn attach_invite_create_effects(event: &mut Value) {
+    let invite_id = event["payload"]["invite_id"]
+        .as_str()
+        .expect("invite fixture has invite_id");
+    let invitee = event["payload"]["invitee"]
+        .as_str()
+        .expect("directed invite fixture has invitee");
+    event["effects"] = serde_json::json!([
+        {
+            "cell": format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"),
+            "op": {"kind": "transition", "from": null, "to": "pending"}
+        },
+        {
+            "cell": format!("ak:cell:ak.component.member.state.v1:{invitee}"),
+            "op": {"kind": "transition", "from": "leave", "to": "invite"}
+        }
+    ]);
+    resign_canonical_event(event);
 }
 
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {

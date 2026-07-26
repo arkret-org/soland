@@ -159,6 +159,10 @@ pub(super) fn accountability_grant_value_active_for(
             "hlc",
             "executed_by",
             "authorization_ref",
+            "seal_basis",
+            "seal_ref",
+            "preconditions",
+            "effects",
         ] {
             object.remove(field);
         }

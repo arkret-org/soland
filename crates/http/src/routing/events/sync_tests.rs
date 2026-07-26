@@ -591,6 +591,7 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
+            "sender": ROSTER_ACTOR,
             "event_received_at": arkret_canonical::format_timestamp_canonical(joined_at)
         }),
         created_at,
@@ -746,6 +747,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
+            "sender": ROSTER_ACTOR,
             "event_received_at": arkret_canonical::format_timestamp_canonical(joined_at)
         }),
         created_at,
@@ -1618,7 +1620,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
                 "id": ROSTER_REALM,
                 "title": "Pinned welcome space",
                 "created_by": ROSTER_ACTOR,
-                "join_rule": "invite",
+                "default_join_rule": "invite",
                 "history_visibility": "joined",
                 "encryption_profile": "none"
             }
@@ -1633,7 +1635,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
-            "sender": ROSTER_CALLER
+            "sender": ROSTER_ACTOR
         }),
         base + ChronoDuration::seconds(1),
     );
@@ -1763,7 +1765,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
                 "id": ROSTER_REALM,
                 "title": "Redacted revision space",
                 "created_by": ROSTER_ACTOR,
-                "join_rule": "invite",
+                "default_join_rule": "invite",
                 "history_visibility": "joined",
                 "encryption_profile": "none"
             }
@@ -1778,7 +1780,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
             "actor_id": ROSTER_CALLER,
             "membership": "join",
             "delivery_status": "unroutable",
-            "sender": ROSTER_CALLER
+            "sender": ROSTER_ACTOR
         }),
         base + ChronoDuration::seconds(1),
     );

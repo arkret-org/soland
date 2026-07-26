@@ -441,11 +441,22 @@ async fn project_accepted_operations_inner(
         // authenticated sidecar aggregate only, supply those values to the
         // reducer on an internal clone. Persistence, sync, and projection
         // events below continue to use the untouched wire-clean operation.
-        let reducer_context_operation = (kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE))
-        .then(|| {
-            accepted_circle_member_reducer_operation(operation, trusted_sidecar_member_controller)
-        });
+        let reducer_context_operation = match kinds::canonical_kind_for_operation(operation) {
+            Some(arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE) => {
+                Some(accepted_circle_member_reducer_operation(
+                    operation,
+                    trusted_sidecar_member_controller,
+                ))
+            }
+            Some(arkret_wire::events::EventKind::MEMBER_STATE)
+                if operation.payload.get("sender").is_none() =>
+            {
+                let mut contextual = operation.clone();
+                contextual.payload["sender"] = Value::String(origin.to_owned());
+                Some(contextual)
+            }
+            _ => None,
+        };
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {

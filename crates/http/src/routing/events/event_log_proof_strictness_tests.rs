@@ -1030,7 +1030,7 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
 }
 
 #[test]
-fn member_state_invite_accept_uses_canonical_invite_ref() {
+fn member_state_join_schema_allows_contextual_invite_ref() {
     let state = make_state(true);
     let valid = json!({
         "payload": {
@@ -1050,7 +1050,7 @@ fn member_state_invite_accept_uses_canonical_invite_ref() {
         valid.as_object().unwrap(),
         false,
     )
-    .expect("ak.member.state invite accept should allow invite_ref");
+    .expect("ak.member.state join schema should allow contextual invite_ref");
 }
 
 #[test]
@@ -1280,7 +1280,7 @@ fn realm_create_rejects_world_readable_history_without_history_capable_scheme() 
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
                 "notary": {
-                    "type": "single_did",
+                    "kind": "single_did",
                     "did": "did:web:alice.example",
                     "recovery_members": ["did:web:recovery.example"],
                     "controller_organization": "did:web:organization.primary.example",
@@ -1792,9 +1792,9 @@ fn insert_historical_data_event_grant_with_e2ee_state(
 
     if include_relaxed_policy {
         let policy_move_id = data_event_move_id(0xb2);
-        let policy_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_components.v1:{DATA_EVENT_REALM}"
-        ))
+        let policy_cell = arkret_identifiers::CellRef::new(
+            "ak:cell:ak.component.realm.policy_components.v1:null".to_owned(),
+        )
         .unwrap();
         let policy_op = arkret_wire::LatticeOp {
             op_type: arkret_wire::LatticeOpType::Set,

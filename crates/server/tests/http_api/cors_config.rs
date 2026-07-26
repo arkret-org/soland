@@ -115,14 +115,10 @@ async fn configured_cors_allows_blob_upload_headers() {
 }
 
 #[tokio::test]
-async fn seed_member_invite_event_surfaces_via_authz_invites() {
-    // The Realm bootstrap strand in inkson emits a
-    // `ak.member.state{membership="invite"}` event for each seed member
-    // (see arkret-rust-sdk + inkson/src/event_builders.rs
-    // `build_realm_bootstrap_events`).
-    // `models/realm-and-space.md` §3 + `governance/join-policy.md` §6 then
-    // expect the invitee to see that invite via `GET /authz/invites`.
-    // This test pins that contract on the event path.
+async fn invite_create_event_surfaces_via_authz_invites() {
+    // A directed `ak.invite.create` atomically creates the invite lifecycle
+    // and the invitee's membership proposal. The invitee must then see the
+    // pending invitation through `GET /authz/invites`.
     let state = soland_test_support::app_state(test_config());
     // dev-login auto-registers the actor; we don't need /account/register's
     // strict schema here. Use inkson-style unique DIDs (with hyphens and
@@ -157,16 +153,22 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     .await;
     let realm_id = created_realm["realm_id"].as_str().unwrap().to_owned();
 
-    // Submit alice's ak.member.state{membership=invite} pointing at bob.
+    // Submit Alice's canonical directed invite.
+    let invite_id = "ak:invite:01904100-0000-7000-8000-aa00000000ed";
     let event_id = "ak:event:01904100-0000-7000-8000-aa00000000ee";
     let payload = serde_json::json!({
-        "actor_id": bob_did,
-        "membership": "invite",
-        "reason": "realm_invite",
+        "invite_id": invite_id,
+        "invitee": bob_did,
+        "invite_delivery_target": {
+            "recipient_service_id": state.service_id(),
+            "recipient_service_kind": "principal_server"
+        },
+        "introduction_evidence_digest": format!("sha256:{}", "1".repeat(64)),
+        "expires_at": "2099-01-01T00:00:00.000Z"
     });
     let mut event = signed_canonical_event(
         event_id,
-        "ak.member.state",
+        "ak.invite.create",
         alice_did,
         "01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
@@ -174,7 +176,10 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         Vec::new(),
         payload,
     );
+    attach_invite_create_effects(&mut event);
     move_event_to_actor_realm_frontier(&state, &alice, alice_did, &realm_id, &mut event).await;
+    event["seal_basis"] = created_realm["seal_basis"].clone();
+    resign_canonical_event(&mut event);
 
     let mut submit = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice}"), true)
@@ -185,7 +190,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
     let submit_body: Value = submit.take_json().await.unwrap();
     assert_eq!(
         submit_status, 200,
-        "ak.member.state{{invite}} should be accepted: {submit_body}"
+        "ak.invite.create should be accepted: {submit_body}"
     );
 
     // Bob should now see a pending invite for the space.
@@ -201,6 +206,7 @@ async fn seed_member_invite_event_surfaces_via_authz_invites() {
         invites.iter().any(|invite| {
             // ak.schema.invite.v1: the state field is `state`, not `status`.
             invite["realm_id"].as_str() == Some(realm_id.as_str())
+                && invite["id"].as_str() == Some(invite_id)
                 && invite["invitee"].as_str() == Some(bob_did)
                 && invite["state"].as_str() == Some("pending")
         }),

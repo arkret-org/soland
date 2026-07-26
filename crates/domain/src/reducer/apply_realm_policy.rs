@@ -3,6 +3,13 @@ use serde::de::DeserializeOwned;
 use super::*;
 
 impl ProjectionState {
+    fn set_realm_null_subject_cell(&mut self, realm_id: &str, family: &str, value: Value) {
+        self.realm_null_subject_cells.insert(
+            (realm_id.to_owned(), format!("ak:cell:{family}:null")),
+            CellState::Value(value),
+        );
+    }
+
     /// Apply one closed Realm-bootstrap cas-register facet after the shared
     /// SDK Event cell-contract validator has recomputed family, subject, plane,
     /// op and payload equality. This function deliberately consumes the exact
@@ -54,12 +61,23 @@ impl ProjectionState {
                 reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
             };
         };
-        if self.cells.contains_key(&cell) {
+        let realm_cell_key = (operation.realm_id.to_string(), cell.as_str().to_owned());
+        if self.realm_null_subject_cells.contains_key(&realm_cell_key) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
-        self.cells.insert(cell, CellState::Value(value));
+        if kind == arkret_wire::events::EventKind::REALM_JOIN_RULE {
+            let Some(join_rule) = value.as_str() else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ReasonCode::EFFECTS_PAYLOAD_MISMATCH.to_owned(),
+                };
+            };
+            self.realm_join_rules
+                .insert(operation.realm_id.to_string(), join_rule.to_owned());
+        }
+        self.realm_null_subject_cells
+            .insert(realm_cell_key, CellState::Value(value));
         ProjectionEffect::RealmBootstrapFacetProjected {
             realm_id: operation.realm_id.to_string(),
             kind: kind.to_owned(),
@@ -85,12 +103,10 @@ impl ProjectionState {
                 }
             };
         let realm_id = payload.realm_id.to_string();
-        let Ok(cell_id) = CellRef::new(format!("ak:cell:ak.component.notary.v1:{realm_id}")) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        };
-        if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+        if matches!(
+            self.realm_notary_cells.get(&realm_id),
+            Some(CellState::Bottom(_))
+        ) {
             return ProjectionEffect::Rejected {
                 reason: "cell_in_bottom_state".to_owned(),
             };
@@ -100,7 +116,8 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
-        self.cells.insert(cell_id, CellState::Value(value));
+        self.realm_notary_cells
+            .insert(realm_id.clone(), CellState::Value(value));
         ProjectionEffect::RealmNotaryProjected { realm_id }
     }
 
@@ -133,14 +150,14 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
-        let Ok(cell_id) = CellRef::new(format!(
-            "ak:cell:ak.component.realm.digest_suite.v1:{realm_id}"
-        )) else {
-            return ProjectionEffect::Rejected {
-                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
-            };
-        };
-        if matches!(self.cells.get(&cell_id), Some(CellState::Bottom(_))) {
+        let cell_key = (
+            realm_id.clone(),
+            "ak:cell:ak.component.realm.digest_suite.v1:null".to_owned(),
+        );
+        if matches!(
+            self.realm_null_subject_cells.get(&cell_key),
+            Some(CellState::Bottom(_))
+        ) {
             return ProjectionEffect::Rejected {
                 reason: "cell_in_bottom_state".to_owned(),
             };
@@ -151,7 +168,8 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         };
-        self.cells.insert(cell_id, CellState::Value(value));
+        self.realm_null_subject_cells
+            .insert(cell_key, CellState::Value(value));
         ProjectionEffect::RealmDigestSuiteTransitionProjected {
             realm_id,
             digest_algorithm,
@@ -169,11 +187,11 @@ impl ProjectionState {
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = operation.payload.clone();
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.delivery_binding_policy.v1:{realm_id}"
-        )) {
-            self.cells.insert(cell_id, CellState::Value(value));
-        }
+        self.set_realm_null_subject_cell(
+            &realm_id,
+            "ak.component.realm.delivery_binding_policy.v1",
+            value,
+        );
         ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
@@ -263,11 +281,8 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.policy_components.v1:{realm_id}"
-        )) {
-            self.cells.insert(cell_id, CellState::Value(value));
-        }
+        self.realm_policy_components_cells
+            .insert(realm_id.clone(), CellState::Value(value));
         ProjectionEffect::RealmPolicyComponentsProjected { realm_id }
     }
 
@@ -276,12 +291,11 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.disappearing_policy.v1:{realm_id}"
-        )) {
-            self.cells
-                .insert(cell_id, CellState::Value(operation.payload.clone()));
-        }
+        self.set_realm_null_subject_cell(
+            &realm_id,
+            "ak.component.realm.disappearing_policy.v1",
+            operation.payload.clone(),
+        );
         ProjectionEffect::RealmDisappearingPolicyProjected { realm_id }
     }
 
@@ -293,11 +307,7 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.search_policy.v1:{realm_id}"
-        )) {
-            self.cells.insert(cell_id, CellState::Value(value));
-        }
+        self.set_realm_null_subject_cell(&realm_id, "ak.component.realm.search_policy.v1", value);
         ProjectionEffect::RealmSearchPolicyProjected { realm_id }
     }
 
@@ -319,11 +329,7 @@ impl ProjectionState {
                 reason: "media_service_foci_required".to_owned(),
             };
         }
-        if let Ok(cell_id) = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.realm.media_service.v1:{realm_id}"
-        )) {
-            self.cells.insert(cell_id, CellState::Value(value));
-        }
+        self.set_realm_null_subject_cell(&realm_id, "ak.component.realm.media_service.v1", value);
         ProjectionEffect::RealmMediaServiceProjected { realm_id }
     }
 

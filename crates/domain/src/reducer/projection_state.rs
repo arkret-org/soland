@@ -119,6 +119,22 @@ pub struct ProjectionState {
     ///     `relations` / `redactions`) stay structured per spec (those event kinds have no
     ///     `cell_family` declaration).
     pub cells: BTreeMap<CellRef, CellState>,
+    /// Realm-scoped resolved values for the three protocol cell families
+    /// whose canonical subject is the literal `null`. The Realm id belongs
+    /// to the CellStore namespace, not the wire cell id, so these values
+    /// cannot safely share the global `cells` map.
+    pub realm_metadata_cells: BTreeMap<String, CellState>,
+    pub realm_create_cells: BTreeMap<String, CellState>,
+    pub realm_notary_cells: BTreeMap<String, CellState>,
+    pub realm_policy_components_cells: BTreeMap<String, CellState>,
+    /// Other canonical null-subject Realm facets keyed by
+    /// `(realm_id, canonical_cell_ref)`.
+    pub realm_null_subject_cells: BTreeMap<(String, String), CellState>,
+    /// Effective `default_join_rule`, keyed by Realm. This mirrors the
+    /// bootstrap/create value and later sealed join-rule facet so admission
+    /// can select the protocol's C-axis gates without inventing a Realm id
+    /// cell subject.
+    pub realm_join_rules: BTreeMap<String, String>,
     /// Server-side Space-container projection —
     /// `container_space_id -> SpaceContainerProjection`.
     /// Maintains the canonical state-machine described in
@@ -826,9 +842,10 @@ impl ProjectionState {
     /// in the peer-event/notary pipeline to keep this projection cache in sync
     /// with sealed cell state.
     ///
-    /// This is the only write path into [`ProjectionState::cells`]; the
-    /// durable-Event projection path (`apply()`) does NOT touch cells —
-    /// state cells are exclusively a Move/Seal surface per spec.
+    /// This replaces the inline accepted-Event cache with the authoritative
+    /// sealed view after `apply_seal`. The durable-Event path may stage the
+    /// same cell families before sealing, but correctness after finalization
+    /// comes from this reload.
     pub fn reload_cells_from_store(
         &mut self,
         realm_id: &RealmId,
@@ -841,7 +858,31 @@ impl ProjectionState {
                 .resolve(realm_id, &cell)
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
             let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
-            self.cells.insert(cell, resolved);
+            match cell.as_str() {
+                arkret_wire::REALM_METADATA_CELL => {
+                    self.realm_metadata_cells
+                        .insert(realm_id.to_string(), resolved);
+                }
+                arkret_wire::REALM_CREATE_CELL => {
+                    self.realm_create_cells
+                        .insert(realm_id.to_string(), resolved);
+                }
+                arkret_wire::REALM_NOTARY_CELL => {
+                    self.realm_notary_cells
+                        .insert(realm_id.to_string(), resolved);
+                }
+                "ak:cell:ak.component.realm.policy_components.v1:null" => {
+                    self.realm_policy_components_cells
+                        .insert(realm_id.to_string(), resolved);
+                }
+                _ if cell.as_str().ends_with(":null") => {
+                    self.realm_null_subject_cells
+                        .insert((realm_id.to_string(), cell.as_str().to_owned()), resolved);
+                }
+                _ => {
+                    self.cells.insert(cell, resolved);
+                }
+            }
         }
         Ok(())
     }

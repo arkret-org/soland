@@ -90,26 +90,18 @@ pub(super) async fn member_join_accepts_pending_invite(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    let kind = object.get("kind").and_then(Value::as_str);
-    // Two canonical invite-acceptance shapes are admitted for a
-    // not-yet-member invitee (spec invite-addressing.md / event-kind-registry):
-    //   1. `ak.member.state{membership:join, invite_ref}` — the join-cascade form;
-    //   2. `ak.invite.accept{invite_ref|invite_id}` — the dedicated accept event.
-    // Both resolve a *pending* invite whose `invitee == actor`, so a fresh
-    // invitee can close their own invite through either path without first
-    // being a realm member. Previously only (1) was exempt, so a spec-correct
-    // `ak.invite.accept` from the invitee was rejected with `capability_denied`.
-    let is_member_state_join = kind == Some(arkret_wire::events::EventKind::MEMBER_STATE);
-    let is_invite_accept = kind == Some("ak.invite.accept");
-    if !is_member_state_join && !is_invite_accept {
+    // Invitation acceptance has one canonical wire event. A bare
+    // `ak.member.state{membership:join, invite_ref}` would bypass the
+    // invite-lifecycle transition and the registry's atomic two-cell
+    // contract, so it must not receive the not-yet-member exemption.
+    if object.get("kind").and_then(Value::as_str)
+        != Some(arkret_wire::events::EventKind::INVITE_ACCEPT)
+    {
         return false;
     }
     let Some(payload) = object.get("payload") else {
         return false;
     };
-    if is_member_state_join && payload.get("membership").and_then(Value::as_str) != Some("join") {
-        return false;
-    }
     let target_actor = payload
         .get("actor_id")
         .or_else(|| payload.get("member"))
