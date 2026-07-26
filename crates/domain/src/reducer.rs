@@ -131,13 +131,13 @@ pub use projection_state::ProjectionState;
 // sibling `apply_*` modules via `super::*`.
 pub use projections::{
     AgentActionApprovalProjection, AgentActionRequestProjection, AgentActionRequestStatus,
-    AppletProjection, CallStateFieldHead, CapabilityDerivedState, CircleLifecycleState,
-    CircleMembershipState, CircleProjection, DocumentVersionProjection, ErasureReceiptRecord,
-    InviteProjection, KeyPackageLifetime, MessageExpiryAnchor, MessageExpiryProjection,
-    MessageExpiryProjectionState, MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
-    MlsRemoveObligation, MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection,
-    ObjectLifecycleState, PendingReplayEntry, PinProjection, PollOptionState, PollState,
-    ProjectedMessageView, PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
+    AppletProjection, CapabilityDerivedState, CircleLifecycleState, CircleMembershipState,
+    CircleProjection, DocumentVersionProjection, ErasureReceiptRecord, InviteProjection,
+    KeyPackageLifetime, MessageExpiryAnchor, MessageExpiryProjection, MessageExpiryProjectionState,
+    MessageState, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsRemoveObligation,
+    MlsRemoveProposal, MlsWelcome, MlsWelcomeQueueKey, MorphProjection, ObjectLifecycleState,
+    PendingReplayEntry, PinProjection, PollOptionState, PollState, ProjectedMessageView,
+    PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
     RealmPolicyServerConfig, RedactionCellValue, RsvpProjection, SidecarProjection,
     SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
@@ -145,7 +145,9 @@ pub use projections::{
     StrandWatchProjection, message_expiry_projection_from_value,
     message_expiry_projection_from_value_with_anchor,
 };
-pub(crate) use projections::{operation_history_basis_seals, space_container_id_from_payload};
+pub(crate) use projections::{
+    CallFsmHead, operation_history_basis_seals, space_container_id_from_payload,
+};
 
 #[cfg(test)]
 mod tests;

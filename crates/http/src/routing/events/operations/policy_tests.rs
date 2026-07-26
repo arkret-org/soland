@@ -2107,7 +2107,13 @@ async fn call_recording_start_defaults_to_record_capability() {
             "call_id": "ak:call:01904100-0000-7000-8000-000000000904",
             "recording_id": "recording-904",
             "recording_agent": "did:web:recorder.example",
-            "mode": "audio_video"
+            "capture_kind": "recording",
+            "mode": "audio_video",
+            "visible_notice": true,
+            "result": {
+                "recording_start_event_id": "ak:event:01904100-0000-7000-8000-000000000904",
+                "retention": {"consent_confirmed": true}
+            }
         }),
     );
 
@@ -2139,7 +2145,12 @@ async fn call_recording_start_transcript_requires_transcribe_capability() {
             "recording_id": "transcript-905",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "transcript",
-            "mode": "audio"
+            "mode": "audio",
+            "visible_notice": true,
+            "result": {
+                "transcript_start_event_id": "ak:event:01904100-0000-7000-8000-000000000905",
+                "retention": {"consent_confirmed": true}
+            }
         }),
     );
 
@@ -2181,7 +2192,12 @@ async fn call_recording_start_transcript_allows_transcribe_capability() {
             "recording_id": "transcript-906",
             "recording_agent": "did:web:recorder.example",
             "capture_kind": "transcript",
-            "mode": "audio"
+            "mode": "audio",
+            "visible_notice": true,
+            "result": {
+                "transcript_start_event_id": "ak:event:01904100-0000-7000-8000-000000000906",
+                "retention": {"consent_confirmed": true}
+            }
         }),
     );
 
@@ -2207,7 +2223,13 @@ async fn call_recording_start_rejects_missing_mode_and_noncanonical_recording_id
         "sender": "did:web:recorder.example",
         "call_id": "ak:call:01904100-0000-7000-8000-000000000907",
         "recording_id": "recording-907",
-        "recording_agent": "did:web:recorder.example"
+        "recording_agent": "did:web:recorder.example",
+        "capture_kind": "recording",
+        "visible_notice": true,
+        "result": {
+            "recording_start_event_id": "ak:event:01904100-0000-7000-8000-000000000907",
+            "retention": {"consent_confirmed": true}
+        }
     });
     let missing_mode = op(
         realm_id.clone(),

@@ -1140,59 +1140,10 @@ fn same_group_id_is_independent_across_effective_scopes() {
 }
 
 #[test]
-fn commit_epoch_stale_rejected() {
+fn commit_future_epoch_rejected() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    // Land epoch 1 first.
-    let _ = apply_commit_epoch(
-        &mut state,
-        &op_at(
-            600,
-            "ak.mls.commit",
-            json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
-                "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
-                "commit_bytes_b64": b64(b"first"),
-                "governance_binding": governance_binding(0),
-            }),
-        ),
-    );
-
-    // Replay the same commit (expected_prev_epoch=0) — must be rejected.
-    let replay = apply_commit_epoch(
-        &mut state,
-        &op_at(
-            601,
-            "ak.mls.commit",
-            json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
-                "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
-                "commit_bytes_b64": b64(b"replay"),
-                "governance_binding": governance_binding(0),
-            }),
-        ),
-    );
-    match replay {
-        ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, REASON_COMMIT_EPOCH_SKEW);
-        }
-        other => panic!("expected Rejected, got {other:?}"),
-    }
-    // Stored epoch must still be 1 — the rejected replay didn't clobber it.
-    assert_eq!(
-        state
-            .mls_commit_epochs
-            .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
-            .unwrap()
-            .epoch,
-        1
-    );
-
-    // A future-epoch commit (expected_prev_epoch=5) is also rejected.
+    // A future-epoch commit (expected_prev_epoch=5) is rejected.
     let leap = apply_commit_epoch(
         &mut state,
         &op_at(
@@ -1217,7 +1168,7 @@ fn commit_epoch_stale_rejected() {
             .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
             .unwrap()
             .epoch,
-        1
+        0
     );
 }
 

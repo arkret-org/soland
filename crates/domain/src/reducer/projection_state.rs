@@ -181,15 +181,9 @@ pub struct ProjectionState {
     /// (cleared on `ak.agent.key.revoke`).
     /// Agent id -> (active key id -> accepted authorize Event id).
     pub agent_authorized_keys: BTreeMap<String, BTreeMap<String, String>>,
-    /// R3 spec-sync — `ak.call.state.session_focus` write-once projection
-    /// keyed by `call_id`. Once a focus is committed for a call, the
-    /// reducer rejects any subsequent write with
-    /// `session_focus_already_committed` (REDU-3).
-    pub call_session_focus: BTreeMap<String, String>,
-    /// Per-field heads for `ak.call.state` fsm dimensions. Keyed by
-    /// `(call_id, field_name)` and used only to detect same-basis sibling
-    /// writes that target the same fsm dimension with different values.
-    pub call_state_field_heads: BTreeMap<(String, String), CallStateFieldHead>,
+    /// Latest accepted FSM head for each independent call cell. This detects
+    /// same-basis sibling transitions without coupling orthogonal call axes.
+    pub call_fsm_heads: BTreeMap<arkret_identifiers::CellRef, CallFsmHead>,
     /// R3.1 — Realm-link projection. Outer key is the source
     /// `realm_id` (the envelope `realm_id` of a `ak.realm.link` event);
     /// the inner Vec accumulates every directed link the Realm has

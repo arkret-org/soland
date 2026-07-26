@@ -577,6 +577,7 @@ fn call_recording_start_payload(
         "capture_kind",
         "mode",
         "visible_notice",
+        "result",
     ]
     .into_iter()
     .filter_map(|field| {
@@ -594,13 +595,12 @@ pub(super) fn call_recording_start_required_action(
     payload: &arkret_models_collaboration::events_payloads::call::RecordingStartPayload,
 ) -> &'static str {
     match payload.capture_kind {
-        Some(
-            arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Transcript,
-        ) => arkret_wire::CapabilityActionId::CALL_TRANSCRIBE,
-        Some(
-            arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Recording,
-        )
-        | None => arkret_wire::CapabilityActionId::CALL_RECORD,
+        arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Transcript => {
+            arkret_wire::CapabilityActionId::CALL_TRANSCRIBE
+        }
+        arkret_models_collaboration::events_payloads::call::RecordingCaptureKind::Recording => {
+            arkret_wire::CapabilityActionId::CALL_RECORD
+        }
     }
 }
 

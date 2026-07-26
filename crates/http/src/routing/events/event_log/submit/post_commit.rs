@@ -259,7 +259,6 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         let idempotency_key = format!("ak:outbox:event-batch:{}", sha256_hex(&hasher_input));
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
-            seals: federation_seal_prerequisites(state, &events),
             events: events.clone(),
             signer_key_evidence: signer_key_evidence.clone(),
             agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
@@ -462,11 +461,9 @@ pub(super) async fn peer_event_fanout_records(
             )
             .await
             .or_else(|| agent_signer_evidence_bundle.clone());
-        let seals = federation_seal_prerequisites(state, &peer_events);
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: peer_events,
-            seals,
             signer_key_evidence: peer_signer_key_evidence,
             agent_signer_evidence_bundle: peer_agent_signer_evidence_bundle,
             idempotency_key: Some(idempotency_key.clone()),
@@ -570,12 +567,7 @@ async fn realm_event_dependency_records(
         for seal in seals {
             for digest in seal.delta {
                 if let Some(event_id) = by_digest.get(digest.as_str()) {
-                    append_stored_event_dependencies(
-                        event_id,
-                        &by_id,
-                        &mut visited,
-                        &mut ordered,
-                    );
+                    append_stored_event_dependencies(event_id, &by_id, &mut visited, &mut ordered);
                 }
             }
         }
@@ -733,7 +725,6 @@ async fn realm_bootstrap_fanout_record(
     let body = EventsSubmitFederationRequestBody {
         service_binding_ref,
         events,
-        seals: Vec::new(),
         signer_key_evidence,
         agent_signer_evidence_bundle,
         idempotency_key: Some(idempotency_key.clone()),
@@ -750,43 +741,6 @@ async fn realm_bootstrap_fanout_record(
         payload_json,
         created_at,
     })
-}
-
-fn federation_seal_prerequisites(state: &AppState, events: &[Event]) -> Vec<Seal> {
-    let mut pending = events
-        .iter()
-        .filter_map(|event| event.seal_ref.clone())
-        .collect::<Vec<_>>();
-    let mut seals_by_id = BTreeMap::new();
-    while let Some(seal_id) = pending.pop() {
-        if seals_by_id.contains_key(&seal_id) {
-            continue;
-        }
-        match state.projections().seal_by_id(&seal_id) {
-            Ok(Some(seal)) => {
-                pending.extend(seal.predecessor_refs.iter().cloned());
-                seals_by_id.insert(seal_id, seal);
-            }
-            Ok(None) => {
-                tracing::warn!(
-                    seal_id = %seal_id,
-                    "federation Event fanout is missing a referenced Seal prerequisite"
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    seal_id = %seal_id,
-                    "failed to load a referenced Seal prerequisite for federation fanout"
-                );
-            }
-        }
-    }
-    let mut seals = seals_by_id.into_values().collect::<Vec<_>>();
-    seals.sort_by(|left, right| {
-        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
-    });
-    seals
 }
 
 struct DynamicPeerEventTarget {

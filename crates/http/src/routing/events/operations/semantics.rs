@@ -318,98 +318,49 @@ fn validate_typed_payload_shapes(kind: &str, operation: &Operation) -> Result<()
             }
             Ok(())
         }
-        // REDU-3 / REDU-4 — `ak.call.state` shape checks.
-        //   - `session_focus` is write-once: clients MUST NOT mutate an already-committed value.
-        //     The wire-level check ensures the payload doesn't carry a `session_focus_revision`
-        //     marker other than the genesis `1`. The full `session_focus_already_committed`
-        //     deduplication runs in the reducer once the per-call cell projection lands.
-        //   - `participants[].participant_binding.scheme` MUST be the canonical
-        //     `ak.media.participant_binding.v1`; otherwise reject with
-        //     `participant_binding_invalid`.
         "ak.call.state" => {
-            // REDU-3 — write-once `session_focus`. Wire-shape check: a
-            // payload that carries `session_focus_revision > 1` MUST
-            // also carry `previous_session_focus` (the failed update
-            // path is reserved for migration tooling). Pure first-write
-            // (`revision==1` or unset) is accepted unconditionally.
-            // ERR-1 — wire-validator error strings embed the canonical
-            // reason code as a prefix; the parallel const reference
-            // here pins them to `soland_http::error::reasons::*` so a rename
-            // would break compilation rather than silently diverge.
-            const _SESSION_FOCUS_REASON: &str =
-                arkret_wire::ReasonCode::SESSION_FOCUS_ALREADY_COMMITTED;
-            const _PARTICIPANT_BINDING_REASON: &str =
-                arkret_wire::ReasonCode::PARTICIPANT_BINDING_INVALID;
-            if let Some(revision) = operation
+            let payload: arkret_models_collaboration::events_payloads::call::CallStatePayload =
+                typed_payload_fields(
+                    operation,
+                    &[
+                        "call_id",
+                        "state_transition",
+                        "focus",
+                        "recording_transition",
+                        "transcript_transition",
+                        "roster_delta",
+                        "moderation_delta",
+                        "mute_override",
+                    ],
+                )?;
+            payload.validate()?;
+            if let Some(binding) = operation
                 .payload
-                .get("session_focus_revision")
-                .and_then(|v| v.as_u64())
-                && revision > 1
-                && operation.payload.get("previous_session_focus").is_none()
+                .get("roster_delta")
+                .filter(|delta| delta.get("op").and_then(Value::as_str) == Some("join"))
+                .and_then(|delta| delta.get("participant"))
+                .and_then(|participant| participant.get("participant_binding"))
             {
-                return Err(
-                    "session_focus_already_committed: ak.call.state.session_focus is write-once",
-                );
-            }
-            if let Some(participants) = operation
-                .payload
-                .get("participants")
-                .and_then(|v| v.as_array())
-            {
-                for participant in participants {
-                    let Some(binding) = participant.get("participant_binding") else {
-                        continue;
-                    };
-                    // REDU-4 — participant_binding wire-shape pre-filter.
-                    // Verifies (a) scheme constant, (b) issuer_kid present,
-                    // (c) expires_at strictly after issued_at when both
-                    // are present, (d) signature ("sig") present.
-                    //
-                    // Full cryptographic verification (issuer anchoring
-                    // against the current epoch `ak.realm.media_service`
-                    // service_id + Ed25519 signature over the canonical
-                    // binding bytes) runs in the state-aware
-                    // `participant_binding::verify_call_state_participant_bindings`
-                    // pass dispatched from `validate_operation_semantics`.
-                    let scheme = binding.get("scheme").and_then(|v| v.as_str());
-                    if scheme != Some(arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA) {
-                        return Err(
-                            "participant_binding_invalid: participant_binding.scheme must be \
-                             ak.media.participant_binding.v1",
-                        );
-                    }
-                    if binding
-                        .get("issuer_kid")
-                        .and_then(|v| v.as_str())
-                        .is_none_or(str::is_empty)
-                    {
-                        return Err(
-                            "participant_binding_invalid: participant_binding.issuer_kid is \
-                             required",
-                        );
-                    }
-                    if binding
+                let scheme = binding.get("scheme").and_then(Value::as_str);
+                if scheme != Some(arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA) {
+                    return Err(
+                        "participant_binding_invalid: participant_binding.scheme must be \
+                         ak.media.participant_binding.v1",
+                    );
+                }
+                if binding
+                    .get("issuer_kid")
+                    .and_then(Value::as_str)
+                    .is_none_or(str::is_empty)
+                    || binding
                         .get("sig")
-                        .and_then(|v| v.as_str())
+                        .and_then(Value::as_str)
                         .is_none_or(str::is_empty)
-                    {
-                        return Err(
-                            "participant_binding_invalid: participant_binding.sig is required",
-                        );
-                    }
-                    if let (Some(issued_at), Some(expires_at)) = (
-                        binding.get("issued_at").and_then(|v| v.as_str()),
-                        binding.get("expires_at").and_then(|v| v.as_str()),
-                    ) && let (Ok(issued), Ok(expires)) = (
-                        chrono::DateTime::parse_from_rfc3339(issued_at),
-                        chrono::DateTime::parse_from_rfc3339(expires_at),
-                    ) && expires <= issued
-                    {
-                        return Err(
-                            "participant_binding_invalid: participant_binding.expires_at must be \
-                             strictly after issued_at",
-                        );
-                    }
+                {
+                    return Err(
+                        "participant_binding_invalid: participant_binding issuer_kid and sig are \
+                         required",
+                    );
                 }
             }
             Ok(())

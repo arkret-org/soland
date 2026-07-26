@@ -1689,34 +1689,6 @@ async fn prepare_reserved_direct_materialization(
         arkret_wire::events::EventKind::CAPABILITY_GRANT,
         founding_payload,
     )?;
-    let main_strand_grant_id = crate::ids::generate("grant");
-    let main_strand_grant_payload = json!({
-        "grant_id": main_strand_grant_id,
-        "grant": {
-            "id": main_strand_grant_id,
-            "schema": "ak.schema.capability.v1",
-            "realm_id": realm_id,
-            "issuer": actor,
-            "subject": actor,
-            "actions": [arkret_wire::events::EventKind::STRAND_CREATE],
-            "resources": [{
-                "kind": "realm",
-                "realm_id": realm_id,
-                "match_scope": "realm_wide"
-            }],
-            "issued_at": reserved.created_at,
-            "proofs": []
-        }
-    });
-    let main_strand_grant_event = unsigned_direct_materialization_event(
-        state,
-        actor,
-        &crate::ids::generate_event_id(),
-        realm_id,
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
-        main_strand_grant_payload,
-    )?;
-
     let creator_member_event =
         direct_creator_member_rebind_payload(state, realm_scope.clone(), actor, contact)
             .map_err(AppError::internal)?
@@ -1863,7 +1835,6 @@ async fn prepare_reserved_direct_materialization(
         founding_grant_event,
         creator_member_event,
         peer_member_event,
-        main_strand_grant_event,
         main_strand_event,
         binding_event,
     };

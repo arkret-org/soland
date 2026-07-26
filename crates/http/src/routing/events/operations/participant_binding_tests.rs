@@ -102,13 +102,15 @@ fn call_state_op(binding: Value) -> Operation {
         arkret_wire::events::EventKind::CALL_STATE,
         json!({
             "call_id": CALL_ID,
-            "state": "active",
-            "participants": [{
-                "actor_id": ACTOR_ID,
-                "device_id": DEVICE_ID,
-                "participant_identity": PARTICIPANT_IDENTITY,
-                "participant_binding": binding,
-            }],
+            "roster_delta": {
+                "op": "join",
+                "participant": {
+                    "actor_id": ACTOR_ID,
+                    "device_id": DEVICE_ID,
+                    "participant_identity": PARTICIPANT_IDENTITY,
+                    "participant_binding": binding,
+                }
+            },
         }),
     );
     // Freeze created_at before the binding expiry so the freshness gate
@@ -136,7 +138,7 @@ fn tampered_tuple_field_is_rejected_participant_binding_invalid() {
     let mut op = call_state_op(binding);
     // Keep the participant entry consistent with the tampered binding so the
     // mismatch is caught by the signature, not the field cross-check.
-    op.payload["participants"][0]["actor_id"] = json!("did:web:mallory.example");
+    op.payload["roster_delta"]["participant"]["actor_id"] = json!("did:web:mallory.example");
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(
         err.starts_with("participant_binding_invalid"),
@@ -150,7 +152,7 @@ fn binding_field_mismatch_with_participant_entry_is_rejected() {
     install_media_service(&state, ISSUER_KID);
     let mut op = call_state_op(signed_binding(&state, "2026-06-15T00:05:00.000Z"));
     // The participant entry's device_id diverges from the signed binding.
-    op.payload["participants"][0]["device_id"] =
+    op.payload["roster_delta"]["participant"]["device_id"] =
         json!("ak:device:01904100-0000-7000-8000-d1ffffffffff");
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();
     assert!(

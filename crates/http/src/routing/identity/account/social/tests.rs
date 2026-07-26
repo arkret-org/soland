@@ -156,8 +156,7 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 fn direct_strand_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
     let realm_id =
-        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101")
-            .unwrap();
+        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap();
     let strand_id = "ak:strand:01964137-0000-7000-8000-000000000102";
     let payload = direct_strand_create_payload(
         realm_id.clone(),

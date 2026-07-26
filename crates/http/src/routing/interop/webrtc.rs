@@ -6,9 +6,8 @@
 //!
 //! These are the only spec-registered media surfaces. Both are stateless with
 //! respect to any ephemeral signaling session: the media token issuer reads the
-//! durable `ak.call.state` cell (`ak.component.call.state.v1`) for the committed
-//! `session_focus`, the `removed_participants[]` ban set, and the current
-//! `participant_mute_overrides[]` set, and ICE config is a transport-layer
+//! independent durable focus, moderation, and per-leg mute-override cells; ICE
+//! config is a transport-layer
 //! discovery surface bound to the authenticated `(actor, device)`. STUN/TURN
 //! URLs, credential TTLs, and the optional TURN shared secret are
 //! operator-configurable via `AppConfig::ice`.
@@ -22,7 +21,7 @@ use arkret_models_collaboration::objects::media::{
     MediaIceCredentialType, MediaIceMode, MediaIceServer, MediaIceSignatureAlgorithm,
     MediaIceSignatureInput,
 };
-use arkret_wire::XExtensionMap;
+use arkret_wire::{DidUrl, XExtensionMap};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
@@ -51,10 +50,10 @@ use crate::wire::{
 /// `/_arkret/self/rtc/ice-config` and `/_arkret/self/rtc/token` (see
 /// `contract-catalog.json` / the OpenAPI binding). Ephemeral call signaling is
 /// the spec-registered `/_arkret/self/ephemeral` `ak.call.signal` relay (see
-/// `routing::events::sync::ephemeral`); the durable call model is the
-/// `ak.call.state` reducer. The legacy soland-internal `/_soland/self/webrtc/*`
+/// `routing::events::sync::ephemeral`); the durable call model is the composite
+/// call-cell lattice. The legacy soland-internal `/_soland/self/webrtc/*`
 /// session stack has been removed — token/ICE authz and focus/ban now read the
-/// durable `ak.call.state` cell directly.
+/// independent durable cells directly.
 pub(super) fn protocol_router() -> Router {
     Router::new()
         // Spec-canonical signed ICE config (`/_arkret/self/rtc/ice-config`).
@@ -355,7 +354,7 @@ fn sign_ice_config_outcome(
 
 // ── AKP-0010 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — media
 // token exchange. Issues a backend_token + ParticipantBinding for a
-// caller that already has a committed `ak.call.state.session_focus`.
+// caller that already has a committed `ak.component.call.focus.v1` value.
 //
 // Wire-level checks implemented here:
 //   - `focus_id` must equal the call's committed session_focus → `focus_mismatch` (MEDIA-2,
@@ -552,12 +551,12 @@ async fn handle_rtc_token(
     }
     // Authz (`media-service-binding.md` §6 commit ordering) — the token issuer does NOT
     // depend on any ephemeral signaling session. Per `media-service-binding.md`
-    // the client redeems the media token BEFORE it writes its own row into
-    // `ak.call.state.participants[]` (the initiator may exchange a token when
-    // the `ak.call.state` cell does not exist yet), so a `participants.contains`
+    // the client redeems the media token BEFORE it joins the durable
+    // `ak.component.call.roster.v1` OR-Set (the initiator may exchange a token
+    // when no call cell exists yet), so a roster-membership
     // / session-not-found gate would be wrong. Authorization is the conjunction
     // of: (1) realm membership, (2) the `ak.call.join` capability, (3) not under
-    // an actor-wide `ban` in the durable `ak.call.state.removed_participants[]`.
+    // an actor-wide ban in the durable call moderation OR-Set.
     //
     // (1) realm member.
     if !realm_has_member(state, body.realm_id.as_str(), body.actor_id.as_str()).await {
@@ -581,16 +580,22 @@ async fn handle_rtc_token(
         ));
     }
 
-    // Read the durable `ak.call.state` cell once. It MAY be absent (a brand-new
-    // call whose initiator is redeeming a token before writing the first
-    // `ak.call.state` event). Absent cell ⇒ no committed focus and no bans.
-    let call_state = CallStateCell::load(state, body.call_id.as_str()).await?;
+    // Read the independent durable media-policy cells once. They MAY all be
+    // absent when a brand-new call initiator redeems a token before writing its
+    // first `ak.call.state` event. Absent cells mean no committed focus or ban.
+    let call_cells = CallMediaCells::load(
+        state,
+        body.call_id.as_str(),
+        body.actor_id.as_str(),
+        body.device_id.as_str(),
+    )
+    .await?;
 
     // (3) `webrtc-signaling.md` §3a — a banned actor MUST NOT re-issue a join
     // token for this call's lifetime. The ban set is the durable
-    // `ak.call.state.removed_participants[]` projection; an absent cell carries
+    // call moderation effective OR-Set; an absent cell carries
     // no bans (everyone passes).
-    if call_state.actor_is_banned(body.actor_id.as_str()) {
+    if call_cells.actor_is_banned(body.actor_id.as_str()) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "actor was removed from the call (ban) and cannot re-issue a join token",
@@ -600,14 +605,14 @@ async fn handle_rtc_token(
     }
     let media_epoch = media_service_epoch_for_realm(state, body.realm_id.as_str())?;
 
-    // MEDIA-2 — focus selection. A committed `ak.call.state.session_focus`
-    // (read from the durable cell) wins when present and the request `focus_id`
+    // MEDIA-2 — focus selection. A committed
+    // `ak.component.call.focus.v1` value wins when present and `focus_id`
     // MUST match it (`focus_mismatch`). Absent a committed focus, the issuer
     // admits the requested `focus_id` as long as it is a legal focus within the
     // realm media_service epoch (oldest-membership-wins reduces to "any epoch
     // focus" once the ephemeral foci_preferred[] session is gone; the durable
     // committed focus remains the binding decision).
-    let session_focus = session_focus_for_call(&call_state, &media_epoch, body.focus_id.as_str())?;
+    let session_focus = session_focus_for_call(&call_cells, &media_epoch, body.focus_id.as_str())?;
     if body.focus_id != session_focus {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -662,7 +667,7 @@ async fn handle_rtc_token(
         })
         .unwrap_or((true, true, false));
     let (audio_muted, video_muted) =
-        call_state.participant_mute_override(body.actor_id.as_str(), body.device_id.as_str());
+        call_cells.participant_mute_override(body.actor_id.as_str(), body.device_id.as_str());
     if audio_muted {
         desired_media.0 = false;
     }
@@ -699,7 +704,11 @@ async fn handle_rtc_token(
     let issued_token =
         media_token_issuer_for(focus.provider).issue(&issue_request, &signing_ctx)?;
 
-    let issuer_kid = focus.issuer_kid.clone();
+    let issuer_kid = DidUrl::new(focus.issuer_kid.clone()).map_err(|error| {
+        token_issuer_unauthorised(format!(
+            "media focus issuer_kid is not a verification-method DID URL: {error}"
+        ))
+    })?;
     // `media-service-binding.md` §3 — the signature covers ONLY the seven
     // authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
     // participant_identity, realm_id)`. The self-describing `scheme` /
@@ -768,25 +777,23 @@ async fn handle_rtc_token(
     })
 }
 
-/// MEDIA-2 focus selection against the durable `ak.call.state` cell.
+/// MEDIA-2 focus selection against `ak.component.call.focus.v1`.
 ///
-/// - A committed `ak.call.state.session_focus` (read from the cell) is the binding decision: it is
-///   returned verbatim provided it is still a legal focus within the current realm media_service
-///   epoch (the caller compares it against the request `focus_id` and surfaces `focus_mismatch` on
-///   a disagreement).
-/// - Absent a committed focus (a brand-new call, or a `ak.call.state` head that has not yet
-///   committed `session_focus`), the issuer admits the `requested_focus_id` as long as it names a
-///   legal focus in the epoch. This replaces the old ephemeral oldest-membership-wins derivation
-///   that read `foci_preferred[]` off a signaling session: the durable committed focus is the
-///   source of truth, and until it is committed any epoch-legal focus the caller asks for is
-///   acceptable (the first committer's focus then pins it for everyone via the cell's write-once
-///   `session_focus`).
+/// - A committed `session_focus` is the binding decision: it is returned verbatim provided it is
+///   still a legal focus within the current realm media_service epoch (the caller compares it
+///   against the request `focus_id` and surfaces `focus_mismatch` on a disagreement).
+/// - Absent a committed focus (a brand-new call whose focus cell is still bottom), the issuer
+///   admits the `requested_focus_id` as long as it names a legal focus in the epoch. This replaces
+///   the old ephemeral oldest-membership-wins derivation that read `foci_preferred[]` off a
+///   signaling session: the durable committed focus is the source of truth, and until it is
+///   committed any epoch-legal focus the caller asks for is acceptable (the first committer's focus
+///   then pins it for everyone via the cell's write-once `session_focus`).
 fn session_focus_for_call(
-    call_state: &CallStateCell,
+    call_cells: &CallMediaCells,
     media_epoch: &MediaServiceEpoch,
     requested_focus_id: &str,
 ) -> Result<String, AppError> {
-    if let Some(focus) = call_state.session_focus() {
+    if let Some(focus) = call_cells.session_focus() {
         if media_epoch.focus(focus).is_some() {
             return Ok(focus.to_owned());
         }
@@ -811,38 +818,37 @@ fn session_focus_for_call(
     ))
 }
 
-/// Read-only view of the durable `ak.call.state` cell
-/// (`ak.component.call.state.v1:{call_id}`) consumed by the media token issuer.
-/// An absent cell (a brand-new call whose initiator redeems a token before
-/// writing the first `ak.call.state` event) is represented by `value: None`:
-/// no committed `session_focus` and an empty ban set.
-struct CallStateCell {
-    value: Option<Value>,
+/// Read-only view of the independent durable focus, moderation and per-leg
+/// mute cells consumed by the media token issuer.
+struct CallMediaCells {
+    focus: Option<Value>,
+    moderation: Option<Value>,
+    mute_override: Option<Value>,
 }
 
-impl CallStateCell {
-    /// Load the `ak.component.call.state.v1` cell for `call_id`. The cell id is
-    /// `ak:cell:ak.component.call.state.v1:{call_id}` — the same form the
-    /// `apply_call_state` reducer writes (see `apply_realm_policy.rs`).
-    async fn load(state: &AppState, call_id: &str) -> Result<Self, AppError> {
-        let cell_id = call_state_cell_ref(call_id)?;
-        let cached = {
-            let projection = state.projections().snapshot();
-            projection.cell_value(&cell_id).cloned()
-        };
-        let value = match call_state_from_event_log(state, call_id, &cell_id).await? {
-            Some(value) => {
-                state.projections().cache_cell(cell_id, value.clone());
-                Some(value)
-            }
-            None => cached,
-        };
-        Ok(Self { value })
+impl CallMediaCells {
+    async fn load(
+        state: &AppState,
+        call_id: &str,
+        actor_id: &str,
+        device_id: &str,
+    ) -> Result<Self, AppError> {
+        let focus_cell = call_cell_ref("ak.component.call.focus.v1", &[call_id])?;
+        let moderation_cell = call_cell_ref("ak.component.call.moderation.v1", &[call_id])?;
+        let mute_cell = call_cell_ref(
+            "ak.component.call.mute_override.v1",
+            &[call_id, actor_id, device_id],
+        )?;
+        Ok(Self {
+            focus: load_call_cell(state, call_id, focus_cell).await?,
+            moderation: load_call_cell(state, call_id, moderation_cell).await?,
+            mute_override: load_call_cell(state, call_id, mute_cell).await?,
+        })
     }
 
-    /// The committed `ak.call.state.session_focus` (§4.1 write-once), if any.
+    /// The committed `ak.component.call.focus.v1` value, if any.
     fn session_focus(&self) -> Option<&str> {
-        self.value
+        self.focus
             .as_ref()?
             .get("session_focus")
             .and_then(Value::as_str)
@@ -850,20 +856,18 @@ impl CallStateCell {
             .filter(|focus| !focus.is_empty())
     }
 
-    /// Whether `actor_id` is under an actor-wide `ban` in the cell's
-    /// `removed_participants[]` (`webrtc-signaling.md` §3a — each row is
-    /// `{ actor_id, device_id?, action, removed_at }`; `ban` omits `device_id`).
+    /// Whether `actor_id` is under an actor-wide ban in the moderation
+    /// effective OR-Set. A ban value omits `device_id`.
     /// An absent cell carries no bans.
     fn actor_is_banned(&self, actor_id: &str) -> bool {
-        let Some(rows) = self
-            .value
-            .as_ref()
-            .and_then(|value| value.get("removed_participants"))
-            .and_then(Value::as_array)
-        else {
+        let Some(rows) = self.moderation.as_ref().and_then(Value::as_array) else {
             return false;
         };
-        rows.iter().any(|row| {
+        rows.iter().any(|entry| {
+            if entry.get("removed").and_then(Value::as_bool) == Some(true) {
+                return false;
+            }
+            let row = entry.get("value").unwrap_or(&Value::Null);
             row.get("action").and_then(Value::as_str) == Some("ban")
                 && row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
         })
@@ -873,39 +877,55 @@ impl CallStateCell {
     /// rows fail closed: any matching `*_muted=true` removes that publish
     /// permission from the issued backend token.
     fn participant_mute_override(&self, actor_id: &str, device_id: &str) -> (bool, bool) {
-        let Some(rows) = self
-            .value
-            .as_ref()
-            .and_then(|value| value.get("participant_mute_overrides"))
-            .and_then(Value::as_array)
-        else {
+        let Some(value) = self.mute_override.as_ref() else {
             return (false, false);
         };
-        rows.iter()
-            .filter(|row| {
-                row.get("actor_id").and_then(Value::as_str) == Some(actor_id)
-                    && row.get("device_id").and_then(Value::as_str) == Some(device_id)
-            })
-            .fold((false, false), |(audio, video), row| {
-                (
-                    audio
-                        || row
-                            .get("audio_muted")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                    video
-                        || row
-                            .get("video_muted")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false),
-                )
-            })
+        if value.get("status").and_then(Value::as_str) != Some("active")
+            || value.get("actor_id").and_then(Value::as_str) != Some(actor_id)
+            || value.get("device_id").and_then(Value::as_str) != Some(device_id)
+        {
+            return (false, false);
+        }
+        (
+            value
+                .get("audio_muted")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+            value
+                .get("video_muted")
+                .and_then(Value::as_bool)
+                .unwrap_or(true),
+        )
     }
 }
 
-fn call_state_cell_ref(call_id: &str) -> Result<CellRef, AppError> {
-    CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}"))
-        .map_err(|error| AppError::internal(format!("invalid call.state cell id: {error}")))
+fn call_cell_ref(family: &str, subject_parts: &[&str]) -> Result<CellRef, AppError> {
+    let subject = if subject_parts.len() == 1 {
+        subject_parts[0].to_owned()
+    } else {
+        arkret_wire::composite_subject(subject_parts)
+            .map_err(|error| AppError::internal(format!("invalid call cell subject: {error}")))?
+    };
+    CellRef::new(format!("ak:cell:{family}:{subject}"))
+        .map_err(|error| AppError::internal(format!("invalid call cell id: {error}")))
+}
+
+async fn load_call_cell(
+    state: &AppState,
+    call_id: &str,
+    cell_id: CellRef,
+) -> Result<Option<Value>, AppError> {
+    let cached = {
+        let projection = state.projections().snapshot();
+        projection.cell_value(&cell_id).cloned()
+    };
+    match call_state_from_event_log(state, call_id, &cell_id).await? {
+        Some(value) => {
+            state.projections().cache_cell(cell_id, value.clone());
+            Ok(Some(value))
+        }
+        None => Ok(cached),
+    }
 }
 
 async fn call_state_from_event_log(
@@ -967,11 +987,23 @@ fn call_state_operation_from_record(
     };
     let operation_id = OperationId::new(format!("ak:operation:{suffix}"))
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let payload = record
+    let mut payload = record
         .envelope
         .get("payload")
         .cloned()
         .unwrap_or_else(|| json!({}));
+    if let Some(object) = payload.as_object_mut() {
+        if let Some(effects) = record.envelope.get("effects") {
+            object.insert("effects".to_owned(), effects.clone());
+        }
+        if let Some(seal_ref) = record.envelope.get("seal_ref") {
+            object.insert("seal_ref".to_owned(), seal_ref.clone());
+        }
+        object.insert(
+            "accepted_event_id".to_owned(),
+            Value::String(record.event_id.clone()),
+        );
+    }
     let mut operation = Operation::create(
         operation_id,
         realm_id,
@@ -1280,10 +1312,9 @@ fn service_id_from_issuer_kid(issuer_kid: &str) -> Option<String> {
 }
 
 fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
-    issuer_kid == service_id
-        || issuer_kid
-            .strip_prefix(service_id)
-            .is_some_and(|rest| rest.starts_with('#'))
+    issuer_kid
+        .strip_prefix(service_id)
+        .is_some_and(|rest| rest.starts_with('#'))
 }
 
 fn token_issuer_unauthorised(message: impl Into<String>) -> AppError {
@@ -1322,35 +1353,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn participant_mute_override_matches_call_leg_and_fails_closed_on_duplicates() {
-        let cell = CallStateCell {
-            value: Some(json!({
-                "participant_mute_overrides": [
-                    {
-                        "actor_id": "did:web:alice.example",
-                        "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                        "audio_muted": false,
-                        "video_muted": false,
-                        "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:00.000Z"
-                    },
-                    {
-                        "actor_id": "did:web:alice.example",
-                        "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
-                        "audio_muted": true,
-                        "video_muted": false,
-                        "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:01.000Z"
-                    },
-                    {
-                        "actor_id": "did:web:alice.example",
-                        "device_id": "ak:device:01904100-0000-7000-8000-000000000002",
-                        "audio_muted": false,
-                        "video_muted": true,
-                        "muted_by": "did:web:mod.example",
-                        "muted_at": "2026-06-16T00:00:02.000Z"
-                    }
-                ]
+    fn participant_mute_override_reads_the_per_leg_cas_cell() {
+        let cell = CallMediaCells {
+            focus: None,
+            moderation: None,
+            mute_override: Some(json!({
+                "status": "active",
+                "actor_id": "did:web:alice.example",
+                "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
+                "audio_muted": true,
+                "video_muted": false,
+                "changed_by": "did:web:mod.example",
+                "changed_at": "2026-06-16T00:00:01.000Z"
             })),
         };
 
@@ -1361,6 +1375,34 @@ mod tests {
             ),
             (true, false)
         );
+    }
+
+    #[test]
+    fn removed_moderation_dot_does_not_remain_an_effective_ban() {
+        let cell = CallMediaCells {
+            focus: None,
+            moderation: Some(json!([
+                {
+                    "tag": "ak:event:01904100-0000-7000-8000-e00000000001",
+                    "value": {
+                        "actor_id": "did:web:bob.example",
+                        "action": "ban"
+                    },
+                    "removed": true
+                },
+                {
+                    "tag": "ak:event:01904100-0000-7000-8000-e00000000002",
+                    "value": {
+                        "actor_id": "did:web:carol.example",
+                        "action": "ban"
+                    }
+                }
+            ])),
+            mute_override: None,
+        };
+
+        assert!(!cell.actor_is_banned("did:web:bob.example"));
+        assert!(cell.actor_is_banned("did:web:carol.example"));
     }
 
     #[test]

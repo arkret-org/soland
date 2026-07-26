@@ -481,7 +481,7 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
     let state = soland_test_support::app_state(test_config());
     install_media_service_epoch(&state, good_media_service_epoch());
     let token = dev_token(state.clone()).await;
-    // Brand-new call: no `ak.call.state` cell yet (the initiator redeems a
+    // Brand-new call: no durable call cells exist yet (the initiator redeems a
     // media token before writing its first `ak.call.state` event). With no
     // committed `session_focus`, the issuer admits the requested focus as long
     // as it is a legal focus within the realm media_service epoch.
@@ -639,8 +639,8 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
 }
 
 /// Keystone acceptance for T4': the inkson flow obtains a media token WITHOUT
-/// ever touching any ephemeral signaling session. There is no `ak.call.state`
-/// cell yet (the initiator redeems the token before writing its first
+/// ever touching any ephemeral signaling session. No durable call cell exists
+/// yet (the initiator redeems the token before writing its first
 /// `ak.call.state` event); authorization is purely realm membership +
 /// `ak.call.join`. This is the case the old `participants.contains` /
 /// session-not-found gate broke (it 404'd every real inkson call).
@@ -655,7 +655,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     let device_id = "ak:device:01904100-0000-7000-8000-b0b000000003";
     add_test_realm_member(&state, DEMO_REALM_ID, actor);
     let token = dev_token_for_device(state.clone(), actor, device_id, "Bob Phone").await;
-    // A fresh call id with NO `ak.call.state` cell and NO ephemeral session.
+    // A fresh call id with no durable call cell and no ephemeral session.
     let call_id = new_prefixed_uuid7("ak:call:");
 
     // Without ak.call.join, even a realm member is denied (§6).
@@ -677,7 +677,7 @@ async fn rtc_media_token_inkson_flow_no_session_issues_token() {
     );
 
     // Grant ak.call.join → the token is issued against the brand-new call even
-    // though no signaling session and no `ak.call.state` cell exist.
+    // though no signaling session or durable call cell exists.
     grant_call_capability(&state, DEMO_REALM_ID, actor, "ak.call.join");
     let issued: Value = TestClient::post("http://server/_arkret/self/rtc/token")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -726,8 +726,8 @@ async fn rtc_media_token_rejects_epoch_and_focus_mismatches() {
         "ak.call.join",
     );
 
-    // Commit `session_focus = mediasoup:blue` into the durable `ak.call.state`
-    // cell (§4.1 write-once). A token request naming a different focus MUST be
+    // Commit `session_focus = mediasoup:blue` into the durable focus cell
+    // (§4.1 write-once). A token request naming a different focus MUST be
     // rejected with `focus_mismatch`.
     seed_call_state(&state, &session_id, Some("ak:focus:mediasoup:blue"), vec![]);
 
@@ -821,7 +821,7 @@ async fn rtc_media_token_requires_call_join_capability() {
     let bob = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
     let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    // bob is a realm member; no `ak.call.state` cell exists yet (the new model
+    // bob is a realm member; no durable call cell exists yet (the new model
     // does not require an ephemeral session to exist before token exchange).
     let session_id = add_member_and_fresh_call(&state, bob);
     let exchange_body = serde_json::json!({
@@ -1066,10 +1066,9 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
         .unwrap();
     assert_eq!(pre_ban["focus_id"], "ak:focus:livekit:green");
 
-    // A moderator actor-wide-bans bob: the durable `ak.call.state.removed_participants[]`
-    // projection (`webrtc-signaling.md` §3a) carries a `ban` row with no
-    // `device_id`. Seed that cell directly (the reducer writes the same shape
-    // from a committed `ak.call.state` event).
+    // A moderator actor-wide-bans bob: the durable call moderation OR-Set
+    // carries a `ban` value with no `device_id`. Seed that effective cell
+    // directly (the reducer writes the same tag/value shape).
     seed_call_state(
         &state,
         &session_id,
@@ -1116,10 +1115,10 @@ fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action
 /// The media token issuer is decoupled from any ephemeral signaling session
 /// (`media-service-binding.md` §3 durable-roster ordering — after token
 /// exchange the client MUST land its `participant_binding` in a durable
-/// `ak.call.state.participants[]` event, accepted by the server, before
+/// `ak.call.state` roster-delta event, accepted by the server, before
 /// the identity counts as a roster member or media is exposed): a
 /// brand-new call has no
-/// `ak.call.state` cell yet, and the issuer authorizes on realm membership +
+/// call cells yet, and the issuer authorizes on realm membership +
 /// `ak.call.join` + the durable ban set. This mirrors the inkson flow, which
 /// redeems a media token before writing its first `ak.call.state` event.
 fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
@@ -1127,31 +1126,42 @@ fn add_member_and_fresh_call(state: &AppState, member: &str) -> String {
     new_prefixed_uuid7("ak:call:")
 }
 
-/// Seed the durable `ak.call.state` cell (`ak.component.call.state.v1:{call_id}`)
-/// the media token issuer reads, mirroring what the `apply_call_state` reducer
-/// writes from a committed `ak.call.state` event. `session_focus` pins the
-/// committed focus (write-once §4.1); `removed_participants` carries the §3a ban
-/// / kick rows (`{ actor_id, device_id?, action, removed_at }`).
+/// Seed the independent durable focus and moderation cells the media token
+/// issuer reads. `session_focus` pins the committed focus (write-once §4.1);
+/// `moderation_values` contains effective ban / kick OR-Set values.
 fn seed_call_state(
     state: &AppState,
     call_id: &str,
     session_focus: Option<&str>,
-    removed_participants: Vec<Value>,
+    moderation_values: Vec<Value>,
 ) {
-    let mut value = serde_json::json!({
-        "call_id": call_id,
-        "state": "active",
-        "removed_participants": removed_participants,
-    });
     if let Some(focus) = session_focus {
-        value["session_focus"] = Value::String(focus.to_owned());
+        let cell_id =
+            CellRef::new(format!("ak:cell:ak.component.call.focus.v1:{call_id}")).unwrap();
+        state.test_projection().lock().cells.insert(
+            cell_id,
+            CellState::Value(serde_json::json!({"session_focus": focus})),
+        );
     }
-    let cell_id = CellRef::new(format!("ak:cell:ak.component.call.state.v1:{call_id}")).unwrap();
-    state
-        .test_projection()
-        .lock()
-        .cells
-        .insert(cell_id, CellState::Value(value));
+    if !moderation_values.is_empty() {
+        let effective = moderation_values
+            .into_iter()
+            .enumerate()
+            .map(|(index, value)| {
+                serde_json::json!({
+                    "tag": format!("ak:orset-tag:test-{index}"),
+                    "value": value,
+                })
+            })
+            .collect::<Vec<_>>();
+        let cell_id =
+            CellRef::new(format!("ak:cell:ak.component.call.moderation.v1:{call_id}")).unwrap();
+        state
+            .test_projection()
+            .lock()
+            .cells
+            .insert(cell_id, CellState::Value(Value::Array(effective)));
+    }
 }
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {

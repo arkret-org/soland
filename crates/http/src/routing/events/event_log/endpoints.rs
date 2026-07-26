@@ -628,20 +628,21 @@ async fn events_frontier(
                 "realm has no accepted Seal on this deployment",
             ));
         }
-        let seal = match crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-            state, &realm_id,
-        )
-        .await
-        {
-            Ok(view) => view.accepted_seal,
-            // A Realm notarized by another DID may legitimately have accepted
-            // Events ahead of the locally visible signed head. Preserve that
-            // authoritative head; only the designated notary may advance it.
-            Err(error) if error.code == ErrorCode::FrontierUnavailable && head.is_some() => {
-                head.expect("checked existing Realm Seal head")
-            }
-            Err(error) => return Err(error),
-        };
+        let seal =
+            match crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+                state, &realm_id,
+            )
+            .await
+            {
+                Ok(view) => view.accepted_seal,
+                // A Realm notarized by another DID may legitimately have accepted
+                // Events ahead of the locally visible signed head. Preserve that
+                // authoritative head; only the designated notary may advance it.
+                Err(error) if error.code == ErrorCode::FrontierUnavailable && head.is_some() => {
+                    head.expect("checked existing Realm Seal head")
+                }
+                Err(error) => return Err(error),
+            };
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
                 realm_id,

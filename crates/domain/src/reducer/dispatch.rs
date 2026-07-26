@@ -709,6 +709,14 @@ fn apply_call_state_dispatch(
     s.apply_call_state(op)
 }
 
+fn apply_call_recording_start_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_call_recording_start(op)
+}
+
 /// Dispatch for `ak.call.summary`; cell family is
 /// `ak.component.call.summary.v1` (`cell_subject = payload.call_id`,
 /// cas_register, write-once).
@@ -1258,6 +1266,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_wire::events::EventKind::CALL_STATE,
         apply_call_state_dispatch,
+    );
+    m.insert(
+        arkret_wire::events::EventKind::CALL_RECORDING_START,
+        apply_call_recording_start_dispatch,
     );
     // `ak.call.summary` — durable terminal summary projection. Cell family
     // `ak.component.call.summary.v1`, write-once cas_register (`call-state.md`

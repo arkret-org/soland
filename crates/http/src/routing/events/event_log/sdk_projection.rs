@@ -272,6 +272,7 @@ pub(in crate::routing) fn projection_operation_from_event(
         parsed.kind.as_str(),
         arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
             | arkret_wire::events::EventKind::AGENT_KEY_REVOKE
+            | arkret_wire::events::EventKind::CALL_RECORDING_START
     ) {
         payload_object.insert(
             "accepted_event_id".to_owned(),

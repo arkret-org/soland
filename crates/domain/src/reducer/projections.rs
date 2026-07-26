@@ -24,7 +24,7 @@ pub struct PushRouteSubject {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct CallStateFieldHead {
+pub struct CallFsmHead {
     pub basis: String,
     pub operation_id: String,
     pub value: String,

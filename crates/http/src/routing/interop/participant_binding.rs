@@ -146,18 +146,18 @@ impl MediaServiceAnchors {
     /// of the focus issuer_kids OR resolves (via its `did#frag` prefix) to the
     /// authoritative `service_id`.
     fn anchors(&self, issuer_kid: &str) -> bool {
-        self.issuer_kids.contains(issuer_kid)
-            || issuer_kid_belongs_to_service(issuer_kid, &self.service_id)
+        arkret_wire::DidUrl::new(issuer_kid).is_ok()
+            && (self.issuer_kids.contains(issuer_kid)
+                || issuer_kid_belongs_to_service(issuer_kid, &self.service_id))
     }
 }
 
 /// `did#frag` → `did` prefix match, matching the issuer-side anchoring rule in
 /// `routing::interop::webrtc`.
 fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
-    issuer_kid == service_id
-        || issuer_kid
-            .strip_prefix(service_id)
-            .is_some_and(|rest| rest.starts_with('#'))
+    issuer_kid
+        .strip_prefix(service_id)
+        .is_some_and(|rest| rest.starts_with('#'))
 }
 
 /// Read the current-epoch media_service anchor set for `realm_id` from the
@@ -213,7 +213,7 @@ fn binding_str<'a>(binding: &'a Value, field: &str) -> Option<&'a str> {
 }
 
 /// `call-state.md` §4.1 / `media-service-binding.md` §3 / §7 — full
-/// cryptographic verification of every `ak.call.state.participants[]`
+/// cryptographic verification of an `ak.call.state.roster_delta` join
 /// `participant_binding`.
 ///
 /// For each binding the receiver MUST:
@@ -233,13 +233,14 @@ pub(crate) fn verify_call_state_participant_bindings(
     // The reducer keys the call cell off `payload.call_id`; some callers
     // wrap the state payload in `{"value": ...}` (Event Envelope shape).
     let call_payload = payload.get("value").unwrap_or(payload);
-    let Some(participants) = call_payload.get("participants").and_then(Value::as_array) else {
+    let Some(participant) = call_payload
+        .get("roster_delta")
+        .filter(|delta| delta.get("op").and_then(Value::as_str) == Some("join"))
+        .and_then(|delta| delta.get("participant"))
+    else {
         return Ok(());
     };
-    if !participants
-        .iter()
-        .any(|participant| participant.get("participant_binding").is_some())
-    {
+    if participant.get("participant_binding").is_none() {
         return Ok(());
     }
 
@@ -256,10 +257,10 @@ pub(crate) fn verify_call_state_participant_bindings(
     )?;
     let notary_key = state.notary_verifying_key();
 
-    for participant in participants {
-        let Some(binding) = participant.get("participant_binding") else {
-            continue;
-        };
+    {
+        let binding = participant
+            .get("participant_binding")
+            .expect("presence checked above");
 
         // (a) issuer anchoring — current epoch service_id / focus issuer_kids.
         let issuer_kid = binding_str(binding, "issuer_kid")
@@ -340,18 +341,17 @@ pub(crate) fn verify_call_state_participant_bindings(
             .ok_or("participant_binding_invalid: participant_binding.sig is required")?;
         let canonical = canonical_value_from_wire(binding);
         if verify_binding_signature(&canonical, sig, &notary_key) {
-            continue;
+            return Ok(());
         }
         if let Ok(resolved) = crate::jws_verify::resolve_ed25519_pubkey(state, issuer_kid)
             && verify_binding_signature(&canonical, sig, &resolved)
         {
-            continue;
+            return Ok(());
         }
         return Err(
             "participant_binding_invalid: participant_binding.sig failed Ed25519 verification",
         );
     }
-    Ok(())
 }
 
 /// Per-field mismatch reason (static strings to satisfy the `&'static str`
@@ -429,7 +429,7 @@ mod cross_impl_tests {
             // Unsigned metadata — MUST NOT enter the signing input.
             scheme: arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.to_owned(),
             sig: String::new(),
-            issuer_kid: "did:web:media.example#media-token".to_owned(),
+            issuer_kid: arkret_wire::DidUrl::new("did:web:media.example#media-token").unwrap(),
             issued_at: "2026-05-27T12:30:00.000Z".parse().unwrap(),
             // The seven authoritative fields.
             realm_id: RealmId::new(REALM_ID).unwrap(),

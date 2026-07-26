@@ -816,7 +816,6 @@ pub(crate) async fn submit_federation_events(
     let EventsSubmitFederationRequestBody {
         service_binding_ref,
         events,
-        mut seals,
         signer_key_evidence,
         agent_signer_evidence_bundle,
         idempotency_key: _,
@@ -1304,30 +1303,6 @@ pub(crate) async fn submit_federation_events(
             });
             continue;
         }
-        if let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str)
-            && let Err(error) = apply_federated_seal_prerequisites(
-                state,
-                &binding_realm,
-                seal_ref,
-                &mut seals,
-            )
-            .await
-        {
-            let dependency_pending = error.message.contains("missing")
-                || error.message.contains("unknown predecessor")
-                || error.message.contains("not projected");
-            if dependency_pending {
-                render_error(
-                    res,
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "federation_dependencies_pending",
-                    "a referenced Seal or its covered Control Events have not arrived yet",
-                );
-            } else {
-                render_error(res, error.http_status(), error.wire_code(), &error.message);
-            }
-            return;
-        }
         if event_string_field_from_value(&envelope, "kind").as_deref()
             == Some(arkret_wire::events::EventKind::MLS_WELCOME)
         {
@@ -1514,76 +1489,6 @@ pub(crate) async fn submit_federation_events(
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     )));
-}
-
-async fn apply_federated_seal_prerequisites(
-    state: &AppState,
-    realm_id: &str,
-    seal_ref: &str,
-    transported: &mut Vec<Seal>,
-) -> Result<(), AppError> {
-    let target = arkret_identifiers::SealId::new(seal_ref.to_owned())
-        .map_err(|_| AppError::invalid_param("federated DataEvent seal_ref is invalid"))?;
-    if state.projections().seal_by_id(&target).map_err(|error| {
-        AppError::internal(format!("federated Seal prerequisite lookup failed: {error}"))
-    })?.is_some()
-    {
-        return Ok(());
-    }
-
-    transported.sort_by(|left, right| {
-        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
-    });
-    let mut required = BTreeSet::from([target.clone()]);
-    loop {
-        let before = required.len();
-        let predecessors = transported
-            .iter()
-            .filter(|seal| required.contains(&seal.id))
-            .flat_map(|seal| seal.predecessor_refs.iter().cloned())
-            .collect::<Vec<_>>();
-        required.extend(predecessors);
-        if required.len() == before {
-            break;
-        }
-    }
-    if !transported.iter().any(|seal| seal.id == target) {
-        return Err(AppError::new(
-            ErrorCode::DependencyMissing,
-            "federated DataEvent is missing its referenced Seal prerequisite",
-        ));
-    }
-    let relevant = transported
-        .iter()
-        .filter(|seal| required.contains(&seal.id))
-        .cloned()
-        .collect::<Vec<_>>();
-    for seal in &relevant {
-        if seal.realm_id.as_str() != realm_id {
-            return Err(AppError::new(
-                ErrorCode::SchemaViolation,
-                "federated Seal prerequisite belongs to another Realm",
-            ));
-        }
-    }
-    let realm = RealmId::new(realm_id.to_owned())
-        .map_err(|_| AppError::invalid_param("federated Seal Realm is invalid"))?;
-    crate::routing::events::event_log::governance_proof::apply_transported_realm_event_seals(
-        state,
-        &realm,
-        &relevant,
-    )
-    .await?;
-    if state.projections().seal_by_id(&target).map_err(|error| {
-        AppError::internal(format!("federated Seal prerequisite lookup failed: {error}"))
-    })?.is_none()
-    {
-        return Err(AppError::new(
-            ErrorCode::DependencyMissing,
-            "federated DataEvent referenced Seal was not projected",
-        ));
-    }
-    Ok(())
 }
 
 async fn project_verified_federated_device_evidence(
