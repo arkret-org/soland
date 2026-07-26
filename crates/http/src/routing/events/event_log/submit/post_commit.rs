@@ -113,6 +113,34 @@ pub(super) fn remove_rejected_claim_active_material(
     }
 }
 
+fn federation_seal_prerequisites(state: &AppState, events: &[Event]) -> Result<Vec<Seal>, String> {
+    let mut pending = events
+        .iter()
+        .filter_map(|event| event.seal_ref.clone())
+        .collect::<Vec<_>>();
+    let mut by_id = BTreeMap::new();
+    while let Some(seal_id) = pending.pop() {
+        if by_id.contains_key(&seal_id) {
+            continue;
+        }
+        let seal = state
+            .projections()
+            .seal_by_id(&seal_id)
+            .map_err(|error| format!("read federation Seal prerequisite {seal_id}: {error}"))?
+            .ok_or_else(|| format!("federation Seal prerequisite {seal_id} is unavailable"))?;
+        pending.extend(seal.predecessor_refs.iter().cloned());
+        by_id.insert(seal_id, seal);
+    }
+    let mut seals = by_id.into_values().collect::<Vec<_>>();
+    seals.sort_by(|left, right| {
+        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
+    });
+    if seals.len() > arkret_models_collaboration::event_sync::MAX_FEDERATED_SEAL_PREREQUISITES {
+        return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
+    }
+    Ok(seals)
+}
+
 pub(super) async fn enqueue_peer_event_fanout(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
@@ -229,6 +257,13 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             state, &events,
         )
         .await;
+    let seals = match federation_seal_prerequisites(state, &events) {
+        Ok(seals) => seals,
+        Err(error) => {
+            tracing::warn!(%error, realm_id = %first.realm_id, "failed to resolve peer Event batch Seal prerequisites");
+            return;
+        }
+    };
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -260,6 +295,7 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: events.clone(),
+            seals: seals.clone(),
             signer_key_evidence: signer_key_evidence.clone(),
             agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
             idempotency_key: Some(idempotency_key.clone()),
@@ -461,9 +497,22 @@ pub(super) async fn peer_event_fanout_records(
             )
             .await
             .or_else(|| agent_signer_evidence_bundle.clone());
+        let seals = match federation_seal_prerequisites(state, &peer_events) {
+            Ok(seals) => seals,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    event_id,
+                    peer_did = %peer.service_id,
+                    "failed to resolve dynamic peer Event Seal prerequisites"
+                );
+                continue;
+            }
+        };
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: peer_events,
+            seals,
             signer_key_evidence: peer_signer_key_evidence,
             agent_signer_evidence_bundle: peer_agent_signer_evidence_bundle,
             idempotency_key: Some(idempotency_key.clone()),
@@ -725,6 +774,7 @@ async fn realm_bootstrap_fanout_record(
     let body = EventsSubmitFederationRequestBody {
         service_binding_ref,
         events,
+        seals: Vec::new(),
         signer_key_evidence,
         agent_signer_evidence_bundle,
         idempotency_key: Some(idempotency_key.clone()),

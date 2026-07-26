@@ -785,6 +785,44 @@ fn batch_has_directed_invite_delivery_for_destination(
     })
 }
 
+async fn accept_federated_seal_prerequisite(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+    envelope: &Value,
+    seals: &[arkret_wire::Seal],
+) -> Result<(), AppError> {
+    let Some(seal_ref) = envelope.get("seal_ref").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    let seal_id = arkret_identifiers::SealId::new(seal_ref.to_owned())
+        .map_err(|error| AppError::invalid_param(format!("invalid seal_ref: {error}")))?;
+    if state
+        .projections()
+        .seal_by_id(&seal_id)
+        .map_err(|error| {
+            AppError::internal(format!("read transported Seal prerequisite: {error}"))
+        })?
+        .is_some()
+    {
+        return Ok(());
+    }
+    let target_index = seals
+        .iter()
+        .position(|seal| seal.id == seal_id)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::DependencyMissing,
+                "DataEvent seal_ref is absent from local state and federation seals[]",
+            )
+        })?;
+    crate::routing::events::event_log::governance_proof::accept_federated_event_seal_path(
+        state,
+        realm_id,
+        &seals[..=target_index],
+    )
+    .await
+}
+
 pub(crate) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
@@ -816,10 +854,22 @@ pub(crate) async fn submit_federation_events(
     let EventsSubmitFederationRequestBody {
         service_binding_ref,
         events,
+        seals,
         signer_key_evidence,
         agent_signer_evidence_bundle,
         idempotency_key: _,
     } = submit;
+    if seals.windows(2).any(|pair| {
+        (pair[0].notary_seq, pair[0].id.as_str()) >= (pair[1].notary_seq, pair[1].id.as_str())
+    }) {
+        render_error(
+            res,
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "federation seals must be unique and ordered by (notary_seq, id)",
+        );
+        return;
+    }
     let mut verified_device_generations = BTreeMap::<(String, String), String>::new();
     for evidence in &signer_key_evidence {
         match super::validate_federated_device_signing_key_evidence(state, evidence).await {
@@ -1411,6 +1461,23 @@ pub(crate) async fn submit_federation_events(
             })
             .cloned()
             .collect::<Vec<_>>();
+        if let Err(error) = accept_federated_seal_prerequisite(
+            state,
+            &service_binding_ref.realm_id,
+            &envelope,
+            &seals,
+        )
+        .await
+        {
+            tracing::debug!(%error, event_id = %id, "federation Seal prerequisite is unavailable");
+            render_error(
+                res,
+                StatusCode::SERVICE_UNAVAILABLE,
+                "federation_dependencies_pending",
+                "a required signed Seal or its accepted Control Event ancestry is unavailable",
+            );
+            return;
+        }
         match submit_event_value_with_context(
             state,
             &session,

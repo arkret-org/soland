@@ -969,6 +969,18 @@ pub(crate) async fn materialize_realm_event_seal(
     Ok(materialize_realm_control(state, realm_id).await?.seal_view)
 }
 
+pub(crate) async fn accept_federated_event_seal_path(
+    state: &AppState,
+    realm_id: &RealmId,
+    seals: &[arkret_wire::Seal],
+) -> Result<(), AppError> {
+    if seals.is_empty() {
+        return Ok(());
+    }
+    materialize_realm_control_with_transported_seals(state, realm_id, Some(seals)).await?;
+    Ok(())
+}
+
 async fn materialize_governance_proof(
     state: &AppState,
     request: &MlsGovernanceProofRequest,
