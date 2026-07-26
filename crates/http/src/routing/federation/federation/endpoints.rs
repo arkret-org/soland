@@ -221,12 +221,21 @@ pub(crate) async fn federation_seals_pull(
         .projections()
         .realm_seal_leaves(&realm)
         .unwrap_or_default();
-    let mut seals = Vec::with_capacity(leaves.len());
-    for leaf in &leaves {
-        if let Ok(Some(seal)) = state.projections().seal_by_id(leaf) {
-            seals.push(seal);
+    let mut pending = leaves;
+    let mut seals_by_id = std::collections::BTreeMap::new();
+    while let Some(seal_id) = pending.pop() {
+        if seals_by_id.contains_key(&seal_id) {
+            continue;
+        }
+        if let Ok(Some(seal)) = state.projections().seal_by_id(&seal_id) {
+            pending.extend(seal.predecessor_refs.iter().cloned());
+            seals_by_id.insert(seal_id, seal);
         }
     }
+    let mut seals = seals_by_id.into_values().collect::<Vec<_>>();
+    seals.sort_by(|left, right| {
+        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
+    });
     json_ok(FederationSealsOutcome {
         seals,
         fanout_topology: state

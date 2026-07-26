@@ -55,7 +55,15 @@ async fn generation_view_from_records(
     let Some(mut last_unconflicted) =
         bootstrap_generation_ref(state, principal_id, records).await?
     else {
-        return Ok(None);
+        let devices = state.identities().devices_for_actor(principal_id).await?;
+        return Ok(federated_generation_view_from_payloads(
+            devices
+                .iter()
+                .filter(|device| {
+                    device.verification_state == "verified" && device.revoked_at.is_none()
+                })
+                .map(|device| &device.payload),
+        ));
     };
     let mut status = DeviceGenerationStatus::Active;
     let mut slots = BTreeMap::<u64, Vec<&CanonicalEventRecord>>::new();
@@ -107,6 +115,43 @@ async fn generation_view_from_records(
         current_ref: last_unconflicted,
         status,
     }))
+}
+
+fn federated_generation_view_from_payloads<'a>(
+    payloads: impl IntoIterator<Item = &'a Value>,
+) -> Option<DeviceGenerationView> {
+    let mut generations = BTreeMap::<u64, BTreeSet<String>>::new();
+    for payload in payloads {
+        if payload.get("federated_authorization").is_none() {
+            continue;
+        }
+        let Some(generation_ref) = payload
+            .get("authorized_generation_ref")
+            .and_then(Value::as_str)
+        else {
+            continue;
+        };
+        let Some(height) = generation_ref
+            .split_once('-')
+            .and_then(|(height, _)| height.parse::<u64>().ok())
+        else {
+            continue;
+        };
+        generations
+            .entry(height)
+            .or_default()
+            .insert(generation_ref.to_owned());
+    }
+    let (_, candidates) = generations.into_iter().next_back()?;
+    let current_ref = candidates.iter().next()?.clone();
+    Some(DeviceGenerationView {
+        current_ref,
+        status: if candidates.len() == 1 {
+            DeviceGenerationStatus::Active
+        } else {
+            DeviceGenerationStatus::Conflicted
+        },
+    })
 }
 
 async fn bootstrap_generation_ref(
@@ -449,6 +494,28 @@ mod tests {
             envelope,
             received_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn federated_device_evidence_uses_latest_unconflicted_did_generation() {
+        let first = json!({
+            "authorized_generation_ref": "1-QmFirst",
+            "federated_authorization": {"accepted_at": "2026-07-25T01:00:00Z"}
+        });
+        let second = json!({
+            "authorized_generation_ref": "2-QmSecond",
+            "federated_authorization": {"accepted_at": "2026-07-25T02:00:00Z"}
+        });
+        let view = federated_generation_view_from_payloads([&first, &second]).unwrap();
+        assert_eq!(view.current_ref, "2-QmSecond");
+        assert_eq!(view.status, DeviceGenerationStatus::Active);
+
+        let fork = json!({
+            "authorized_generation_ref": "2-QmFork",
+            "federated_authorization": {"accepted_at": "2026-07-25T02:00:01Z"}
+        });
+        let conflicted = federated_generation_view_from_payloads([&first, &second, &fork]).unwrap();
+        assert_eq!(conflicted.status, DeviceGenerationStatus::Conflicted);
     }
 
     #[test]

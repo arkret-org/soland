@@ -92,6 +92,19 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
         )
         .map(str::to_owned);
     }
+    let recipient_service_id = state
+        .projections()
+        .snapshot()
+        .member(operation.realm_id.as_str(), recipient_actor_id)
+        .and_then(|member| member.recipient_service_id.clone());
+    if recipient_device_is_remote(state.service_id(), recipient_service_id.as_deref()) {
+        // The canonical member delivery binding assigns this recipient to a
+        // different Principal Server. That server validates its local device
+        // record when the Welcome crosses federation ingress; treating the
+        // absent device row on the source server as revocation would make
+        // every cross-PS Welcome impossible.
+        return None;
+    }
     let device_revoked = crate::routing::identity::auth::is_device_revoked(
         state,
         recipient_actor_id,
@@ -99,6 +112,10 @@ pub(super) async fn preflight_mls_welcome_recipient_reject(
     )
     .await;
     welcome_recipient_trust_reject_reason(None, false, device_revoked).map(str::to_owned)
+}
+
+fn recipient_device_is_remote(local_service_id: &str, recipient_service_id: Option<&str>) -> bool {
+    recipient_service_id.is_some_and(|service_id| service_id != local_service_id)
 }
 
 fn welcome_recipient_trust_reject_reason(
@@ -115,7 +132,7 @@ fn welcome_recipient_trust_reject_reason(
 
 #[cfg(test)]
 mod tests {
-    use super::welcome_recipient_trust_reject_reason;
+    use super::{recipient_device_is_remote, welcome_recipient_trust_reject_reason};
 
     #[test]
     fn native_agent_welcome_uses_agent_authorization_instead_of_device_record() {
@@ -135,5 +152,21 @@ mod tests {
             welcome_recipient_trust_reject_reason(None, false, true),
             Some("device_revoked")
         );
+    }
+
+    #[test]
+    fn remote_recipient_device_is_validated_by_its_home_service() {
+        assert!(recipient_device_is_remote(
+            "did:web:soland-alpha.example",
+            Some("did:web:soland-beta.example"),
+        ));
+        assert!(!recipient_device_is_remote(
+            "did:web:soland-alpha.example",
+            Some("did:web:soland-alpha.example"),
+        ));
+        assert!(!recipient_device_is_remote(
+            "did:web:soland-alpha.example",
+            None,
+        ));
     }
 }

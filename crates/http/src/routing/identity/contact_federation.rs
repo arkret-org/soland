@@ -507,6 +507,12 @@ async fn accept_delivered_direct_binding(
             .map_err(|error| AppError::internal(error.to_string()))?
             .is_some();
         if !available {
+            tracing::warn!(
+                target: "soland_http::error",
+                realm_id = %payload.realm_id,
+                event_ref = %event_ref,
+                "direct binding dependency is not canonical yet"
+            );
             return Err(AppError::new(
                 soland_http::error::ErrorCode::TemporarilyUnavailable,
                 "direct binding dependencies have not arrived yet",

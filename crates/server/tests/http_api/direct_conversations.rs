@@ -21,16 +21,12 @@ async fn submit_direct_materialization_without_mls(
     token: &str,
     draft: &Value,
 ) -> Value {
-    submit_direct_event_drafts_batch(
-        state.clone(),
-        token,
-        &[
-            &draft["realm_event"],
-            &draft["founding_grant_event"],
-            &draft["peer_member_event"],
-        ],
-    )
-    .await;
+    let mut bootstrap_drafts = vec![&draft["realm_event"], &draft["founding_grant_event"]];
+    if !draft["creator_member_event"].is_null() {
+        bootstrap_drafts.push(&draft["creator_member_event"]);
+    }
+    bootstrap_drafts.push(&draft["peer_member_event"]);
+    submit_direct_event_drafts_batch(state.clone(), token, &bootstrap_drafts).await;
     submit_direct_event_draft(state, token, &draft["binding_event"], false).await
 }
 

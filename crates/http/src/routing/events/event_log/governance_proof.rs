@@ -7,11 +7,12 @@ use arkret_models_crypto::{
     MlsGovernanceProofRequest, build_mls_governance_proof_chunks,
     derive_mls_discussion_metadata_digest, is_mls_membership_frontier_component,
 };
-use arkret_state::lattice::{CellState, SealedOp, ordered_log::IssuedOp};
+use arkret_state::lattice::ordered_log::IssuedOp;
+use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
-use arkret_state::state::compute_state_root;
+use arkret_state::state::{compute_state_root, control_event_set_root};
 use arkret_wire::move_event::{LatticeOp, LatticeOpType};
-use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event};
+use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event, NotarySig};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
@@ -100,6 +101,369 @@ struct MaterializedRealmControl {
     joined: BTreeMap<CellRef, CellState>,
     seal_view: crate::notary::MaterializedEventSealView,
     covered_event_digests: Vec<MoveId>,
+}
+
+async fn backfill_authoritative_event_seals(
+    state: &AppState,
+    realm_id: &RealmId,
+    joined: &BTreeMap<CellRef, CellState>,
+    event_ops: &[(CellRef, IssuedOp)],
+) -> Result<bool, AppError> {
+    if !state.config().development_mode {
+        return Ok(false);
+    }
+    let notary_cell = CellRef::new(format!(
+        "ak:cell:ak.component.notary.v1:{}",
+        realm_id.as_str()
+    ))
+    .map_err(proof_state_error)?;
+    let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
+        return Ok(false);
+    };
+    let notary = serde_json::from_value::<arkret_wire::notary::NotaryValue>(value.clone())
+        .map_err(|error| {
+            proof_state_error(format!("invalid materialized Realm notary: {error}"))
+        })?;
+    let authority_dids = match notary {
+        arkret_wire::notary::NotaryValue::SingleDid { did, .. } => vec![did.to_string()],
+        arkret_wire::notary::NotaryValue::Threshold { members, .. }
+        | arkret_wire::notary::NotaryValue::OpenSet { members } => {
+            members.into_iter().map(|did| did.to_string()).collect()
+        }
+        arkret_wire::notary::NotaryValue::Mixed {
+            did,
+            recovery_members,
+        } => std::iter::once(did.to_string())
+            .chain(
+                recovery_members
+                    .into_iter()
+                    .map(|member| member.to_string()),
+            )
+            .collect(),
+    };
+    let Some(peer) = crate::routing::federation::federation::configured_peer_targets(state)
+        .into_iter()
+        .find(|peer| {
+            peer.did != *state.service_id() && authority_dids.iter().any(|did| did == &peer.did)
+        })
+    else {
+        return Ok(false);
+    };
+    let mut url = reqwest::Url::parse(&format!(
+        "{}/_soland/peer/federation/seals",
+        peer.url.trim_end_matches('/')
+    ))
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("authoritative Seal backfill URL is invalid: {error}"),
+        )
+    })?;
+    url.query_pairs_mut()
+        .append_pair("realm_id", realm_id.as_str());
+    let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        url.as_str(),
+        "authoritative Event Seal backfill",
+        true,
+        std::time::Duration::from_secs(30),
+    )
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("authoritative Seal backfill target is unavailable: {error}"),
+        )
+    })?;
+    let response = client.get(url).send().await.map_err(|error| {
+        AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!("authoritative Seal backfill request failed: {error}"),
+        )
+    })?;
+    if !response.status().is_success() {
+        return Err(AppError::new(
+            ErrorCode::FrontierUnavailable,
+            format!(
+                "authoritative Seal backfill returned HTTP {}",
+                response.status()
+            ),
+        ));
+    }
+    let outcome = response
+        .json::<crate::routing::federation::federation::FederationSealsOutcome>()
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                format!("authoritative Seal backfill response is invalid: {error}"),
+            )
+        })?;
+    if outcome.seals.is_empty() {
+        return Ok(false);
+    }
+    apply_authoritative_event_seal_path(
+        state,
+        realm_id,
+        &authority_dids,
+        event_ops,
+        &outcome.seals,
+    )
+    .await?;
+    Ok(true)
+}
+
+async fn apply_authoritative_event_seal_path(
+    state: &AppState,
+    realm_id: &RealmId,
+    authority_dids: &[String],
+    event_ops: &[(CellRef, IssuedOp)],
+    seals: &[arkret_wire::Seal],
+) -> Result<(), AppError> {
+    for seal in seals {
+        seal.validate_id().map_err(|error| {
+            proof_state_error(format!("authoritative Event Seal id is invalid: {error}"))
+        })?;
+        seal.validate_structural().map_err(|error| {
+            proof_state_error(format!(
+                "authoritative Event Seal structure is invalid: {error}"
+            ))
+        })?;
+        if &seal.realm_id != realm_id {
+            return Err(proof_state_error(
+                "authoritative Event Seal path crosses Realm boundaries",
+            ));
+        }
+        crate::jws_verify::verify_replay_window(
+            &seal.hlc,
+            state.config().jws_replay_window_seconds,
+        )
+        .map_err(|error| {
+            proof_state_error(format!("authoritative Event Seal replay window: {error}"))
+        })?;
+        if let Some(existing) = state
+            .projections()
+            .seal_by_id(&seal.id)
+            .map_err(|error| proof_state_error(format!("read Event Seal: {error}")))?
+        {
+            if existing != *seal {
+                return Err(proof_state_error(
+                    "authoritative Event Seal id already has different signature material",
+                ));
+            }
+            continue;
+        }
+
+        let mut leaves = state
+            .projections()
+            .realm_seal_leaves(realm_id)
+            .map_err(|error| proof_state_error(format!("read Event Seal frontier: {error}")))?;
+        leaves.sort();
+        if seal.predecessor_refs != leaves {
+            return Err(proof_state_error(
+                "authoritative Event Seal predecessors differ from the local frontier",
+            ));
+        }
+        let current = if leaves.is_empty() {
+            BTreeSet::new()
+        } else {
+            state
+                .projections()
+                .predecessor_covered_events(&leaves)
+                .map_err(|error| {
+                    proof_state_error(format!("read Event Seal predecessor coverage: {error}"))
+                })?
+        };
+        if seal.delta.iter().any(|digest| current.contains(digest)) {
+            return Err(proof_state_error(
+                "authoritative Event Seal delta repeats predecessor coverage",
+            ));
+        }
+        let mut target = current;
+        target.extend(seal.delta.iter().cloned());
+        let declared = seal
+            .covered_event_digests
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if declared.len() != seal.covered_event_digests.len() || declared != target {
+            return Err(proof_state_error(
+                "authoritative Event Seal coverage differs from predecessor coverage plus delta",
+            ));
+        }
+        let expected_control_root = control_event_set_root(&target).map_err(proof_state_error)?;
+        if seal.control_event_set_root != expected_control_root
+            || seal.completeness_root != expected_control_root
+        {
+            return Err(proof_state_error(
+                "authoritative Event Seal control/completeness root mismatch",
+            ));
+        }
+
+        let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
+        for (cell, op) in event_ops
+            .iter()
+            .filter(|(_, issued)| target.contains(&issued.op.move_id))
+        {
+            ops_by_cell
+                .entry(cell.clone())
+                .or_default()
+                .push(op.clone());
+        }
+        let mut target_state = BTreeMap::new();
+        for (cell, ops) in ops_by_cell {
+            let binding = state
+                .projections()
+                .resolve_cell(realm_id, &cell)
+                .map_err(|error| {
+                    proof_state_error(format!(
+                        "resolve authoritative Event Seal cell {cell}: {error}"
+                    ))
+                })?;
+            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
+            if matches!(resolved, CellState::Bottom(_)) {
+                return Err(proof_state_error(format!(
+                    "authoritative Event Seal cell {cell} resolves to Bottom"
+                )));
+            }
+            target_state.insert(cell, resolved);
+        }
+        let expected_state_root = compute_state_root(&target_state).map_err(proof_state_error)?;
+        if seal.state_root != expected_state_root {
+            return Err(proof_state_error(format!(
+                "authoritative Event Seal state_root mismatch: submitted {}, expected {}",
+                seal.state_root, expected_state_root
+            )));
+        }
+        let expected_notary_seq = leaves
+            .iter()
+            .map(|leaf| {
+                state
+                    .projections()
+                    .seal_by_id(leaf)
+                    .map_err(|error| proof_state_error(format!("read Seal predecessor: {error}")))?
+                    .ok_or_else(|| proof_state_error("Event Seal predecessor is missing"))
+                    .map(|predecessor| predecessor.notary_seq)
+            })
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .max()
+            .map_or(Ok(0), |sequence| {
+                sequence
+                    .checked_add(1)
+                    .ok_or_else(|| proof_state_error("Event Seal notary_seq overflow"))
+            })?;
+        if seal.notary_seq != expected_notary_seq {
+            return Err(proof_state_error(
+                "authoritative Event Seal notary_seq does not follow its predecessors",
+            ));
+        }
+
+        let canonical_bytes = seal.canonical_bytes_for_id().map_err(proof_state_error)?;
+        let signatures = match &seal.notary_signature {
+            NotarySig::Single(signature) => std::slice::from_ref(signature),
+            NotarySig::Multi(multi) => multi.signatures.as_slice(),
+            NotarySig::Threshold(_) => {
+                return Err(AppError::new(
+                    ErrorCode::ProfileUnsupported,
+                    "threshold authoritative Event Seal backfill is unsupported",
+                ));
+            }
+        };
+        if signatures.is_empty() {
+            return Err(proof_state_error(
+                "authoritative Event Seal has no signatures",
+            ));
+        }
+        for signature in signatures {
+            let signer = arkret_identity::verification_method_did(&signature.verification_method)
+                .map_err(proof_state_error)?;
+            if !authority_dids.iter().any(|did| did == signer.as_str()) {
+                return Err(proof_state_error(format!(
+                    "Event Seal signer {signer} is not authorized by the Realm notary cell"
+                )));
+            }
+            verify_authoritative_event_seal_signature(
+                state,
+                signature,
+                signer.as_str(),
+                &canonical_bytes,
+            )
+            .await?;
+        }
+
+        let delta = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
+        let new_ops = event_ops
+            .iter()
+            .filter(|(_, issued)| delta.contains(&issued.op.move_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        match state
+            .projections()
+            .commit_event_seal_if_frontier(seal, &leaves, &new_ops, &target)
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                return Err(proof_state_error(
+                    "authoritative Event Seal frontier changed during backfill",
+                ));
+            }
+            Err(error) => {
+                return Err(proof_state_error(format!(
+                    "commit authoritative Event Seal: {error}"
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn verify_authoritative_event_seal_signature(
+    state: &AppState,
+    signature: &arkret_wire::MoveSignature,
+    signer: &str,
+    canonical_bytes: &[u8],
+) -> Result<(), AppError> {
+    let expected_method = format!("{signer}#notary-key");
+    if signature.alg != "EdDSA" || signature.verification_method != expected_method {
+        return Err(proof_state_error(
+            "authoritative Event Seal signature is not bound to the notary key",
+        ));
+    }
+    let expected_digest =
+        Hash::new(arkret_canonical::sha256_digest(canonical_bytes)).map_err(proof_state_error)?;
+    if signature.payload_digest != expected_digest {
+        return Err(proof_state_error(
+            "authoritative Event Seal signature payload_digest mismatch",
+        ));
+    }
+
+    let cached_key = state
+        .federation_peer_verification_method_key(&expected_method)
+        .or_else(|| state.federation_peer_verifying_key(signer));
+    let result = if let Some(key) = cached_key {
+        arkret_signatures::Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(
+                &signature.jws,
+                canonical_bytes,
+                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: key.to_bytes().to_vec(),
+                },
+            )
+            .map_err(|error| error.to_string())
+    } else {
+        crate::jws_verify::verify_jws_ed25519_async(
+            canonical_bytes,
+            &signature.jws,
+            &signature.verification_method,
+            signer,
+            state,
+        )
+        .await
+    };
+    result.map_err(|error| {
+        proof_state_error(format!(
+            "verify authoritative Event Seal signature: {error}"
+        ))
+    })
 }
 
 async fn materialize_realm_control(
@@ -453,7 +817,7 @@ async fn materialize_realm_control(
         )
     })?;
     let covered_event_digests = covered.iter().cloned().collect::<Vec<_>>();
-    let seal_view = crate::notary::ensure_materialized_event_seal(
+    let mut seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
         &covered_event_digests,
@@ -461,8 +825,21 @@ async fn materialize_realm_control(
         &event_ops,
         device_generation_seal_required,
         generation_fence.as_ref(),
-    )
-    .map_err(|error| {
+    );
+    if matches!(seal_view, Err(crate::notary::NotaryError::NotAuthorized(_)))
+        && backfill_authoritative_event_seals(state, realm_id, &joined, &event_ops).await?
+    {
+        seal_view = crate::notary::ensure_materialized_event_seal(
+            state,
+            realm_id,
+            &covered_event_digests,
+            &state_root,
+            &event_ops,
+            device_generation_seal_required,
+            generation_fence.as_ref(),
+        );
+    }
+    let seal_view = seal_view.map_err(|error| {
         AppError::new(
             ErrorCode::FrontierUnavailable,
             format!("accepted Event Seal materialization failed: {error}"),
@@ -926,18 +1303,20 @@ pub(crate) fn canonical_event_ops(
     move_id: &MoveId,
     invite_accept_from: Option<&str>,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
-    Ok(canonical_event_sealed_ops(event, move_id, invite_accept_from)?
-        .into_iter()
-        .map(|(cell, op)| {
-            (
-                cell,
-                IssuedOp {
-                    issuer: event.actor_id.clone(),
-                    op,
-                },
-            )
-        })
-        .collect())
+    Ok(
+        canonical_event_sealed_ops(event, move_id, invite_accept_from)?
+            .into_iter()
+            .map(|(cell, op)| {
+                (
+                    cell,
+                    IssuedOp {
+                        issuer: event.actor_id.clone(),
+                        op,
+                    },
+                )
+            })
+            .collect(),
+    )
 }
 
 fn canonical_event_sealed_ops(

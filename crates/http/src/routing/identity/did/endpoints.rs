@@ -791,6 +791,18 @@ pub(crate) async fn identity_resolve(
             record.method_evidence,
         ));
     }
+    if let Some(document) = super::document::federation_peer_did_document(state, did) {
+        return json_ok(identity_resolve_outcome(
+            body.did,
+            document,
+            None,
+            None,
+            json!({
+                "mode": "federation_peer_discovery",
+                "source": "endpoint_bound_did_document",
+            }),
+        ));
+    }
     let sdk_document = state.dids().resolve_did(&body.did).await.ok();
     if let Some(doc) = sdk_document {
         return json_ok(identity_resolve_outcome(

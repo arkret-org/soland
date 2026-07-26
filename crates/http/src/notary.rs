@@ -37,7 +37,8 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use arkret_identifiers::{CellRef, Hash, Hlc, MoveId, RealmId, SealId};
-use arkret_state::lattice::{CellState, SealedOp, ordered_log::IssuedOp};
+use arkret_state::lattice::ordered_log::IssuedOp;
+use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{StoreError, compute_state_root, control_event_set_root};
 use arkret_wire::{Move, MoveSignature, NotarySig, Seal};
 use base64::Engine as _;
@@ -316,10 +317,7 @@ impl NotaryWorker {
     ///   default. If the latest leaf is older than `revocation_freshness_window_ms` (default
     ///   60_000ms), the recovery set takes over with the same lex-smallest leader election.
     fn is_authorized_for(&self, state: &AppState, realm_id: &RealmId) -> Result<bool, NotaryError> {
-        let notary_cell = match CellRef::new(format!(
-            "ak:cell:ak.component.notary.v1:{}",
-            realm_id.as_str()
-        )) {
+        let notary_cell = match notary_cell_ref(realm_id) {
             Ok(c) => c,
             Err(_) => return Ok(true),
         };
@@ -331,12 +329,60 @@ impl NotaryWorker {
             // notary" applies until the first Move sets the cell.
             return Ok(true);
         }
+        self.is_authorized_for_notary_ops(state, realm_id, &notary_cell, &ops)
+    }
+
+    /// Authorize Event-Seal materialization against the complete accepted
+    /// canonical Event state when the sealed cell is still empty.
+    ///
+    /// A federated replica can receive a Realm create Event before it receives
+    /// the authoritative genesis Seal. Treating that state as an implicit local
+    /// genesis would let every replica mint a service-signed competing Seal.
+    /// The create Event's derived notary-cell write is already part of
+    /// `event_ops`, so it is the fail-closed authority until a sealed value is
+    /// available.
+    fn is_authorized_for_event_state(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        event_ops: &[(CellRef, IssuedOp)],
+    ) -> Result<bool, NotaryError> {
+        let notary_cell = match notary_cell_ref(realm_id) {
+            Ok(cell) => cell,
+            Err(_) => return Ok(false),
+        };
+        let sealed = state
+            .projections()
+            .sealed_ops_for_cell(realm_id, &notary_cell)?;
+        if !sealed.is_empty() {
+            return self.is_authorized_for_notary_ops(state, realm_id, &notary_cell, &sealed);
+        }
+        let accepted = event_ops
+            .iter()
+            .filter(|(cell, _)| cell == &notary_cell)
+            .map(|(_, op)| op.clone())
+            .collect::<Vec<_>>();
+        if accepted.is_empty() {
+            // Legacy Move materialization has no canonical Event state to
+            // consult and retains the implicit local-genesis rule.
+            return Ok(true);
+        }
+        self.is_authorized_for_notary_ops(state, realm_id, &notary_cell, &accepted)
+    }
+
+    fn is_authorized_for_notary_ops(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        notary_cell: &CellRef,
+        ops: &[IssuedOp],
+    ) -> Result<bool, NotaryError> {
         // Resolve via cell registry to get the lattice, then join.
         let binding = state
             .projections()
-            .resolve_cell(realm_id, &notary_cell)
+            .resolve_cell(realm_id, notary_cell)
             .map_err(|e| NotaryError::Store(format!("notary cell resolve: {e}")))?;
-        let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &notary_cell, &ops);
+        let resolved = arkret_state::join_cell(binding.lattice.as_ref(), notary_cell, ops);
         let CellState::Value(value) = resolved else {
             // Bottom on notary cell = Realm-wide pause; the notary is
             // not authorized to advance until recovery.
@@ -656,6 +702,13 @@ fn notary_profile_wire(value: &serde_json::Value) -> serde_json::Value {
     value
 }
 
+fn notary_cell_ref(realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::IdentifierError> {
+    CellRef::new(format!(
+        "ak:cell:ak.component.notary.v1:{}",
+        realm_id.as_str()
+    ))
+}
+
 fn zero_notary_sig_placeholder() -> Result<MoveSignature, NotaryError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
         .map_err(|e| NotaryError::Construction(format!("zero payload hash: {e}")))?;
@@ -813,7 +866,7 @@ pub fn ensure_materialized_event_seal(
         && leaves.is_empty()
         && generation_fence.is_none_or(|requirement| !requirement.predecessor_refs.is_empty())
     {
-        if !worker.is_authorized_for(state, realm_id)? {
+        if !worker.is_authorized_for_event_state(state, realm_id, event_ops)? {
             return Err(NotaryError::NotAuthorized(realm_id.to_string()));
         }
         leaves = materialize_genesis_if_empty(&worker, state, realm_id)?;
@@ -882,7 +935,7 @@ pub fn ensure_materialized_event_seal(
                 .to_owned(),
         ));
     }
-    if !worker.is_authorized_for(state, realm_id)? {
+    if !worker.is_authorized_for_event_state(state, realm_id, event_ops)? {
         return Err(NotaryError::NotAuthorized(realm_id.to_string()));
     }
 
@@ -1133,6 +1186,73 @@ mod tests {
     fn is_round_leader_returns_false_for_empty_member_set() {
         let worker = NotaryWorker::for_service("did:ak:a");
         assert!(!worker.is_round_leader::<String>(&[]));
+    }
+
+    #[test]
+    fn event_genesis_authorization_uses_the_create_events_notary_cell() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = RealmId::new("ak:realm:019f9c00-0000-7000-8000-000000000001").unwrap();
+        let notary_cell = notary_cell_ref(&realm_id).unwrap();
+        let move_id = MoveId::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+        let local_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
+            arkret_identifiers::Did::new(state.service_id().clone()).unwrap(),
+        ))
+        .unwrap();
+        let event_ops = vec![(
+            notary_cell.clone(),
+            IssuedOp {
+                issuer: arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                op: SealedOp::new(
+                    move_id.clone(),
+                    arkret_wire::move_event::LatticeOp {
+                        op_type: arkret_wire::move_event::LatticeOpType::Set,
+                        tag: None,
+                        value: Some(local_notary),
+                        from: None,
+                        to: None,
+                        reason: None,
+                        issuer_seq: None,
+                    },
+                ),
+            },
+        )];
+        let local_worker = NotaryWorker::for_service(state.service_id().clone());
+        assert!(
+            local_worker
+                .is_authorized_for_event_state(&state, &realm_id, &event_ops)
+                .unwrap()
+        );
+
+        let remote_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
+            arkret_identifiers::Did::new("did:web:notary.example".to_owned()).unwrap(),
+        ))
+        .unwrap();
+        let remote_event_ops = vec![(
+            notary_cell,
+            IssuedOp {
+                issuer: arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
+                op: SealedOp::new(
+                    move_id,
+                    arkret_wire::move_event::LatticeOp {
+                        op_type: arkret_wire::move_event::LatticeOpType::Set,
+                        tag: None,
+                        value: Some(remote_notary),
+                        from: None,
+                        to: None,
+                        reason: None,
+                        issuer_seq: None,
+                    },
+                ),
+            },
+        )];
+        assert!(
+            !local_worker
+                .is_authorized_for_event_state(&state, &realm_id, &remote_event_ops)
+                .unwrap()
+        );
     }
 
     fn recovery_first_seal_requirement(

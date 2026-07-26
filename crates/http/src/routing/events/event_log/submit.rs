@@ -731,6 +731,60 @@ async fn direct_bootstrap_source_is_contact_authority(
         })
 }
 
+fn batch_has_directed_invite_delivery_for_destination(
+    destination_service_id: &str,
+    events: &[Value],
+) -> bool {
+    let Some(invite) = events.last() else {
+        return false;
+    };
+    if event_string_field_from_value(invite, "kind").as_deref()
+        != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+        || invite
+            .get("payload")
+            .and_then(|payload| payload.get("invite_delivery_target"))
+            .and_then(|target| target.get("recipient_service_id"))
+            .and_then(Value::as_str)
+            != Some(destination_service_id)
+    {
+        return false;
+    }
+    let by_id = events
+        .iter()
+        .filter_map(|event| event_string_field_from_value(event, "event_id").map(|id| (id, event)))
+        .collect::<BTreeMap<_, _>>();
+    let mut ancestors = std::collections::BTreeSet::new();
+    let mut pending = invite
+        .get("prev_refs")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    while let Some(event_id) = pending.pop() {
+        if !ancestors.insert(event_id.clone()) {
+            continue;
+        }
+        let Some(event) = by_id.get(event_id.as_str()) else {
+            continue;
+        };
+        pending.extend(
+            event
+                .get("prev_refs")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned),
+        );
+    }
+    events[..events.len() - 1].iter().all(|event| {
+        event_string_field_from_value(event, "event_id")
+            .is_some_and(|event_id| ancestors.contains(&event_id))
+    })
+}
+
 pub(crate) async fn submit_federation_events(
     state: &AppState,
     req: &Request,
@@ -766,18 +820,28 @@ pub(crate) async fn submit_federation_events(
         agent_signer_evidence_bundle,
         idempotency_key: _,
     } = submit;
+    let mut verified_device_generations = BTreeMap::<(String, String), String>::new();
     for evidence in &signer_key_evidence {
-        if let Err(error) =
-            super::validate_federated_device_signing_key_evidence(state, evidence).await
-        {
-            tracing::debug!(%error, "federated device authorization evidence rejected");
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "federation signer_key_evidence has no valid portable device authorization",
-            );
-            return;
+        match super::validate_federated_device_signing_key_evidence(state, evidence).await {
+            Ok(generation_ref) => {
+                verified_device_generations.insert(
+                    (
+                        evidence.actor_id.to_string(),
+                        evidence.device_id.to_string(),
+                    ),
+                    generation_ref,
+                );
+            }
+            Err(error) => {
+                tracing::debug!(%error, "federated device authorization evidence rejected");
+                render_error(
+                    res,
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    "federation signer_key_evidence has no valid portable device authorization",
+                );
+                return;
+            }
         }
     }
     let mut verified_agent_signer_evidence = Vec::new();
@@ -997,32 +1061,35 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     }
-    match federation_service_binding_current_for_destination(state, &service_binding_ref).await {
-        FederationServiceBindingCheck::Current => {}
-        FederationServiceBindingCheck::Reject(reason) => {
-            render_error(res, StatusCode::CONFLICT, reason, reason);
-            return;
-        }
-        FederationServiceBindingCheck::Stale(evidence) => {
-            res.status_code(StatusCode::CONFLICT);
-            res.render(Json(
-                crate::routing::federation::federation::delivery_binding_stale_response(
-                    &evidence.new_recipient_service_id,
-                    &evidence.actor_id,
-                    &evidence.handover_frontier,
-                    evidence.witness,
-                ),
-            ));
-            return;
-        }
-        FederationServiceBindingCheck::HandedOver(evidence) => {
-            res.status_code(StatusCode::CONFLICT);
-            res.render(Json(
-                crate::routing::federation::federation::delivery_binding_handed_over_response(
-                    &evidence.new_recipient_service_id,
-                ),
-            ));
-            return;
+    if !batch_has_directed_invite_delivery_for_destination(state.service_id(), &events) {
+        match federation_service_binding_current_for_destination(state, &service_binding_ref).await
+        {
+            FederationServiceBindingCheck::Current => {}
+            FederationServiceBindingCheck::Reject(reason) => {
+                render_error(res, StatusCode::CONFLICT, reason, reason);
+                return;
+            }
+            FederationServiceBindingCheck::Stale(evidence) => {
+                res.status_code(StatusCode::CONFLICT);
+                res.render(Json(
+                    crate::routing::federation::federation::delivery_binding_stale_response(
+                        &evidence.new_recipient_service_id,
+                        &evidence.actor_id,
+                        &evidence.handover_frontier,
+                        evidence.witness,
+                    ),
+                ));
+                return;
+            }
+            FederationServiceBindingCheck::HandedOver(evidence) => {
+                res.status_code(StatusCode::CONFLICT);
+                res.render(Json(
+                    crate::routing::federation::federation::delivery_binding_handed_over_response(
+                        &evidence.new_recipient_service_id,
+                    ),
+                ));
+                return;
+            }
         }
     }
     let mut accepted = Vec::new();
@@ -1170,7 +1237,16 @@ pub(crate) async fn submit_federation_events(
         match submit_realm_bootstrap_batch(state, &session, events, Some(admissions.as_slice()))
             .await
         {
-            Ok(outcome) => res.render(Json(outcome)),
+            Ok(outcome) => {
+                project_verified_federated_device_evidence(
+                    state,
+                    &signer_key_evidence,
+                    &verified_device_generations,
+                    &source_service_id,
+                )
+                .await;
+                res.render(Json(outcome));
+            }
             Err(error) => render_submit_one_error(res, error),
         }
         return;
@@ -1313,12 +1389,28 @@ pub(crate) async fn submit_federation_events(
         };
         let admission = InternalEventAdmission::peer_federated_event(
             binding_realm.clone(),
-            actor,
+            actor.clone(),
             device_id,
             id.clone(),
             signer_key_evidence.clone(),
             verified_agent_signer_evidence.clone(),
         );
+        let matching_device_evidence = signer_key_evidence
+            .iter()
+            .filter(|evidence| {
+                evidence.actor_id.as_str() == actor
+                    && envelope
+                        .get("proofs")
+                        .and_then(Value::as_array)
+                        .is_some_and(|proofs| {
+                            proofs.iter().any(|proof| {
+                                proof.get("verification_method").and_then(Value::as_str)
+                                    == Some(evidence.verification_method.as_str())
+                            })
+                        })
+            })
+            .cloned()
+            .collect::<Vec<_>>();
         match submit_event_value_with_context(
             state,
             &session,
@@ -1334,6 +1426,13 @@ pub(crate) async fn submit_federation_events(
                 if response.duplicate {
                     duplicate.push(response.event_id);
                 }
+                project_verified_federated_device_evidence(
+                    state,
+                    &matching_device_evidence,
+                    &verified_device_generations,
+                    &source_service_id,
+                )
+                .await;
             }
             Err(error) => {
                 if error.code == "dependency_missing" {
@@ -1390,6 +1489,35 @@ pub(crate) async fn submit_federation_events(
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     )));
+}
+
+async fn project_verified_federated_device_evidence(
+    state: &AppState,
+    evidence: &[arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence],
+    generations: &BTreeMap<(String, String), String>,
+    source_service_id: &str,
+) {
+    for entry in evidence {
+        let key = (entry.actor_id.to_string(), entry.device_id.to_string());
+        let Some(generation_ref) = generations.get(&key) else {
+            continue;
+        };
+        if let Err(error) = super::project_federated_device_signing_key_evidence(
+            state,
+            entry,
+            generation_ref,
+            source_service_id,
+        )
+        .await
+        {
+            tracing::warn!(
+                %error,
+                actor_id = %entry.actor_id,
+                device_id = %entry.device_id,
+                "failed to project verified federated device authorization"
+            );
+        }
+    }
 }
 
 pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Option<String> {
@@ -1586,6 +1714,52 @@ mod federation_delivery_binding_tests {
             delivery_binding_frontier_ref: frontier.as_str().to_owned(),
             updated_at,
         }
+    }
+
+    #[test]
+    fn directed_invite_batch_authorizes_only_its_in_batch_causal_ancestors() {
+        let predecessor = event_id(1);
+        let invite = event_id(2);
+        let events = vec![
+            json!({
+                "event_id": predecessor,
+                "kind": "ak.member.state",
+                "prev_refs": [event_id(9)]
+            }),
+            json!({
+                "event_id": invite,
+                "kind": "ak.invite.create",
+                "prev_refs": [predecessor],
+                "payload": {
+                    "invite_delivery_target": {
+                        "recipient_service_id": "did:web:local.example"
+                    }
+                }
+            }),
+        ];
+
+        assert!(batch_has_directed_invite_delivery_for_destination(
+            "did:web:local.example",
+            &events
+        ));
+
+        let mut unrelated = events.clone();
+        unrelated.insert(
+            1,
+            json!({
+                "event_id": event_id(3),
+                "kind": "ak.message.create",
+                "prev_refs": []
+            }),
+        );
+        assert!(!batch_has_directed_invite_delivery_for_destination(
+            "did:web:local.example",
+            &unrelated
+        ));
+        assert!(!batch_has_directed_invite_delivery_for_destination(
+            "did:web:other.example",
+            &events
+        ));
     }
 
     #[test]

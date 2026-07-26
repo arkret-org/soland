@@ -627,15 +627,22 @@ pub(crate) fn sdk_event_for_state(
     state: &AppState,
     record: &CanonicalEventRecord,
 ) -> Result<Event, AppError> {
+    let realm_id = canonical_realm_id_for_record(record);
+    let actor_erased = record.kind != arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT
+        && realm_id.as_deref().is_some_and(|realm_id| {
+            actor_erased_in_realm(&state.projections().snapshot(), &record.actor_id, realm_id)
+        });
     sdk_event_from_record(
         record,
         retention_tombstone_for_event(state, &record.event_id),
+        actor_erased,
     )
 }
 
 fn sdk_event_from_record(
     record: &CanonicalEventRecord,
     tombstone: Option<soland_services::governance::RetentionTombstoneRecord>,
+    actor_erased: bool,
 ) -> Result<Event, AppError> {
     let object = record
         .envelope
@@ -665,6 +672,10 @@ fn sdk_event_from_record(
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
         .unwrap_or_default();
+    if actor_erased {
+        payload = erasure_tombstone_payload_value(&payload);
+        unsigned.insert("erasure_tombstone".to_owned(), json!(true));
+    }
     if let Some(tombstone) = tombstone {
         payload = retention_tombstone_payload_value(&payload, &tombstone);
         unsigned.insert("retention_tombstone".to_owned(), json!(true));

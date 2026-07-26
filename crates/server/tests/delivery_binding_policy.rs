@@ -53,6 +53,31 @@ fn join_op(member: &str, binding: Value) -> Operation {
     )
 }
 
+fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) {
+    let realm_id = arkret_identifiers::RealmId::new(REALM_A).unwrap();
+    let creator = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+    let payload = arkret_models_collaboration::objects::direct_conversation::direct_conversation_realm_create_payload(
+        realm_id,
+        creator.clone(),
+        arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+        arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+        arkret_wire::notary::NotaryValue::single_did(creator),
+        chrono::Utc::now(),
+    );
+    let effect = state.apply(
+        &op(
+            arkret_wire::events::EventKind::REALM_CREATE,
+            REALM_A,
+            serde_json::to_value(payload).unwrap(),
+        ),
+        hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::RealmLifecycle { action, .. } if action == "create"
+    ));
+}
+
 // ── 1. delivery_binding_policy_member_join_test ─────────────────────────
 //
 // `recipient_service_id` outside the policy's `allowed_recipient_services`
@@ -322,6 +347,79 @@ fn delivery_binding_policy_no_did_fallback_when_policy_unset() {
         other => panic!("expected Rejected(delivery_binding_policy_unset), got {other:?}"),
     }
     assert!(state.member(REALM_A, "did:web:eve").is_none());
+}
+
+#[test]
+fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    create_direct_conversation(&mut state, &hlc);
+
+    let founding_peer = op(
+        arkret_wire::events::EventKind::MEMBER_STATE,
+        REALM_A,
+        json!({
+            "actor_id": "did:web:bob.example",
+            "membership": "join",
+            "role": "member",
+            "reason": "direct_conversation_bootstrap",
+            "delivery_status": "routable",
+            "delivery_binding": {
+                "binding_source": "explicit",
+                "recipient_service_id": "did:web:soland-beta.example",
+                "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "resolved_at": "2026-07-25T00:00:00.000Z"
+            }
+        }),
+    );
+    let effect = state.apply(&founding_peer, &hlc);
+    assert!(
+        matches!(effect, ProjectionEffect::MembershipChanged { .. }),
+        "expected Direct Conversation founding peer join to pass, got {effect:?}"
+    );
+
+    let third_member = op(
+        arkret_wire::events::EventKind::MEMBER_STATE,
+        REALM_A,
+        json!({
+            "actor_id": "did:web:carol.example",
+            "membership": "join",
+            "role": "member",
+            "reason": "direct_conversation_bootstrap",
+            "delivery_status": "routable",
+            "delivery_binding": {
+                "binding_source": "explicit",
+                "recipient_service_id": "did:web:soland-gamma.example",
+                "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
+                "resolved_at": "2026-07-25T00:00:00.000Z"
+            }
+        }),
+    );
+    assert!(matches!(
+        state.apply(&third_member, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "delivery_binding_policy_unset"
+    ));
+}
+
+#[test]
+fn direct_conversation_join_without_bootstrap_reason_still_requires_policy() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    create_direct_conversation(&mut state, &hlc);
+
+    let ordinary_join = join_op(
+        "did:web:bob.example",
+        json!({
+            "binding_source": "explicit",
+            "recipient_service_id": "did:web:soland-beta.example",
+            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-cccccccccccc",
+            "resolved_at": "2026-07-25T00:00:00.000Z"
+        }),
+    );
+    assert!(matches!(
+        state.apply(&ordinary_join, &hlc),
+        ProjectionEffect::Rejected { reason } if reason == "delivery_binding_policy_unset"
+    ));
 }
 
 // Even when a policy exists, `did_document_default` is rejected unless

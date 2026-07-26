@@ -47,8 +47,9 @@ use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::{operation_semantics as kinds, protocol_artifacts as artifacts};
 
 use super::projection::{
-    retention_risk_audit_flag, retention_risk_reason, retention_risk_ui_flag,
-    retention_tombstone_for_event, retention_tombstone_payload_value,
+    actor_erased_in_realm, erasure_tombstone_payload_value, retention_risk_audit_flag,
+    retention_risk_reason, retention_risk_ui_flag, retention_tombstone_for_event,
+    retention_tombstone_payload_value,
 };
 use super::{
     append_audit_log, auth_or_render, is_valid_hash_digest, now, query_param,

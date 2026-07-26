@@ -27,6 +27,7 @@ use actor_signature::federation_verify_actor_digest;
 // on these names resolving through the module that hosts `mod tests`.
 #[cfg(test)]
 use chrono::Utc;
+pub(crate) use endpoints::FederationSealsOutcome;
 pub(super) use endpoints::{
     federation_actor_events, federation_realm_members, federation_seals_pull,
     federation_verify_actor,

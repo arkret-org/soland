@@ -7,7 +7,7 @@
 //!
 //! Surfaces:
 //! - **inbound**: local operation builders and the standard peer-event handler call
-//!   `project_accepted_operations` and `ingest_federation_operations` from here.
+//!   `project_accepted_operations` from here.
 //! - **outbound**: event-query and account-subscribe handlers consume the projection event log and
 //!   typed SDK response models.
 //!
@@ -136,6 +136,8 @@ mod tests {
         let operation = op(
             arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
+                "event_id": "ak:event:01904100-0000-7000-8000-000000000003",
+                "sender": "did:web:alice.example",
                 "services": [{
                     "service_id": service,
                     "service_type": "principal_server",

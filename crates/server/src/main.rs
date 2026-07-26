@@ -686,12 +686,18 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             soland_http::routing::federation::federation_service_signature_key_id(
                                 description.service_id.as_str(),
                             );
+                        let receipt_verification_method =
+                            format!("{}#notary-key", description.service_id);
                         if document.id != description.service_id
                             || document.validate_for(&registration_key).is_err()
                             || !document
                                 .assertion_method
                                 .iter()
                                 .any(|method| method == &expected_verification_method)
+                            || !document
+                                .assertion_method
+                                .iter()
+                                .any(|method| method == &receipt_verification_method)
                         {
                             tracing::warn!(
                                 %endpoint,
@@ -713,6 +719,19 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             );
                             continue;
                         };
+                        let Some(receipt_public_key_multibase) = document
+                            .verification_method
+                            .iter()
+                            .find(|method| method.id == receipt_verification_method)
+                            .map(|method| method.public_key_multibase.as_str())
+                        else {
+                            tracing::warn!(
+                                %endpoint,
+                                peer_service_id = %description.service_id,
+                                "federation peer DID document has no active receipt assertion key"
+                            );
+                            continue;
+                        };
                         let verifying_key =
                             match arkret_canonical::decode_ed25519_multibase(public_key_multibase)
                                 .map_err(|error| error.to_string())
@@ -731,6 +750,26 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                     continue;
                                 }
                             };
+                        let receipt_verifying_key =
+                            match arkret_canonical::decode_ed25519_multibase(
+                                receipt_public_key_multibase,
+                            )
+                            .map_err(|error| error.to_string())
+                            .and_then(|raw| {
+                                ed25519_dalek::VerifyingKey::from_bytes(&raw)
+                                    .map_err(|error| error.to_string())
+                            }) {
+                                Ok(key) => key,
+                                Err(error) => {
+                                    tracing::warn!(
+                                        %endpoint,
+                                        peer_service_id = %description.service_id,
+                                        %error,
+                                        "federation peer receipt assertion key is invalid"
+                                    );
+                                    continue;
+                                }
+                            };
                         let discovered = format!(
                             "{}|{}",
                             endpoint.trim_end_matches('/'),
@@ -745,6 +784,14 @@ fn spawn_federation_peer_discovery(state: AppState) {
                             previous_service_id.as_deref(),
                             description.service_id.as_str(),
                             verifying_key,
+                        );
+                        let previous_receipt_verification_method = previous_service_id
+                            .as_ref()
+                            .map(|service_id| format!("{service_id}#notary-key"));
+                        state.install_federation_peer_verification_method_key(
+                            previous_receipt_verification_method.as_deref(),
+                            &receipt_verification_method,
+                            receipt_verifying_key,
                         );
                         if configured != discovered || key_changed {
                             tracing::info!(

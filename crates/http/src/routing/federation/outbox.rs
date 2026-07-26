@@ -59,6 +59,9 @@ pub const GAVE_UP_STATUS_SENTINEL: i32 = -1;
 /// Sentinel `last_status` written when a row is suppressed by the
 /// deployment egress policy before any socket is opened.
 pub const EGRESS_POLICY_DENIED_STATUS_SENTINEL: i32 = -2;
+/// Sentinel written when peer Event HTTP transport succeeded but the typed
+/// `EventsSubmitOutcome` reported a partial or otherwise non-success result.
+pub const PEER_EVENT_OUTCOME_REJECTED_STATUS_SENTINEL: i32 = -3;
 /// Cap on the response excerpt we persist. 1 KiB matches the spec's
 /// postmortem-evidence size budget.
 const RESPONSE_EXCERPT_BYTES: usize = 1024;
@@ -288,6 +291,41 @@ fn excerpt(body: &str) -> String {
     }
 }
 
+fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static str> {
+    if endpoint == "/_soland/peer/federation/operations" {
+        return match serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("rejected")
+                    .and_then(serde_json::Value::as_array)
+                    .cloned()
+            }) {
+            Some(rejected) if rejected.is_empty() => None,
+            Some(_) => Some("partial_peer_operation_outcome"),
+            None => Some("invalid_peer_operation_outcome"),
+        };
+    }
+    if endpoint != "/_arkret/peer/events" {
+        return None;
+    }
+    match serde_json::from_str::<serde_json::Value>(body)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("status")
+                .and_then(|status| status.as_str())
+                .map(str::to_owned)
+        })
+        .as_deref()
+    {
+        Some("accepted" | "duplicate") => None,
+        Some("partial") => Some("partial_peer_event_outcome"),
+        Some("historical_only") => Some("historical_only_peer_event_outcome"),
+        _ => Some("invalid_peer_event_outcome"),
+    }
+}
+
 /// Compute the next retry timestamp for a retryable failure. Doubles
 /// the backoff on each attempt and caps at 1h.
 fn next_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
@@ -296,6 +334,24 @@ fn next_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
     let raw = (attempts as u32).min(20);
     let backoff = 5u64.saturating_mul(1u64 << raw).min(3_600);
     now + backoff as i64
+}
+
+/// Causal dependency misses are expected while a related batch is still in
+/// flight. Retry them on the next dispatcher tick instead of applying the
+/// exponential transport-failure backoff.
+fn causal_dependencies_pending(body: &str) -> bool {
+    matches!(
+        serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|value| {
+                value
+                    .pointer("/error/code")
+                    .and_then(|code| code.as_str())
+                    .map(str::to_owned)
+            })
+            .as_deref(),
+        Some("federation_dependencies_pending" | "direct_binding_dependencies_pending")
+    )
 }
 
 /// Background outbound federation dispatcher.
@@ -399,7 +455,13 @@ impl FederationDispatcher {
             reqwest::header::CONTENT_TYPE,
             reqwest::header::HeaderValue::from_static("application/json"),
         );
-        if let Ok(value) = reqwest::header::HeaderValue::from_str(&row.idempotency_key) {
+        // The private operations rail uses its legacy federation signature
+        // transcript, which does not cover Idempotency-Key. Outbox persistence
+        // still deduplicates the delivery by this key; only the HTTP header is
+        // omitted for that wire profile.
+        if row.endpoint != "/_soland/peer/federation/operations"
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(&row.idempotency_key)
+        {
             headers.insert("idempotency-key", value);
         }
         let digest = content_digest_header_value(&body_bytes);
@@ -434,7 +496,8 @@ impl FederationDispatcher {
                 let body_text = resp.text().await.unwrap_or_default();
                 row.last_status = Some(status);
                 row.last_response_excerpt = Some(excerpt(&body_text));
-                if (200..300).contains(&status) {
+                let application_failure = peer_event_application_failure(&row.endpoint, &body_text);
+                if (200..300).contains(&status) && application_failure.is_none() {
                     row.delivered_at = Some(now_unix_secs());
                     crate::metrics::record_federation_retry_state("delivered");
                     tracing::info!(
@@ -446,8 +509,16 @@ impl FederationDispatcher {
                         status,
                         "federation outbox delivery succeeded"
                     );
+                } else if (200..300).contains(&status) {
+                    self.mark_application_failure(
+                        &mut row,
+                        application_failure.expect("checked as present"),
+                    )
+                    .await;
                 } else if is_retryable_status(status) {
-                    self.schedule_retry(&mut row, status).await;
+                    let dependencies_pending = causal_dependencies_pending(&body_text);
+                    self.schedule_retry(&mut row, status, dependencies_pending)
+                        .await;
                 } else {
                     // Permanent 4xx — record and stop retrying.
                     self.mark_terminal_failure(&mut row, status).await;
@@ -457,7 +528,7 @@ impl FederationDispatcher {
                 // Network error / timeout — always retryable.
                 row.last_status = None;
                 row.last_response_excerpt = Some(excerpt(&format!("network_error: {error}")));
-                self.schedule_retry(&mut row, 0).await;
+                self.schedule_retry(&mut row, 0, false).await;
             }
         }
 
@@ -477,7 +548,12 @@ impl FederationDispatcher {
         }
     }
 
-    async fn schedule_retry(&self, row: &mut FederationDispatchState, observed_status: i32) {
+    async fn schedule_retry(
+        &self,
+        row: &mut FederationDispatchState,
+        observed_status: i32,
+        dependencies_pending: bool,
+    ) {
         if row.attempts >= MAX_ATTEMPTS {
             // Out of retries — mark as gave-up with the sentinel status
             // so observability tools can distinguish "permanent 4xx" from
@@ -497,7 +573,11 @@ impl FederationDispatcher {
                 "federation outbox giving up after MAX_ATTEMPTS (dead-letter follow-up pending)"
             );
         } else {
-            row.next_attempt_at = next_backoff_unix_secs(row.attempts, now_unix_secs());
+            row.next_attempt_at = if dependencies_pending {
+                now_unix_secs()
+            } else {
+                next_backoff_unix_secs(row.attempts, now_unix_secs())
+            };
             crate::metrics::record_federation_retry_state("retry_scheduled");
         }
     }
@@ -515,7 +595,30 @@ impl FederationDispatcher {
             endpoint = %row.endpoint,
             status,
             attempts = row.attempts,
+            response_excerpt = ?row.last_response_excerpt,
             "federation outbox permanent failure (4xx, no retry, dead-letter follow-up pending)"
+        );
+    }
+
+    async fn mark_application_failure(
+        &self,
+        row: &mut FederationDispatchState,
+        reason: &'static str,
+    ) {
+        row.delivered_at = Some(now_unix_secs());
+        row.last_status = Some(PEER_EVENT_OUTCOME_REJECTED_STATUS_SENTINEL);
+        self.insert_dead_letter(row, PEER_EVENT_OUTCOME_REJECTED_STATUS_SENTINEL, reason)
+            .await;
+        crate::metrics::record_federation_retry_state(reason);
+        tracing::warn!(
+            target: "federation_outbox",
+            worker = "federation_outbox",
+            outbox_id = %row.id,
+            peer_did = %row.peer_did,
+            endpoint = %row.endpoint,
+            reason,
+            response_excerpt = ?row.last_response_excerpt,
+            "federation outbox peer Event outcome requires dead-letter follow-up"
         );
     }
 
@@ -600,11 +703,61 @@ mod tests {
     }
 
     #[test]
+    fn causal_dependency_responses_are_classified_for_prompt_retry() {
+        assert!(causal_dependencies_pending(
+            r#"{"ok":false,"error":{"code":"federation_dependencies_pending"}}"#
+        ));
+        assert!(causal_dependencies_pending(
+            r#"{"ok":false,"error":{"code":"direct_binding_dependencies_pending"}}"#
+        ));
+        assert!(!causal_dependencies_pending(
+            r#"{"ok":false,"error":{"code":"service_unavailable"}}"#
+        ));
+        assert!(!causal_dependencies_pending("not json"));
+    }
+
+    #[test]
     fn content_digest_matches_rfc_9530_shape() {
         let body = br#"{"hello":"world"}"#;
         let header = content_digest_header_value(body);
         assert!(header.starts_with("sha-256=:"));
         assert!(header.ends_with(':'));
+    }
+
+    #[test]
+    fn peer_event_partial_outcome_is_not_transport_success() {
+        assert_eq!(
+            peer_event_application_failure(
+                "/_arkret/peer/events",
+                r#"{"status":"partial","accepted":[],"rejected":[{"id":"ak:event:test"}]}"#
+            ),
+            Some("partial_peer_event_outcome")
+        );
+        assert_eq!(
+            peer_event_application_failure(
+                "/_arkret/peer/events",
+                r#"{"status":"accepted","accepted":["ak:event:test"]}"#
+            ),
+            None
+        );
+        assert_eq!(
+            peer_event_application_failure("/_arkret/peer/contacts", r#"{"status":"partial"}"#),
+            None
+        );
+        assert_eq!(
+            peer_event_application_failure(
+                "/_soland/peer/federation/operations",
+                r#"{"accepted":[],"rejected":[{"id":"ak:operation:test","reason_code":"capability_denied"}]}"#
+            ),
+            Some("partial_peer_operation_outcome")
+        );
+        assert_eq!(
+            peer_event_application_failure(
+                "/_soland/peer/federation/operations",
+                r#"{"accepted":["ak:operation:test"],"rejected":[]}"#
+            ),
+            None
+        );
     }
 
     #[test]

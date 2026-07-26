@@ -535,6 +535,7 @@ struct PeerReadAuthz {
     realm_meta: BTreeMap<String, RealmMetaRecord>,
     realm_endpoints: BTreeMap<String, Vec<PeerRealmEndpoint>>,
     realm_members: BTreeMap<String, BTreeMap<String, PeerMembership>>,
+    pending_realm_invites: BTreeMap<(String, String), PendingPeerInvite>,
     circles: BTreeMap<String, PeerCircleState>,
     circle_members: BTreeMap<String, BTreeMap<String, PeerMembership>>,
 }
@@ -559,6 +560,12 @@ enum PeerEndpointVisibility {
 struct PeerMembership {
     joined_at: DateTime<Utc>,
     invited_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingPeerInvite {
+    invitee: String,
+    invited_at: DateTime<Utc>,
 }
 
 #[derive(Clone, Debug)]
@@ -602,6 +609,7 @@ impl PeerReadAuthz {
             realm_meta,
             realm_endpoints: BTreeMap::new(),
             realm_members: BTreeMap::new(),
+            pending_realm_invites: BTreeMap::new(),
             circles,
             circle_members: BTreeMap::new(),
         };
@@ -619,8 +627,69 @@ impl PeerReadAuthz {
 
     fn apply_record(&mut self, record: &CanonicalEventRecord) {
         self.apply_realm_endpoint_record(record);
+        self.apply_invite_record(record);
         self.apply_member_record(record);
         self.apply_circle_member_record(record);
+    }
+
+    fn apply_invite_record(&mut self, record: &CanonicalEventRecord) {
+        let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
+            return;
+        };
+        let Some(payload) = record_payload(record) else {
+            return;
+        };
+        match record.kind.as_str() {
+            arkret_wire::events::EventKind::INVITE_CREATE => {
+                let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
+                    return;
+                };
+                let Some(invitee) = payload.get("invitee").and_then(Value::as_str) else {
+                    return;
+                };
+                let source_matches = payload
+                    .get("invite_delivery_target")
+                    .and_then(Value::as_object)
+                    .and_then(|target| target.get("recipient_service_id"))
+                    .and_then(Value::as_str)
+                    .is_some_and(|service_id| service_id == self.source_service_id);
+                if source_matches {
+                    self.pending_realm_invites.insert(
+                        (realm_id, invite_id.to_owned()),
+                        PendingPeerInvite {
+                            invitee: invitee.to_owned(),
+                            invited_at: record_event_time(record),
+                        },
+                    );
+                }
+            }
+            arkret_wire::events::EventKind::INVITE_ACCEPT => {
+                let Some(invite_id) = payload
+                    .get("invite_id")
+                    .or_else(|| payload.get("invite_ref"))
+                    .and_then(Value::as_str)
+                else {
+                    return;
+                };
+                let Some(invite) = self
+                    .pending_realm_invites
+                    .remove(&(realm_id.clone(), invite_id.to_owned()))
+                else {
+                    return;
+                };
+                if record.actor_id != invite.invitee {
+                    return;
+                }
+                self.realm_members.entry(realm_id).or_default().insert(
+                    invite.invitee,
+                    PeerMembership {
+                        joined_at: record_event_time(record),
+                        invited_at: Some(invite.invited_at),
+                    },
+                );
+            }
+            _ => {}
+        }
     }
 
     fn record_visible(&self, record: &CanonicalEventRecord) -> bool {

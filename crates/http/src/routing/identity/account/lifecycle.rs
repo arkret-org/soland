@@ -656,31 +656,32 @@ pub(super) async fn erase_account(
         .iter()
         .filter_map(|receipt| erasure_receipt_operation(receipt.clone()))
         .collect::<Vec<_>>();
-    if !realm_operations.is_empty()
-        && let Err(error) = crate::routing::events::projection::accept_local_operations(
+    if !realm_operations.is_empty() {
+        if let Err(error) = crate::routing::events::projection::accept_local_operations(
             state,
             &actor,
             &realm_operations,
         )
         .await
-    {
-        tracing::warn!(
-            %error,
-            actor = %actor,
-            "failed to accept realm-scoped erasure receipt operations"
-        );
-        append_audit_log(
-            state,
-            Some(&actor),
-            "org.arkret.soland.audit.erasure_receipt.fanout_failed",
-            json!({
-                "actor": actor.clone(),
-                "affected_realms": affected_realms,
-                "reason": error,
-            }),
-            "failed",
-        )
-        .await;
+        {
+            tracing::warn!(
+                %error,
+                actor = %actor,
+                "failed to accept realm-scoped erasure receipt operations"
+            );
+            append_audit_log(
+                state,
+                Some(&actor),
+                "org.arkret.soland.audit.erasure_receipt.projection_failed",
+                json!({
+                    "actor": actor.clone(),
+                    "affected_realms": affected_realms,
+                    "reason": error,
+                }),
+                "failed",
+            )
+            .await;
+        }
     }
     // Snapshot the audit log inline so the response is the canonical
     // last-known-good view of the actor's audit trail — subsequent

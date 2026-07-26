@@ -115,7 +115,7 @@ pub fn tombstone_projection_event_for_erased_actor(
         return;
     }
     event.sender = Some(ERASED_USER_PLACEHOLDER.to_owned());
-    event.payload = tombstone_payload_value(&event.payload);
+    event.payload = erasure_tombstone_payload_value(&event.payload);
 }
 
 pub fn tombstone_projection_event_for_message_redaction(
@@ -377,7 +377,7 @@ pub fn retention_risk_reason(tombstone: &RetentionTombstoneRecord) -> &'static s
     }
 }
 
-fn tombstone_payload_value(payload: &Value) -> Value {
+pub fn erasure_tombstone_payload_value(payload: &Value) -> Value {
     let mut value = payload.clone();
     let Some(object) = value.as_object_mut() else {
         return json!({

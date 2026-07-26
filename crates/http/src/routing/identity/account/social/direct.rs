@@ -257,25 +257,62 @@ pub(crate) async fn validate_direct_binding_operation(
     {
         return Ok(());
     }
-    let payload = direct_binding_payload_from_operation(operation)?;
+    let payload = direct_binding_payload_from_operation(operation).map_err(|reason| {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage = "payload",
+            reason,
+            "direct conversation binding validation failed"
+        );
+        "direct_conversation_binding_invalid"
+    })?;
     let issuer = operation
         .payload
         .get("sender")
         .and_then(Value::as_str)
-        .ok_or("direct_conversation_binding_invalid")?;
+        .ok_or_else(|| {
+            tracing::warn!(
+                target: "soland_http::error",
+                stage = "issuer_missing",
+                "direct conversation binding validation failed"
+            );
+            "direct_conversation_binding_invalid"
+        })?;
     if !payload
         .participants_unordered
         .iter()
         .any(|participant| participant.as_str() == issuer)
     {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage = "issuer_participant",
+            issuer,
+            participants = ?payload.participants_unordered,
+            "direct conversation binding validation failed"
+        );
         return Err("direct_conversation_binding_invalid");
     }
-    let trust_domain =
-        arkret_identifiers::TypedTrustDomainId::new(state.config().trust_domain.clone())
-            .map_err(|_| "direct_conversation_binding_invalid")?;
-    payload
-        .validate_pair_key(trust_domain)
-        .map_err(|_| "direct_conversation_binding_invalid")?;
+    let trust_domain = arkret_identifiers::TypedTrustDomainId::new(
+        state.config().trust_domain.clone(),
+    )
+    .map_err(|_| {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage = "trust_domain",
+            "direct conversation binding validation failed"
+        );
+        "direct_conversation_binding_invalid"
+    })?;
+    payload.validate_pair_key(trust_domain).map_err(|_| {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage = "pair_key",
+            pair_key = %payload.pair_key,
+            participants = ?payload.participants_unordered,
+            "direct conversation binding validation failed"
+        );
+        "direct_conversation_binding_invalid"
+    })?;
 
     if payload.binding_state == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Retired {
         let supersedes = payload
@@ -291,50 +328,62 @@ pub(crate) async fn validate_direct_binding_operation(
             .ok_or("direct_conversation_binding_invalid");
     }
 
-    let candidate = DirectConversationBindingRecord {
-        participants_unordered: payload
-            .participants_unordered
-            .iter()
-            .map(ToString::to_string)
-            .collect(),
-        realm_id: payload.realm_id.to_string(),
-        main_strand_id: payload.main_strand_id.to_string(),
-        binding_event_ref: operation
-            .payload
-            .get("event_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned(),
-        state: "active".to_owned(),
-        authoring_context: None,
-        created_at: payload.created_at,
-        updated_at: now(),
-    };
-    if !direct_binding_matches_projection(state, &candidate) {
+    // The canonical precursor Events are the admission authority. Projection
+    // application is asynchronous, so consulting the derived Realm view here
+    // creates a race when a binding immediately follows its accepted
+    // Realm/member/Strand/MLS Events. Active-binding reads still require the
+    // projection to agree; admission validates every exact precursor below.
+    if let Err(stage) = validate_direct_binding_event_refs(state, &payload).await {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage,
+            realm_id = %payload.realm_id,
+            "direct conversation binding validation failed"
+        );
         return Err("direct_conversation_binding_invalid");
     }
-    validate_direct_binding_event_refs(state, &payload).await?;
     if payload.authorization_basis.kind
         == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact
     {
         let left = payload.participants_unordered[0].as_str();
         let right = payload.participants_unordered[1].as_str();
-        let contact = state
-            .contacts()
-            .contact_any(left, right)
+        // `participants_unordered` is canonical pair-key order, not contact
+        // request direction. Resolve both directions or a random DID ordering
+        // can make the same accepted contact intermittently disappear.
+        let contact = accepted_contact_for_pair(state, left, right, "direct_message")
             .await
-            .map_err(|_| "direct_conversation_binding_invalid")?
+            .map_err(|error| {
+                tracing::warn!(
+                    target: "soland_http::error",
+                    %error,
+                    left,
+                    right,
+                    "direct conversation accepted-contact lookup failed"
+                );
+                "direct_conversation_binding_invalid"
+            })?
             .ok_or("direct_conversation_binding_invalid")?;
         if contact.status != "accepted" {
+            tracing::warn!(
+                target: "soland_http::error",
+                stage = "contact_status",
+                status = %contact.status,
+                "direct conversation binding validation failed"
+            );
             return Err("direct_conversation_binding_invalid");
         }
-        let verified_contact_refs: BTreeSet<_> = contact_fact_refs(&contact).into_iter().collect();
-        if payload
-            .authorization_basis
-            .event_refs
-            .iter()
-            .any(|reference| !verified_contact_refs.contains(reference.as_str()))
-        {
+        let verified_contact_refs = contact_fact_refs(&contact);
+        if !accepted_contact_authorization_refs_match(
+            &verified_contact_refs,
+            &payload.authorization_basis.event_refs,
+        ) {
+            tracing::warn!(
+                target: "soland_http::error",
+                stage = "contact_refs",
+                verified = ?verified_contact_refs,
+                provided = ?payload.authorization_basis.event_refs,
+                "direct conversation binding validation failed"
+            );
             return Err("direct_conversation_binding_invalid");
         }
     }
@@ -351,12 +400,12 @@ async fn accepted_direct_event(
         .event_queries()
         .accepted_event(event_id.as_str())
         .await
-        .map_err(|_| "direct_conversation_binding_invalid")?
-        .ok_or("direct_conversation_binding_invalid")?;
+        .map_err(|_| "referenced_event_query")?
+        .ok_or("referenced_event_missing")?;
     if accepted.realm_id.as_deref() != Some(realm_id.as_str()) || accepted.kind != kind {
-        return Err("direct_conversation_binding_invalid");
+        return Err("referenced_event_mismatch");
     }
-    serde_json::from_value(accepted.envelope).map_err(|_| "direct_conversation_binding_invalid")
+    serde_json::from_value(accepted.envelope).map_err(|_| "referenced_event_decode")
 }
 
 async fn validate_direct_binding_event_refs(
@@ -364,7 +413,7 @@ async fn validate_direct_binding_event_refs(
     payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
 ) -> Result<(), &'static str> {
     if payload.member_event_refs.len() != 2 {
-        return Err("direct_conversation_binding_invalid");
+        return Err("member_ref_count");
     }
     let mut realm_create_ref = None;
     let mut peer_member_ref = None;
@@ -382,7 +431,7 @@ async fn validate_direct_binding_event_refs(
             arkret_wire::events::EventKind::MEMBER_STATE if peer_member_ref.is_none() => {
                 peer_member_ref = Some(event_id)
             }
-            _ => return Err("direct_conversation_binding_invalid"),
+            _ => return Err("member_ref_kind"),
         }
     }
     let realm_create_ref = realm_create_ref.ok_or("direct_conversation_binding_invalid")?;
@@ -405,7 +454,7 @@ async fn validate_direct_binding_event_refs(
         .iter()
         .any(|participant| participant.as_str() == creator)
     {
-        return Err("direct_conversation_binding_invalid");
+        return Err("creator_participant");
     }
     let peer_member = accepted_direct_event(
         state,
@@ -430,31 +479,30 @@ async fn validate_direct_binding_event_refs(
             .iter()
             .any(|participant| participant.as_str() == peer)
     {
-        return Err("direct_conversation_binding_invalid");
+        return Err("peer_member");
     }
 
-    let mut authorization_kinds = BTreeSet::new();
-    for event_ref in &payload.authorization_basis.event_refs {
-        let accepted = state
-            .event_queries()
-            .accepted_event(event_ref.as_str())
-            .await
-            .map_err(|_| "direct_conversation_binding_invalid")?
-            .ok_or("direct_conversation_binding_invalid")?;
-        authorization_kinds.insert(accepted.kind);
-    }
     match payload.authorization_basis.kind {
         arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact => {
-            let expected = BTreeSet::from([
-                arkret_wire::events::EventKind::CONTACT_REQUESTED.to_owned(),
-                arkret_wire::events::EventKind::CONTACT_ACCEPTED.to_owned(),
-            ]);
-            if payload.authorization_basis.event_refs.len() != 2 || authorization_kinds != expected
-            {
-                return Err("direct_conversation_binding_invalid");
+            // Contact request/accept facts are principal-scoped projection
+            // facts, including facts delivered across federation. Their exact
+            // kinds and refs are validated against the accepted ContactRecord
+            // by the caller; they are not Realm canonical-event rows.
+            if payload.authorization_basis.event_refs.len() != 2 {
+                return Err("contact_ref_count");
             }
         }
         arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::ManagedAgentController => {
+            let mut authorization_kinds = BTreeSet::new();
+            for event_ref in &payload.authorization_basis.event_refs {
+                let accepted = state
+                    .event_queries()
+                    .accepted_event(event_ref.as_str())
+                    .await
+                    .map_err(|_| "direct_conversation_binding_invalid")?
+                    .ok_or("direct_conversation_binding_invalid")?;
+                authorization_kinds.insert(accepted.kind);
+            }
             let expected = BTreeSet::from([
                 arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT.to_owned(),
                 arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM.to_owned(),
@@ -462,7 +510,7 @@ async fn validate_direct_binding_event_refs(
             ]);
             if payload.authorization_basis.event_refs.len() != 3 || authorization_kinds != expected
             {
-                return Err("direct_conversation_binding_invalid");
+                return Err("managed_agent_authorization_refs");
             }
             let record = state
                 .agent_pairings()
@@ -471,7 +519,7 @@ async fn validate_direct_binding_event_refs(
                 .map_err(|_| "direct_conversation_binding_invalid")?
                 .ok_or("direct_conversation_binding_invalid")?;
             if record.controller_id != creator || record.state != "active" {
-                return Err("direct_conversation_binding_invalid");
+                return Err("managed_agent_record");
             }
             let provision_refs = record
                 .provision_event_refs
@@ -496,7 +544,7 @@ async fn validate_direct_binding_event_refs(
                 .map(arkret_identifiers::EventId::as_str)
                 .collect::<BTreeSet<_>>();
             if provided_refs != expected_refs {
-                return Err("direct_conversation_binding_invalid");
+                return Err("managed_agent_refs");
             }
             crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
                 state,
@@ -522,7 +570,7 @@ async fn validate_direct_binding_event_refs(
         .and_then(Value::as_str)
         != Some(payload.main_strand_id.as_str())
     {
-        return Err("direct_conversation_binding_invalid");
+        return Err("main_strand");
     }
 
     let genesis = accepted_direct_event(
@@ -564,7 +612,7 @@ async fn validate_direct_binding_event_refs(
         || welcome.payload.get("commit_ref").and_then(Value::as_str)
             != Some(payload.mls_commit_event_ref.as_str())
     {
-        return Err("direct_conversation_binding_invalid");
+        return Err("mls_event_links");
     }
     let recipient = welcome
         .payload
@@ -577,7 +625,7 @@ async fn validate_direct_binding_event_refs(
             .iter()
             .any(|participant| participant.as_str() == recipient)
     {
-        return Err("direct_conversation_binding_invalid");
+        return Err("welcome_recipient");
     }
     let typed_welcome = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
@@ -598,10 +646,25 @@ async fn validate_direct_binding_event_refs(
             || request.pair_key.as_ref() != Some(&payload.pair_key)
             || request.allow_last_resort == Some(true)
         {
-            return Err("direct_conversation_binding_invalid");
+            return Err("peer_claim_receipt");
         }
     }
     Ok(())
+}
+
+fn accepted_contact_authorization_refs_match(
+    verified_contact_refs: &[String],
+    provided_refs: &[arkret_identifiers::EventId],
+) -> bool {
+    let verified = verified_contact_refs
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let provided = provided_refs
+        .iter()
+        .map(arkret_identifiers::EventId::as_str)
+        .collect::<BTreeSet<_>>();
+    verified.len() == 2 && provided.len() == 2 && provided == verified
 }
 
 pub(crate) async fn project_canonical_direct_binding(
@@ -1331,27 +1394,21 @@ async fn verify_remote_peer_claim_outcome(
             "remote KeyPackage claim receipt signer is invalid",
         ));
     }
-    let destination_did = arkret_identifiers::Did::new(destination_service_id.to_owned())
-        .map_err(|_| AppError::internal("remote service DID is invalid"))?;
-    let key = crate::jws_verify::resolve_ed25519_verification_key_for_did(
-        state,
-        &destination_did,
-        &expected_method,
-    )
-    .await
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::TemporarilyUnavailable,
-            format!("remote service receipt key unavailable: {error}"),
-        )
-    })?;
+    let key = state
+        .federation_peer_verification_method_key(&expected_method)
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::TemporarilyUnavailable,
+                "remote service receipt key unavailable from discovered peer identity",
+            )
+        })?;
     let signing_bytes =
         arkret_models_crypto::http_bodies::peer_keypackage_claim_receipt_signing_bytes(
             &outcome.claim_receipt,
         )
         .map_err(|error| AppError::internal(format!("remote receipt transcript: {error}")))?;
     if !crate::routing::identity::cross_signing::ed25519_verify(
-        &key.public_key,
+        &key,
         &signing_bytes,
         outcome.claim_receipt.signature.sig.as_str(),
     ) {
@@ -1628,6 +1685,23 @@ async fn prepare_reserved_direct_materialization(
         founding_payload,
     )?;
 
+    let creator_member_event =
+        direct_creator_member_rebind_payload(state, realm_scope.clone(), actor, contact)
+            .map_err(AppError::internal)?
+            .map(|payload| {
+                let mut event = unsigned_direct_materialization_event(
+                    state,
+                    actor,
+                    &crate::ids::generate_event_id(),
+                    realm_id,
+                    arkret_wire::events::EventKind::MEMBER_STATE,
+                    payload,
+                )?;
+                attach_member_rebind_cell_contract(&mut event, actor)?;
+                Ok::<_, AppError>(event)
+            })
+            .transpose()?;
+
     let member_payload = direct_member_join_operation(state, realm_scope.clone(), peer, contact)
         .map_err(AppError::internal)?
         .payload;
@@ -1754,6 +1828,7 @@ async fn prepare_reserved_direct_materialization(
         claim_receipt,
         realm_event,
         founding_grant_event,
+        creator_member_event,
         peer_member_event,
         main_strand_event,
         binding_event,
@@ -1892,6 +1967,35 @@ fn attach_member_join_cell_contract(
             tag: None,
             value: None,
             from: Some(Value::String("leave".to_owned())),
+            to: Some(Value::String("join".to_owned())),
+            reason: Some("direct_conversation_bootstrap".to_owned()),
+            issuer_seq: None,
+        },
+    }];
+    Ok(())
+}
+
+fn attach_member_rebind_cell_contract(
+    event: &mut arkret_wire::Event,
+    participant: &str,
+) -> Result<(), AppError> {
+    let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
+    event.preconditions = vec![arkret_wire::move_event::Precondition {
+        cell: cell.clone(),
+        predicate: arkret_wire::move_event::Predicate {
+            op: arkret_wire::move_event::PredicateOp::HeadEq,
+            value: Some(Value::String("join".to_owned())),
+            values: None,
+            predicate_id: None,
+        },
+    }];
+    event.effects = vec![arkret_wire::Effect {
+        cell,
+        op: arkret_wire::LatticeOp {
+            op_type: arkret_wire::LatticeOpType::Transition,
+            tag: None,
+            value: None,
+            from: Some(Value::String("join".to_owned())),
             to: Some(Value::String("join".to_owned())),
             reason: Some("direct_conversation_bootstrap".to_owned()),
             issuer_seq: None,
@@ -2308,6 +2412,39 @@ pub(super) fn direct_member_join_operation(
     Ok(operation)
 }
 
+fn direct_creator_member_rebind_payload(
+    state: &AppState,
+    realm_scope: arkret_identifiers::RealmId,
+    creator: &str,
+    contact: Option<&ContactRecord>,
+) -> Result<Option<Value>, &'static str> {
+    let Some(contact) = contact else {
+        return Ok(None);
+    };
+    let service_acceptance_ref = contact
+        .response_event_ref
+        .as_deref()
+        .ok_or("direct creator delivery binding requires contact acceptance ref")?;
+    let created_at = direct_now();
+    let mut payload = direct_member_join_payload(realm_scope, creator)?;
+    payload["delivery_status"] = json!("routable");
+    payload["delivery_binding"] = json!({
+        "recipient_service_id": state.service_id(),
+        "recipient_service_type": "principal_server",
+        "binding_scope": "realm",
+        "binding_source": "explicit",
+        "delivery_modes": ["events", "sync", "to_device", "key_packages"],
+        "service_endpoint": state.config().public_base_url,
+        "resolved_at": arkret_canonical::format_timestamp_canonical(created_at),
+        "service_acceptance_ref": service_acceptance_ref,
+        "holder_proof_ref": service_acceptance_ref,
+        "expires_at": arkret_canonical::format_timestamp_canonical(
+            created_at + chrono::Duration::days(30)
+        )
+    });
+    Ok(Some(payload))
+}
+
 pub(super) fn direct_member_join_payload(
     realm_scope: arkret_identifiers::RealmId,
     member: &str,
@@ -2359,4 +2496,36 @@ pub(super) fn direct_strand_create_operation(
     );
     operation.created_at = created_at;
     Ok(operation)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::accepted_contact_authorization_refs_match;
+
+    #[test]
+    fn accepted_contact_authorization_requires_exact_request_and_response_refs() {
+        let request =
+            arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa")
+                .unwrap();
+        let response =
+            arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb")
+                .unwrap();
+        let unrelated =
+            arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-cccccccccccc")
+                .unwrap();
+        let verified = vec![request.to_string(), response.to_string()];
+
+        assert!(accepted_contact_authorization_refs_match(
+            &verified,
+            &[response.clone(), request.clone()],
+        ));
+        assert!(!accepted_contact_authorization_refs_match(
+            &verified,
+            &[request.clone(), unrelated],
+        ));
+        assert!(!accepted_contact_authorization_refs_match(
+            &verified,
+            &[request.clone(), request],
+        ));
+    }
 }

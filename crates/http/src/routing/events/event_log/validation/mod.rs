@@ -7,7 +7,9 @@ mod payload_shape;
 pub(crate) use audit::append_encrypted_message_franking;
 #[cfg(test)]
 pub(super) use enrollment::validate_device_enrollment_authority_binding;
-pub(crate) use enrollment::validate_federated_device_signing_key_evidence;
+pub(crate) use enrollment::{
+    project_federated_device_signing_key_evidence, validate_federated_device_signing_key_evidence,
+};
 #[cfg(test)]
 pub(crate) use envelope::validate_event_envelope;
 pub(crate) use envelope::{canonical_json_hash, validate_event_envelope_with_context};

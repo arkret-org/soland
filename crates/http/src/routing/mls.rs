@@ -558,9 +558,21 @@ async fn peer_claim_keypackage(
         request: body.unsigned_request(),
         transport_binding: transport,
     };
-    let authorized = peer_claim_policy_authorized(state, &body, &source_service_id).await?
-        && verify_peer_claim_participant_authorization(state, &body, &authorization_draft).await?;
-    if !authorized {
+    let policy_authorized = peer_claim_policy_authorized(state, &body, &source_service_id).await?;
+    let participant_authorized = if policy_authorized {
+        verify_peer_claim_participant_authorization(state, &body, &authorization_draft).await?
+    } else {
+        false
+    };
+    if !policy_authorized || !participant_authorized {
+        tracing::warn!(
+            %source_service_id,
+            requester = %body.requester,
+            target_principal_id = %body.target_principal_id,
+            policy_authorized,
+            participant_authorized,
+            "peer KeyPackage claim authorization rejected"
+        );
         record_peer_claim_failed(state, &body, &source_service_id, &request_digest).await?;
         return Err(peer_claim_failed());
     }
@@ -813,13 +825,22 @@ async fn verify_peer_claim_participant_authorization(
     draft: &PeerKeyPackagesClaimAuthorizationDraft,
 ) -> Result<bool, AppError> {
     let authorization = &body.requester_authorization;
+    let reject = |reason: &'static str| {
+        tracing::warn!(
+            requester = %body.requester,
+            target_principal_id = %body.target_principal_id,
+            reason,
+            "peer KeyPackage participant authorization rejected"
+        );
+        Ok::<bool, AppError>(false)
+    };
     if authorization
         .signature
         .alg
         .as_ref()
         .is_some_and(|algorithm| algorithm.as_str() != "EdDSA")
     {
-        return Ok(false);
+        return reject("signature_algorithm");
     }
     let signing_bytes = peer_keypackage_claim_authorization_signing_bytes(draft, authorization)
         .map_err(|error| {
@@ -828,12 +849,12 @@ async fn verify_peer_claim_participant_authorization(
     let key = if let Some(generation) = authorization.ssk_generation {
         let current = state.identities().current_cross_signing(&body.requester);
         let Some(current) = current else {
-            return Ok(false);
+            return reject("cross_signing_missing");
         };
         if current.generation.get() != generation
             || current.self_signing_key.kid.as_str() != authorization.verification_method.as_str()
         {
-            return Ok(false);
+            return reject("cross_signing_binding");
         }
         crate::routing::identity::cross_signing::decode_ed25519_key(
             current.self_signing_key.public_key.as_str(),
@@ -842,7 +863,7 @@ async fn verify_peer_claim_participant_authorization(
         .map_err(|_| peer_claim_failed())?
     } else {
         let Some(device_id) = authorization.requester_device_id.as_ref() else {
-            return Ok(false);
+            return reject("device_id_missing");
         };
         if let Some(evidence) = body.requester_signing_key_evidence.as_ref() {
             if evidence.actor_id != body.requester
@@ -851,22 +872,28 @@ async fn verify_peer_claim_participant_authorization(
                 || Some(evidence.device_authorize_event.event_id.as_str())
                     != authorization.device_authorize_event_id.as_deref()
             {
-                return Ok(false);
+                return reject("federated_evidence_binding");
             }
-            if crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
-                state, evidence,
-            )
-            .await
-            .is_err()
+            if let Err(error) =
+                crate::routing::events::event_log::validate_federated_device_signing_key_evidence(
+                    state, evidence,
+                )
+                .await
             {
-                return Ok(false);
+                tracing::warn!(
+                    requester = %body.requester,
+                    target_principal_id = %body.target_principal_id,
+                    %error,
+                    "peer KeyPackage federated device evidence rejected"
+                );
+                return reject("federated_evidence_validation");
             }
             let Some(multibase) = evidence
                 .device_signing_key
                 .as_str()
                 .strip_prefix("did:key:")
             else {
-                return Ok(false);
+                return reject("federated_evidence_key_format");
             };
             crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
                 .map_err(|_| peer_claim_failed())?
@@ -890,24 +917,28 @@ async fn verify_peer_claim_participant_authorization(
                 || authorization.verification_method.as_str()
                     != format!("{}#{}", body.requester, device_id).as_str()
             {
-                return Ok(false);
+                return reject("local_device_directory_binding");
             }
             let Some(multibase) = facet
                 .signing_key_did
                 .as_deref()
                 .and_then(|value| value.strip_prefix("did:key:"))
             else {
-                return Ok(false);
+                return reject("local_device_directory_key_format");
             };
             crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
                 .map_err(|_| peer_claim_failed())?
         }
     };
-    Ok(crate::routing::identity::cross_signing::ed25519_verify(
+    let signature_valid = crate::routing::identity::cross_signing::ed25519_verify(
         &key,
         &signing_bytes,
         authorization.signature.sig.as_str(),
-    ))
+    );
+    if !signature_valid {
+        return reject("signature_invalid");
+    }
+    Ok(true)
 }
 
 async fn peer_claim_policy_authorized(

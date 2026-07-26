@@ -86,10 +86,11 @@ pub(in crate::routing) async fn identity_document_record(
         .flatten()
         .unwrap_or_else(|| WebvhDocumentRecord {
             did: did.to_owned(),
-            did_document: default_did_document(Some(state), did),
+            did_document: federation_peer_did_document(state, did)
+                .unwrap_or_else(|| default_did_document(Some(state), did)),
             key_log_head: None,
             seq: 0,
-            method_evidence: json!({"mode": "development_local"}),
+            method_evidence: json!({"mode": "resolved_or_development_local"}),
             // Local default document (dev fallback), treated as fresh.
             fetched_at: now(),
             expires_at: now()
@@ -97,6 +98,23 @@ pub(in crate::routing) async fn identity_document_record(
             updated_at: now(),
         });
     with_default_also_known_as(record, state, did)
+}
+
+pub(super) fn federation_peer_did_document(state: &AppState, did: &str) -> Option<Value> {
+    let verification_method = format!("{did}#notary-key");
+    let key = state.federation_peer_verification_method_key(&verification_method)?;
+    let public_key = arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.as_bytes());
+    Some(json!({
+        "id": did,
+        "verificationMethod": [{
+            "id": verification_method,
+            "type": "Multikey",
+            "controller": did,
+            "publicKeyMultibase": public_key,
+        }],
+        "authentication": [verification_method],
+        "assertionMethod": [verification_method],
+    }))
 }
 
 pub(super) fn default_did_document(state: Option<&AppState>, did: &str) -> Value {

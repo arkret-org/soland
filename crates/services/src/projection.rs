@@ -3,7 +3,8 @@ use std::sync::Arc;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CellRef, MoveId, RealmId, SealId};
-use arkret_state::lattice::{CellState, ordered_log::IssuedOp};
+use arkret_state::lattice::CellState;
+use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
     CellLatticeBinding, MoveReject, MoveStore, SealEffect, SealLeafUnionProof, SealReject,
     SealStore, SealedMoveRecord, StoreResult,
@@ -40,6 +41,16 @@ pub type RelationReadModel = soland_domain::reducer::SolandRelationState;
 pub type SpaceContainerLifecycle = soland_domain::reducer::SpaceContainerLifecycleState;
 pub type MembershipReadModel = soland_domain::reducer::SolandMembershipState;
 pub type RealmLinkReadModel = soland_domain::reducer::RealmLinkState;
+
+fn projection_event_ref(operation: &Operation) -> String {
+    operation
+        .payload
+        .get("event_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| operation.operation_id.as_str())
+        .to_owned()
+}
 
 #[derive(Clone, Debug)]
 pub struct EffectiveRealmPolicyView {
@@ -1600,7 +1611,7 @@ impl ProjectionService {
             .as_ref()
             .map(|_| "routable".to_owned())
             .or_else(|| Some("unroutable".to_owned()));
-        let membership_event_ref = Some(operation.operation_id.as_str().to_owned());
+        let membership_event_ref = Some(projection_event_ref(operation));
         let mut state = self.state.lock();
         let key = (realm_id.to_owned(), member.to_owned());
         let previous = state.members.get(&key).cloned();
@@ -1649,6 +1660,7 @@ impl ProjectionService {
         invitee: &str,
         recipient_service_id: String,
     ) {
+        let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();
         let key = (operation.realm_id.as_str().to_owned(), invitee.to_owned());
         let previous = state.members.get(&key).cloned();
@@ -1672,8 +1684,8 @@ impl ProjectionService {
                     .unwrap_or_else(|| "member".to_owned()),
                 delivery_status: Some("routable".to_owned()),
                 recipient_service_id: Some(recipient_service_id),
-                membership_event_ref: Some(operation.operation_id.as_str().to_owned()),
-                delivery_binding_frontier: Some(operation.operation_id.as_str().to_owned()),
+                membership_event_ref: Some(event_ref.clone()),
+                delivery_binding_frontier: Some(event_ref),
                 invited_at: previous
                     .as_ref()
                     .and_then(|member| member.invited_at)

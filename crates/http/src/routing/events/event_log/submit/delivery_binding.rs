@@ -33,6 +33,21 @@ pub(super) async fn federation_service_binding_current_for_destination(
     {
         return FederationServiceBindingCheck::Current;
     }
+    let member_binding_diagnostics = members
+        .iter()
+        .map(|member| {
+            (
+                member.member.clone(),
+                member.recipient_service_id.clone(),
+                member.delivery_binding_frontier_ref.clone(),
+            )
+        })
+        .collect::<Vec<_>>();
+    let request_frontier_diagnostics = binding
+        .delivery_binding_frontier
+        .iter()
+        .map(EventId::as_str)
+        .collect::<Vec<_>>();
     let result = federation_service_binding_check_from_members(
         state.service_id().as_str(),
         now(),
@@ -41,14 +56,39 @@ pub(super) async fn federation_service_binding_current_for_destination(
     );
     match result {
         FederationServiceBindingCheck::Stale(mut evidence) => {
+            tracing::warn!(
+                realm_id = %binding.realm_id,
+                local_service_id = %state.service_id(),
+                request_frontier = ?request_frontier_diagnostics,
+                member_bindings = ?member_binding_diagnostics,
+                "federation delivery binding frontier is stale"
+            );
             evidence.witness = delivery_binding_handover_witness(state, &evidence).await;
             FederationServiceBindingCheck::Stale(evidence)
         }
         FederationServiceBindingCheck::HandedOver(mut evidence) => {
+            tracing::warn!(
+                realm_id = %binding.realm_id,
+                local_service_id = %state.service_id(),
+                request_frontier = ?request_frontier_diagnostics,
+                member_bindings = ?member_binding_diagnostics,
+                "federation delivery binding has been handed over"
+            );
             evidence.witness = delivery_binding_handover_witness(state, &evidence).await;
             FederationServiceBindingCheck::HandedOver(evidence)
         }
-        other => other,
+        FederationServiceBindingCheck::Reject(reason) => {
+            tracing::warn!(
+                realm_id = %binding.realm_id,
+                local_service_id = %state.service_id(),
+                request_frontier = ?request_frontier_diagnostics,
+                member_bindings = ?member_binding_diagnostics,
+                reason,
+                "federation delivery binding frontier was rejected"
+            );
+            FederationServiceBindingCheck::Reject(reason)
+        }
+        FederationServiceBindingCheck::Current => FederationServiceBindingCheck::Current,
     }
 }
 

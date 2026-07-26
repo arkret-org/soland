@@ -63,10 +63,19 @@ impl ProjectionState {
                     // R1.2 — `ak.realm.delivery_binding_policy` enforcement.
                     // Without a projected policy cell, fail-closed for
                     // routable joins per spec join-policy.md §5.1.3 —
-                    // there is no DID Document fallback path.
+                    // there is no DID Document fallback path. The registered
+                    // Direct Conversation founding unit is the sole exception:
+                    // contact-and-direct-conversation.md §6 fixes that atomic
+                    // sequence as Realm create, founding grant, then peer join,
+                    // so no policy event can precede the peer join.
                     let policy_value = self
                         .realm_delivery_binding_policy_cell_value(&realm_id)
-                        .cloned();
+                        .cloned()
+                        .or_else(|| {
+                            self.direct_conversation_bootstrap_delivery_policy(
+                                &realm_id, operation, binding,
+                            )
+                        });
                     let Some(policy) = policy_value else {
                         return ProjectionEffect::Rejected {
                             reason: "delivery_binding_policy_unset".to_owned(),
@@ -95,6 +104,44 @@ impl ProjectionState {
         }
 
         self.project_accepted_membership(operation, now, new_state.to_owned(), member, realm_id)
+    }
+
+    fn direct_conversation_bootstrap_delivery_policy(
+        &self,
+        realm_id: &str,
+        operation: &Operation,
+        binding: &serde_json::Map<String, Value>,
+    ) -> Option<Value> {
+        if !self.realm_is_direct_conversation(realm_id)
+            || operation.payload.get("reason").and_then(Value::as_str)
+                != Some("direct_conversation_bootstrap")
+        {
+            return None;
+        }
+
+        // A Direct Conversation create projects its creator as the first
+        // joined member. Permit this policy-free path only while that creator
+        // is still the Realm's sole joined member, never for later additions
+        // or rebinds.
+        let joined_members = self
+            .members
+            .values()
+            .filter(|member| member.realm_id == realm_id && member.state == "join")
+            .count();
+        if joined_members != 1 {
+            return None;
+        }
+
+        let recipient_service_id = binding
+            .get("recipient_service_id")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())?;
+        Some(serde_json::json!({
+            "allow_binding_sources": ["explicit"],
+            "allow_did_document_default": false,
+            "allowed_recipient_services": [recipient_service_id],
+            "required_endorsers": [],
+        }))
     }
 
     /// Restore an already-accepted canonical membership Event into the

@@ -218,6 +218,8 @@ pub fn record_is_peer_authz_state_record(record: &CanonicalEventRecord) -> bool 
         record.kind.as_str(),
         arkret_wire::events::EventKind::MEMBER_STATE
             | arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE
+            | arkret_wire::events::EventKind::INVITE_CREATE
+            | arkret_wire::events::EventKind::INVITE_ACCEPT
     ) || event_payload_field(&record.envelope, "sync_endpoints").is_some()
 }
 #[doc(hidden)]

@@ -136,9 +136,12 @@ pub struct AppState {
     /// conformance harness can exercise the protocol shape locally; a durable
     /// store can replace the backing map without changing the HTTP contract.
     /// Runtime-only verification keys learned from endpoint-discovered
-    /// federation peer DID documents. Configuration contains endpoints, not
-    /// copied service DIDs or public-key pins; discovery validates the
-    /// document's Principal Server endpoint binding before publishing a key.
+    /// federation peer DID documents. Entries are keyed either by service DID
+    /// (the HTTP Message Signature key) or by an exact verification-method
+    /// DID URL (artifact-specific assertion keys). Configuration contains
+    /// endpoints, not copied service DIDs or public-key pins; discovery
+    /// validates the document's Principal Server endpoint binding before
+    /// publishing a key.
     federation_peer_verifying_keys: Arc<ArcSwap<BTreeMap<String, VerifyingKey>>>,
     /// Live event notification bus for `ak.self.events.stream.subscribe`.
     /// Memory mode uses the local broadcast channel; PostgreSQL mode also
@@ -530,6 +533,24 @@ impl AppState {
         });
     }
 
+    pub fn install_federation_peer_verification_method_key(
+        &self,
+        previous_verification_method: Option<&str>,
+        verification_method: &str,
+        verifying_key: VerifyingKey,
+    ) {
+        self.federation_peer_verifying_keys.rcu(|current| {
+            let mut next = (**current).clone();
+            if let Some(previous_verification_method) = previous_verification_method
+                && previous_verification_method != verification_method
+            {
+                next.remove(previous_verification_method);
+            }
+            next.insert(verification_method.to_owned(), verifying_key);
+            Arc::new(next)
+        });
+    }
+
     pub fn apply_resolved_federation_peers(&self, resolved: &HashMap<String, String>) {
         self.settings.rcu(|current| {
             let mut next = (**current).clone();
@@ -582,6 +603,18 @@ impl AppState {
         self.federation_peer_verifying_keys
             .load()
             .get(service_id)
+            .copied()
+    }
+
+    /// Snapshot a peer assertion key bound to an exact verification-method
+    /// DID URL in the endpoint-discovered service DID document.
+    pub fn federation_peer_verification_method_key(
+        &self,
+        verification_method: &str,
+    ) -> Option<VerifyingKey> {
+        self.federation_peer_verifying_keys
+            .load()
+            .get(verification_method)
             .copied()
     }
 
