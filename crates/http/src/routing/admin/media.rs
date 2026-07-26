@@ -117,13 +117,13 @@ async fn admin_get_realm_media_service(
         ))
         .with_status(StatusCode::BAD_REQUEST));
     }
-    let cell_id = CellRef::new(format!(
-        "ak:cell:ak.component.realm.media_service.v1:{realm_id}"
+    let cell_id = CellRef::new(arkret_wire::null_subject_cell(
+        "ak.component.realm.media_service.v1",
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
         let proj = state.projections().snapshot();
-        proj.cell_value(&cell_id).cloned()
+        proj.realm_cell_value(&realm_id, &cell_id).cloned()
     };
 
     append_audit_log(

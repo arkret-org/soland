@@ -164,13 +164,13 @@ fn issuer_kid_belongs_to_service(issuer_kid: &str, service_id: &str) -> bool {
 /// projection. Returns `None` when no epoch is projected (fail-closed at the
 /// call site with `token_issuer_unauthorised`).
 fn media_service_anchors(state: &AppState, realm_id: &str) -> Option<MediaServiceAnchors> {
-    let cell_id = CellRef::new(format!(
-        "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
+    let cell_id = CellRef::new(arkret_wire::null_subject_cell(
+        REALM_MEDIA_SERVICE_CELL_FAMILY,
     ))
     .ok()?;
     let value = {
         let projection = state.projections().snapshot();
-        projection.cell_value(&cell_id).cloned()?
+        projection.realm_cell_value(realm_id, &cell_id).cloned()?
     };
     let foci = value.get("foci").and_then(Value::as_array)?;
     let mut issuer_kids = BTreeSet::new();

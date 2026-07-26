@@ -1025,13 +1025,13 @@ fn media_service_epoch_for_realm(
     state: &AppState,
     realm_id: &str,
 ) -> Result<MediaServiceEpoch, AppError> {
-    let cell_id = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:{REALM_MEDIA_SERVICE_CELL_FAMILY}:{realm_id}"
+    let cell_id = arkret_identifiers::CellRef::new(arkret_wire::null_subject_cell(
+        REALM_MEDIA_SERVICE_CELL_FAMILY,
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {
         let projection = state.projections().snapshot();
-        projection.cell_value(&cell_id).cloned()
+        projection.realm_cell_value(realm_id, &cell_id).cloned()
     }
     .ok_or_else(|| {
         token_issuer_unauthorised(format!(

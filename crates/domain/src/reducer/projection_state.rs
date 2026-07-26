@@ -92,12 +92,12 @@ pub struct ProjectionState {
     /// Per-cell effective state
     /// populated from the Move/Seal pipeline's `apply_seal` write-back.
     ///
-    /// Keyed by internal projection `CellRef` (e.g.
-    /// `ak:cell:ak.component.realm.read_receipt_policy.v1:<realm_id>`).
+    /// Keyed by canonical `CellRef` (e.g.
+    /// `ak:cell:ak.component.realm.read_receipt_policy.v1:null`).
     /// Realm-singleton Event effects use the canonical subject `null` on wire;
-    /// this process-wide map replaces that subject with the Event `realm_id`
-    /// so singleton values from different Realms remain isolated. This
-    /// projection-only key does not participate in Move/Seal state roots.
+    /// the enclosing Realm id is carried by the separate
+    /// `realm_null_subject_cells` key so singleton values from different
+    /// Realms remain isolated.
     /// Each successful `apply_seal` call from peer-event admission or
     /// `crate::notary::NotaryWorker` calls
     /// [`ProjectionState::reload_cells_from_store`] to refresh this map for
@@ -619,6 +619,21 @@ impl ProjectionState {
     pub fn cell_value(&self, cell_id: &CellRef) -> Option<&Value> {
         match self.cells.get(cell_id)? {
             CellState::Value(v) => Some(v),
+            CellState::Bottom(_) => None,
+        }
+    }
+
+    /// Resolve a cell inside one Realm namespace. Canonical null-subject
+    /// singleton cells share the same wire CellRef across Realms, so their
+    /// process cache keeps the Realm id as a separate key dimension.
+    pub fn realm_cell_value(&self, realm_id: &str, cell_id: &CellRef) -> Option<&Value> {
+        let realm_key = (realm_id.to_owned(), cell_id.as_str().to_owned());
+        let state = self
+            .realm_null_subject_cells
+            .get(&realm_key)
+            .or_else(|| self.cells.get(cell_id))?;
+        match state {
+            CellState::Value(value) => Some(value),
             CellState::Bottom(_) => None,
         }
     }

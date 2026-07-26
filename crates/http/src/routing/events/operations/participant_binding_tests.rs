@@ -32,22 +32,26 @@ fn test_config() -> crate::config::AppConfig {
 /// Install a current-epoch media_service cell anchoring `issuer_kid` under
 /// `service_id`.
 fn install_media_service_with_service_id(state: &AppState, service_id: &str, issuer_kid: &str) {
-    let cell_id = CellRef::new(format!(
-        "ak:cell:ak.component.realm.media_service.v1:{REALM_ID}"
+    let cell_id = CellRef::new(arkret_wire::null_subject_cell(
+        "ak.component.realm.media_service.v1",
     ))
     .unwrap();
-    state.test_projection().lock().cells.insert(
-        cell_id,
-        CellState::Value(json!({
-            "service_id": service_id,
-            "foci": [{
-                "focus_id": FOCUS_ID,
-                "backend": "arkret_native",
-                "issuer_kid": issuer_kid,
-                "connect_url": "wss://media.soland.local/native"
-            }]
-        })),
-    );
+    state
+        .test_projection()
+        .lock()
+        .realm_null_subject_cells
+        .insert(
+            (REALM_ID.to_owned(), cell_id.as_str().to_owned()),
+            CellState::Value(json!({
+                "service_id": service_id,
+                "foci": [{
+                    "focus_id": FOCUS_ID,
+                    "backend": "arkret_native",
+                    "issuer_kid": issuer_kid,
+                    "connect_url": "wss://media.soland.local/native"
+                }]
+            })),
+        );
 }
 
 /// Install a current-epoch media_service cell anchoring `issuer_kid` under
