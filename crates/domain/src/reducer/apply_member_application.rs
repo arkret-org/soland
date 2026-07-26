@@ -375,48 +375,6 @@ impl ProjectionState {
             .map(join_policy_review_capability)
     }
 
-    pub fn member_application_receipts(&self, realm_id: &str) -> Vec<String> {
-        self.member_applications
-            .values()
-            .filter(|state| state.realm_id == realm_id)
-            .map(|state| state.receipt_digest.clone())
-            .collect()
-    }
-
-    pub fn member_applications_for_viewer(
-        &self,
-        realm_id: &str,
-        viewer: &str,
-        viewer_is_reviewer: bool,
-    ) -> Vec<MemberApplicationView> {
-        let now = Utc::now();
-        self.member_applications
-            .values()
-            .filter(|state| state.realm_id == realm_id)
-            .map(|state| {
-                let status = if state.is_open() && now >= state.expires_at {
-                    "expired"
-                } else {
-                    state.status.as_str()
-                };
-                let can_see_body = viewer_is_reviewer
-                    || state.applicant == viewer
-                    || state.applicant_visibility == "public"
-                    || (state.applicant_visibility == "members_after_join"
-                        && matches!(state.status.as_str(), "accepted" | "consumed"));
-                MemberApplicationView {
-                    applicant_did: state.applicant.clone(),
-                    application_receipt_digest: state.receipt_digest.clone(),
-                    status: status.to_owned(),
-                    submitted_at: arkret_canonical::format_timestamp_canonical(state.submitted_at),
-                    private_body: can_see_body.then(|| state.private_body.clone()),
-                    application_pending: (!can_see_body).then_some(true),
-                    latest_review_ref: state.review_receipt_digests.last().cloned(),
-                }
-            })
-            .collect()
-    }
-
     fn member_application_by_receipt(
         &self,
         realm_id: &str,

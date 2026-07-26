@@ -40,7 +40,6 @@ pub type RelationReadModel = soland_domain::reducer::SolandRelationState;
 pub type SpaceContainerLifecycle = soland_domain::reducer::SpaceContainerLifecycleState;
 pub type MembershipReadModel = soland_domain::reducer::SolandMembershipState;
 pub type RealmLinkReadModel = soland_domain::reducer::RealmLinkState;
-pub type MemberApplicationReadModel = soland_domain::reducer::MemberApplicationView;
 
 #[derive(Clone, Debug)]
 pub struct EffectiveRealmPolicyView {
@@ -1096,10 +1095,6 @@ impl ProjectionService {
     pub fn apply_mls_keypackage_claim(&self, operation: &Operation) -> ProjectionEffectView {
         soland_domain::reducer::mls::apply_keypackage_claim(&mut self.state.lock(), operation)
             .into()
-    }
-
-    pub fn apply_mls_group_genesis(&self, operation: &Operation) -> ProjectionEffectView {
-        soland_domain::reducer::mls::apply_group_genesis(&mut self.state.lock(), operation).into()
     }
 
     pub fn mls_key_package_record(

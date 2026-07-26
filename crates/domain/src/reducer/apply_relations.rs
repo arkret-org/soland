@@ -1,83 +1,30 @@
 use std::collections::BTreeSet;
 
+use arkret_models_collaboration::objects::relation::{
+    RelationCardinality, RelationConflictPolicy, RelationProfile, RelationScope,
+};
 use serde::de::DeserializeOwned;
 
 use super::*;
 
 const RELATION_CONFLICT_FANOUT_LIMIT: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RelationCardinality {
-    OneToOne,
-    OneToMany,
-    ManyToOne,
-    ManyToMany,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum RelationConflictPolicy {
-    DeterministicWinner,
-    Reject,
-    ClosePrevious,
-    RequireReview,
-}
-
-#[derive(Clone, Debug)]
-struct RelationProfile {
-    cardinality: RelationCardinality,
-    multi_edge: bool,
-    on_conflict: RelationConflictPolicy,
-    max_to_per_from: Option<usize>,
-    max_from_per_to: Option<usize>,
-}
-
-impl RelationProfile {
-    fn default_for(relation_kind: &str) -> Self {
-        let cardinality = match relation_kind {
-            "belongs_to"
-            | "replies_to"
-            | "has_default_view"
-            | "agent_sidecar_of"
-            | "confidential_discussion_of" => RelationCardinality::ManyToOne,
-            _ => RelationCardinality::ManyToMany,
-        };
-        Self {
-            cardinality,
-            multi_edge: false,
-            on_conflict: RelationConflictPolicy::DeterministicWinner,
-            max_to_per_from: None,
-            max_from_per_to: None,
-        }
-    }
-
-    fn apply_override(&mut self, value: &Value) {
-        if let Some(cardinality) = value.get("cardinality").and_then(Value::as_str) {
-            self.cardinality = match cardinality {
-                "one_to_one" => RelationCardinality::OneToOne,
-                "one_to_many" => RelationCardinality::OneToMany,
-                "many_to_one" => RelationCardinality::ManyToOne,
-                "many_to_many" => RelationCardinality::ManyToMany,
-                _ => self.cardinality,
-            };
-        }
-        if let Some(multi_edge) = value.get("multi_edge").and_then(Value::as_bool) {
-            self.multi_edge = multi_edge;
-        }
-        if let Some(on_conflict) = value.get("on_conflict").and_then(Value::as_str) {
-            self.on_conflict = match on_conflict {
-                "reject" => RelationConflictPolicy::Reject,
-                "close_previous" => RelationConflictPolicy::ClosePrevious,
-                "require_review" => RelationConflictPolicy::RequireReview,
-                "deterministic_winner" => RelationConflictPolicy::DeterministicWinner,
-                _ => self.on_conflict,
-            };
-        }
-        if let Some(max_to_per_from) = value.get("max_to_per_from").and_then(Value::as_u64) {
-            self.max_to_per_from = usize::try_from(max_to_per_from).ok().filter(|max| *max > 0);
-        }
-        if let Some(max_from_per_to) = value.get("max_from_per_to").and_then(Value::as_u64) {
-            self.max_from_per_to = usize::try_from(max_from_per_to).ok().filter(|max| *max > 0);
-        }
+fn default_relation_profile(relation_kind: &str) -> RelationProfile {
+    let cardinality = arkret_wire::standard_relation_kind_metadata(relation_kind)
+        .and_then(|metadata| RelationCardinality::from_registry_value(metadata.default_cardinality))
+        .unwrap_or(RelationCardinality::ManyToMany);
+    RelationProfile {
+        relation_kind: relation_kind.to_owned(),
+        from_type: None,
+        to_type: None,
+        relation_scope: RelationScope::Realm,
+        cardinality,
+        dedupe_key: Vec::new(),
+        max_to_per_from: None,
+        max_from_per_to: None,
+        multi_edge: false,
+        rank_field: None,
+        on_conflict: RelationConflictPolicy::DeterministicWinner,
     }
 }
 
@@ -208,14 +155,21 @@ impl ProjectionState {
             history_basis_seals: operation_history_basis_seals(operation),
             updated_at: now,
         };
-        let profile = self.relation_profile_for(&state);
+        let profile = match self.relation_profile_for(&state) {
+            Ok(profile) => profile,
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.as_str().to_owned(),
+                };
+            }
+        };
         if self.relation_conflict_fanout_exceeded(&state, &profile) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
             };
         }
         self.relations.insert(relation_id.clone(), state);
-        self.enforce_relation_cardinality_for(&relation_id, now);
+        self.enforce_relation_cardinality_for(&relation_id, &profile, now);
         ProjectionEffect::RelationCreated(
             self.relations
                 .get(&relation_id)
@@ -224,29 +178,35 @@ impl ProjectionState {
         )
     }
 
-    fn relation_profile_for(&self, relation: &SolandRelationState) -> RelationProfile {
-        let mut profile = RelationProfile::default_for(&relation.relation_kind);
+    fn relation_profile_for(
+        &self,
+        relation: &SolandRelationState,
+    ) -> Result<RelationProfile, arkret_wire::ReasonCode> {
+        let mut profile = default_relation_profile(&relation.relation_kind);
         for profile_value in self.relation_profile_values(&relation.realm_id) {
             if profile_value.get("relation_kind").and_then(Value::as_str)
                 != Some(relation.relation_kind.as_str())
             {
                 continue;
             }
+            let candidate: RelationProfile = serde_json::from_value(profile_value.clone())
+                .map_err(|_| arkret_wire::ReasonCode::RelationProfileCardinalityConflict)?;
+            candidate.validate_cardinality_consistency()?;
             if !self.relation_profile_matches_endpoint(
-                profile_value.get("from_type").and_then(Value::as_str),
+                candidate.from_type.as_deref(),
                 relation.from_ref.as_deref(),
             ) {
                 continue;
             }
             if !self.relation_profile_matches_endpoint(
-                profile_value.get("to_type").and_then(Value::as_str),
+                candidate.to_type.as_deref(),
                 relation.to_ref.as_deref(),
             ) {
                 continue;
             }
-            profile.apply_override(profile_value);
+            profile = candidate;
         }
-        profile
+        Ok(profile)
     }
 
     fn relation_profile_values(&self, realm_id: &str) -> Vec<&Value> {
@@ -376,7 +336,7 @@ impl ProjectionState {
                 self.active_relation_ids_matching(relation, |other| {
                     other.from_ref == relation.from_ref
                 }),
-                max_to_per_from,
+                usize::try_from(max_to_per_from).unwrap_or(usize::MAX),
             ));
         }
         if let Some(max_from_per_to) = profile.max_from_per_to
@@ -386,7 +346,7 @@ impl ProjectionState {
                 self.active_relation_ids_matching(relation, |other| {
                     other.to_ref == relation.to_ref
                 }),
-                max_from_per_to,
+                usize::try_from(max_from_per_to).unwrap_or(usize::MAX),
             ));
         }
         sets
@@ -436,6 +396,7 @@ impl ProjectionState {
     fn enforce_relation_cardinality_for(
         &mut self,
         relation_id: &str,
+        profile: &RelationProfile,
         now: chrono::DateTime<chrono::Utc>,
     ) {
         let Some(relation) = self.relations.get(relation_id).cloned() else {
@@ -444,9 +405,8 @@ impl ProjectionState {
         if !relation.is_active() {
             return;
         }
-        let profile = self.relation_profile_for(&relation);
         let constraint_sets = self
-            .relation_constraint_sets(&relation, &profile)
+            .relation_constraint_sets(&relation, profile)
             .into_iter()
             .filter(|(ids, max)| ids.len() > *max)
             .collect::<Vec<_>>();
@@ -797,7 +757,14 @@ impl ProjectionState {
         {
             candidate_relation.to_ref = value.as_str().map(ToOwned::to_owned);
         }
-        let profile = self.relation_profile_for(&candidate_relation);
+        let profile = match self.relation_profile_for(&candidate_relation) {
+            Ok(profile) => profile,
+            Err(reason) => {
+                return ProjectionEffect::Rejected {
+                    reason: reason.as_str().to_owned(),
+                };
+            }
+        };
         if self.relation_conflict_fanout_exceeded(&candidate_relation, &profile) {
             return ProjectionEffect::Rejected {
                 reason: arkret_wire::ReasonCode::RELATION_CONFLICT_FANOUT_EXCEEDED.to_owned(),
@@ -846,7 +813,7 @@ impl ProjectionState {
             }
         }
         relation.updated_at = now;
-        self.enforce_relation_cardinality_for(&relation_id, now);
+        self.enforce_relation_cardinality_for(&relation_id, &profile, now);
         ProjectionEffect::RelationUpdated(
             self.relations
                 .get(&relation_id)

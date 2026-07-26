@@ -29,10 +29,6 @@ pub fn registered_operation_ids(ids: &[&str]) -> Vec<String> {
     soland_domain::artifacts::registered_operation_ids(ids)
 }
 
-pub fn operation_id_is_registered(id: &str) -> bool {
-    soland_domain::artifacts::operation_ids().contains(id)
-}
-
 pub fn operation_ids() -> &'static BTreeSet<String> {
     soland_domain::artifacts::operation_ids()
 }

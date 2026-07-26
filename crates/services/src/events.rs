@@ -196,13 +196,6 @@ impl RealmDirectoryIndex {
             .collect()
     }
 
-    pub fn search_by_member(&self, member: &Did) -> Vec<&RealmDirectoryEntry> {
-        self.entries
-            .values()
-            .filter(|entry| entry.members.contains(member))
-            .collect()
-    }
-
     pub fn search(&self, query: RealmDirectoryQuery) -> Vec<&RealmDirectoryEntry> {
         let mut scored =
             self.entries
@@ -834,15 +827,6 @@ impl EventQueryService {
         actor_id: &str,
     ) -> ServiceResult<Vec<AcceptedEvent>> {
         self.events.accepted_events_for_actor(actor_id).await
-    }
-
-    pub async fn next_actor_sequence(&self, actor_id: &str) -> ServiceResult<u64> {
-        Ok(self
-            .events
-            .max_actor_sequence(actor_id)
-            .await?
-            .unwrap_or(0)
-            .saturating_add(1))
     }
 
     pub async fn batch_receipts_for_event(

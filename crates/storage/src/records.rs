@@ -175,32 +175,6 @@ pub struct RecoverySessionRecord {
     pub expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Per-actor failed-login bookkeeping. Spec: A.3 — five failures within
-/// the active window flip the actor into a 15-minute lockout. The record
-/// is cleared on any successful login.
-#[derive(Clone, Debug)]
-pub struct FailedLoginRecord {
-    /// Number of failed attempts observed in the current window.
-    pub attempts: u32,
-    /// When the most recent failure was recorded. Drives the rolling
-    /// window check: failures older than `ACCOUNT_LOCKOUT_WINDOW` reset
-    /// the counter rather than locking the actor.
-    pub last_failure_at: chrono::DateTime<chrono::Utc>,
-    /// `Some(until)` if the actor is currently locked out — auth
-    /// handlers return 403 `policy_denied` (lockout) until `Utc::now() >= until`.
-    pub locked_until: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-/// Threshold of consecutive failed auth attempts before the actor is
-/// locked out. Spec: A.3.
-pub const ACCOUNT_LOCKOUT_THRESHOLD: u32 = 5;
-/// Lockout window — once the actor crosses [`ACCOUNT_LOCKOUT_THRESHOLD`]
-/// they stay locked for this long. Spec: A.3.
-pub const ACCOUNT_LOCKOUT_DURATION: chrono::Duration = chrono::Duration::minutes(15);
-/// Rolling window over which failed attempts accumulate. Failures older
-/// than this reset the counter rather than escalating to a lockout.
-pub const ACCOUNT_LOCKOUT_WINDOW: chrono::Duration = chrono::Duration::minutes(15);
-
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by

@@ -977,15 +977,6 @@ impl MessageExpiryProjection {
     }
 }
 
-impl MessageState {
-    pub fn expiry_projection_at(
-        &self,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> Option<MessageExpiryProjection> {
-        message_expiry_projection_from_value(self.expiry.as_ref(), self.created_at, now)
-    }
-}
-
 pub fn message_expiry_projection_from_value(
     expiry: Option<&Value>,
     created_at: chrono::DateTime<chrono::Utc>,
