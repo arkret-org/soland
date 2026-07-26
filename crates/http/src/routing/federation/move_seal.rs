@@ -22,7 +22,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{MoveId, RealmId, SealId};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_state::lattice::SealedOp;
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use arkret_wire::{Event, Move, NotarySig, Seal, SealKind};
 use salvo::http::StatusCode;
@@ -680,7 +679,8 @@ async fn try_apply_device_generation_event_seal(
             anchor_event_ids.insert(authorize_id.to_owned());
         }
     }
-    let mut new_ops: Vec<(arkret_identifiers::CellRef, SealedOp)> = Vec::new();
+    let mut new_ops: Vec<(arkret_identifiers::CellRef, arkret_state::lattice::ordered_log::IssuedOp)> =
+        Vec::new();
     for digest in &seal.delta {
         if quarantined.contains(digest.as_str()) {
             return Err(device_generation_fenced(
@@ -1081,7 +1081,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
     let new_ops = material
         .event_ops
         .iter()
-        .filter(|(_, op)| delta.contains(&op.move_id))
+        .filter(|(_, issued)| delta.contains(&issued.op.move_id))
         .cloned()
         .collect::<Vec<_>>();
     match state

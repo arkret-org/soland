@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use arkret_identifiers::{CellRef, Hash, MoveId, RealmId, SealId};
-use arkret_state::lattice::{CellState, SealedOp};
+use arkret_identifiers::{CellRef, Did, Hash, MoveId, RealmId, SealId};
+use arkret_state::lattice::{CellState, SealedOp, ordered_log::IssuedOp};
 use arkret_state::state::{
     CellRegistry, CellStore, MoveStore, SealStore, SealedMoveRecord, StoreError, StoreResult,
     compute_state_root,
@@ -30,7 +30,7 @@ pub trait EventSealCommitStore: Send + Sync {
         &self,
         seal: &Seal,
         expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<MoveId>,
     ) -> StoreResult<bool>;
 }
@@ -260,7 +260,17 @@ fn seal_from_value(value: Value) -> StoreResult<Seal> {
     serde_json::from_value(value).map_err(serde_to_store)
 }
 
-fn sealed_op_from_value(value: Value) -> StoreResult<SealedOp> {
+fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
+    // The issuer is persisted with the op because `ordered_log` slots are keyed
+    // by `(cell, actor_id, issuer_seq)`. A row without it cannot be joined
+    // correctly, so it fails closed instead of falling back to a synthetic DID.
+    let issuer = value
+        .get("issuer")
+        .and_then(Value::as_str)
+        .ok_or_else(|| StoreError::Backend("sealed op missing issuer".to_owned()))
+        .and_then(|did| {
+            Did::new(did.to_owned()).map_err(|error| StoreError::Backend(error.to_string()))
+        })?;
     let move_id = value
         .get("move_id")
         .and_then(Value::as_str)
@@ -273,7 +283,10 @@ fn sealed_op_from_value(value: Value) -> StoreResult<SealedOp> {
         .cloned()
         .ok_or_else(|| StoreError::Backend("sealed op missing op".to_owned()))
         .and_then(|op| serde_json::from_value::<LatticeOp>(op).map_err(serde_to_store))?;
-    Ok(SealedOp::new(move_id, op))
+    Ok(IssuedOp {
+        issuer,
+        op: SealedOp::new(move_id, op),
+    })
 }
 
 fn cell_state_from_value(value: Value) -> StoreResult<CellState> {
@@ -300,10 +313,11 @@ fn cell_state_from_value(value: Value) -> StoreResult<CellState> {
     }
 }
 
-fn sealed_op_to_value(op: &SealedOp) -> StoreResult<Value> {
+fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
     Ok(serde_json::json!({
-        "move_id": op.move_id.as_str(),
-        "op": serde_json::to_value(&op.op).map_err(serde_to_store)?,
+        "issuer": issued.issuer.as_str(),
+        "move_id": issued.op.move_id.as_str(),
+        "op": serde_json::to_value(&issued.op.op).map_err(serde_to_store)?,
     }))
 }
 
@@ -312,7 +326,7 @@ fn effective_state_with_new_ops(
     registry: &dyn CellRegistry,
     realm_id: &RealmId,
     covered: &BTreeSet<MoveId>,
-    new_ops: &[(CellRef, SealedOp)],
+    new_ops: &[(CellRef, IssuedOp)],
 ) -> StoreResult<std::collections::BTreeMap<CellRef, CellState>> {
     let mut cell_refs = cells
         .list_cells(realm_id)?
@@ -324,12 +338,14 @@ fn effective_state_with_new_ops(
         let mut ops = cells
             .sealed_ops_for_cell(realm_id, &cell)?
             .into_iter()
-            .filter(|op| covered.contains(&op.move_id))
+            .filter(|issued| covered.contains(&issued.op.move_id))
             .collect::<Vec<_>>();
         ops.extend(
             new_ops
                 .iter()
-                .filter(|(candidate, op)| candidate == &cell && covered.contains(&op.move_id))
+                .filter(|(candidate, issued)| {
+                    candidate == &cell && covered.contains(&issued.op.move_id)
+                })
                 .map(|(_, op)| op.clone()),
         );
         if ops.is_empty() {
@@ -340,7 +356,10 @@ fn effective_state_with_new_ops(
         // encode causality; sorting FSM transitions by MoveId can turn a valid
         // leave -> join -> ban history into Bottom.
         let binding = registry.resolve(realm_id, &cell)?;
-        joined.insert(cell.clone(), binding.lattice.join(&cell, &ops));
+        joined.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+        );
     }
     Ok(joined)
 }
@@ -794,7 +813,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         &self,
         seal: &Seal,
         expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<MoveId>,
     ) -> StoreResult<bool> {
         let pool = self.pool.clone();
@@ -816,12 +835,12 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         let new_rows = new_ops
             .iter()
             .enumerate()
-            .map(|(index, (cell, op))| {
+            .map(|(index, (cell, issued))| {
                 Ok((
                     index as i64,
                     cell.as_str().to_owned(),
-                    op.move_id.as_str().to_owned(),
-                    sealed_op_to_value(op)?,
+                    issued.op.move_id.as_str().to_owned(),
+                    sealed_op_to_value(issued)?,
                 ))
             })
             .collect::<StoreResult<Vec<_>>>()?;
@@ -886,30 +905,32 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     "SELECT cell_id, op_json \
                      FROM state_cell_ops \
                      WHERE realm_id = $1 \
-                     ORDER BY cell_id ASC, move_id DESC, seq ASC",
+                     ORDER BY cell_id ASC, seq ASC",
                 )
                 .bind::<Text, _>(&realm_id)
                 .load::<EventCellOpRow>(&mut *conn)
                 .await?;
-                let mut ops_by_cell = std::collections::BTreeMap::<CellRef, Vec<SealedOp>>::new();
+                let mut ops_by_cell = std::collections::BTreeMap::<CellRef, Vec<IssuedOp>>::new();
                 for row in rows {
-                    let op = sealed_op_from_value(row.op_json)?;
-                    if !covered.contains(op.move_id.as_str()) {
+                    let issued = sealed_op_from_value(row.op_json)?;
+                    if !covered.contains(issued.op.move_id.as_str()) {
                         continue;
                     }
                     let cell = CellRef::new(row.cell_id)
                         .map_err(|error| StoreError::Backend(error.to_string()))?;
-                    ops_by_cell.entry(cell).or_default().push(op);
+                    ops_by_cell.entry(cell).or_default().push(issued);
                 }
                 let realm = RealmId::new(realm_id.clone())
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
                 let mut joined = std::collections::BTreeMap::new();
-                for (cell, mut ops) in ops_by_cell {
-                    ops.sort_by(|left, right| {
-                        right.move_id.as_str().cmp(left.move_id.as_str())
-                    });
+                // No pre-sort: joins are commutative and ordering by the typed
+                // `move_id` string would imply a tie-break `encoding.md` 4.2 forbids.
+                for (cell, ops) in ops_by_cell {
                     let binding = cell_registry.resolve(&realm, &cell)?;
-                    joined.insert(cell.clone(), binding.lattice.join(&cell, &ops));
+                    joined.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+        );
                 }
                 let recomputed = compute_state_root(&joined)
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -941,7 +962,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         &self,
         seal: &Seal,
         expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<MoveId>,
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
@@ -1019,7 +1040,7 @@ impl CellStore for PgCellStore {
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
-    ) -> StoreResult<Vec<SealedOp>> {
+    ) -> StoreResult<Vec<IssuedOp>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
         let cell = cell.as_str().to_owned();
@@ -1107,7 +1128,7 @@ impl CellStore for PgCellStore {
         &self,
         realm_id: &RealmId,
         seal: &SealId,
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
@@ -1115,12 +1136,12 @@ impl CellStore for PgCellStore {
         let rows: Vec<(i64, String, String, Value)> = new_ops
             .iter()
             .enumerate()
-            .map(|(index, (cell, op))| {
-                let op_json = sealed_op_to_value(op)?;
+            .map(|(index, (cell, issued))| {
+                let op_json = sealed_op_to_value(issued)?;
                 Ok((
                     index as i64,
                     cell.as_str().to_owned(),
-                    op.move_id.as_str().to_owned(),
+                    issued.op.move_id.as_str().to_owned(),
                     op_json,
                 ))
             })
@@ -1191,6 +1212,15 @@ impl CellStore for PgCellStore {
 
 #[cfg(test)]
 mod event_seal_commit_tests {
+    /// Attach a fixed issuer to a fixture op. These cases exercise counter /
+    /// fsm cells, where the issuer travels but is not part of the slot key.
+    fn test_issued(op: super::SealedOp) -> super::IssuedOp {
+        super::IssuedOp {
+            issuer: super::Did::new("did:webvh:z6mkfixture:alice.example".to_owned()).unwrap(),
+            op,
+        }
+    }
+
     use std::sync::{Arc, Barrier};
 
     use arkret_identifiers::Hlc;
@@ -1212,7 +1242,7 @@ mod event_seal_commit_tests {
         realm: &RealmId,
         marker: char,
         increment: i64,
-    ) -> (Seal, Vec<(CellRef, SealedOp)>, BTreeSet<MoveId>) {
+    ) -> (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<MoveId>) {
         let move_id = MoveId::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap();
         let cell = CellRef::new(
             "ak:cell:ak.component.metric.counter.v1:ak.metric.seal_admission".to_owned(),
@@ -1220,7 +1250,7 @@ mod event_seal_commit_tests {
         .unwrap();
         let ops = vec![(
             cell,
-            SealedOp::new(
+            test_issued(SealedOp::new(
                 move_id.clone(),
                 LatticeOp {
                     op_type: LatticeOpType::Inc,
@@ -1231,7 +1261,7 @@ mod event_seal_commit_tests {
                     reason: None,
                     issuer_seq: None,
                 },
-            ),
+            )),
         )];
         let covered = std::iter::once(move_id.clone()).collect::<BTreeSet<_>>();
         let state =
@@ -1288,7 +1318,7 @@ mod event_seal_commit_tests {
         .map(|(move_id, from, to)| {
             (
                 cell.clone(),
-                SealedOp::new(
+                test_issued(SealedOp::new(
                     move_id,
                     LatticeOp {
                         op_type: LatticeOpType::Transition,
@@ -1299,7 +1329,7 @@ mod event_seal_commit_tests {
                         reason: None,
                         issuer_seq: None,
                     },
-                ),
+                )),
             )
         })
         .collect::<Vec<_>>();
@@ -1328,7 +1358,7 @@ mod event_seal_commit_tests {
         let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1);
         let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2);
         let barrier = Arc::new(Barrier::new(3));
-        let spawn = |candidate: (Seal, Vec<(CellRef, SealedOp)>, BTreeSet<MoveId>)| {
+        let spawn = |candidate: (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<MoveId>)| {
             let committer = committer.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {
@@ -1350,8 +1380,12 @@ mod event_seal_commit_tests {
         let cell = winner.1[0].0.clone();
         let stored = cell_store.sealed_ops_for_cell(&realm, &cell).unwrap();
         assert_eq!(stored.len(), 1);
-        assert_eq!(stored[0].move_id, winner.1[0].1.move_id);
-        assert!(stored.iter().all(|op| op.move_id != loser.1[0].1.move_id));
+        assert_eq!(stored[0].op.move_id, winner.1[0].1.op.move_id);
+        assert!(
+            stored
+                .iter()
+                .all(|issued| issued.op.move_id != loser.1[0].1.op.move_id)
+        );
         assert!(seal_store.get(&winner.0.id).unwrap().is_some());
         assert!(seal_store.get(&loser.0.id).unwrap().is_none());
     }

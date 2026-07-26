@@ -481,6 +481,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     )
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
+    enforce_ordered_log_cell_contract(state, envelope, &kind, &realm_id, object)?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
 
@@ -617,4 +618,54 @@ async fn enforce_device_generation_fence(
         ));
     }
     Ok(())
+}
+
+/// Re-derive the registry-declared cell and append value for single-target
+/// `ordered_log` reducer inputs.
+///
+/// `models/event-and-patch.md` §2.4.2 makes the registry — not a
+/// producer-selected `effects[].cell` or an arbitrary `op.value` — the
+/// authority for a reducer target. This is the general hook: it applies to
+/// every kind whose registry row declares an ordered-log single-target
+/// contract with a value projection, not just the realm-key delivery family
+/// that first exposed the gap.
+fn enforce_ordered_log_cell_contract(
+    state: &AppState,
+    envelope: &Value,
+    kind: &str,
+    realm_id: &str,
+    object: &serde_json::Map<String, Value>,
+) -> Result<(), EventValidationError> {
+    let event_kind = arkret_wire::events::EventKind::from(kind);
+    let Some(descriptor) = event_kind.descriptor() else {
+        return Ok(());
+    };
+    if !descriptor.reducer_input
+        || descriptor.lattice != Some("ordered_log")
+        || descriptor.value_projection_rule.is_none()
+    {
+        return Ok(());
+    }
+    // A kind that reaches here but cannot be parsed as a typed Event has
+    // already failed shared envelope shape validation above; treat an
+    // unparseable envelope as fail-closed rather than skipping the contract.
+    let event = serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("ordered-log reducer input is not a valid Event Envelope: {error}"),
+        )
+    })?;
+    // device-lifecycle.md 13.0.1 pins the material digest to the Realm's active
+    // digest_algorithm, so the contract cannot be checked without it.
+    let suite_name = event_digest_suite(state, kind, realm_id, object)?;
+    let suite = arkret_canonical::digest_suite(&suite_name)
+        .map_err(|_| unsupported_digest_algorithm_error(&suite_name))?;
+    arkret_schema::validate_single_target_append_event_contract(&event, suite).map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            error.reason_code(),
+            error.to_string(),
+        )
+    })
 }

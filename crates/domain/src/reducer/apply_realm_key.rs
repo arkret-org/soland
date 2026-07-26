@@ -1,3 +1,7 @@
+use arkret_models_collaboration::events_payloads::preview_realm_reaction::{
+    RealmKeyShareMaterial, RealmKeyShareTarget,
+};
+
 use super::*;
 
 impl ProjectionState {
@@ -14,14 +18,10 @@ impl ProjectionState {
                 Err(_) => return rejected("realm_key_share_payload_invalid"),
             };
 
-        if share
-            .ciphertext
-            .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
-            && share
-                .encrypted_key_ref
-                .as_deref()
-                .is_none_or(|value| value.trim().is_empty())
+        // Exactly-one material is now a wire invariant (schema `oneOf` plus the
+        // SDK enum), so only a whitespace-only ciphertext still needs guarding.
+        if let RealmKeyShareMaterial::Ciphertext { ciphertext } = &share.material
+            && ciphertext.trim().is_empty()
         {
             return rejected("realm_key_share_material_missing");
         }
@@ -43,7 +43,14 @@ impl ProjectionState {
         ProjectionEffect::RealmKeyShareProjected {
             realm_id: operation.realm_id.to_string(),
             recipient_principal_id: share.recipient_principal_id.to_string(),
-            recipient_device_id: share.recipient_device_id.map(|value| value.to_string()),
+            // Only a member-device share names a concrete recipient device; an
+            // RRK durability seal targets an offline recovery recipient.
+            recipient_device_id: match &share.target {
+                RealmKeyShareTarget::MemberDevice {
+                    recipient_device_id,
+                } => Some(recipient_device_id.to_string()),
+                RealmKeyShareTarget::RealmRecoveryKey { .. } => None,
+            },
         }
     }
 }

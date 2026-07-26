@@ -371,7 +371,10 @@ mod test_construction {
             &self,
             seal: &arkret_wire::Seal,
             expected_store_frontier: &[arkret_identifiers::SealId],
-            new_ops: &[(arkret_identifiers::CellRef, arkret_state::lattice::SealedOp)],
+            new_ops: &[(
+                arkret_identifiers::CellRef,
+                arkret_state::lattice::ordered_log::IssuedOp,
+            )],
             covered: &BTreeSet<arkret_identifiers::MoveId>,
         ) -> arkret_state::state::StoreResult<bool> {
             self.0

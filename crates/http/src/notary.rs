@@ -37,7 +37,7 @@ use std::sync::OnceLock;
 
 use anyhow::Result;
 use arkret_identifiers::{CellRef, Hash, Hlc, MoveId, RealmId, SealId};
-use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::lattice::{CellState, SealedOp, ordered_log::IssuedOp};
 use arkret_state::state::{StoreError, compute_state_root, control_event_set_root};
 use arkret_wire::{Move, MoveSignature, NotarySig, Seal};
 use base64::Engine as _;
@@ -336,7 +336,7 @@ impl NotaryWorker {
             .projections()
             .resolve_cell(realm_id, &notary_cell)
             .map_err(|e| NotaryError::Store(format!("notary cell resolve: {e}")))?;
-        let resolved = binding.lattice.join(&notary_cell, &ops);
+        let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &notary_cell, &ops);
         let CellState::Value(value) = resolved else {
             // Bottom on notary cell = Realm-wide pause; the notary is
             // not authorized to advance until recovery.
@@ -467,15 +467,15 @@ impl NotaryWorker {
         accepted: &[Move],
     ) -> Result<Hash, NotaryError> {
         // Build per-cell list of (current ops ++ new ops).
-        let mut ops_by_cell: BTreeMap<CellRef, Vec<SealedOp>> = BTreeMap::new();
+        let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
         let covered: BTreeSet<MoveId> = covered_event_digests.iter().cloned().collect();
         // Seed with all currently-known cells.
         for cell in state.projections().realm_cells(realm_id)? {
-            let ops: Vec<SealedOp> = state
+            let ops: Vec<IssuedOp> = state
                 .projections()
                 .sealed_ops_for_cell(realm_id, &cell)?
                 .into_iter()
-                .filter(|op| covered.contains(&op.move_id))
+                .filter(|issued| covered.contains(&issued.op.move_id))
                 .collect();
             if !ops.is_empty() {
                 ops_by_cell.insert(cell, ops);
@@ -484,7 +484,10 @@ impl NotaryWorker {
         // Layer on the new accepted Moves' effects.
         for m in accepted {
             for effect in &m.effects {
-                let aop = SealedOp::new(m.id.clone(), effect.op.clone());
+                let aop = IssuedOp {
+                    issuer: m.issuer.clone(),
+                    op: SealedOp::new(m.id.clone(), effect.op.clone()),
+                };
                 ops_by_cell
                     .entry(effect.cell.clone())
                     .or_default()
@@ -498,7 +501,7 @@ impl NotaryWorker {
                 .projections()
                 .resolve_cell(realm_id, &cell)
                 .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
-            let resolved = binding.lattice.join(&cell, &ops);
+            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
             post_state.insert(cell, resolved);
         }
         // canonical Merkle state_root.
@@ -796,7 +799,7 @@ pub fn ensure_materialized_event_seal(
     realm_id: &RealmId,
     covered_event_digests: &[MoveId],
     state_root: &Hash,
-    event_ops: &[(CellRef, SealedOp)],
+    event_ops: &[(CellRef, IssuedOp)],
     device_generation_seal_required: bool,
     generation_fence: Option<&FirstGenerationEventSealRequirement>,
 ) -> Result<MaterializedEventSealView, NotaryError> {
@@ -953,7 +956,7 @@ pub fn ensure_materialized_event_seal(
     let delta_set = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
     let new_ops = event_ops
         .iter()
-        .filter(|(_, op)| delta_set.contains(&op.move_id))
+        .filter(|(_, issued)| delta_set.contains(&issued.op.move_id))
         .cloned()
         .collect::<Vec<_>>();
     match state.projections().commit_event_seal_if_frontier(

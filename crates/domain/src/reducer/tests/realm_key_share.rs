@@ -97,19 +97,44 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     ));
 }
 
+/// Exactly-one material is now a wire invariant (schema `oneOf` plus the SDK
+/// `RealmKeyShareMaterial` enum), so a share with neither material never
+/// reaches the reducer's own checks — it fails at deserialization.
 #[test]
-fn realm_key_share_requires_material() {
+fn realm_key_share_without_material_fails_typed_parsing() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("realm-key-share-material");
     let mut payload = realm_key_share_payload(realm_scope(REALM));
-    payload
-        .as_object_mut()
-        .expect("payload object")
-        .remove("ciphertext");
-    payload
-        .as_object_mut()
-        .expect("payload object")
-        .remove("encrypted_key_ref");
+    let object = payload.as_object_mut().expect("payload object");
+    object.remove("ciphertext");
+    object.remove("encrypted_key_ref");
+
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::events::EventKind::REALM_KEY_SHARE,
+            REALM,
+            payload,
+        ),
+        &hlc,
+    );
+
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == "realm_key_share_payload_invalid"
+    ));
+}
+
+/// `NonEmptyString` only rejects the empty string, so a whitespace-only
+/// ciphertext still parses and must be caught by the reducer.
+#[test]
+fn realm_key_share_rejects_whitespace_only_ciphertext() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("realm-key-share-blank-material");
+    let mut payload = realm_key_share_payload(realm_scope(REALM));
+    let object = payload.as_object_mut().expect("payload object");
+    object.remove("encrypted_key_ref");
+    object.insert("ciphertext".to_owned(), serde_json::json!("   "));
 
     let effect = state.apply(
         &make_operation(

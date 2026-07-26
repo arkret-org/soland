@@ -10,7 +10,7 @@ use arkret_identity::service_identity::{
     LocalServiceIdentity, ServiceIdentityKeyRef, ServiceIdentityState,
 };
 use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
-use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::lattice::{CellState, ordered_log::IssuedOp};
 use arkret_state::state::{
     CellRegistry, CellStore, MemoryCellStore, MemoryMoveStore, MemorySealStore, MoveStore,
     SealStore, StoreError, StoreResult, compute_state_root,
@@ -353,7 +353,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         &self,
         seal: &Seal,
         expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
         covered: &BTreeSet<MoveId>,
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
@@ -408,7 +408,7 @@ fn effective_state_with_new_ops(
     registry: &dyn CellRegistry,
     realm_id: &arkret_identifiers::RealmId,
     covered: &BTreeSet<MoveId>,
-    new_ops: &[(CellRef, SealedOp)],
+    new_ops: &[(CellRef, IssuedOp)],
 ) -> StoreResult<BTreeMap<CellRef, CellState>> {
     let mut cell_refs = cells
         .list_cells(realm_id)?
@@ -420,13 +420,13 @@ fn effective_state_with_new_ops(
         let mut ops = cells
             .sealed_ops_for_cell(realm_id, &cell)?
             .into_iter()
-            .filter(|operation| covered.contains(&operation.move_id))
+            .filter(|issued| covered.contains(&issued.op.move_id))
             .collect::<Vec<_>>();
         ops.extend(
             new_ops
                 .iter()
-                .filter(|(candidate, operation)| {
-                    candidate == &cell && covered.contains(&operation.move_id)
+                .filter(|(candidate, issued)| {
+                    candidate == &cell && covered.contains(&issued.op.move_id)
                 })
                 .map(|(_, operation)| operation.clone()),
         );
@@ -437,7 +437,10 @@ fn effective_state_with_new_ops(
         // `new_ops` are both causal. MoveId is a content hash, not an ordering
         // key for FSM transitions.
         let binding = registry.resolve(realm_id, &cell)?;
-        joined.insert(cell.clone(), binding.lattice.join(&cell, &ops));
+        joined.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+        );
     }
     Ok(joined)
 }

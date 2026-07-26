@@ -224,7 +224,10 @@ pub(super) async fn delivery_binding_handover_witness(
             .sealed_ops_for_cell(&realm_id, &cell_ref)
         {
             Ok(ops) => {
-                let move_ids = ops.iter().map(|op| op.move_id.as_str()).collect::<Vec<_>>();
+                let move_ids = ops
+                    .iter()
+                    .map(|issued| issued.op.move_id.as_str())
+                    .collect::<Vec<_>>();
                 if let Some(object) = witness.as_object_mut() {
                     object.insert("sealed_ops_count".to_owned(), json!(ops.len()));
                     object.insert("sealed_move_ids".to_owned(), json!(move_ids));

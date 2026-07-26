@@ -1642,7 +1642,7 @@ fn insert_historical_data_event_grant(
             &seal_id,
             &[(
                 cell,
-                arkret_state::lattice::SealedOp::new(move_id.clone(), op),
+                strictness_issued(arkret_state::lattice::SealedOp::new(move_id.clone(), op)),
             )],
         )
         .unwrap();
@@ -1709,11 +1709,11 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
             &[
                 (
                     parent_cell,
-                    arkret_state::lattice::SealedOp::new(parent_move_id.clone(), parent_op),
+                    strictness_issued(arkret_state::lattice::SealedOp::new(parent_move_id.clone(), parent_op)),
                 ),
                 (
                     child_cell,
-                    arkret_state::lattice::SealedOp::new(child_move_id.clone(), child_op),
+                    strictness_issued(arkret_state::lattice::SealedOp::new(child_move_id.clone(), child_op)),
                 ),
             ],
         )
@@ -1756,7 +1756,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     move_ids.push(grant_move_id.clone());
     ops.push((
         grant_cell,
-        arkret_state::lattice::SealedOp::new(grant_move_id, grant_op),
+        strictness_issued(arkret_state::lattice::SealedOp::new(grant_move_id, grant_op)),
     ));
 
     if include_covered_seal {
@@ -1774,7 +1774,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         move_ids.push(covered_move_id.clone());
         ops.push((
             covered_cell,
-            arkret_state::lattice::SealedOp::new(covered_move_id, covered_op),
+            strictness_issued(arkret_state::lattice::SealedOp::new(covered_move_id, covered_op)),
         ));
     }
 
@@ -1802,7 +1802,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         move_ids.push(policy_move_id.clone());
         ops.push((
             policy_cell,
-            arkret_state::lattice::SealedOp::new(policy_move_id, policy_op),
+            strictness_issued(arkret_state::lattice::SealedOp::new(policy_move_id, policy_op)),
         ));
     }
 
@@ -2228,4 +2228,16 @@ async fn non_enrollment_device_authorize_passes_through_gate() {
     validate_device_enrollment_authority_binding(&state, &object, principal_did)
         .await
         .expect("non-enrollment device.authorize must pass through this gate");
+}
+
+/// Attach a fixed issuer to a strictness fixture op; these cells are not
+/// ordered-log keyed, so the issuer travels but does not select a slot.
+fn strictness_issued(
+    op: arkret_state::lattice::SealedOp,
+) -> arkret_state::lattice::ordered_log::IssuedOp {
+    arkret_state::lattice::ordered_log::IssuedOp {
+        issuer: arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example".to_owned())
+            .unwrap(),
+        op,
+    }
 }

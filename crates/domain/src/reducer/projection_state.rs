@@ -848,7 +848,7 @@ impl ProjectionState {
             let binding = cell_registry
                 .resolve(realm_id, &cell)
                 .map_err(|e| StoreError::Backend(format!("cell registry resolve: {e}")))?;
-            let resolved = binding.lattice.join(&cell, &ops);
+            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
             self.cells.insert(cell, resolved);
         }
         Ok(())

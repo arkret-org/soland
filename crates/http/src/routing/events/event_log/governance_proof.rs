@@ -7,7 +7,7 @@ use arkret_models_crypto::{
     MlsGovernanceProofRequest, build_mls_governance_proof_chunks,
     derive_mls_discussion_metadata_digest, is_mls_membership_frontier_component,
 };
-use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::lattice::{CellState, SealedOp, ordered_log::IssuedOp};
 use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
 use arkret_state::state::compute_state_root;
 use arkret_wire::move_event::{LatticeOp, LatticeOpType};
@@ -231,7 +231,7 @@ async fn materialize_realm_control(
         );
     }
     let mut events = Vec::new();
-    let mut ops_by_cell: BTreeMap<CellRef, Vec<SealedOp>> = BTreeMap::new();
+    let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
     let mut event_ops = Vec::new();
     let mut covered = BTreeSet::new();
     let mut identity_anchor_event_ids = realm_records
@@ -382,7 +382,7 @@ async fn materialize_realm_control(
                                 ),
                             )
                         })?;
-                    match binding.lattice.join(&member_cell, ops) {
+                    match arkret_state::join_cell(binding.lattice.as_ref(), &member_cell, ops) {
                         CellState::Value(serde_json::Value::String(value)) => Some(value),
                         CellState::Value(_) => {
                             return Err(AppError::new(
@@ -404,12 +404,13 @@ async fn materialize_realm_control(
         } else {
             None
         };
-        for (cell, op) in canonical_event_ops(&event, &move_id, invite_accept_from.as_deref())? {
+        for (cell, issued) in canonical_event_ops(&event, &move_id, invite_accept_from.as_deref())?
+        {
             ops_by_cell
                 .entry(cell.clone())
                 .or_default()
-                .push(op.clone());
-            event_ops.push((cell, op));
+                .push(issued.clone());
+            event_ops.push((cell, issued));
         }
         events.push(event);
     }
@@ -436,7 +437,7 @@ async fn materialize_realm_control(
                     format!("no lattice registered for governance cell {cell}: {error}"),
                 )
             })?;
-        let resolved = binding.lattice.join(&cell, &ops);
+        let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
         if matches!(resolved, CellState::Bottom(_)) {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
@@ -915,7 +916,31 @@ pub(crate) async fn first_generation_event_seal_requirement(
 /// required to duplicate them in `effects[]`. The proof materializer must
 /// therefore reconstruct the same three cells instead of treating the literal
 /// producer effect list as the complete reducer output.
+/// Canonical sealed effects for one Event, each tagged with the Event's actor.
+///
+/// The issuer must travel with the op: `ordered_log` keys its slots by
+/// `(cell, actor_id, issuer_seq)`, so a store that received issuer-less ops
+/// would have to invent one.
 pub(crate) fn canonical_event_ops(
+    event: &Event,
+    move_id: &MoveId,
+    invite_accept_from: Option<&str>,
+) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
+    Ok(canonical_event_sealed_ops(event, move_id, invite_accept_from)?
+        .into_iter()
+        .map(|(cell, op)| {
+            (
+                cell,
+                IssuedOp {
+                    issuer: event.actor_id.clone(),
+                    op,
+                },
+            )
+        })
+        .collect())
+}
+
+fn canonical_event_sealed_ops(
     event: &Event,
     move_id: &MoveId,
     invite_accept_from: Option<&str>,
@@ -1261,9 +1286,9 @@ mod tests {
                 ops[0].0.as_str(),
                 format!("ak:cell:ak.component.member.state.v1:{actor_id}")
             );
-            assert_eq!(ops[0].1.op.op_type, LatticeOpType::Transition);
-            assert_eq!(ops[0].1.op.from, Some(serde_json::json!(prior_state)));
-            assert_eq!(ops[0].1.op.to, Some(serde_json::json!("join")));
+            assert_eq!(ops[0].1.op.op.op_type, LatticeOpType::Transition);
+            assert_eq!(ops[0].1.op.op.from, Some(serde_json::json!(prior_state)));
+            assert_eq!(ops[0].1.op.op.to, Some(serde_json::json!("join")));
         }
     }
 }

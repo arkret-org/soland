@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CellRef, MoveId, RealmId, SealId};
-use arkret_state::lattice::{CellState, SealedOp};
+use arkret_state::lattice::{CellState, ordered_log::IssuedOp};
 use arkret_state::state::{
     CellLatticeBinding, MoveReject, MoveStore, SealEffect, SealLeafUnionProof, SealReject,
     SealStore, SealedMoveRecord, StoreResult,
@@ -95,7 +95,7 @@ pub trait EventSealCommitPort: Send + Sync {
         &self,
         seal: &Seal,
         expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<MoveId>,
     ) -> StoreResult<bool>;
 }
@@ -545,7 +545,7 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
         cell: &CellRef,
-    ) -> StoreResult<Vec<SealedOp>> {
+    ) -> StoreResult<Vec<IssuedOp>> {
         self.cell_store().sealed_ops_for_cell(realm_id, cell)
     }
 
@@ -629,7 +629,7 @@ impl ProjectionService {
         &self,
         seal: &Seal,
         expected_store_frontier: &[SealId],
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
         covered: &std::collections::BTreeSet<MoveId>,
     ) -> StoreResult<bool> {
         self.event_seal_committer().commit_if_frontier(
@@ -652,7 +652,7 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
         seal_id: &SealId,
-        new_ops: &[(CellRef, SealedOp)],
+        new_ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
         self.cell_store()
             .append_sealed_effects(realm_id, seal_id, new_ops)

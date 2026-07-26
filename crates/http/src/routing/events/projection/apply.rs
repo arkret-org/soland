@@ -5,6 +5,8 @@ use soland_services::events::MlsWelcomeState;
 use soland_services::operation_semantics as kinds;
 use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
 
+use arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeyShareTarget;
+
 use super::*;
 use crate::ids;
 use crate::state::AppState;
@@ -725,7 +727,10 @@ async fn project_realm_key_share_to_device(
     // share_class=realm_recovery_key (recipient_device_id absent): the recipient is
     // an offline recovery org delivered via the durable Event, not a to-device
     // queue (encryption-and-audit.md §2.10.8). No device message is enqueued.
-    let Some(recipient_device_id) = share.recipient_device_id.clone() else {
+    let RealmKeyShareTarget::MemberDevice {
+        recipient_device_id,
+    } = &share.target
+    else {
         return;
     };
     let sender_device_id = if source_device_id.trim().is_empty() {

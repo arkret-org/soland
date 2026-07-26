@@ -5,6 +5,10 @@ use arkret_models_collaboration::objects::read_receipts::{
 use serde_json::Value;
 use soland_services::operation_semantics::poll_id_from_content;
 
+use arkret_models_collaboration::events_payloads::preview_realm_reaction::{
+    RealmKeyShareMaterial, RealmKeyShareTarget,
+};
+
 use super::*;
 
 pub(crate) async fn validate_history_visibility_policy(
@@ -428,12 +432,14 @@ pub(crate) async fn validate_realm_key_share_policy(
         return validate_rrk_targeted_realm_key_share(state, operation.realm_id.as_str(), &share)
             .unwrap_or(Err("durability_recovery_recipient_unverified"));
     }
-    // share_class=member_device from here: recipient_device_id is required.
-    let recipient_device_id = share
-        .recipient_device_id
-        .as_ref()
-        .map(arkret_identifiers::DeviceId::as_str)
-        .ok_or("policy_denied")?;
+    // share_class=member_device from here: the typed target names the device.
+    let RealmKeyShareTarget::MemberDevice {
+        ref recipient_device_id,
+    } = share.target
+    else {
+        return Err("policy_denied");
+    };
+    let recipient_device_id = recipient_device_id.as_str();
     let Some(meta) = state
         .realms()
         .realm_metadata(operation.realm_id.as_str())
@@ -589,21 +595,25 @@ fn validate_rrk_targeted_realm_key_share(
     };
     // The RRK addressing fields MUST match the declared recovery recipient
     // (verification_method + recipient_id), not just the principal.
-    if share.recovery_recipient_id.as_deref() != Some(matched.recipient_id.as_str())
-        || share.recipient_verification_method.as_deref()
-            != Some(matched.verification_method.as_str())
+    let RealmKeyShareTarget::RealmRecoveryKey {
+        ref recipient_verification_method,
+        ref recovery_recipient_id,
+    } = share.target
+    else {
+        return Some(Err("durability_recovery_recipient_unverified"));
+    };
+    if recovery_recipient_id.as_str() != matched.recipient_id.as_str()
+        || recipient_verification_method.as_str() != matched.verification_method.as_str()
     {
         return Some(Err("durability_recovery_recipient_unverified"));
     }
-    // RRK-targeted: validate material presence and that the key_scope references
-    // this Realm with a sane epoch range. Membership / history-visibility gates
-    // do NOT apply (the recipient is an offline org, not a member).
-    let has_material = share
-        .ciphertext
-        .as_deref()
-        .is_some_and(|value| !value.trim().is_empty())
-        || share.encrypted_key_ref.is_some();
-    if !has_material {
+    // RRK-targeted: the key_scope must reference this Realm with a sane epoch
+    // range. Membership / history-visibility gates do NOT apply (the recipient
+    // is an offline org, not a member). Exactly-one material is a wire
+    // invariant, so only a whitespace-only ciphertext still needs guarding.
+    if let RealmKeyShareMaterial::Ciphertext { ref ciphertext } = share.material
+        && ciphertext.trim().is_empty()
+    {
         return Some(Err("realm_key_share_material_missing"));
     }
     if share.key_scope.effective_scope.realm_id().as_str() != realm_id {
@@ -656,14 +666,15 @@ fn realm_key_share_receiver_event_state(
 fn realm_key_share_source(
     share: &arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
 ) -> arkret_models_collaboration::governance::history_visibility::HistoryKeySource {
-    if share
-        .recipient_device_id
-        .as_ref()
-        .map(arkret_identifiers::DeviceId::as_str)
-        == Some(share.sender_device_id.as_str())
-    {
+    let recipient_device_id = match &share.target {
+        RealmKeyShareTarget::MemberDevice {
+            recipient_device_id,
+        } => Some(recipient_device_id.as_str()),
+        RealmKeyShareTarget::RealmRecoveryKey { .. } => None,
+    };
+    if recipient_device_id == Some(share.sender_device_id.as_str()) {
         arkret_models_collaboration::governance::history_visibility::HistoryKeySource::OwnDevice
-    } else if share.encrypted_key_ref.is_some() {
+    } else if matches!(share.material, RealmKeyShareMaterial::EncryptedKeyRef { .. }) {
         arkret_models_collaboration::governance::history_visibility::HistoryKeySource::KeyBackup
     } else {
         arkret_models_collaboration::governance::history_visibility::HistoryKeySource::VerifiedMemberDevice
