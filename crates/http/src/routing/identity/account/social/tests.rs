@@ -155,9 +155,13 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 #[test]
 fn direct_strand_create_payload_is_sdk_schema_valid() {
     let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
+    let realm_id =
+        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101")
+            .unwrap();
+    let strand_id = "ak:strand:01964137-0000-7000-8000-000000000102";
     let payload = direct_strand_create_payload(
-        arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000101").unwrap(),
-        "ak:strand:01964137-0000-7000-8000-000000000102",
+        realm_id.clone(),
+        strand_id,
         "did:web:alice.example",
         created_at,
     )
@@ -190,6 +194,29 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
         object.get("created_at").and_then(Value::as_str),
         Some("2026-07-06T00:00:00.000Z")
     );
+
+    let state = test_state();
+    let mut event = unsigned_direct_materialization_event(
+        &state,
+        "did:web:alice.example",
+        "ak:event:01964137-0000-7000-8000-000000000103",
+        realm_id.as_str(),
+        arkret_wire::events::EventKind::STRAND_CREATE,
+        payload,
+    )
+    .unwrap();
+    attach_create_cell_contract(
+        &mut event,
+        "ak.component.strand.object.v1",
+        strand_id,
+        false,
+    )
+    .unwrap();
+    assert!(
+        event.preconditions.is_empty(),
+        "data-plane strand draft must not carry Move preconditions"
+    );
+    assert_eq!(event.effects.len(), 1);
 }
 
 #[tokio::test]

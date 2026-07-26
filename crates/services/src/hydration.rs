@@ -1467,6 +1467,15 @@ pub async fn hydrate_realm_policy_event(
                 meta.asset_privacy_policy_digest = canonical_value_digest(value);
             }
         }
+        "ak.realm.plaintext_visible_services" => {
+            for (service, classes) in plaintext_service_classes_from_value(payload) {
+                meta.plaintext_visible_services.insert(service.clone());
+                meta.plaintext_visible_service_classes
+                    .entry(service)
+                    .or_default()
+                    .extend(classes);
+            }
+        }
         _ => {}
     }
     meta.updated_at = record.received_at;

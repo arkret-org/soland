@@ -609,36 +609,38 @@ async fn events_frontier(
         }
         let head = crate::notary::ensure_realm_seal_head(state, &realm_id)
             .map_err(|e| AppError::internal(format!("seal head unavailable: {e}")))?;
-        // A freshly accepted ordinary Realm bootstrap is still made of
-        // canonical Control Events until the local single-DID notary closes
-        // them into the first Event Seal. The Realm frontier is the registered
-        // account-client source for `seal_basis` / `seal_ref`, so materialize
-        // that pending bootstrap here instead of making a newly created Realm
-        // unusable until an unrelated directory or MLS-proof read happens to
-        // trigger the same notary pass.
-        let seal = match head {
-            Some(seal) => seal,
-            None => {
-                let stats = state
-                    .event_queries()
-                    .realm_event_stats(realm_id.as_str())
-                    .await
-                    .map_err(|error| {
-                        AppError::internal(format!(
-                            "canonical Realm Event preflight unavailable: {error}"
-                        ))
-                    })?;
-                if stats.count == 0 {
-                    return Err(AppError::not_found(
-                        "realm has no accepted Seal on this deployment",
-                    ));
-                }
-                crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
-                    state, &realm_id,
-                )
-                .await?
-                .accepted_seal
+        // The Realm frontier is the registered source for seal_basis/seal_ref.
+        // Re-materialize on every read so accepted Control Events advance a
+        // locally notarized Realm even after its bootstrap Seal already
+        // exists. Returning `head` unconditionally here left every later
+        // capability/policy Move permanently outside the authorization state.
+        let stats = state
+            .event_queries()
+            .realm_event_stats(realm_id.as_str())
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "canonical Realm Event preflight unavailable: {error}"
+                ))
+            })?;
+        if stats.count == 0 {
+            return Err(AppError::not_found(
+                "realm has no accepted Seal on this deployment",
+            ));
+        }
+        let seal = match crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+            state, &realm_id,
+        )
+        .await
+        {
+            Ok(view) => view.accepted_seal,
+            // A Realm notarized by another DID may legitimately have accepted
+            // Events ahead of the locally visible signed head. Preserve that
+            // authoritative head; only the designated notary may advance it.
+            Err(error) if error.code == ErrorCode::FrontierUnavailable && head.is_some() => {
+                head.expect("checked existing Realm Seal head")
             }
+            Err(error) => return Err(error),
         };
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(

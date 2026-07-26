@@ -1640,7 +1640,12 @@ async fn prepare_reserved_direct_materialization(
         arkret_wire::events::EventKind::REALM_CREATE,
         realm_payload,
     )?;
-    attach_create_cell_contract(&mut realm_event, "ak.component.realm.create.v1", realm_id)?;
+    attach_create_cell_contract(
+        &mut realm_event,
+        "ak.component.realm.create.v1",
+        realm_id,
+        true,
+    )?;
     realm_event
         .requirements
         .critical_extensions
@@ -1683,6 +1688,33 @@ async fn prepare_reserved_direct_materialization(
         realm_id,
         arkret_wire::events::EventKind::CAPABILITY_GRANT,
         founding_payload,
+    )?;
+    let main_strand_grant_id = crate::ids::generate("grant");
+    let main_strand_grant_payload = json!({
+        "grant_id": main_strand_grant_id,
+        "grant": {
+            "id": main_strand_grant_id,
+            "schema": "ak.schema.capability.v1",
+            "realm_id": realm_id,
+            "issuer": actor,
+            "subject": actor,
+            "actions": [arkret_wire::events::EventKind::STRAND_CREATE],
+            "resources": [{
+                "kind": "realm",
+                "realm_id": realm_id,
+                "match_scope": "realm_wide"
+            }],
+            "issued_at": reserved.created_at,
+            "proofs": []
+        }
+    });
+    let main_strand_grant_event = unsigned_direct_materialization_event(
+        state,
+        actor,
+        &crate::ids::generate_event_id(),
+        realm_id,
+        arkret_wire::events::EventKind::CAPABILITY_GRANT,
+        main_strand_grant_payload,
     )?;
 
     let creator_member_event =
@@ -1734,6 +1766,7 @@ async fn prepare_reserved_direct_materialization(
         &mut main_strand_event,
         "ak.component.strand.object.v1",
         main_strand_id,
+        false,
     )?;
 
     let member_event_refs = vec![
@@ -1830,6 +1863,7 @@ async fn prepare_reserved_direct_materialization(
         founding_grant_event,
         creator_member_event,
         peer_member_event,
+        main_strand_grant_event,
         main_strand_event,
         binding_event,
     };
@@ -1853,7 +1887,7 @@ async fn prepare_reserved_direct_materialization(
     Ok((staged, false, Some(draft)))
 }
 
-fn unsigned_direct_materialization_event(
+pub(super) fn unsigned_direct_materialization_event(
     state: &AppState,
     actor: &str,
     event_id: &str,
@@ -1911,10 +1945,11 @@ fn direct_cell_ref(
     })
 }
 
-fn attach_create_cell_contract(
+pub(super) fn attach_create_cell_contract(
     event: &mut arkret_wire::Event,
     cell_family: &str,
     subject: &str,
+    include_precondition: bool,
 ) -> Result<(), AppError> {
     let cell = direct_cell_ref(cell_family, subject)?;
     let value = event
@@ -1922,15 +1957,19 @@ fn attach_create_cell_contract(
         .get("object")
         .cloned()
         .ok_or_else(|| AppError::internal("direct create payload object missing"))?;
-    event.preconditions = vec![arkret_wire::move_event::Precondition {
-        cell: cell.clone(),
-        predicate: arkret_wire::move_event::Predicate {
-            op: arkret_wire::move_event::PredicateOp::HeadEq,
-            value: Some(Value::Null),
-            values: None,
-            predicate_id: None,
-        },
-    }];
+    event.preconditions = if include_precondition {
+        vec![arkret_wire::move_event::Precondition {
+            cell: cell.clone(),
+            predicate: arkret_wire::move_event::Predicate {
+                op: arkret_wire::move_event::PredicateOp::HeadEq,
+                value: Some(Value::Null),
+                values: None,
+                predicate_id: None,
+            },
+        }]
+    } else {
+        Vec::new()
+    };
     event.effects = vec![arkret_wire::Effect {
         cell,
         op: arkret_wire::LatticeOp {

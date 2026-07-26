@@ -114,35 +114,7 @@ async fn backfill_authoritative_event_seals(
     if !state.config().development_mode {
         return Ok(false);
     }
-    let notary_cell = CellRef::new(format!(
-        "ak:cell:ak.component.notary.v1:{}",
-        realm_id.as_str()
-    ))
-    .map_err(proof_state_error)?;
-    let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
-        return Ok(false);
-    };
-    let notary = serde_json::from_value::<arkret_wire::notary::NotaryValue>(value.clone())
-        .map_err(|error| {
-            proof_state_error(format!("invalid materialized Realm notary: {error}"))
-        })?;
-    let authority_dids = match notary {
-        arkret_wire::notary::NotaryValue::SingleDid { did, .. } => vec![did.to_string()],
-        arkret_wire::notary::NotaryValue::Threshold { members, .. }
-        | arkret_wire::notary::NotaryValue::OpenSet { members } => {
-            members.into_iter().map(|did| did.to_string()).collect()
-        }
-        arkret_wire::notary::NotaryValue::Mixed {
-            did,
-            recovery_members,
-        } => std::iter::once(did.to_string())
-            .chain(
-                recovery_members
-                    .into_iter()
-                    .map(|member| member.to_string()),
-            )
-            .collect(),
-    };
+    let authority_dids = authoritative_notary_dids(realm_id, joined)?;
     let Some(peer) = crate::routing::federation::federation::configured_peer_targets(state)
         .into_iter()
         .find(|peer| {
@@ -211,6 +183,42 @@ async fn backfill_authoritative_event_seals(
     )
     .await?;
     Ok(true)
+}
+
+fn authoritative_notary_dids(
+    realm_id: &RealmId,
+    joined: &BTreeMap<CellRef, CellState>,
+) -> Result<Vec<String>, AppError> {
+    let notary_cell = CellRef::new(format!(
+        "ak:cell:ak.component.notary.v1:{}",
+        realm_id.as_str()
+    ))
+    .map_err(proof_state_error)?;
+    let Some(CellState::Value(value)) = joined.get(&notary_cell) else {
+        return Ok(Vec::new());
+    };
+    let notary = serde_json::from_value::<arkret_wire::notary::NotaryValue>(value.clone())
+        .map_err(|error| {
+            proof_state_error(format!("invalid materialized Realm notary: {error}"))
+        })?;
+    let authority_dids = match notary {
+        arkret_wire::notary::NotaryValue::SingleDid { did, .. } => vec![did.to_string()],
+        arkret_wire::notary::NotaryValue::Threshold { members, .. }
+        | arkret_wire::notary::NotaryValue::OpenSet { members } => {
+            members.into_iter().map(|did| did.to_string()).collect()
+        }
+        arkret_wire::notary::NotaryValue::Mixed {
+            did,
+            recovery_members,
+        } => std::iter::once(did.to_string())
+            .chain(
+                recovery_members
+                    .into_iter()
+                    .map(|member| member.to_string()),
+            )
+        .collect(),
+    };
+    Ok(authority_dids)
 }
 
 async fn apply_authoritative_event_seal_path(
@@ -471,6 +479,14 @@ async fn verify_authoritative_event_seal_signature(
 async fn materialize_realm_control(
     state: &AppState,
     realm_id: &RealmId,
+) -> Result<MaterializedRealmControl, AppError> {
+    materialize_realm_control_with_transported_seals(state, realm_id, None).await
+}
+
+async fn materialize_realm_control_with_transported_seals(
+    state: &AppState,
+    realm_id: &RealmId,
+    transported_seals: Option<&[arkret_wire::Seal]>,
 ) -> Result<MaterializedRealmControl, AppError> {
     let stats = state
         .event_queries()
@@ -820,6 +836,17 @@ async fn materialize_realm_control(
         )
     })?;
     let covered_event_digests = covered.iter().cloned().collect::<Vec<_>>();
+    if let Some(seals) = transported_seals {
+        let authority_dids = authoritative_notary_dids(realm_id, &joined)?;
+        apply_authoritative_event_seal_path(
+            state,
+            realm_id,
+            &authority_dids,
+            &event_ops,
+            seals,
+        )
+        .await?;
+    }
     let mut seal_view = crate::notary::ensure_materialized_event_seal(
         state,
         realm_id,
@@ -946,6 +973,15 @@ pub(crate) async fn materialize_realm_event_seal(
     realm_id: &RealmId,
 ) -> Result<crate::notary::MaterializedEventSealView, AppError> {
     Ok(materialize_realm_control(state, realm_id).await?.seal_view)
+}
+
+pub(crate) async fn apply_transported_realm_event_seals(
+    state: &AppState,
+    realm_id: &RealmId,
+    seals: &[arkret_wire::Seal],
+) -> Result<(), AppError> {
+    materialize_realm_control_with_transported_seals(state, realm_id, Some(seals)).await?;
+    Ok(())
 }
 
 async fn materialize_governance_proof(

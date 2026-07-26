@@ -807,8 +807,8 @@ pub(super) fn plaintext_service_classes_from_operation(
 fn plaintext_visible_services_payload(
     operation: &Operation,
 ) -> Option<PlaintextVisibleServicesPayload> {
-    let payload = if operation.payload.get("services").is_some() {
-        operation.payload.clone()
+    let payload = if let Some(services) = operation.payload.get("services") {
+        serde_json::json!({ "services": services })
     } else {
         let services = operation
             .payload

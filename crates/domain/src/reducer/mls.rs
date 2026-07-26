@@ -691,17 +691,11 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     // already advanced the epoch and recorded `(accepted_from_epoch,
     // accepted_commit_digest)`; the racing second still attests
     // `accepted_from_epoch` but carries a different digest. A genuine race is
-    // distinguished from a plain stale replay (which stays `mls_epoch_skew`) by
-    // the committer explicitly attesting the same base via `base_epoch_ref` of
-    // the accepted commit — i.e. the payload declares it forked from the live
-    // frontier, not from a long-superseded epoch. The fork is signalled by
-    // `concurrent_commit == true`; without it a non-matching base is skew.
-    let declares_concurrent = payload
-        .get("concurrent_commit")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-    let is_contention = declares_concurrent
-        && accepted_from_epoch == Some(expected_prev_epoch)
+    // distinguished from an unrelated stale replay by its attested base epoch:
+    // it names the same epoch from which the currently accepted commit
+    // advanced. No private wire marker is needed (or permitted by the
+    // registered `ak.mls.commit` payload schema).
+    let is_contention = accepted_from_epoch == Some(expected_prev_epoch)
         && accepted_digest
             .as_deref()
             .is_some_and(|digest| digest != commit_digest);

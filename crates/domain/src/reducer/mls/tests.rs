@@ -1290,10 +1290,7 @@ fn concurrent_commits_contend_then_resolve() {
     // set by commit-a — because the contested-frontier mirror locates the
     // durable epoch row by that value; the contention does not rewind it to
     // the forked base.
-    let contended = apply_commit_epoch(
-        &mut state,
-        &commit_op(501, b"commit-b", json!({ "concurrent_commit": true })),
-    );
+    let contended = apply_commit_epoch(&mut state, &commit_op(501, b"commit-b", json!({})));
     assert!(matches!(
         contended,
         ProjectionEffect::Mls(MlsEffect::CommitFrontierContested { epoch: 1, .. })
@@ -1310,10 +1307,7 @@ fn concurrent_commits_contend_then_resolve() {
 
     // A further racing commit at the contested base fails closed as
     // decryption_pending.
-    let pending = apply_commit_epoch(
-        &mut state,
-        &commit_op(502, b"commit-c", json!({ "concurrent_commit": true })),
-    );
+    let pending = apply_commit_epoch(&mut state, &commit_op(502, b"commit-c", json!({})));
     assert!(matches!(
         pending,
         ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::DECRYPTION_PENDING

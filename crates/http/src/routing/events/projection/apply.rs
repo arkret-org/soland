@@ -472,7 +472,15 @@ async fn project_accepted_operations_inner(
                     "durably accepted active-series Event rejected by live reducer: {reason}"
                 );
             }
-            if matches!(&effect, ProjectionEffectView::RealmKeyShareProjected) {
+            // Durable member-device history shares are themselves the delivery
+            // source of truth. Enqueue from the accepted canonical kind instead
+            // of coupling transport delivery to the reducer's transient effect
+            // view: replay/hydration may legitimately collapse that view after
+            // the cell write, while the idempotent device-message projection
+            // must still be rebuilt.
+            if kinds::canonical_kind_string(operation)
+                == arkret_wire::events::EventKind::REALM_KEY_SHARE
+            {
                 project_realm_key_share_to_device(state, origin, source_device_id, operation).await;
             }
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
@@ -723,6 +731,19 @@ async fn project_realm_key_share_to_device(
     >(wire_payload.clone()) else {
         return;
     };
+    if share.key_scope.effective_scope.realm_id().as_str() != operation.realm_id.as_str()
+        || share
+            .key_scope
+            .from_epoch
+            .zip(share.key_scope.to_epoch)
+            .is_some_and(|(from_epoch, to_epoch)| from_epoch > to_epoch)
+    {
+        tracing::warn!(
+            operation_id = %operation.operation_id,
+            "accepted realm key share failed delivery projection invariants"
+        );
+        return;
+    }
     // share_class=realm_recovery_key (recipient_device_id absent): the recipient is
     // an offline recovery org delivered via the durable Event, not a to-device
     // queue (encryption-and-audit.md §2.10.8). No device message is enqueued.
@@ -1002,7 +1023,11 @@ mod tests {
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000001a1",
-            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "sender_device_signature": {
+                "alg": "Ed25519",
+                "signature": "signature",
+                "signer_public_key_multibase": "z6MkkWfGNkv1TUe64XN2p4WMVabjTxzk4snewMn4774HxGyB"
+            },
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
                 "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -1022,7 +1047,13 @@ mod tests {
             payload,
         );
 
-        project_realm_key_share_to_device(&state, sender, sender_device, &operation).await;
+        project_accepted_operations_from_device(
+            &state,
+            sender,
+            sender_device,
+            std::slice::from_ref(&operation),
+        )
+        .await;
 
         let queued = state
             .deliveries()
