@@ -1332,32 +1332,33 @@ impl ProjectionService {
         &self,
         actor_id: &str,
         backup_kind: &str,
-    ) -> Option<
-        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
-    > {
+    ) -> Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeries> {
         let state = self.state.lock();
         let row = state.key_backup_active_series(actor_id, backup_kind)?;
         Some(
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries {
-            schema: "ak.schema.key_backup_active_series.v1".to_owned(),
-            actor_id: arkret_identifiers::Did::new(row.actor_id.clone()).ok()?,
-            backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeries {
+                schema: "ak.schema.key_backup_active_series.v1".to_owned(),
+                actor_id: arkret_identifiers::Did::new(row.actor_id.clone()).ok()?,
+                backup_kind: arkret_models_crypto::BackupKind::try_from(row.backup_kind.as_str())
+                    .ok()?,
+                active_series_id: arkret_identifiers::BackupSeriesId::new(
+                    row.active_series_id.clone(),
+                )
                 .ok()?,
-            active_series_id: arkret_identifiers::BackupSeriesId::new(row.active_series_id.clone())
-                .ok()?,
-            series_pointer_version: row.series_pointer_version,
-            previous_series_ids: row
-                .previous_series_ids
-                .iter()
-                .cloned()
-                .map(arkret_identifiers::BackupSeriesId::new)
-                .collect::<Result<Vec<_>, _>>()
-                .ok()?,
-            frontier_ref: row.frontier_ref.clone(),
-            issued_at: row.issued_at,
-            auth_data: row.auth_data.clone(),
-            extra: row.extra.clone(),
-        })
+                series_pointer_version: row.series_pointer_version,
+                previous_series_ids: row
+                    .previous_series_ids
+                    .iter()
+                    .cloned()
+                    .map(arkret_identifiers::BackupSeriesId::new)
+                    .collect::<Result<Vec<_>, _>>()
+                    .ok()?,
+                frontier_ref: row.frontier_ref.clone(),
+                issued_at: row.issued_at,
+                auth_data: row.auth_data.clone(),
+                extra: row.extra.clone(),
+            },
+        )
     }
 
     pub fn remove_realm_policy_server(&self, realm_id: &str) -> bool {

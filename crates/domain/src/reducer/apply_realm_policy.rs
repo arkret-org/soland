@@ -106,11 +106,11 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_realm_notary(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmNotaryPayload =
-            match typed_realm_control_payload::<arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmNotaryPayload>(
-                &operation.payload,
-                &["realm_id", "notary"],
-            ) {
+        let payload: arkret_models_collaboration::events_payloads::RealmNotaryPayload =
+            match typed_realm_control_payload::<
+                arkret_models_collaboration::events_payloads::RealmNotaryPayload,
+            >(&operation.payload, &["realm_id", "notary"])
+            {
                 Ok(payload)
                     if payload.validate().is_ok()
                         && payload.realm_id.as_str() == operation.realm_id.as_str() =>
@@ -146,8 +146,8 @@ impl ProjectionState {
         &mut self,
         operation: &Operation,
     ) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmDigestSuiteTransitionPayload =
-            match typed_realm_control_payload::<arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmDigestSuiteTransitionPayload>(
+        let payload: arkret_models_collaboration::events_payloads::RealmDigestSuiteTransitionPayload =
+            match typed_realm_control_payload::<arkret_models_collaboration::events_payloads::RealmDigestSuiteTransitionPayload>(
                 &operation.payload,
                 &[
                     "from_digest_algorithm",

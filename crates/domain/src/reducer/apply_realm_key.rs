@@ -1,6 +1,4 @@
-use arkret_models_collaboration::events_payloads::preview_realm_reaction::{
-    RealmKeyShareMaterial, RealmKeyShareTarget,
-};
+use arkret_models_collaboration::events_payloads::{RealmKeyShareMaterial, RealmKeyShareTarget};
 
 use super::*;
 
@@ -12,7 +10,7 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         }
 
-        let share: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload =
+        let share: arkret_models_collaboration::events_payloads::RealmKeySharePayload =
             match serde_json::from_value(realm_key_share_wire_payload(&operation.payload)) {
                 Ok(share) => share,
                 Err(_) => return rejected("realm_key_share_payload_invalid"),

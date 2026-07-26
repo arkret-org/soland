@@ -1220,8 +1220,9 @@ impl ProjectionState {
 
         match compatibility_class {
             "additive" => {
-                let empty = arkret_models_collaboration::events_payloads::moderation_morph_misc::MorphSchemaFieldSet::new();
-                arkret_models_collaboration::events_payloads::moderation_morph_misc::morph_schema_refs_additive_only(
+                let empty =
+                    arkret_models_collaboration::events_payloads::MorphSchemaFieldSet::new();
+                arkret_models_collaboration::events_payloads::morph_schema_refs_additive_only(
                     &from_schema_refs,
                     &to_schema_refs,
                     &empty,

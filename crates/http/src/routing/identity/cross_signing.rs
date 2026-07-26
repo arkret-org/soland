@@ -13,10 +13,9 @@ use std::collections::BTreeSet;
 
 use arkret_crypto::DeviceTrustBinding;
 use arkret_identifiers::{DeviceId, Did, EventId};
-use arkret_models_collaboration::events_payloads::list_message_mimi_mls::{
-    MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope,
+use arkret_models_collaboration::events_payloads::{
+    MlsRequesterTrustBinding, MlsWelcomeClaimEnvelope, SignatureMaterial,
 };
-use arkret_models_collaboration::events_payloads::preview_realm_reaction::SignatureMaterial;
 use arkret_models_crypto::DeviceStatus;
 use arkret_models_identity::artifacts_device_identity::{
     CrossSigningPublish, CrossSigningResetProof, DeviceEnrollmentAuthorityBinding,

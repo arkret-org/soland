@@ -76,7 +76,7 @@ fn key_backup_active_series_projects_pointer_and_cell() {
     assert_eq!(projected.previous_series_ids, vec![PREVIOUS_SERIES]);
     assert!(matches!(
         projected.auth_data.trust_binding,
-        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
+        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation)
             if generation.get() == 2
     ));
 

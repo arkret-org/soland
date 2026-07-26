@@ -11,7 +11,7 @@ pub(super) async fn validate_capability_grant_proofs(
     if kind != arkret_wire::events::EventKind::CAPABILITY_GRANT {
         return Ok(());
     }
-    let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::CapabilityGrantPayload =
+    let payload: arkret_models_collaboration::events_payloads::CapabilityGrantPayload =
         serde_json::from_value(object.get("payload").cloned().unwrap_or(Value::Null)).map_err(
             |error| {
                 event_validation_error(

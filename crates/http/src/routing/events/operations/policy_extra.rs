@@ -1,7 +1,5 @@
 use arkret_event_draft::Operation;
-use arkret_models_collaboration::events_payloads::preview_realm_reaction::{
-    RealmKeyShareMaterial, RealmKeyShareTarget,
-};
+use arkret_models_collaboration::events_payloads::{RealmKeyShareMaterial, RealmKeyShareTarget};
 use arkret_models_collaboration::objects::read_receipts::{
     ReadReceiptPolicy, ReadReceiptPolicyChildViolation,
 };
@@ -413,7 +411,7 @@ pub(crate) async fn validate_realm_key_share_policy(
         return Ok(());
     }
     let share = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
+        arkret_models_collaboration::events_payloads::RealmKeySharePayload,
     >(projection_context_stripped_payload(&operation.payload))
     .map_err(|error| {
         tracing::debug!(%error, "realm key share projection payload parse failed");
@@ -429,7 +427,7 @@ pub(crate) async fn validate_realm_key_share_policy(
     // recovery recipient or it is rejected.
     if matches!(
         share.share_kind,
-        arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeyShareClass::RealmRecoveryKey
+        arkret_models_collaboration::events_payloads::RealmKeyShareClass::RealmRecoveryKey
     ) {
         return validate_rrk_targeted_realm_key_share(state, operation.realm_id.as_str(), &share)
             .unwrap_or(Err("durability_recovery_recipient_unverified"));
@@ -481,9 +479,9 @@ pub(crate) async fn validate_realm_key_share_policy(
         .await
         .map_err(|_| "policy_denied")?
         .ok_or("policy_denied")?;
-    let policy = serde_json::from_value::<arkret_models_collaboration::events_payloads::strand_history_join::HistorySharingPolicyPayloadValue>(
-        policy_value.clone(),
-    )
+    let policy = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue,
+    >(policy_value.clone())
     .map_err(|_| "policy_denied")?;
     arkret_policy::history_visibility::validate_history_sharing_policy(&policy)
         .map_err(|_| "policy_denied")?;
@@ -571,7 +569,7 @@ pub(crate) async fn validate_realm_key_share_policy(
 fn validate_rrk_targeted_realm_key_share(
     state: &AppState,
     realm_id: &str,
-    share: &arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
+    share: &arkret_models_collaboration::events_payloads::RealmKeySharePayload,
 ) -> Option<Result<(), &'static str>> {
     use arkret_models_collaboration::objects::realm::DurabilityMode;
     // Snapshot the durability policy off the projection without holding the lock
@@ -666,7 +664,7 @@ fn realm_key_share_receiver_event_state(
 }
 
 fn realm_key_share_source(
-    share: &arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmKeySharePayload,
+    share: &arkret_models_collaboration::events_payloads::RealmKeySharePayload,
 ) -> arkret_models_collaboration::governance::history_visibility::HistoryKeySource {
     let recipient_device_id = match &share.target {
         RealmKeyShareTarget::MemberDevice {

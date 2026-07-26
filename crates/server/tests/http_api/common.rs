@@ -1668,10 +1668,12 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
                     .expect("morph update payload requires patch"),
             )
             .expect("valid morph update patch");
-            arkret_models_collaboration::events_payloads::morph_message::MorphUpdatePayload::for_morph(morph_id, patch)
-                .expect("valid morph update payload")
-                .to_value()
-                .expect("morph update payload serialization")
+            arkret_models_collaboration::events_payloads::MorphUpdatePayload::for_morph(
+                morph_id, patch,
+            )
+            .expect("valid morph update payload")
+            .to_value()
+            .expect("morph update payload serialization")
         }
         _ => payload,
     }

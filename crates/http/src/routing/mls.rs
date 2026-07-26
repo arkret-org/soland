@@ -1093,10 +1093,10 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
         .await
         .map_err(|_| "peer_claim_welcome_pending")?;
     let welcome = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
+        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
     >(payload.clone())
     .map_err(|_| "peer_claim_welcome_invalid")?;
-    if let arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(authorize_event_id) =
+    if let arkret_models_collaboration::events_payloads::MlsClaimTrustBinding::AgentKeyAuthorizeEventId(authorize_event_id) =
         &welcome.claim_ref.trust_binding
         && !current_agent_key_authorization_matches(
             state,
@@ -1735,19 +1735,18 @@ async fn validate_direct_keypackage_consume(
             "canonical direct Welcome belongs to another Realm",
         ));
     }
-    let welcome = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
-    >(
-        serde_json::to_value(welcome_event.payload).map_err(|error| {
-            AppError::internal(format!("stored direct Welcome payload invalid: {error}"))
-        })?,
-    )
-    .map_err(|_| {
-        AppError::new(
-            ErrorCode::FailedPrecondition,
-            "canonical direct Welcome payload is invalid",
+    let welcome =
+        serde_json::from_value::<arkret_models_collaboration::events_payloads::MlsWelcomePayload>(
+            serde_json::to_value(welcome_event.payload).map_err(|error| {
+                AppError::internal(format!("stored direct Welcome payload invalid: {error}"))
+            })?,
         )
-    })?;
+        .map_err(|_| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "canonical direct Welcome payload is invalid",
+            )
+        })?;
     let claim_id = &body.claim_ids[0];
     let key_package_id = &body.key_package_refs[0];
     if welcome.recipient_principal_id.as_str() != session.actor
@@ -1833,7 +1832,7 @@ async fn validate_sidecar_keypackage_consume(
         ));
     }
     let welcome = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
+        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
     >(serde_json::to_value(event.payload).map_err(|error| {
         AppError::internal(format!("stored Sidecar Welcome payload invalid: {error}"))
     })?)

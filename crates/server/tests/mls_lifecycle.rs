@@ -19,7 +19,7 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{Did, TypedTrustDomainId};
-use arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomeClaimEnvelope;
+use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_models_identity::{
     CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };

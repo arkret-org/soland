@@ -13,7 +13,7 @@ impl ProjectionState {
         }
 
         let wire_payload = projection_context_stripped_payload(&operation.payload);
-        let record: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries =
+        let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
             match serde_json::from_value(wire_payload.clone()) {
                 Ok(record) => record,
                 Err(_) => {
@@ -30,7 +30,7 @@ impl ProjectionState {
             .key_backup_active_series
             .get(&pointer_key)
             .and_then(soland_active_series_head);
-        let head = match arkret_models_collaboration::events_payloads::strand_history_join::validate_key_backup_active_series_transition(
+        let head = match arkret_models_collaboration::events_payloads::validate_key_backup_active_series_transition(
             current_head.as_ref(),
             &record,
         ) {
@@ -92,7 +92,7 @@ impl ProjectionState {
         &self,
         actor_id: &str,
         backup_kind: &str,
-    ) -> Option<arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead>{
+    ) -> Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead> {
         self.key_backup_active_series(actor_id, backup_kind)
             .and_then(soland_active_series_head)
     }
@@ -100,23 +100,26 @@ impl ProjectionState {
 
 fn soland_active_series_head(
     current: &SolandKeyBackupActiveSeries,
-) -> Option<
-    arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead,
-> {
-    Some(arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesHead {
-        actor_id: arkret_identifiers::Did::new(current.actor_id.clone()).ok()?,
-        backup_kind: arkret_models_crypto::BackupKind::try_from(current.backup_kind.as_str()).ok()?,
-        active_series_id: arkret_identifiers::BackupSeriesId::new(current.active_series_id.clone())
+) -> Option<arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead> {
+    Some(
+        arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead {
+            actor_id: arkret_identifiers::Did::new(current.actor_id.clone()).ok()?,
+            backup_kind: arkret_models_crypto::BackupKind::try_from(current.backup_kind.as_str())
+                .ok()?,
+            active_series_id: arkret_identifiers::BackupSeriesId::new(
+                current.active_series_id.clone(),
+            )
             .ok()?,
-        series_pointer_version: current.series_pointer_version,
-        previous_series_ids: current
-            .previous_series_ids
-            .iter()
-            .map(|series_id| arkret_identifiers::BackupSeriesId::new(series_id.clone()))
-            .collect::<std::result::Result<Vec<_>, _>>()
-            .ok()?,
-        record_digest: current.record_digest.clone(),
-    })
+            series_pointer_version: current.series_pointer_version,
+            previous_series_ids: current
+                .previous_series_ids
+                .iter()
+                .map(|series_id| arkret_identifiers::BackupSeriesId::new(series_id.clone()))
+                .collect::<std::result::Result<Vec<_>, _>>()
+                .ok()?,
+            record_digest: current.record_digest.clone(),
+        },
+    )
 }
 
 fn rejected(reason: &str) -> ProjectionEffect {

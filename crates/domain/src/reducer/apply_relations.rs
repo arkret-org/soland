@@ -850,8 +850,10 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_container_move_item(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerMoveItemPayload =
-            match typed_container_payload::<arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerMoveItemPayload>(
+        let payload: arkret_models_collaboration::events_payloads::ContainerMoveItemPayload =
+            match typed_container_payload::<
+                arkret_models_collaboration::events_payloads::ContainerMoveItemPayload,
+            >(
                 &operation.payload,
                 &[
                     "item_ref",
@@ -915,8 +917,10 @@ impl ProjectionState {
     }
 
     pub(crate) fn apply_container_rebalance(&mut self, operation: &Operation) -> ProjectionEffect {
-        let payload: arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerRebalancePayload =
-            match typed_container_payload::<arkret_models_collaboration::events_payloads::capability_circle_consent_contact::ContainerRebalancePayload>(
+        let payload: arkret_models_collaboration::events_payloads::ContainerRebalancePayload =
+            match typed_container_payload::<
+                arkret_models_collaboration::events_payloads::ContainerRebalancePayload,
+            >(
                 &operation.payload,
                 &[
                     "container_ref",

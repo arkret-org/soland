@@ -340,10 +340,11 @@ pub(super) async fn validate_signed_ghost_provision_events(
         .with_wire_code("invalid_proof")
     })?;
 
-    let profile_payload: arkret_models_collaboration::events_payloads::account_misc::ActorProfileCreatePayload =
+    let profile_payload: arkret_models_collaboration::events_payloads::ActorProfileCreatePayload =
         serde_json::from_value(serde_json::to_value(&profile.payload).map_err(|error| {
             AppError::invalid_param(format!("profile_event payload invalid: {error}"))
-        })?).map_err(|error| {
+        })?)
+        .map_err(|error| {
             AppError::invalid_param(format!("profile_event payload invalid: {error}"))
         })?;
     let actor_profile = profile_payload.object;

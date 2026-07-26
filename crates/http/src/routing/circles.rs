@@ -30,7 +30,7 @@
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CircleId, Did, EventId, OperationId, RealmId};
-use arkret_models_collaboration::events_payloads::capability_circle_consent_contact::CircleCreatePayload;
+use arkret_models_collaboration::events_payloads::CircleCreatePayload;
 use arkret_models_collaboration::governance::circle::{
     Circle, CircleColorToken, CircleCreateRequestBody, CircleDirectoryVisibility, CircleDisplay,
     CircleGlyph, CircleJoinRule, CircleList, CircleMemberRequestBody, CircleMembership,

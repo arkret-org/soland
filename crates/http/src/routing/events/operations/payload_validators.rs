@@ -52,9 +52,9 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
 pub(crate) fn validate_key_backup_active_series_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
-    >(projection_context_stripped_payload(&operation.payload))
+    serde_json::from_value::<arkret_models_collaboration::events_payloads::KeyBackupActiveSeries>(
+        projection_context_stripped_payload(&operation.payload),
+    )
     .map(|_| ())
     .map_err(|_| "ak.key_backup.active_series payload violates SDK artifact schema")
 }
@@ -355,8 +355,9 @@ pub(crate) fn validate_realm_inheritance_policy_payload(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     let wire_payload = projection_context_stripped_payload(&operation.payload);
-    let payload: arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmInheritancePolicyPayload = serde_json::from_value(wire_payload)
-        .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
+    let payload: arkret_models_collaboration::events_payloads::RealmInheritancePolicyPayload =
+        serde_json::from_value(wire_payload)
+            .map_err(|_| "ak.realm.inheritance_policy payload violates SDK artifact schema")?;
     if payload.mode != "narrow_only" {
         return Err("ak.realm.inheritance_policy mode must be narrow_only");
     }
@@ -810,8 +811,9 @@ pub(crate) fn validate_morph_schema_migrate_payload(
         .and_then(serde_json::Value::as_str)
     {
         Some("additive") => {
-            let empty_fields = arkret_models_collaboration::events_payloads::moderation_morph_misc::MorphSchemaFieldSet::new();
-            arkret_models_collaboration::events_payloads::moderation_morph_misc::morph_schema_refs_additive_only(
+            let empty_fields =
+                arkret_models_collaboration::events_payloads::MorphSchemaFieldSet::new();
+            arkret_models_collaboration::events_payloads::morph_schema_refs_additive_only(
                 &from_schema_refs,
                 &to_schema_refs,
                 &empty_fields,

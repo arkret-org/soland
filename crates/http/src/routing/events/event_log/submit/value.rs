@@ -43,16 +43,17 @@ async fn validate_active_series_authority_before_commit(
     if parsed.kind != arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
         return Ok(());
     }
-    let record: arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries = serde_json::from_value(
-        crate::routing::events::projection_context_stripped_payload(&operation.payload),
-    )
-    .map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("active-series payload is invalid: {error}"),
-        )
-    })?;
+    let record: arkret_models_collaboration::events_payloads::KeyBackupActiveSeries =
+        serde_json::from_value(crate::routing::events::projection_context_stripped_payload(
+            &operation.payload,
+        ))
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("active-series payload is invalid: {error}"),
+            )
+        })?;
     if record.actor_id.as_str() != parsed.actor_id {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,

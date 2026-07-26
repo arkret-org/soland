@@ -627,13 +627,12 @@ async fn validate_direct_binding_event_refs(
     {
         return Err("welcome_recipient");
     }
-    let typed_welcome = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomePayload,
-    >(
-        serde_json::to_value(&welcome.payload)
-            .map_err(|_| "direct_conversation_binding_invalid")?,
-    )
-    .map_err(|_| "direct_conversation_binding_invalid")?;
+    let typed_welcome =
+        serde_json::from_value::<arkret_models_collaboration::events_payloads::MlsWelcomePayload>(
+            serde_json::to_value(&welcome.payload)
+                .map_err(|_| "direct_conversation_binding_invalid")?,
+        )
+        .map_err(|_| "direct_conversation_binding_invalid")?;
     if let Some(receipt) = typed_welcome.peer_claim_receipt.as_ref() {
         let request = &receipt.request;
         if request.claim_purpose

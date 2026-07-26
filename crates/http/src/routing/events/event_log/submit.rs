@@ -687,9 +687,11 @@ async fn direct_bootstrap_source_is_contact_authority(
         return false;
     };
     let realm = first.get("payload").cloned().and_then(|payload| {
-        serde_json::from_value::<arkret_models_collaboration::events_payloads::preview_realm_reaction::RealmCreatePayload>(payload)
-            .ok()
-            .map(|payload| payload.object)
+        serde_json::from_value::<arkret_models_collaboration::events_payloads::RealmCreatePayload>(
+            payload,
+        )
+        .ok()
+        .map(|payload| payload.object)
     });
     if realm
         .as_ref()

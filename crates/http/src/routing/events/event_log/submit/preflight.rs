@@ -17,15 +17,15 @@ pub(super) async fn preflight_mls_welcome_claim_signature_reject(
             return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
         }
     };
-    let envelope =
-        match serde_json::from_value::<arkret_models_collaboration::events_payloads::list_message_mimi_mls::MlsWelcomeClaimEnvelope>(envelope_value) {
-            Ok(envelope) => envelope,
-            Err(_) => {
-                return Some(
-                    arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned(),
-                );
-            }
-        };
+    let envelope = match serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope,
+    >(envelope_value)
+    {
+        Ok(envelope) => envelope,
+        Err(_) => {
+            return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
+        }
+    };
     if envelope.requester_did.as_str() != actor_id {
         return Some(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH.to_owned());
     }

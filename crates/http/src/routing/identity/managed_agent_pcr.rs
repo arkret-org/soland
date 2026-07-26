@@ -366,7 +366,7 @@ pub(crate) async fn project_agent_pcr_recovery(
 pub(crate) async fn active_series_pointer_is_current(
     state: &AppState,
     controller_id: &str,
-    pointer: &arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
+    pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
     let controller_realm = RealmId::new(
         soland_services::identity::principal_control_realm_for_did(controller_id),
@@ -418,16 +418,16 @@ pub(crate) async fn active_series_pointer_is_current(
         &pointer.frontier_ref.generation,
     ) {
         (
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTrustBinding::SskGeneration(auth),
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesFrontierGeneration::SskGeneration(frontier),
         ) => Ok(auth == frontier
             && crate::routing::identity::cross_signing::current_accepted_ssk_generation(
                 state,
                 controller_id,
             ) == Some(auth.get())),
         (
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id),
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesFrontierGeneration::DeviceGenerationRef(frontier),
         ) => {
             let current = crate::routing::identity::device_generation::current_device_generation(
                 state,
@@ -490,7 +490,7 @@ pub(crate) async fn validate_active_series_operation_authority(
         return Ok(());
     }
     let record = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
+        arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
     >(crate::routing::events::projection_context_stripped_payload(
         &operation.payload,
     ))
@@ -517,7 +517,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     if !series_exists {
         return Err("key_backup_active_series_target_missing");
     }
-    arkret_models_collaboration::events_payloads::strand_history_join::key_backup_active_series_head(&record)
+    arkret_models_collaboration::events_payloads::key_backup_active_series_head(&record)
         .map_err(|_| "key_backup_active_series_schema_violation")?;
     let pointer = record;
     match active_series_pointer_is_current(state, pointer.actor_id.as_str(), &pointer).await {
@@ -530,7 +530,7 @@ pub(crate) async fn validate_active_series_operation_authority(
 async fn active_series_signature_is_valid(
     state: &AppState,
     controller_id: &str,
-    pointer: &arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeries,
+    pointer: &arkret_models_collaboration::events_payloads::KeyBackupActiveSeries,
 ) -> Result<bool, AppError> {
     if pointer.auth_data.signature_algorithm
         != arkret_models_crypto::key_backup::KeyBackupSignatureAlgorithm::Ed25519
@@ -582,7 +582,7 @@ async fn active_series_signature_is_valid(
             continue;
         }
         let anchored = match &pointer.auth_data.trust_binding {
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTrustBinding::SskGeneration(generation) => {
                 crate::routing::identity::cross_signing::persisted_device_is_anchored_to_ssk_generation(
                     state,
                     controller_id,
@@ -592,7 +592,7 @@ async fn active_series_signature_is_valid(
                     generation.get(),
                 )
             }
-            arkret_models_collaboration::events_payloads::strand_history_join::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
+            arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesTrustBinding::DeviceAuthorizeEventId(event_id) => {
                 device
                     .payload
                     .get("device_authorize_event_id")

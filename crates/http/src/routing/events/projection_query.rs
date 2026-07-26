@@ -33,7 +33,7 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{CellRef, Did, MorphId, RealmId, RelationId, SealId, SpaceId, StrandId};
-use arkret_models_collaboration::events_payloads::strand_history_join::HistorySharingPolicyPayloadValue;
+use arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue;
 use arkret_models_collaboration::governance::history_visibility::{
     HistoryRangeContext, HistoryReaderContext, HistoryReaderEventState,
     HistorySharingRestrictedScopeRef, HistorySharingScopeKind,
