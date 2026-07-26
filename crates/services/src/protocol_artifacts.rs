@@ -44,9 +44,3 @@ pub fn active_durable_event_kinds() -> &'static BTreeSet<String> {
 pub fn schema_ids() -> BTreeSet<String> {
     soland_domain::artifacts::schema_ids()
 }
-
-pub fn cell_family_is_registered(cell_family: &str) -> bool {
-    soland_domain::artifacts::cell_family_bindings()
-        .iter()
-        .any(|binding| binding.cell_family == cell_family)
-}

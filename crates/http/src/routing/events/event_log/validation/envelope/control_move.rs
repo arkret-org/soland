@@ -1,3 +1,5 @@
+use arkret_wire::events::{CbaEffectPlane, cba_cell_family_plane};
+
 use super::*;
 
 pub(super) fn validate_control_move_seal_basis(
@@ -71,18 +73,6 @@ pub(super) fn validate_control_move_seal_basis(
     Ok(())
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-enum CbaEffectPlane {
-    Data,
-    Control,
-}
-
-pub(super) const DATA_PLANE_CELL_FAMILIES: &[&str] = &[
-    "ak.component.strand.discussion.timeline.v1",
-    "ak.component.message.reactions.v1",
-    "ak.component.pin.v1",
-];
-
 pub(super) fn validate_cba_effect_planes(
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
@@ -99,7 +89,14 @@ pub(super) fn validate_cba_effect_planes(
     }
     for effect in effects {
         let family = cba_effect_cell_family(effect)?;
-        match cba_cell_family_plane(family)? {
+        let plane = cba_cell_family_plane(family).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("effects[].cell references unknown cell family {family}"),
+            )
+        })?;
+        match plane {
             CbaEffectPlane::Control if is_data_event => {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
@@ -157,20 +154,6 @@ pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValida
         ));
     }
     Ok(family)
-}
-
-fn cba_cell_family_plane(family: &str) -> Result<CbaEffectPlane, EventValidationError> {
-    if DATA_PLANE_CELL_FAMILIES.contains(&family) {
-        return Ok(CbaEffectPlane::Data);
-    }
-    if soland_services::protocol_artifacts::cell_family_is_registered(family) {
-        return Ok(CbaEffectPlane::Control);
-    }
-    Err(event_validation_error(
-        StatusCode::BAD_REQUEST,
-        "schema_violation",
-        format!("effects[].cell references unknown cell family {family}"),
-    ))
 }
 
 pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {
