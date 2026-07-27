@@ -327,33 +327,38 @@ fn pair_pubkey_material(
 
 fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError> {
     let public_key = public_key.trim();
-    let multibase = public_key
-        .strip_prefix("did:key:")
-        .and_then(|body| body.split('#').next())
-        .unwrap_or(public_key);
-    if multibase.starts_with('z') {
-        arkret_canonical::decode_ed25519_multibase(multibase).map_err(|error| {
-            AppError::invalid_param(format!(
-                "new_device_pubkey.public_key is not an Ed25519 multibase key: {error}"
-            ))
-        })?;
-        return Ok(multibase.to_owned());
-    }
-
     let bytes = arkret_canonical::base64url_decode(public_key).map_err(|error| {
         AppError::invalid_param(format!(
-            "new_device_pubkey.public_key must be Ed25519 multibase or base64url: {error}"
+            "new_device_pubkey.key must be a base64url Ed25519 key: {error}"
         ))
     })?;
     let public_key_bytes: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
         AppError::invalid_param(format!(
-            "new_device_pubkey.public_key decoded to {} bytes, expected 32",
+            "new_device_pubkey.key decoded to {} bytes, expected 32",
             bytes.len()
         ))
     })?;
     Ok(arkret_canonical::ed25519_pubkey_to_did_key_multibase(
         &public_key_bytes,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_public_key_requires_raw_base64url_and_normalizes_for_directory_storage() {
+        let raw = arkret_canonical::base64url_encode(&[7_u8; 32]);
+        let normalized = normalize_pair_device_public_key(&raw).expect("raw Ed25519 key");
+        assert_eq!(
+            arkret_canonical::decode_ed25519_multibase(&normalized).unwrap(),
+            [7_u8; 32]
+        );
+
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7_u8; 32]);
+        assert!(normalize_pair_device_public_key(&multibase).is_err());
+    }
 }
 
 fn device_pairing_gate_audience(public_base_url: &str) -> Result<String, AppError> {

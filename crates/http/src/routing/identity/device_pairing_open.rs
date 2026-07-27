@@ -367,32 +367,21 @@ fn device_pairing_not_found() -> AppError {
 
 /// Validate the staged device key the same way `auth::device_pair` does before
 /// authorizing: `kid` must be an `ak:device` id and `key` must be an Ed25519
-/// multibase (`z...`, optionally `did:key:`-wrapped) or a 32-byte base64url key.
+/// raw 32-byte base64url key. Directory multibase is a distinct representation
+/// and accepting it here would stage a request the proof verifier cannot use.
 fn validate_new_device_pubkey(new_device_pubkey: &PublicKey) -> Result<(), AppError> {
     let public_key = new_device_pubkey.key.as_str().trim();
-    let multibase = public_key
-        .strip_prefix("did:key:")
-        .and_then(|body| body.split('#').next())
-        .unwrap_or(public_key);
-    if multibase.starts_with('z') {
-        arkret_canonical::decode_ed25519_multibase(multibase).map_err(|error| {
-            AppError::invalid_param(format!(
-                "new_device_pubkey.key is not an Ed25519 multibase key: {error}"
-            ))
-        })?;
-    } else {
-        let bytes = arkret_canonical::base64url_decode(public_key).map_err(|error| {
-            AppError::invalid_param(format!(
-                "new_device_pubkey.key must be Ed25519 multibase or base64url: {error}"
-            ))
-        })?;
-        let _: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
-            AppError::invalid_param(format!(
-                "new_device_pubkey.key decoded to {} bytes, expected 32",
-                bytes.len()
-            ))
-        })?;
-    }
+    let bytes = arkret_canonical::base64url_decode(public_key).map_err(|error| {
+        AppError::invalid_param(format!(
+            "new_device_pubkey.key must be a base64url Ed25519 key: {error}"
+        ))
+    })?;
+    let _: [u8; 32] = bytes.try_into().map_err(|bytes: Vec<u8>| {
+        AppError::invalid_param(format!(
+            "new_device_pubkey.key decoded to {} bytes, expected 32",
+            bytes.len()
+        ))
+    })?;
     DeviceId::new(new_device_pubkey.kid.as_str().to_owned())
         .map(|_| ())
         .map_err(|_| AppError::invalid_param("new_device_pubkey.kid must be a ak:device id"))
@@ -433,5 +422,28 @@ mod tests {
         let noncanonical = br#"{"r":"device_pairing_request:01964137-0000-7000-8000-0000000000c1","c":"7H2K9M4Q"}"#;
         let token = URL_SAFE_NO_PAD.encode(noncanonical);
         assert!(decode_device_pairing_token(&token).is_none());
+    }
+
+    #[test]
+    fn staged_pairing_key_rejects_directory_multibase() {
+        let raw = arkret_canonical::base64url_encode(&[7_u8; 32]);
+        let canonical: PublicKey = serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "kid": "ak:device:01964137-0000-7000-8000-0000000000c1",
+            "alg": "EdDSA",
+            "key": raw
+        }))
+        .unwrap();
+        assert!(validate_new_device_pubkey(&canonical).is_ok());
+
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7_u8; 32]);
+        let noncanonical: PublicKey = serde_json::from_value(serde_json::json!({
+            "kty": "OKP",
+            "kid": "ak:device:01964137-0000-7000-8000-0000000000c1",
+            "alg": "EdDSA",
+            "key": multibase
+        }))
+        .unwrap();
+        assert!(validate_new_device_pubkey(&noncanonical).is_err());
     }
 }
