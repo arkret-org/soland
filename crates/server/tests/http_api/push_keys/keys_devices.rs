@@ -677,6 +677,65 @@ async fn keys_query_projects_device_signing_key_and_drops_on_revoke() {
     );
 }
 
+/// An active member must retain access to an ex-member's authoritative device
+/// key so accepted membership-frontier events remain verifiable after a leave
+/// or ban. Actors that never reached a joined state remain hidden.
+#[tokio::test]
+async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
+    let state = soland_test_support::app_state(test_config());
+
+    let bob = "did:web:bob.example";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
+    let bob_device_key = SigningKey::from_bytes(&[204u8; 32]);
+    let bob_device_multibase = test_ed25519_multibase_public(&bob_device_key);
+    let expected_did_key = format!("did:key:{bob_device_multibase}");
+    seed_verified_device_with_public_key(&state, bob, bob_device, &bob_device_multibase).await;
+    let carol = "did:web:carol.example";
+    let carol_device = "ak:device:01904100-0000-7000-8000-ca2010000001";
+    let carol_device_key = SigningKey::from_bytes(&[205u8; 32]);
+    let carol_device_multibase = test_ed25519_multibase_public(&carol_device_key);
+    seed_verified_device_with_public_key(&state, carol, carol_device, &carol_device_multibase)
+        .await;
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+
+    let realm_id = RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
+    let bob_did = Did::new(bob.to_owned()).unwrap();
+    let mut realms = state.test_realms().lock();
+    let mut realm = realms.get(&realm_id).cloned().expect("demo realm exists");
+    realm.members.remove(&bob_did);
+    realms.upsert(realm);
+    drop(realms);
+    state
+        .test_projection()
+        .lock()
+        .members
+        .get_mut(&(DEMO_REALM_ID.to_owned(), bob.to_owned()))
+        .expect("Bob membership projection exists")
+        .state = "ban".to_owned();
+
+    let alice = dev_token(state.clone()).await;
+    let query: Value = TestClient::post("http://server/_arkret/self/keys/query")
+        .add_header("authorization", format!("Bearer {alice}"), true)
+        .json(&serde_json::json!({
+            "device_keys": {
+                bob: [bob_device],
+                carol: [carol_device]
+            }
+        }))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    let entry = &query["device_keys"][bob][bob_device];
+    assert_eq!(entry["device_status"], "active", "query body: {query}");
+    assert_eq!(entry["device_signing_key"], expected_did_key);
+    assert!(
+        query["device_keys"].get(carol).is_none(),
+        "never-member key material must remain hidden: {query}"
+    );
+}
+
 /// Device-identity Phase 1 (Task C) — an accepted `ak.device.authorize` carrying
 /// `device_public_key` projects that key into the devices table, so a device that
 /// was authorized but never opened a session is still directory-resolvable.
