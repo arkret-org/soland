@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+
 use super::*;
 
 pub(super) fn validate_direct_conversation_realm_policy(
@@ -75,11 +77,10 @@ pub(super) async fn validate_member_state_policy(
             return Ok(());
         }
         if let Some(agent) = native_agent_controlled_by_record(state, target, actor).await {
-            match agent.state.as_str() {
-                "active" => {}
-                "paused" => return Err("agent_paused"),
-                "deactivated" => return Err("agent_deactivated"),
-                _ => return Err("agent_pcr_recovery_not_ready"),
+            match agent.state {
+                AgentLifecycleState::Active => {}
+                AgentLifecycleState::Paused => return Err("agent_paused"),
+                AgentLifecycleState::Deactivated => return Err("agent_deactivated"),
             }
             if !realm_member_is_joined(state, operation.realm_id.as_str(), actor).await {
                 return Err("not_member");
@@ -264,7 +265,8 @@ async fn native_agent_controlled_by(
     let Ok(Some(record)) = state.agent_pairings().agent(agent_id).await else {
         return false;
     };
-    record.controller_id == controller_id && (!require_active || record.state == "active")
+    record.controller_id == controller_id
+        && (!require_active || record.state == AgentLifecycleState::Active)
 }
 
 /// COT-06-004 — capability gate for `ak.realm.set_default_strand`. Mirrors the

@@ -942,7 +942,7 @@ pub(crate) async fn apply_managed_agent_event_seal(
     if material.realm_id != seal.realm_id
         || material.agent_id.as_str() != agent_record.id
         || material.controller_id.as_str() != agent_record.controller_id
-        || material.authorization_ref != agent_record.controller_authorization_ref
+        || material.authorization_ref != agent_record.controller_authorization_ref.as_str()
     {
         return Err(device_generation_fenced(
             "managed Agent PCR Seal authority differs from the accepted Agent delegation",

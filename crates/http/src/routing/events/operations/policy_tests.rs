@@ -1,3 +1,4 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signer as _, SigningKey};
@@ -631,8 +632,8 @@ async fn register_agent_selection(
         agent_id.to_owned(),
         "did:web:alice.example".to_owned(),
         "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
-        format!("{agent_id}#managed-controller"),
-        "active".to_owned(),
+        arkret_wire::DidUrl::new(format!("{agent_id}#managed-controller")).unwrap(),
+        AgentLifecycleState::Active,
         chrono::Utc::now(),
     );
     record.display_name = Some("Summary".to_owned());
@@ -675,8 +676,8 @@ async fn register_native_agent_membership_context(
         agent.to_owned(),
         controller.to_owned(),
         "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
-        format!("{agent}#managed-controller"),
-        "active".to_owned(),
+        arkret_wire::DidUrl::new(format!("{agent}#managed-controller")).unwrap(),
+        AgentLifecycleState::Active,
         now,
     );
     record.agent_slug = Some("summary".to_owned());
@@ -1517,7 +1518,7 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
         .await
         .expect("agent lookup")
         .expect("agent record");
-    record.state = "paused".to_owned();
+    record.state = AgentLifecycleState::Paused;
     state
         .agent_pairings()
         .save_agent(record)

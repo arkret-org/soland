@@ -288,7 +288,7 @@ pub(super) async fn provision_agent(
             let controller_authorization_ref =
                 crate::routing::identity::managed_agent_pcr::controller_authorization_ref(
                     agent_principal_did.as_str(),
-                );
+                )?;
             let outcome = AgentProvisionOutcome::AwaitingControllerEvents {
                 agent_id: agent_principal_did,
                 principal_control_realm_id,
@@ -350,8 +350,10 @@ pub(super) async fn provision_agent(
     )
     .map_err(|err| AppError::internal(format!("requested_scope digest failed: {err}")))?;
     let controller_authorization_ref =
-        crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&agent_id);
-    let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
+        crate::routing::identity::managed_agent_pcr::controller_authorization_ref(&agent_id)?;
+    let pairing_request_id =
+        arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
+            .expect("generated pairing request id must be valid");
     let pairing_code = generate_pairing_code();
     let pairing_ttl_ms = pairing_ttl_ms
         .unwrap_or(15 * 60 * 1000)
@@ -380,7 +382,7 @@ pub(super) async fn provision_agent(
         &agent_id,
         &controller_id,
         &principal_control_realm_id,
-        &controller_authorization_ref,
+        controller_authorization_ref.as_str(),
         &requested_scope,
         &requested_scope_digest,
         provisioned_at,
@@ -402,7 +404,7 @@ pub(super) async fn provision_agent(
         // Lifecycle intent axis only (key-management.md §3.6.1). A freshly
         // provisioned agent's intent is "active" (run it); the derived
         // runtime_state projects pending_runtime_key until first pairing.
-        "active".to_owned(),
+        AgentLifecycleState::Active,
         provisioned_at,
     );
     principal.controller_account_id = Some(ids::typed_uuid_part_expect_internal(
@@ -499,7 +501,7 @@ pub(super) async fn renew_agent_pairing(
         chrono::Utc::now(),
     )
     .await?;
-    if record.state == "deactivated" {
+    if record.state == AgentLifecycleState::Deactivated {
         return Err(
             pairing_failed_precondition("agent is deactivated; deactivation is terminal")
                 .with_reason_detail("agent_deactivated"),
@@ -544,7 +546,9 @@ pub(super) async fn renew_agent_pairing(
             ));
         }
     }
-    let pairing_request_id = format!("agent_pairing_request:{}", uuid::Uuid::now_v7());
+    let pairing_request_id =
+        arkret_wire::OpaqueLocalId::new(format!("agent_pairing_request:{}", uuid::Uuid::now_v7()))
+            .expect("generated pairing request id must be valid");
     let pairing_code = generate_pairing_code();
     let pairing_ttl_ms = body
         .pairing_ttl_ms
@@ -576,7 +580,12 @@ pub(super) async fn renew_agent_pairing(
         .await
         .map_err(|err| AppError::internal(format!("agent persist failed: {err}")))?;
     if let Some(context) = terminal_notification {
-        persist_terminal_account_notification(state, context, "renewed").await?;
+        persist_terminal_account_notification(
+            state,
+            context,
+            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Renewed,
+        )
+        .await?;
     }
     append_audit_log(
         state,
@@ -782,7 +791,12 @@ pub(super) async fn lazily_expire_pairing(
             AppError::internal(format!("failed to persist expired Agent pairing: {error}"))
         })?;
     if let Some(context) = terminal_notification
-        && let Err(error) = persist_terminal_account_notification(state, context, "expired").await
+        && let Err(error) = persist_terminal_account_notification(
+            state,
+            context,
+            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Expired,
+        )
+        .await
     {
         tracing::error!(message = %error.message, agent_id, "failed to persist expired Agent approval notification");
     }
@@ -880,7 +894,7 @@ pub(super) async fn lifecycle_transition(
         &agent_id,
         &authorization_ref,
         event_kind,
-        &previous_status,
+        previous_status.as_wire_str(),
         reason.as_deref(),
         sidecar_exposure_ack.as_ref(),
         lifecycle_event,
@@ -890,7 +904,7 @@ pub(super) async fn lifecycle_transition(
     // list/get reflect the new status (the durable event drives the reducer
     // FSM; this row is the read-side projection consumed by the HTTP API).
     let mut updated_record = record;
-    updated_record.state = new_state.as_wire_str().to_owned();
+    updated_record.state = new_state;
     updated_record.state_changed_at = Some(status_changed_at);
     updated_record.updated_at = status_changed_at;
     // Pause is a pure lifecycle-intent write and MUST NOT touch an open pairing
@@ -917,7 +931,12 @@ pub(super) async fn lifecycle_transition(
         .await
         .map_err(|error| AppError::internal(format!("agent lifecycle persist failed: {error}")))?;
     if let Some(context) = terminal_notification {
-        persist_terminal_account_notification(state, context, "deactivated").await?;
+        persist_terminal_account_notification(
+            state,
+            context,
+            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Deactivated,
+        )
+        .await?;
     }
     // spec `agent_lifecycle_state` = `operation_status_outcome` =
     // `{ok: true, status}` (status is the post-transition `agent_status`).
@@ -1042,7 +1061,7 @@ pub(super) async fn deactivate_agent(
         &agent_id,
         &record.controller_authorization_ref,
         "ak.self.agent.deactivate",
-        &record.state,
+        record.state.as_wire_str(),
         reason,
         None,
         &body.lifecycle_event,

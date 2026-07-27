@@ -1,3 +1,5 @@
+use arkret_wire::{DidUrl, NonEmptyString};
+
 use super::*;
 
 const ACTION_EVENT_READ: &str = "ak.event.read";
@@ -387,8 +389,8 @@ mod requested_scope_tests {
             "did:webvh:agent.example:agents:test".to_owned(),
             "did:webvh:controller.example:users:test".to_owned(),
             "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
-            "did:webvh:agent.example:agents:test#controller".to_owned(),
-            "active".to_owned(),
+            arkret_wire::DidUrl::new("did:webvh:agent.example:agents:test#controller").unwrap(),
+            AgentLifecycleState::Active,
             chrono::Utc::now(),
         );
         record.requested_scope = Some(scope);
@@ -605,12 +607,7 @@ mod requested_scope_tests {
 /// (`active | paused | deactivated`); pairing progress lives on the orthogonal
 /// derived `runtime_state` axis and is never stored here.
 pub(super) fn agent_lifecycle_from_record(record: &AgentPrincipalRecord) -> AgentLifecycleState {
-    match record.state.as_str() {
-        "paused" => AgentLifecycleState::Paused,
-        "deactivated" => AgentLifecycleState::Deactivated,
-        // `active` and any provisioning-default intent both project running.
-        _ => AgentLifecycleState::Active,
-    }
+    record.state
 }
 
 /// Whether the record carries a live (unconsumed, unexpired) pairing handle for
@@ -718,6 +715,11 @@ pub(super) fn agent_key_state_from_record(
     >,
     runtime_state: AgentRuntimeState,
 ) -> Result<KeyState, AppError> {
+    let runtime_bindings = record.runtime_bindings().map_err(|error| {
+        AppError::internal(format!(
+            "persisted Agent runtime binding state is invalid: {error}"
+        ))
+    })?;
     let requested_scope = record
         .requested_scope
         .clone()
@@ -725,16 +727,10 @@ pub(super) fn agent_key_state_from_record(
     let requested_scope = serde_json::from_value(requested_scope).map_err(|error| {
         AppError::internal(format!("persisted Agent scope is invalid: {error}"))
     })?;
-    let authorized_event_ref = record
-        .authorized_event_ref
+    let authorized_event_ref = runtime_bindings
+        .active_binding
         .as_ref()
-        .map(|value| EventId::new(value.clone()))
-        .transpose()
-        .map_err(|error| {
-            AppError::internal(format!(
-                "persisted Agent authorization Event is invalid: {error}"
-            ))
-        })?;
+        .map(|binding| binding.authorized_event_ref.clone());
     let agent_id = Did::new(record.id.clone())
         .map_err(|error| AppError::internal(format!("persisted Agent DID is invalid: {error}")))?;
     let controller_id = Did::new(record.controller_id.clone()).map_err(|error| {
@@ -758,6 +754,22 @@ pub(super) fn agent_key_state_from_record(
         AgentRuntimeState::Replacing => (true, Some(AgentPairingMode::Replacement)),
         AgentRuntimeState::Ready | AgentRuntimeState::PairingExpired => (false, None),
     };
+    let open_handle = pairing_is_open
+        .then_some(runtime_bindings.open_handle.as_ref())
+        .flatten()
+        .ok_or_else(|| {
+            AppError::internal(
+                "derived Agent runtime state requires an open handle, but none is valid",
+            )
+        })
+        .map(Some)
+        .or_else(|error| {
+            if pairing_is_open {
+                Err(error)
+            } else {
+                Ok(None)
+            }
+        })?;
     Ok(KeyState {
         agent_id,
         controller_id,
@@ -771,42 +783,18 @@ pub(super) fn agent_key_state_from_record(
         pcr_recovery,
         requested_scope,
         requested_scope_digest,
-        pairing_request_id: pairing_is_open
-            .then(|| record.pairing_request_id.clone())
-            .flatten(),
+        pairing_request_id: open_handle.map(|handle| handle.pairing_request_id.clone()),
         pairing_mode,
-        pairing_code: pairing_is_open
-            .then(|| record.pairing_code.clone())
-            .flatten(),
-        pairing_expires_at: pairing_is_open
-            .then_some(record.pairing_expires_at)
-            .flatten(),
-        approval_request_id: pairing_is_open
-            .then(|| {
-                record
-                    .runtime_key_request
-                    .as_ref()
-                    .and_then(Value::as_object)
-                    .and(record.approval_request_id.clone())
-            })
-            .flatten(),
-        pending_runtime_key_request: pairing_is_open
-            .then(|| {
-                record
-                    .runtime_key_request
-                    .clone()
-                    .and_then(|value| serde_json::from_value(value).ok())
-            })
-            .flatten(),
-        approval_requested_at: pairing_is_open
-            .then(|| {
-                record
-                    .runtime_key_request
-                    .as_ref()
-                    .filter(|value| value.is_object())
-                    .and(record.approval_requested_at)
-            })
-            .flatten(),
+        pairing_code: open_handle.map(|handle| handle.pairing_code.clone()),
+        pairing_expires_at: open_handle.map(|handle| handle.expires_at),
+        approval_request_id: open_handle
+            .and_then(|handle| handle.pending_runtime_key_request.as_ref())
+            .and(record.approval_request_id.clone()),
+        pending_runtime_key_request: open_handle
+            .and_then(|handle| handle.pending_runtime_key_request.clone()),
+        approval_requested_at: open_handle
+            .and_then(|handle| handle.pending_runtime_key_request.as_ref())
+            .and(record.approval_requested_at),
         authorized_event_ref,
         active_authorizations,
     })
@@ -826,8 +814,14 @@ fn active_agent_key_authorizations(
         .into_iter()
         .map(|(key_id, authorized_event_ref)| {
             Ok(arkret_models_collaboration::governance::agent_artifacts::AgentKeyAuthorizationState {
-                verification_method: key_id.clone(),
-                key_id,
+                verification_method: DidUrl::new(key_id.clone()).map_err(|error| {
+                    AppError::internal(format!(
+                        "projected Agent verification method is invalid: {error}"
+                    ))
+                })?,
+                key_id: NonEmptyString::new(key_id).map_err(|error| {
+                    AppError::internal(format!("projected Agent key id is invalid: {error}"))
+                })?,
                 authorized_event_ref: EventId::new(authorized_event_ref).map_err(|error| {
                     AppError::internal(format!(
                         "projected Agent authorization Event is invalid: {error}"

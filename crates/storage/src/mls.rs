@@ -1,3 +1,5 @@
+use arkret_wire::{MlsGroupId, RealmId};
+
 use super::{PersistenceError, PersistenceResult, Uuid, Value, async_trait};
 /// G3.S1 — durable KeyPackage row.
 ///
@@ -33,6 +35,211 @@ pub struct MlsKeyPackageRow {
     /// Unix seconds at which the target device consumed the accepted claim.
     pub consumed_at: Option<i64>,
     pub created_at: i64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PersistedKeyPackageReusePolicy {
+    SingleUse,
+    LastResort { bound_realm_id: Option<RealmId> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PersistedKeyPackageClaimState {
+    Available,
+    Claimed {
+        mls_group_id: MlsGroupId,
+        claimed_at: i64,
+        claim_expires_at_unix_ms: Option<i64>,
+    },
+    Consumed {
+        mls_group_id: MlsGroupId,
+        claimed_at: i64,
+        claim_expires_at_unix_ms: Option<i64>,
+        consumed_at: i64,
+    },
+    Revoked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PersistedKeyPackageLifecycle {
+    pub reuse_policy: PersistedKeyPackageReusePolicy,
+    pub claim_state: PersistedKeyPackageClaimState,
+}
+
+pub fn classify_key_package_lifecycle(
+    last_resort: bool,
+    last_resort_realm_id: Option<&str>,
+    claimed_by_mls_group_id: Option<&str>,
+    claimed_at: Option<i64>,
+    claim_expires_at_unix_ms: Option<i64>,
+    consumed_at: Option<i64>,
+) -> Result<PersistedKeyPackageLifecycle, String> {
+    const REVOKED_CLAIM_SENTINEL: &str = "revoked";
+
+    let reuse_policy = if last_resort {
+        PersistedKeyPackageReusePolicy::LastResort {
+            bound_realm_id: last_resort_realm_id
+                .map(|value| {
+                    RealmId::new(value.to_owned()).map_err(|error| {
+                        format!("last-resort KeyPackage Realm id is invalid: {error}")
+                    })
+                })
+                .transpose()?,
+        }
+    } else {
+        if last_resort_realm_id.is_some() {
+            return Err("ordinary KeyPackage must not carry last_resort_realm_id".to_owned());
+        }
+        PersistedKeyPackageReusePolicy::SingleUse
+    };
+    let claim_state = match claimed_by_mls_group_id {
+        Some(REVOKED_CLAIM_SENTINEL) => {
+            if claimed_at.is_some() || claim_expires_at_unix_ms.is_some() || consumed_at.is_some() {
+                return Err(
+                    "revoked KeyPackage must not carry claim or consumption timestamps".to_owned(),
+                );
+            }
+            PersistedKeyPackageClaimState::Revoked
+        }
+        Some(group_id) if last_resort => {
+            return Err(format!(
+                "last-resort KeyPackage must not be claimed by MLS group `{group_id}`"
+            ));
+        }
+        Some(group_id) => {
+            let group_id = MlsGroupId::new(group_id.to_owned())
+                .map_err(|error| format!("claimed KeyPackage MLS group id is invalid: {error}"))?;
+            let claimed_at =
+                claimed_at.ok_or_else(|| "claimed KeyPackage is missing claimed_at".to_owned())?;
+            match consumed_at {
+                Some(consumed_at) => PersistedKeyPackageClaimState::Consumed {
+                    mls_group_id: group_id,
+                    claimed_at,
+                    claim_expires_at_unix_ms,
+                    consumed_at,
+                },
+                None => PersistedKeyPackageClaimState::Claimed {
+                    mls_group_id: group_id,
+                    claimed_at,
+                    claim_expires_at_unix_ms,
+                },
+            }
+        }
+        None => {
+            if claimed_at.is_some() || claim_expires_at_unix_ms.is_some() || consumed_at.is_some() {
+                return Err(
+                    "available KeyPackage must not carry claim or consumption timestamps"
+                        .to_owned(),
+                );
+            }
+            PersistedKeyPackageClaimState::Available
+        }
+    };
+    Ok(PersistedKeyPackageLifecycle {
+        reuse_policy,
+        claim_state,
+    })
+}
+
+impl MlsKeyPackageRow {
+    pub fn lifecycle(&self) -> Result<PersistedKeyPackageLifecycle, String> {
+        classify_key_package_lifecycle(
+            self.last_resort,
+            self.last_resort_realm_id.as_deref(),
+            self.claimed_by_mls_group_id.as_deref(),
+            self.claimed_at,
+            self.claim_expires_at_unix_ms,
+            self.consumed_at,
+        )
+    }
+}
+
+#[cfg(test)]
+mod key_package_lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn ordinary_claim_and_consumption_are_explicit_states() {
+        let claimed = classify_key_package_lifecycle(
+            false,
+            None,
+            Some("group-a"),
+            Some(10),
+            Some(20_000),
+            None,
+        )
+        .unwrap();
+        assert!(matches!(
+            claimed.claim_state,
+            PersistedKeyPackageClaimState::Claimed {
+                ref mls_group_id,
+                ..
+            } if mls_group_id.as_str() == "group-a"
+        ));
+
+        let consumed = classify_key_package_lifecycle(
+            false,
+            None,
+            Some("group-a"),
+            Some(10),
+            Some(20_000),
+            Some(15),
+        )
+        .unwrap();
+        assert!(matches!(
+            consumed.claim_state,
+            PersistedKeyPackageClaimState::Consumed {
+                consumed_at: 15,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn last_resort_binding_is_a_reuse_policy_not_a_group_claim() {
+        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
+        let lifecycle =
+            classify_key_package_lifecycle(true, Some(realm_id), None, None, None, None).unwrap();
+        assert_eq!(
+            lifecycle.reuse_policy,
+            PersistedKeyPackageReusePolicy::LastResort {
+                bound_realm_id: Some(RealmId::new(realm_id).unwrap())
+            }
+        );
+        assert_eq!(
+            lifecycle.claim_state,
+            PersistedKeyPackageClaimState::Available
+        );
+    }
+
+    #[test]
+    fn invalid_column_combinations_fail_closed() {
+        assert!(
+            classify_key_package_lifecycle(false, Some("realm"), None, None, None, None).is_err()
+        );
+        assert!(
+            classify_key_package_lifecycle(true, None, Some("group-a"), Some(1), None, None)
+                .is_err()
+        );
+        assert!(
+            classify_key_package_lifecycle(false, None, Some("group-a"), None, None, None).is_err()
+        );
+        assert!(
+            classify_key_package_lifecycle(false, None, Some("revoked"), Some(1), None, Some(2))
+                .is_err()
+        );
+        assert!(
+            classify_key_package_lifecycle(
+                false,
+                None,
+                Some("revoked"),
+                Some(1),
+                Some(2_000),
+                None,
+            )
+            .is_err()
+        );
+    }
 }
 
 /// Durable terminal result for a peer KeyPackage claim request.
@@ -78,9 +285,14 @@ pub enum PeerKeyPackageClaimAttemptResult {
     KeyPackageUnavailable,
 }
 
+pub enum MlsKeyPackageClaimTarget<'a> {
+    Group(&'a str),
+    Revoke,
+}
+
 pub struct MlsKeyPackageClaim<'a> {
     pub id: &'a str,
-    pub mls_group_id: &'a str,
+    pub target: MlsKeyPackageClaimTarget<'a>,
     pub intended_realm_id: Option<&'a str>,
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,

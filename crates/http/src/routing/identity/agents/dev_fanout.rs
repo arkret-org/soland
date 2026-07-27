@@ -373,41 +373,6 @@ pub(super) async fn attach_agent_grant_event(
     materialize_grant(state, session, realm_id.as_str(), payload).await
 }
 
-/// AKP-0016 — materialise a participation `effective=true` decision into a
-/// durable reply/reaction capability grant for the agent over the scope
-/// resource. Idempotent on the deterministic `grant_id` derived from the
-/// (agent, scope_key) pair.
-pub(super) async fn materialize_capability_grant(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: &str,
-    agent_id: &str,
-    resource: Value,
-    grant_id: &str,
-) -> Result<String, AppError> {
-    let issued_at = arkret_canonical::format_timestamp_canonical(Utc::now());
-    let grant = json!({
-        "id": grant_id,
-        "schema": "ak.schema.capability.v1",
-        "realm_id": realm_id,
-        "issuer": session.actor.clone(),
-        "subject": agent_id,
-        "actions": ["ak.message.create", "ak.reaction.add"],
-        "resources": [resource],
-        "issued_at": issued_at,
-        "proofs": [{
-            "kind": "detached_jws",
-            "verification_method": format!("{}#dev", session.actor),
-            "alg": "EdDSA",
-            "payload_digest": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "created_at": issued_at,
-            "jws": "a..b",
-        }],
-    });
-    let payload = json!({ "grant_id": grant_id, "grant": grant });
-    materialize_grant(state, session, realm_id, payload).await
-}
-
 /// AKP-0016 — revoke a previously materialised participation grant
 /// (idempotent; `ak.capability.revoke` is a no-op when the grant_id was
 /// never granted).

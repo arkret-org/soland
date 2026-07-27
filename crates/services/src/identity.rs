@@ -1,15 +1,16 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use arkret_identifiers::{BlobRef, DeviceId, Did, Hash};
+use arkret_identifiers::{BlobRef, DeviceId, Did, EventId, Hash};
 use arkret_identity::IdentityError;
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
-use arkret_wire::{NonEmptyString, SealBasis};
+use arkret_wire::{DidUrl, NonEmptyString, OpaqueLocalId, SealBasis};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -1016,14 +1017,15 @@ impl CrossSigningRegistry {
 #[derive(Clone, Debug)]
 pub struct ActivateAgentRuntimeCommand {
     pub agent_id: String,
-    pub approval_request_id: String,
+    pub approval_request_id: OpaqueLocalId,
     pub runtime_key_binding_digest: String,
-    pub pairing_request_id: String,
+    pub pairing_request_id: OpaqueLocalId,
     pub paired_request_digest: String,
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
-    pub authorized_signing_key_binding: Value,
+    pub authorized_signing_key_binding:
+        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
     pub authorized_at: DateTime<Utc>,
 }
 
@@ -1032,35 +1034,70 @@ pub struct AgentPairingState {
     pub id: String,
     pub controller_id: String,
     pub principal_control_realm_id: String,
-    pub controller_authorization_ref: String,
+    pub controller_authorization_ref: DidUrl,
     pub display_name: Option<String>,
     pub agent_slug: Option<String>,
     pub avatar_blob_ref: Option<String>,
-    pub state: String,
+    pub state: AgentLifecycleState,
     pub requested_scope: Option<Value>,
     pub accountability: Option<Value>,
     pub provision_event_refs: Option<Value>,
-    pub pairing_request_id: Option<String>,
-    pub paired_pairing_request_id: Option<String>,
+    pub pairing_request_id: Option<OpaqueLocalId>,
+    pub paired_pairing_request_id: Option<OpaqueLocalId>,
     pub paired_request_digest: Option<String>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
-    pub approval_request_id: Option<String>,
+    pub approval_request_id: Option<OpaqueLocalId>,
     pub controller_account_id: Option<uuid::Uuid>,
     pub recipient_service_id: Option<String>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
     pub runtime_attestation_digest: Option<String>,
     pub approval_notification_id: Option<uuid::Uuid>,
-    pub runtime_key_request: Option<Value>,
+    pub runtime_key_request: Option<
+        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
+    >,
     pub approval_requested_at: Option<DateTime<Utc>>,
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
-    pub authorized_signing_key_binding: Option<Value>,
+    pub authorized_signing_key_binding:
+        Option<arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OpenAgentPairingHandle {
+    pub pairing_request_id: OpaqueLocalId,
+    pub pairing_code: String,
+    pub expires_at: DateTime<Utc>,
+    pub pending_runtime_key_request: Option<
+        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
+    >,
+}
+
+impl OpenAgentPairingHandle {
+    pub fn is_live_at(&self, now: DateTime<Utc>) -> bool {
+        self.expires_at > now
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ActiveAgentRuntimeBinding {
+    pub completed_pairing_request_id: OpaqueLocalId,
+    pub authorized_event_ref: EventId,
+    pub verification_method: DidUrl,
+    pub public_key_digest: Hash,
+    pub signing_key_binding:
+        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentRuntimeBindings {
+    pub open_handle: Option<OpenAgentPairingHandle>,
+    pub active_binding: Option<ActiveAgentRuntimeBinding>,
 }
 
 impl AgentPairingState {
@@ -1068,8 +1105,8 @@ impl AgentPairingState {
         id: String,
         controller_id: String,
         principal_control_realm_id: String,
-        controller_authorization_ref: String,
-        state: String,
+        controller_authorization_ref: DidUrl,
+        state: AgentLifecycleState,
         created_at: DateTime<Utc>,
     ) -> Self {
         Self {
@@ -1106,6 +1143,124 @@ impl AgentPairingState {
             created_at,
             updated_at: created_at,
         }
+    }
+
+    /// Reconstruct the two protocol states hidden behind the flat persistence
+    /// columns. Partial tuples are rejected instead of being interpreted as a
+    /// weaker state.
+    pub fn runtime_bindings(&self) -> Result<AgentRuntimeBindings, String> {
+        let active_binding = match self.authorized_event_ref.as_ref() {
+            Some(authorized_event_ref) => {
+                let completed_pairing_request_id =
+                    self.paired_pairing_request_id.clone().ok_or_else(|| {
+                        "active Agent runtime binding is missing paired_pairing_request_id"
+                            .to_owned()
+                    })?;
+                let authorized_event_ref =
+                    EventId::new(authorized_event_ref.clone()).map_err(|error| {
+                        format!("active Agent runtime authorized_event_ref is invalid: {error}")
+                    })?;
+                let verification_method = self
+                    .authorized_verification_method
+                    .clone()
+                    .ok_or_else(|| {
+                        "active Agent runtime binding is missing verification_method".to_owned()
+                    })
+                    .and_then(|value| {
+                        DidUrl::new(value).map_err(|error| {
+                            format!("active Agent runtime verification_method is invalid: {error}")
+                        })
+                    })?;
+                let public_key_digest = self
+                    .authorized_public_key_digest
+                    .clone()
+                    .ok_or_else(|| {
+                        "active Agent runtime binding is missing public_key_digest".to_owned()
+                    })
+                    .and_then(|value| {
+                        Hash::new(value).map_err(|error| {
+                            format!("active Agent runtime public_key_digest is invalid: {error}")
+                        })
+                    })?;
+                let signing_key_binding =
+                    self.authorized_signing_key_binding.clone().ok_or_else(|| {
+                        "active Agent runtime binding is missing signing_key_binding".to_owned()
+                    })?;
+                if signing_key_binding.agent_id.as_str() != self.id
+                    || signing_key_binding.agent_key_authorize_event_id != authorized_event_ref
+                    || signing_key_binding.verification_method != verification_method
+                    || signing_key_binding.public_key_digest != public_key_digest
+                {
+                    return Err(
+                        "active Agent runtime binding fields do not match signing_key_binding"
+                            .to_owned(),
+                    );
+                }
+                Some(ActiveAgentRuntimeBinding {
+                    completed_pairing_request_id,
+                    authorized_event_ref,
+                    verification_method,
+                    public_key_digest,
+                    signing_key_binding,
+                })
+            }
+            None => {
+                if self.paired_pairing_request_id.is_some()
+                    || self.authorized_verification_method.is_some()
+                    || self.authorized_public_key_digest.is_some()
+                    || self.authorized_signing_key_binding.is_some()
+                {
+                    return Err(
+                        "Agent runtime authorization columns contain a partial active binding"
+                            .to_owned(),
+                    );
+                }
+                None
+            }
+        };
+
+        let open_handle = match self.pairing_request_id.as_ref() {
+            Some(pairing_request_id)
+                if self.paired_pairing_request_id.as_deref()
+                    != Some(pairing_request_id.as_str()) =>
+            {
+                let pairing_code = self.pairing_code.clone().ok_or_else(|| {
+                    "open Agent pairing handle is missing pairing_code".to_owned()
+                })?;
+                let expires_at = self.pairing_expires_at.ok_or_else(|| {
+                    "open Agent pairing handle is missing pairing_expires_at".to_owned()
+                })?;
+                if self.runtime_key_request.as_ref().is_some_and(|request| {
+                    request.pairing_request_id.as_str() != pairing_request_id.as_str()
+                        || request.agent_id.as_str() != self.id
+                }) {
+                    return Err(
+                        "pending Agent runtime key request does not match its open handle"
+                            .to_owned(),
+                    );
+                }
+                Some(OpenAgentPairingHandle {
+                    pairing_request_id: pairing_request_id.clone(),
+                    pairing_code,
+                    expires_at,
+                    pending_runtime_key_request: self.runtime_key_request.clone(),
+                })
+            }
+            _ => {
+                if self.runtime_key_request.is_some() {
+                    return Err(
+                        "pending Agent runtime key request has no unconsumed pairing handle"
+                            .to_owned(),
+                    );
+                }
+                None
+            }
+        };
+
+        Ok(AgentRuntimeBindings {
+            open_handle,
+            active_binding,
+        })
     }
 }
 
@@ -1203,8 +1358,8 @@ impl DevicePairingService {
 #[derive(Clone, Debug)]
 pub struct StoreAgentRuntimeApprovalCommand {
     pub agent_id: String,
-    pub pairing_request_id: String,
-    pub approval_request_id: String,
+    pub pairing_request_id: OpaqueLocalId,
+    pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: DateTime<Utc>,
     pub controller_account_id: String,
@@ -1212,7 +1367,8 @@ pub struct StoreAgentRuntimeApprovalCommand {
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,
-    pub runtime_key_request: Value,
+    pub runtime_key_request:
+        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
 }
 
 #[async_trait]
@@ -2634,7 +2790,7 @@ mod tests {
             &self,
             command: &ActivateAgentRuntimeCommand,
         ) -> ServiceResult<bool> {
-            Ok(command.pairing_request_id == "pairing-1")
+            Ok(command.pairing_request_id.as_str() == "pairing-1")
         }
 
         async fn clear_approval_notification_if_current(
@@ -2715,16 +2871,35 @@ mod tests {
         let service = AgentPairingService::new(Arc::new(AcceptPairing), Arc::new(NoSidecars));
         let command = ActivateAgentRuntimeCommand {
             agent_id: "did:web:agent.example".to_owned(),
-            approval_request_id: "approval-1".to_owned(),
+            approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
             runtime_key_binding_digest: "sha256:binding".to_owned(),
-            pairing_request_id: "pairing-1".to_owned(),
+            pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
             paired_request_digest: "sha256:request".to_owned(),
             authorized_event_ref: "ak:event:1".to_owned(),
             authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
             authorized_public_key_digest: "sha256:key".to_owned(),
-            authorized_signing_key_binding: serde_json::json!({
-                "schema": "ak.schema.agent_signing_key_binding.v1"
-            }),
+            authorized_signing_key_binding: serde_json::from_value(serde_json::json!({
+                "schema": "ak.schema.agent_signing_key_binding.v1",
+                "agent_id": "did:web:agent.example",
+                "agent_key_id": "runtime-1",
+                "verification_method": "did:web:agent.example#key-1",
+                "public_key": {
+                    "kty": "OKP",
+                    "alg": "Ed25519",
+                    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                },
+                "public_key_digest": format!("sha256:{}", "00".repeat(32)),
+                "agent_key_authorize_event_id":
+                    "ak:event:01904100-0000-7000-8000-000000000001",
+                "issued_at": "2026-07-27T00:00:00.000Z",
+                "controller_id": "did:web:alice.example",
+                "controller_proof": {
+                    "kind": "controller_signature",
+                    "verification_method": "did:web:alice.example#key-1",
+                    "jws": "proof"
+                }
+            }))
+            .expect("valid signing-key binding fixture"),
             authorized_at: Utc::now(),
         };
         assert!(

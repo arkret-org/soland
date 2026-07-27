@@ -1,3 +1,4 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use salvo::oapi::endpoint;
 
 use super::*;
@@ -1096,7 +1097,7 @@ async fn contact_list_rows(
         else {
             continue;
         };
-        if record.state != "active" {
+        if record.state != AgentLifecycleState::Active {
             continue;
         }
         if record.controller_id == actor {

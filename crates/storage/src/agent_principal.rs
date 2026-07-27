@@ -1,3 +1,8 @@
+use arkret_models_collaboration::agent_operations::{
+    AgentLifecycleState, AgentRuntimeApprovalControllerProjection,
+};
+use arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding;
+use arkret_wire::{DidUrl, OpaqueLocalId};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
@@ -11,32 +16,32 @@ pub struct AgentPrincipalRecord {
     pub id: String,
     pub controller_id: String,
     pub principal_control_realm_id: String,
-    pub controller_authorization_ref: String,
+    pub controller_authorization_ref: DidUrl,
     pub display_name: Option<String>,
     pub agent_slug: Option<String>,
     pub avatar_blob_ref: Option<String>,
-    pub state: String,
+    pub state: AgentLifecycleState,
     pub requested_scope: Option<Value>,
     pub accountability: Option<Value>,
     pub provision_event_refs: Option<Value>,
-    pub pairing_request_id: Option<String>,
-    pub paired_pairing_request_id: Option<String>,
+    pub pairing_request_id: Option<OpaqueLocalId>,
+    pub paired_pairing_request_id: Option<OpaqueLocalId>,
     pub paired_request_digest: Option<String>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
-    pub approval_request_id: Option<String>,
+    pub approval_request_id: Option<OpaqueLocalId>,
     pub controller_account_id: Option<Uuid>,
     pub recipient_service_id: Option<String>,
     pub runtime_key_binding_digest: Option<String>,
     pub runtime_public_key_digest: Option<String>,
     pub runtime_attestation_digest: Option<String>,
     pub approval_notification_id: Option<Uuid>,
-    pub runtime_key_request: Option<Value>,
+    pub runtime_key_request: Option<AgentRuntimeApprovalControllerProjection>,
     pub approval_requested_at: Option<DateTime<Utc>>,
     pub authorized_event_ref: Option<String>,
     pub authorized_verification_method: Option<String>,
     pub authorized_public_key_digest: Option<String>,
-    pub authorized_signing_key_binding: Option<Value>,
+    pub authorized_signing_key_binding: Option<AgentSigningKeyBinding>,
     pub state_changed_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -47,8 +52,8 @@ impl AgentPrincipalRecord {
         id: String,
         controller_id: String,
         principal_control_realm_id: String,
-        controller_authorization_ref: String,
-        state: String,
+        controller_authorization_ref: DidUrl,
+        state: AgentLifecycleState,
         created_at: DateTime<Utc>,
     ) -> Self {
         Self {

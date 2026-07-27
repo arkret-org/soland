@@ -378,6 +378,7 @@ pub(super) async fn push_notify(
         .as_deref()
         .filter(|value| arkret_push_policy::blind_payload_sanitizer::is_valid_push_target_id(value))
         .ok_or_else(|| AppError::invalid_param("notification.push_target_id is required"))?;
+    let devices = body.notification.devices.clone();
     let notification = serde_json::to_value(&body.notification).map_err(|error| {
         AppError::internal(format!("push notification request serialize: {error}"))
     })?;
@@ -386,19 +387,11 @@ pub(super) async fn push_notify(
             "push notification must not include plaintext content or stable identifiers",
         ));
     }
-    let devices = notification
-        .get("devices")
-        .and_then(|value| value.as_array())
-        .cloned()
-        .unwrap_or_default();
     let registered = state.deliveries().push_devices().await.unwrap_or_default();
-    let mut outcomes = Vec::new();
+    let mut outcomes = Vec::with_capacity(devices.len());
     let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
     for device in devices {
-        let device_id = device
-            .get("device_id")
-            .and_then(|value| value.as_str())
-            .unwrap_or_default();
+        let device_id = device.device_id.as_str();
         let Some(registered_device) = registered
             .iter()
             .filter(|registered| registered["device_id"].as_str() == Some(device_id))
@@ -408,16 +401,17 @@ pub(super) async fn push_notify(
                 .iter()
                 .any(|registered| registered["device_id"].as_str() == Some(device_id));
             let reason = if has_device {
-                "push_target_mismatch"
-            } else {
-                "unknown_device"
-            };
-            let reason = if reason == "push_target_mismatch" {
                 arkret_models_integration::models_push::PushNotifyReasonCode::PushTargetUnknown
             } else {
                 arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown
             };
-            outcomes.push(push_rejection(device, reason, None)?);
+            outcomes.push(
+                arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
+                    device.device_id,
+                    reason,
+                    None,
+                ),
+            );
             continue;
         };
         let actor = registered_device
@@ -457,23 +451,19 @@ pub(super) async fn push_notify(
                 "rejected",
             )
             .await;
-            outcomes.push(push_rejection(
-                device,
-                arkret_models_integration::models_push::PushNotifyReasonCode::DeliveryBindingStale,
-                None,
-            )?);
+            outcomes.push(
+                arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
+                    device.device_id,
+                    arkret_models_integration::models_push::PushNotifyReasonCode::DeliveryBindingStale,
+                    None,
+                ),
+            );
             continue;
         }
-        let device_id = device
-            .get("device_id")
-            .and_then(Value::as_str)
-            .ok_or_else(|| AppError::internal("validated push device lacks device_id"))?;
-        let device_id =
-            arkret_identifiers::DeviceId::new(device_id.to_owned()).map_err(|error| {
-                AppError::internal(format!("validated device_id rejected: {error}"))
-            })?;
         outcomes.push(
-            arkret_models_integration::models_push::PushNotifyDeviceOutcome::accepted(device_id),
+            arkret_models_integration::models_push::PushNotifyDeviceOutcome::accepted(
+                device.device_id,
+            ),
         );
     }
     json_ok(PushNotifyOutcome {
@@ -676,26 +666,6 @@ fn push_notification_leaks_private_payload(
             .any(|value| push_notification_leaks_private_payload(value, parent_key)),
         _ => false,
     }
-}
-
-fn push_rejection(
-    device: Value,
-    reason: arkret_models_integration::models_push::PushNotifyReasonCode,
-    retry_after_ms: Option<u64>,
-) -> Result<arkret_models_integration::models_push::PushNotifyDeviceOutcome, AppError> {
-    let device_id = device
-        .get("device_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::internal("validated push device lacks device_id"))?;
-    let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned())
-        .map_err(|error| AppError::internal(format!("validated device_id rejected: {error}")))?;
-    Ok(
-        arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
-            device_id,
-            reason,
-            retry_after_ms,
-        ),
-    )
 }
 
 #[cfg(test)]

@@ -78,7 +78,7 @@ use crate::state::AppState;
 
 mod dev_fanout;
 use dev_fanout::{
-    attach_agent_grant_event, fanout_provision_subevents, materialize_capability_grant,
+    attach_agent_grant_event, fanout_provision_subevents,
     require_controller_principal_control_realm, revoke_capability_grant,
     submit_durable_agent_lifecycle, submit_signed_agent_event, validate_durable_agent_lifecycle,
 };
@@ -184,8 +184,8 @@ mod tests {
             agent_id.to_owned(),
             controller_id.to_owned(),
             "ak:realm:01999999-0000-7000-8000-00000000feed".to_owned(),
-            format!("{agent_id}#managed-controller"),
-            "active".to_owned(),
+            arkret_wire::DidUrl::new(format!("{agent_id}#managed-controller")).unwrap(),
+            AgentLifecycleState::Active,
             created_at,
         );
         record.display_name = Some("Test Agent".to_owned());
@@ -203,10 +203,14 @@ mod tests {
         // Lifecycle intent is active from provisioning; the open bootstrap
         // handle drives runtime_state to pending_runtime_key (key-management.md
         // §3.6.1).
-        record.state = "active".to_owned();
+        record.state = AgentLifecycleState::Active;
         record.requested_scope = Some(requested_scope);
-        record.pairing_request_id =
-            Some("agent_pairing_request:01999999-0000-7000-8000-00000000feed".to_owned());
+        record.pairing_request_id = Some(
+            arkret_wire::OpaqueLocalId::new(
+                "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
+            )
+            .unwrap(),
+        );
         record.pairing_code = Some(pairing_code.to_owned());
         record.pairing_expires_at = Some(
             chrono::DateTime::parse_from_rfc3339(pairing_expires_at)
@@ -394,7 +398,7 @@ mod tests {
         }))
         .unwrap();
         AgentKeyPairRequestBody {
-            pairing_request_id: arkret_wire::NonEmptyString::new(pairing_request_id).unwrap(),
+            pairing_request_id: arkret_wire::OpaqueLocalId::new(pairing_request_id).unwrap(),
             agent_id,
             verification_method: arkret_wire::DidUrl::new(verification_method).unwrap(),
             public_key,
@@ -481,13 +485,13 @@ mod tests {
         // A keyed agent (authorized_event_ref set) reserves its slug for any
         // non-terminal lifecycle intent (key-management.md §3.6.1).
         let mut active = agent_record("did:web:agent.example", "did:web:controller.example");
-        active.state = "active".to_owned();
+        active.state = AgentLifecycleState::Active;
         active.authorized_event_ref =
             Some("ak:event:01964137-0000-7000-8000-000000000001".to_owned());
         assert!(agent_record_reserves_selector_slug(&active, &now));
 
         let mut paused = active.clone();
-        paused.state = "paused".to_owned();
+        paused.state = AgentLifecycleState::Paused;
         assert!(agent_record_reserves_selector_slug(&paused, &now));
 
         // A never-keyed agent reserves the slug only while its bootstrap handle
@@ -514,7 +518,7 @@ mod tests {
         // key, no live handle) releases the slug for a fresh provision.
         let mut bootstrap_lapsed =
             agent_record("did:web:agent.example", "did:web:controller.example");
-        bootstrap_lapsed.state = "active".to_owned();
+        bootstrap_lapsed.state = AgentLifecycleState::Active;
         assert!(!agent_record_reserves_selector_slug(
             &bootstrap_lapsed,
             &now
@@ -522,7 +526,7 @@ mod tests {
 
         // Deactivation is terminal.
         let mut deactivated = active;
-        deactivated.state = "deactivated".to_owned();
+        deactivated.state = AgentLifecycleState::Deactivated;
         assert!(!agent_record_reserves_selector_slug(&deactivated, &now));
     }
 
@@ -663,14 +667,13 @@ mod tests {
 
         let controller_request = runtime_key_request_for_controller(&request);
 
-        assert!(controller_request.get("pairing_code").is_none());
         assert_eq!(
-            controller_request["pairing_request_id"],
-            key_pair.pairing_request_id.as_str()
+            controller_request.pairing_request_id,
+            key_pair.pairing_request_id
         );
         assert_eq!(
-            controller_request["verification_method"],
-            verification_method
+            controller_request.verification_method.as_str(),
+            verification_method,
         );
     }
 
@@ -683,13 +686,14 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00.000Z",
         );
-        record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
+        record.approval_request_id =
+            Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:01999999").unwrap());
         record.approval_requested_at = Some(
             chrono::DateTime::parse_from_rfc3339("2026-07-08T00:00:00.000Z")
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         );
-        record.runtime_key_request = Some(json!({
+        record.runtime_key_request = Some(serde_json::from_value(json!({
             "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
             "agent_id": "did:web:agent.example",
             "verification_method": "did:web:agent.example#runtime-key-1",
@@ -700,7 +704,8 @@ mod tests {
                 "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             },
             "proof_of_possession": { "challenge": "agent_pairing_request:01999999-0000-7000-8000-00000000feed" }
-        }));
+        }))
+        .expect("valid controller runtime request"));
 
         let key_state = agent_key_state_from_record(
             &record,
@@ -718,8 +723,7 @@ mod tests {
             key_state
                 .pending_runtime_key_request
                 .as_ref()
-                .and_then(|request| request.get("verification_method"))
-                .and_then(Value::as_str),
+                .map(|request| request.verification_method.as_str()),
             Some("did:web:agent.example#runtime-key-1")
         );
         assert_eq!(
@@ -733,8 +737,10 @@ mod tests {
         agent_id: &str,
     ) -> AgentRuntimeApprovalStatusRequestBody {
         AgentRuntimeApprovalStatusRequestBody {
-            pairing_request_id: "agent_pairing_request:01999999-0000-7000-8000-00000000feed"
-                .to_owned(),
+            pairing_request_id: arkret_wire::OpaqueLocalId::new(
+                "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
+            )
+            .unwrap(),
             pairing_code: pairing_code.to_owned(),
             agent_id: Did::new(agent_id.to_owned()).unwrap(),
         }
@@ -755,7 +761,8 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00.000Z",
         );
-        record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
+        record.approval_request_id =
+            Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:01999999").unwrap());
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -783,24 +790,23 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00.000Z",
         );
-        record.state = "active".to_owned();
+        record.state = AgentLifecycleState::Active;
         // Approval consumes the pairing handle (activation stamps
         // paired_pairing_request_id), so runtime_state derives to ready.
         record.paired_pairing_request_id = record.pairing_request_id.clone();
-        record.authorized_event_ref =
-            Some("ak:event:01999999-0000-7000-8000-000000000001".to_owned());
-        record.authorized_verification_method = Some("did:web:agent.example#runtime-1".to_owned());
-        record.authorized_public_key_digest = Some(
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
-        );
         let signing_key_binding = key_pair_request_body(
             "did:web:agent.example",
             "did:web:agent.example#runtime-1",
             "did:web:soland.example",
         )
         .signing_key_binding;
-        record.authorized_signing_key_binding =
-            Some(serde_json::to_value(&signing_key_binding).unwrap());
+        record.authorized_event_ref =
+            Some(signing_key_binding.agent_key_authorize_event_id.to_string());
+        record.authorized_verification_method =
+            Some(signing_key_binding.verification_method.to_string());
+        record.authorized_public_key_digest =
+            Some(signing_key_binding.public_key_digest.to_string());
+        record.authorized_signing_key_binding = Some(signing_key_binding.clone());
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -814,7 +820,7 @@ mod tests {
         assert!(outcome.approval_request_id.is_none());
         assert_eq!(
             outcome.authorized_event_ref.as_ref().map(|id| id.as_str()),
-            Some("ak:event:01999999-0000-7000-8000-000000000001")
+            Some(signing_key_binding.agent_key_authorize_event_id.as_str())
         );
         assert_eq!(
             outcome.authorized_verification_method.as_deref(),
@@ -822,7 +828,7 @@ mod tests {
         );
         assert_eq!(
             outcome.authorized_public_key_digest.as_deref(),
-            Some("sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+            Some(signing_key_binding.public_key_digest.as_str())
         );
         assert_eq!(
             outcome.authorized_signing_key_binding,
@@ -839,13 +845,25 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00.000Z",
         );
-        record.state = "active".to_owned();
-        record.authorized_event_ref =
-            Some("ak:event:01999999-0000-7000-8000-000000000001".to_owned());
-        record.authorized_verification_method = Some("did:web:agent.example#runtime-1".to_owned());
-        record.authorized_public_key_digest = Some(
-            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        record.state = AgentLifecycleState::Active;
+        record.paired_pairing_request_id = Some(
+            arkret_wire::OpaqueLocalId::new(
+                "agent_pairing_request:01988888-0000-7000-8000-00000000feed",
+            )
+            .unwrap(),
         );
+        let previous_binding = key_pair_request_body(
+            "did:web:agent.example",
+            "did:web:agent.example#runtime-1",
+            "did:web:soland.example",
+        )
+        .signing_key_binding;
+        record.authorized_event_ref =
+            Some(previous_binding.agent_key_authorize_event_id.to_string());
+        record.authorized_verification_method =
+            Some(previous_binding.verification_method.to_string());
+        record.authorized_public_key_digest = Some(previous_binding.public_key_digest.to_string());
+        record.authorized_signing_key_binding = Some(previous_binding);
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,
@@ -871,7 +889,8 @@ mod tests {
             "12345678",
             "2026-07-09T00:00:00.000Z",
         );
-        record.approval_request_id = Some("agent_runtime_approval:01999999".to_owned());
+        record.approval_request_id =
+            Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:01999999").unwrap());
 
         let outcome = agent_runtime_key_request_status_outcome(
             &record,

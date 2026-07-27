@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+
 use super::*;
 
 pub(in crate::routing::events) fn router() -> Router {
@@ -675,7 +677,7 @@ async fn events_frontier(
             .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
             .is_some_and(|record| {
                 record.controller_id == session.actor
-                    && record.state != "deactivated"
+                    && record.state != AgentLifecycleState::Deactivated
                     && record.principal_control_realm_id == realm_value
             });
         let invited_actor = actor == session.actor
@@ -710,7 +712,10 @@ async fn events_frontier(
         .agent(&actor)
         .await
         .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
-        .filter(|record| record.controller_id == session.actor && record.state != "deactivated")
+        .filter(|record| {
+            record.controller_id == session.actor
+                && record.state != AgentLifecycleState::Deactivated
+        })
         .map(|record| record.principal_control_realm_id);
     let records = state
         .event_queries()

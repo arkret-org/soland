@@ -931,7 +931,14 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
             .mls_key_packages()
             .try_claim(soland_storage::MlsKeyPackageClaim {
                 id: command.id,
-                mls_group_id: command.mls_group_id,
+                target: match command.target {
+                    crate::events::ClaimMlsKeyPackageTarget::Group(group_id) => {
+                        soland_storage::MlsKeyPackageClaimTarget::Group(group_id)
+                    }
+                    crate::events::ClaimMlsKeyPackageTarget::Revoke => {
+                        soland_storage::MlsKeyPackageClaimTarget::Revoke
+                    }
+                },
                 intended_realm_id: command.intended_realm_id,
                 ssk_generation: command.ssk_generation,
                 device_authorize_event_id: command.device_authorize_event_id,
@@ -1075,7 +1082,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 .mls_key_packages()
                 .try_claim(soland_storage::MlsKeyPackageClaim {
                     id: &row.id,
-                    mls_group_id: "revoked",
+                    target: soland_storage::MlsKeyPackageClaimTarget::Revoke,
                     intended_realm_id: None,
                     ssk_generation: None,
                     device_authorize_event_id: None,

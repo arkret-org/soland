@@ -10,6 +10,15 @@
 
 use std::collections::BTreeSet;
 
+use arkret_models_collaboration::objects::read_receipts::{
+    Notification, NotificationEventSource, NotificationSchema, NotificationSource,
+    NotificationSourceRef,
+};
+use arkret_wire::events::EventKind;
+use arkret_wire::{
+    Did, EventId, NotificationId, NotificationKind, NotificationPriority, NotificationState,
+    RealmId, StrandId,
+};
 use serde_json::Value;
 
 use crate::routing::agent_participation::{
@@ -180,8 +189,8 @@ async fn put_notification(
     recipient_id: &str,
     realm_id: &str,
     source_event_id: &str,
-    notification_kind: &str,
-    event_kind: &str,
+    notification_kind: NotificationKind,
+    event_kind: EventKind,
     source_ref: Option<&str>,
     strand_id: Option<&str>,
     track_name: Option<&str>,
@@ -189,33 +198,63 @@ async fn put_notification(
     preview: Option<Value>,
 ) {
     let created_at = crate::routing::events::now();
-    let mut record = serde_json::json!({
-        "notification_id": crate::ids::generate_notification_id(),
-        "recipient_id": recipient_id,
-        "realm_id": realm_id,
-        "source_event_id": source_event_id,
-        "notification_kind": notification_kind,
-        "event_kind": event_kind,
-        "priority": "normal",
-        "state": "unread",
-        "created_at": created_at,
-        "updated_at": created_at,
-    });
-    if let Some(source_ref) = source_ref {
-        record["source_ref"] = serde_json::json!(source_ref);
-    }
-    if let Some(strand_id) = strand_id {
-        record["strand_id"] = serde_json::json!(strand_id);
-    }
-    if let Some(track_name) = track_name {
-        record["track_name"] = serde_json::json!(track_name);
-    }
-    if let Some(source_actor_id) = source_actor_id {
-        record["source_actor_id"] = serde_json::json!(source_actor_id);
-    }
-    if let Some(preview) = preview {
-        record["preview"] = preview;
-    }
+    let record = (|| {
+        let preview = preview
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|error| format!("notification preview is invalid: {error}"))?;
+        let notification = Notification {
+            id: NotificationId::new(crate::ids::generate_notification_id())
+                .map_err(|error| format!("notification id is invalid: {error}"))?,
+            schema: NotificationSchema::V1,
+            actor_id: Did::new(recipient_id.to_owned())
+                .map_err(|error| format!("notification recipient is invalid: {error}"))?,
+            source: NotificationSource::Event(NotificationEventSource {
+                source_event_id: EventId::new(source_event_id.to_owned())
+                    .map_err(|error| format!("notification source Event is invalid: {error}"))?,
+                realm_id: Some(
+                    RealmId::new(realm_id.to_owned())
+                        .map_err(|error| format!("notification Realm is invalid: {error}"))?,
+                ),
+                source_ref: source_ref
+                    .map(|value| NotificationSourceRef::new(value.to_owned()))
+                    .transpose()
+                    .map_err(|error| {
+                        format!("notification source reference is invalid: {error}")
+                    })?,
+                strand_id: strand_id
+                    .map(|value| StrandId::new(value.to_owned()))
+                    .transpose()
+                    .map_err(|error| format!("notification Strand is invalid: {error}"))?,
+                track_name: track_name.map(ToOwned::to_owned),
+            }),
+            notification_kind,
+            priority: NotificationPriority::Normal,
+            state: NotificationState::Unread,
+            preview,
+            created_at,
+            updated_at: Some(created_at),
+        };
+        notification
+            .validate()
+            .map_err(|error| format!("notification is invalid: {error}"))?;
+        let source_actor_id = source_actor_id
+            .map(|value| Did::new(value.to_owned()))
+            .transpose()
+            .map_err(|error| format!("notification source actor is invalid: {error}"))?;
+        Ok::<_, String>(soland_services::delivery::RecipientNotificationRecord {
+            notification,
+            event_kind,
+            source_actor_id,
+        })
+    })();
+    let record = match record {
+        Ok(record) => record,
+        Err(error) => {
+            tracing::warn!(%error, "failed to materialize typed notification");
+            return;
+        }
+    };
     if let Err(error) = state
         .deliveries()
         .store_notification(soland_services::delivery::StoreNotificationCommand { record })
@@ -230,7 +269,7 @@ async fn put_message_notification(
     recipient_id: &str,
     realm_id: &str,
     source_event_id: &str,
-    notification_kind: &str,
+    notification_kind: NotificationKind,
     strand_id: Option<&str>,
     source_actor_id: Option<&str>,
     source_ref: Option<&str>,
@@ -243,7 +282,7 @@ async fn put_message_notification(
         realm_id,
         source_event_id,
         notification_kind,
-        arkret_wire::events::EventKind::MESSAGE_CREATE,
+        EventKind::MessageCreate,
         source_ref,
         strand_id,
         track_name,
@@ -337,7 +376,7 @@ pub(crate) async fn dispatch_message_notifications(
                 &recipient,
                 &realm_id,
                 &source_event_id,
-                "message",
+                NotificationKind::Message,
                 Some(strand_id),
                 Some(&sender),
                 source_ref.as_deref(),
@@ -386,7 +425,7 @@ pub(crate) async fn dispatch_message_notifications(
             &subject,
             &realm_id,
             &source_event_id,
-            "mention",
+            NotificationKind::Mention,
             strand_id.as_deref(),
             Some(&sender),
             source_ref.as_deref(),
@@ -434,8 +473,8 @@ pub(crate) async fn dispatch_assignment_notifications(
         assignee,
         realm_id,
         &source_event_id,
-        "assignment",
-        arkret_wire::events::EventKind::RELATION_CREATE,
+        NotificationKind::Assignment,
+        EventKind::RelationCreate,
         relation_id,
         Some(strand_id),
         None,
@@ -563,8 +602,8 @@ pub(crate) async fn dispatch_schedule_notifications(
             &recipient,
             realm_id,
             &source_event_id,
-            "schedule",
-            arkret_wire::events::EventKind::STRAND_UPDATE,
+            NotificationKind::Schedule,
+            EventKind::StrandUpdate,
             Some(strand_id),
             Some(strand_id),
             None,
@@ -612,6 +651,11 @@ mod tests {
             )
             .await
             .expect("notification query")
+            .into_iter()
+            .map(|record| {
+                serde_json::to_value(record.notification).expect("encode typed notification")
+            })
+            .collect()
     }
 
     fn seed_realm_members(state: &AppState, realm_id: &str, members: &[&str]) {
@@ -630,8 +674,8 @@ mod tests {
             agent.to_owned(),
             controller.to_owned(),
             "ak:realm:01964137-0000-7000-8000-000000000010".to_owned(),
-            format!("{agent}#managed-controller"),
-            "active".to_owned(),
+            arkret_wire::DidUrl::new(format!("{agent}#managed-controller")).unwrap(),
+            arkret_models_collaboration::agent_operations::AgentLifecycleState::Active,
             chrono::Utc::now(),
         );
         record.agent_slug = Some("summary".to_owned());

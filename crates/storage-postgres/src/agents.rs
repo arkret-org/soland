@@ -209,7 +209,7 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let principal = AgentPrincipalRow::from(principal);
+        let principal = AgentPrincipalRow::try_from(principal)?;
         let agent_id = principal.id.clone();
         let upsert = diesel::insert_into(agent_principals::table)
             .values(&principal)
@@ -245,14 +245,14 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        agent_principals::table
+        let record = agent_principals::table
             .find(agent_id)
             .select(AgentPrincipalRow::as_select())
             .first::<AgentPrincipalRow>(&mut *conn)
             .await
             .optional()
-            .map_err(PersistenceError::database)
-            .map(|record| record.map(Into::into))
+            .map_err(PersistenceError::database)?;
+        record.map(TryInto::try_into).transpose()
     }
 
     async fn get_by_pairing_request_id(
@@ -262,14 +262,14 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        agent_principals::table
+        let record = agent_principals::table
             .filter(agent_principals::pairing_request_id.eq(pairing_request_id))
             .select(AgentPrincipalRow::as_select())
             .first::<AgentPrincipalRow>(&mut *conn)
             .await
             .optional()
-            .map_err(PersistenceError::database)
-            .map(|record| record.map(Into::into))
+            .map_err(PersistenceError::database)?;
+        record.map(TryInto::try_into).transpose()
     }
 
     async fn list_for_controller(
@@ -279,20 +279,20 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        agent_principals::table
+        let records = agent_principals::table
             .filter(agent_principals::controller_id.eq(controller_id))
             .order(agent_principals::created_at.asc())
             .select(AgentPrincipalRow::as_select())
             .load::<AgentPrincipalRow>(&mut *conn)
             .await
-            .map_err(PersistenceError::database)
-            .map(|records| records.into_iter().map(Into::into).collect())
+            .map_err(PersistenceError::database)?;
+        records.into_iter().map(TryInto::try_into).collect()
     }
 
     async fn set_state(
         &self,
         agent_id: &str,
-        state: &str,
+        state: arkret_models_collaboration::agent_operations::AgentLifecycleState,
         changed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         let mut conn = pg_conn(&self.pool)
@@ -300,7 +300,7 @@ impl AgentStore for PgAgentStore {
             .map_err(PersistenceError::database)?;
         let updated = diesel::update(agent_principals::table.find(agent_id))
             .set((
-                agent_principals::state.eq(state),
+                agent_principals::state.eq(state.as_wire_str()),
                 agent_principals::state_changed_at.eq(changed_at),
                 agent_principals::updated_at.eq(changed_at),
             ))
@@ -317,16 +317,27 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
+        let authorized_signing_key_binding =
+            serde_json::to_value(&activation.authorized_signing_key_binding).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "encode typed Agent signing-key binding: {error}"
+                ))
+            })?;
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&activation.agent_id))
                 .filter(agent_principals::state.eq_any(["active", "paused"]))
-                .filter(agent_principals::approval_request_id.eq(&activation.approval_request_id))
+                .filter(
+                    agent_principals::approval_request_id
+                        .eq(activation.approval_request_id.as_str()),
+                )
                 .filter(
                     agent_principals::runtime_key_binding_digest
                         .eq(&activation.runtime_key_binding_digest),
                 )
-                .filter(agent_principals::pairing_request_id.eq(&activation.pairing_request_id)),
+                .filter(
+                    agent_principals::pairing_request_id.eq(activation.pairing_request_id.as_str()),
+                ),
         )
         .set((
             // Runtime key activation records the authorization; it is not a
@@ -338,9 +349,8 @@ impl AgentStore for PgAgentStore {
                 .eq(&activation.authorized_verification_method),
             agent_principals::authorized_public_key_digest
                 .eq(&activation.authorized_public_key_digest),
-            agent_principals::authorized_signing_key_binding
-                .eq(&activation.authorized_signing_key_binding),
-            agent_principals::paired_pairing_request_id.eq(&activation.pairing_request_id),
+            agent_principals::authorized_signing_key_binding.eq(&authorized_signing_key_binding),
+            agent_principals::paired_pairing_request_id.eq(activation.pairing_request_id.as_str()),
             agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
             agent_principals::runtime_key_request.eq(None::<Value>),
             agent_principals::approval_requested_at.eq(None::<chrono::DateTime<chrono::Utc>>),
@@ -390,14 +400,20 @@ impl AgentStore for PgAgentStore {
             ids::typed_uuid_part_expect_internal(&write.approval_notification_id);
         let controller_account_id =
             ids::typed_uuid_part_expect_internal(&write.controller_account_id);
-        diesel::update(
+        let runtime_key_request =
+            serde_json::to_value(&write.runtime_key_request).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "encode typed Agent runtime key request: {error}"
+                ))
+            })?;
+        let record = diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&write.agent_id))
                 .filter(agent_principals::state.eq_any(["active", "paused"]))
-                .filter(agent_principals::pairing_request_id.eq(&write.pairing_request_id))
+                .filter(agent_principals::pairing_request_id.eq(write.pairing_request_id.as_str()))
                 .filter(
                     agent_principals::paired_pairing_request_id
-                        .is_distinct_from(&write.pairing_request_id),
+                        .is_distinct_from(write.pairing_request_id.as_str()),
                 )
                 .filter(
                     agent_principals::runtime_key_binding_digest
@@ -427,14 +443,14 @@ impl AgentStore for PgAgentStore {
             agent_principals::runtime_key_binding_digest.eq(&write.runtime_key_binding_digest),
             agent_principals::runtime_public_key_digest.eq(&write.runtime_public_key_digest),
             agent_principals::runtime_attestation_digest.eq(&write.runtime_attestation_digest),
-            agent_principals::runtime_key_request.eq(&write.runtime_key_request),
+            agent_principals::runtime_key_request.eq(&runtime_key_request),
             agent_principals::updated_at.eq(Utc::now()),
         ))
         .returning(AgentPrincipalRow::as_returning())
         .get_result::<AgentPrincipalRow>(&mut *conn)
         .await
         .optional()
-        .map_err(PersistenceError::database)
-        .map(|record| record.map(Into::into))
+        .map_err(PersistenceError::database)?;
+        record.map(TryInto::try_into).transpose()
     }
 }

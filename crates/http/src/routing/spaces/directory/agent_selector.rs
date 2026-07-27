@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+
 use super::*;
 
 pub(super) fn selector_not_found() -> AppError {
@@ -181,7 +183,7 @@ pub(super) async fn resolve_agent_selector(
         .iter()
         .filter(|record| {
             record.agent_slug.as_deref() == Some(body.agent_slug.as_str())
-                && record.state == "active"
+                && record.state == AgentLifecycleState::Active
         })
         .collect();
     if matches.len() != 1 {

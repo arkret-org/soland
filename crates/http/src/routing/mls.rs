@@ -34,6 +34,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, Hash, OperationId, RealmId};
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_crypto::{
     Failure as KeypackageFailure, KeyOperationSignature, KeyPackageClaimRecord,
     KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
@@ -60,7 +61,8 @@ use soland_services::events::{
     PeerKeyPackageClaimCommand as PeerKeyPackageClaimAttempt,
     PeerKeyPackageClaimLedgerState as PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult,
-    PeerKeyPackageClaimResult as PeerKeyPackageClaimAttemptResult,
+    PeerKeyPackageClaimResult as PeerKeyPackageClaimAttemptResult, PersistedKeyPackageClaimState,
+    PersistedKeyPackageReusePolicy,
 };
 use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{MlsProjectionEffect, ProjectionEffectView};
@@ -601,8 +603,7 @@ async fn peer_claim_keypackage(
         let keypackages = state.projections().mls_key_package_records();
         let mut candidates = keypackages
             .iter()
-            .filter(|keypackage| !keypackage.last_resort)
-            .filter(|keypackage| keypackage.claimed_by_mls_group_id.is_none())
+            .filter(|keypackage| ordinary_keypackage_is_available(keypackage))
             .filter(|keypackage| {
                 keypackage.lifetime_not_after.saturating_mul(1000)
                     >= body.expires_at.timestamp_millis()
@@ -639,7 +640,7 @@ async fn peer_claim_keypackage(
         else {
             continue;
         };
-        if predicted.last_resort || predicted.claimed_by_mls_group_id.is_some() {
+        if !ordinary_keypackage_is_available(&predicted) {
             continue;
         }
         predicted.claimed_by_mls_group_id = Some(body.mls_group_id.as_str().to_owned());
@@ -1349,13 +1350,7 @@ pub(crate) async fn claim_keypackages_for_request(
         let keypackages = state.projections().mls_key_package_records();
         let matching_claim = keypackages
             .iter()
-            .filter(|kp| {
-                ordinary_keypackage_is_same_group_claim(
-                    kp.last_resort,
-                    kp.claimed_by_mls_group_id.as_deref(),
-                    mls_group_ref.as_str(),
-                )
-            })
+            .filter(|kp| ordinary_keypackage_is_same_group_claim(kp, mls_group_ref.as_str()))
             .filter(|kp| {
                 keypackage_matches_claim(
                     kp,
@@ -1374,8 +1369,7 @@ pub(crate) async fn claim_keypackages_for_request(
             });
         let ordinary = keypackages
             .iter()
-            .filter(|kp| !kp.last_resort)
-            .filter(|kp| kp.claimed_by_mls_group_id.is_none())
+            .filter(|kp| ordinary_keypackage_is_available(kp))
             .filter(|kp| {
                 keypackage_matches_claim(
                     kp,
@@ -1505,7 +1499,7 @@ pub(crate) async fn claim_keypackages_for_request(
         .mls_key_packages()
         .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
             id: &claimed_keypackage_id,
-            mls_group_id: &claimed_group_id,
+            target: soland_services::events::ClaimMlsKeyPackageTarget::Group(&claimed_group_id),
             intended_realm_id: claimed_realm_id.as_deref(),
             ssk_generation: claim_binding.ssk_generation,
             device_authorize_event_id: claim_binding.device_authorize_event_id.as_deref(),
@@ -1603,10 +1597,21 @@ async fn consume_keypackages(
                 continue;
             }
         };
-        if record.last_resort && record.claimed_by_mls_group_id.as_deref() != Some("revoked") {
-            if record
-                .last_resort_realm_id
-                .as_deref()
+        let lifecycle = match record.lifecycle() {
+            Ok(lifecycle) => lifecycle,
+            Err(error) => {
+                failures.push(keypackage_ref_failure(keypackage_ref, error));
+                continue;
+            }
+        };
+        if let (
+            PersistedKeyPackageReusePolicy::LastResort { bound_realm_id },
+            PersistedKeyPackageClaimState::Available,
+        ) = (&lifecycle.reuse_policy, &lifecycle.claim_state)
+        {
+            if bound_realm_id
+                .as_ref()
+                .map(RealmId::as_str)
                 .zip(consume_realm_id.as_deref())
                 .is_some_and(|(bound, requested)| bound != requested)
             {
@@ -1616,17 +1621,18 @@ async fn consume_keypackages(
                 ));
                 continue;
             }
-            if record.last_resort_realm_id.is_none() {
+            if bound_realm_id.is_none() {
                 failures.push(keypackage_ref_failure(keypackage_ref, "claim_missing"));
                 continue;
             }
             consumed.push(keypackage_ref);
             continue;
         }
-        if record.consumed_at.is_some() {
+        if let PersistedKeyPackageClaimState::Consumed { mls_group_id, .. } = &lifecycle.claim_state
+        {
             if record.actor_id == session.actor
                 && record.device_id == session.device_id
-                && record.claimed_by_mls_group_id.as_deref() == Some(group_id.as_str())
+                && mls_group_id.as_str() == group_id.as_str()
             {
                 consumed.push(keypackage_ref);
             } else {
@@ -2006,7 +2012,14 @@ async fn revoke_keypackages(
             Ok(Some(record)) if record.actor_id != session.actor => {
                 failures.push(keypackage_ref_failure(keypackage_ref, "not_owner"));
             }
-            Ok(Some(record)) if record.consumed_at.is_some() => {
+            Ok(Some(record))
+                if record.lifecycle().is_ok_and(|lifecycle| {
+                    matches!(
+                        lifecycle.claim_state,
+                        PersistedKeyPackageClaimState::Consumed { .. }
+                    )
+                }) =>
+            {
                 failures.push(keypackage_ref_failure(keypackage_ref, "already_consumed"));
             }
             Ok(Some(record)) => {
@@ -2014,7 +2027,7 @@ async fn revoke_keypackages(
                     .mls_key_packages()
                     .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                         id: &record.id,
-                        mls_group_id: "revoked",
+                        target: soland_services::events::ClaimMlsKeyPackageTarget::Revoke,
                         intended_realm_id: None,
                         ssk_generation: None,
                         device_authorize_event_id: None,
@@ -2025,12 +2038,9 @@ async fn revoke_keypackages(
                     .await
                 {
                     Ok(Some(_)) => {
-                        state.projections().mark_key_package_claimed(
-                            &record.id,
-                            "revoked".to_owned(),
-                            revoked_at,
-                            None,
-                        );
+                        state
+                            .projections()
+                            .mark_key_packages_revoked(std::slice::from_ref(&record.id));
                         revoked.push(keypackage_ref);
                     }
                     Ok(None) => {
@@ -2070,14 +2080,18 @@ pub(crate) async fn retire_device_keypackages(
     for row in rows.into_iter().filter(|row| {
         row.actor_id == actor_id
             && row.device_id == device_id
-            && row.claimed_by_mls_group_id.is_none()
-            && row.consumed_at.is_none()
+            && row.lifecycle().is_ok_and(|lifecycle| {
+                matches!(
+                    lifecycle.claim_state,
+                    PersistedKeyPackageClaimState::Available
+                )
+            })
     }) {
         if state
             .mls_key_packages()
             .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                 id: &row.id,
-                mls_group_id: "revoked",
+                target: soland_services::events::ClaimMlsKeyPackageTarget::Revoke,
                 intended_realm_id: None,
                 ssk_generation: None,
                 device_authorize_event_id: None,
@@ -2091,12 +2105,9 @@ pub(crate) async fn retire_device_keypackages(
             })?
             .is_some()
         {
-            state.projections().mark_key_package_claimed(
-                &row.id,
-                "revoked".to_owned(),
-                retired_at,
-                None,
-            );
+            state
+                .projections()
+                .mark_key_packages_revoked(std::slice::from_ref(&row.id));
             retired += 1;
         }
     }
@@ -2387,7 +2398,7 @@ async fn current_agent_keypackage_trust_binding(
     else {
         return Ok(None);
     };
-    if agent.state != "active" {
+    if agent.state != AgentLifecycleState::Active {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "Native Agent must be active before publishing or claiming a KeyPackage",
@@ -2637,17 +2648,29 @@ fn available_keypackage_count(
         .filter(|kp| kp.actor_id == actor_id)
         .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))
         .filter(|kp| trust_selector.is_none_or(|selector| selector.matches_keypackage(kp)))
-        .filter(|kp| kp.consumed_at.is_none())
         .filter(|kp| {
-            if kp.last_resort {
-                intended_realm_id
-                    .map(|realm_id| last_resort_matches_realm(kp, realm_id))
-                    .unwrap_or_else(|| kp.last_resort_realm_id.is_none())
-            } else {
-                kp.claimed_by_mls_group_id.is_none()
+            let Ok(lifecycle) = kp.lifecycle() else {
+                return false;
+            };
+            match (&lifecycle.reuse_policy, &lifecycle.claim_state) {
+                (
+                    PersistedKeyPackageReusePolicy::LastResort { bound_realm_id },
+                    PersistedKeyPackageClaimState::Available,
+                ) => intended_realm_id
+                    .map(|realm_id| {
+                        bound_realm_id
+                            .as_ref()
+                            .map(RealmId::as_str)
+                            .is_none_or(|bound| bound == realm_id)
+                    })
+                    .unwrap_or_else(|| bound_realm_id.is_none()),
+                (
+                    PersistedKeyPackageReusePolicy::SingleUse,
+                    PersistedKeyPackageClaimState::Available,
+                ) => true,
+                _ => false,
             }
         })
-        .filter(|kp| kp.claimed_by_mls_group_id.as_deref() != Some("revoked"))
         .filter(|kp| kp.lifetime_not_after > now_secs)
         .count() as u64
 }
@@ -2682,9 +2705,8 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         .mls_key_package_records()
         .iter()
         .any(|keypackage| {
-            ((!keypackage.last_resort && keypackage.claimed_by_mls_group_id.is_none())
-                || (keypackage.last_resort
-                    && last_resort_matches_realm(keypackage, intended_realm_id)))
+            (ordinary_keypackage_is_available(keypackage)
+                || last_resort_matches_realm(keypackage, intended_realm_id))
                 && keypackage_matches_claim(
                     keypackage,
                     actor_id,
@@ -2696,12 +2718,32 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         })
 }
 
+fn ordinary_keypackage_is_available(keypackage: &MlsKeyPackageRow) -> bool {
+    keypackage.lifecycle().is_ok_and(|lifecycle| {
+        matches!(
+            lifecycle.reuse_policy,
+            PersistedKeyPackageReusePolicy::SingleUse
+        ) && matches!(
+            lifecycle.claim_state,
+            PersistedKeyPackageClaimState::Available
+        )
+    })
+}
+
 fn ordinary_keypackage_is_same_group_claim(
-    last_resort: bool,
-    claimed_group: Option<&str>,
+    keypackage: &MlsKeyPackageRow,
     requested_group: &str,
 ) -> bool {
-    !last_resort && claimed_group == Some(requested_group)
+    keypackage.lifecycle().is_ok_and(|lifecycle| {
+        matches!(
+            lifecycle.reuse_policy,
+            PersistedKeyPackageReusePolicy::SingleUse
+        ) && matches!(
+            lifecycle.claim_state,
+            PersistedKeyPackageClaimState::Claimed { ref mls_group_id, .. }
+                if mls_group_id.as_str() == requested_group
+        )
+    })
 }
 
 fn keypackage_matches_claim(
@@ -2714,19 +2756,32 @@ fn keypackage_matches_claim(
 ) -> bool {
     kp.actor_id == actor_id
         && (target_device_ids.is_empty() || target_device_ids.contains(kp.device_id.as_str()))
-        && kp.consumed_at.is_none()
-        && kp.claimed_by_mls_group_id.as_deref() != Some("revoked")
+        && kp.lifecycle().is_ok_and(|lifecycle| {
+            matches!(
+                lifecycle.claim_state,
+                PersistedKeyPackageClaimState::Available
+                    | PersistedKeyPackageClaimState::Claimed { .. }
+            )
+        })
         && trust_selector.matches_keypackage(kp)
         && kp.lifetime_not_after > now_secs
         && capabilities_satisfy(&kp.capabilities, required_capabilities)
 }
 
 fn last_resort_matches_realm(kp: &MlsKeyPackageRow, intended_realm_id: &str) -> bool {
-    kp.last_resort
-        && kp
-            .last_resort_realm_id
-            .as_deref()
-            .is_none_or(|realm_id| realm_id == intended_realm_id)
+    kp.lifecycle().is_ok_and(|lifecycle| {
+        matches!(
+            lifecycle.reuse_policy,
+            PersistedKeyPackageReusePolicy::LastResort { ref bound_realm_id }
+                if bound_realm_id
+                    .as_ref()
+                    .map(RealmId::as_str)
+                    .is_none_or(|realm_id| realm_id == intended_realm_id)
+        ) && matches!(
+            lifecycle.claim_state,
+            PersistedKeyPackageClaimState::Available
+        )
+    })
 }
 
 fn keypackage_claim_record(
@@ -2820,24 +2875,46 @@ mod trust_binding_tests {
 
     #[test]
     fn ordinary_claim_retry_only_matches_the_original_group() {
+        let mut ordinary = MlsKeyPackageRow {
+            id: "kp-1".to_owned(),
+            keypackage_ref: "ref-1".to_owned(),
+            keypackage_digest: "sha256:digest".to_owned(),
+            actor_id: "did:web:alice.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            key_package_bytes: Vec::new(),
+            capabilities: Vec::new(),
+            capabilities_digest: "sha256:capabilities".to_owned(),
+            device_signature: Value::Null,
+            last_resort: false,
+            last_resort_realm_id: None,
+            lifetime_not_before: 1,
+            lifetime_not_after: 100,
+            claimed_by_mls_group_id: Some("mls-group-a".to_owned()),
+            ssk_generation: Some(1),
+            device_authorize_event_id: None,
+            agent_key_authorize_event_id: None,
+            claimed_at: Some(2),
+            claim_expires_at_unix_ms: None,
+            consumed_at: None,
+            created_at: 1,
+        };
         assert!(ordinary_keypackage_is_same_group_claim(
-            false,
-            Some("mls-group-a"),
+            &ordinary,
             "mls-group-a"
         ));
         assert!(!ordinary_keypackage_is_same_group_claim(
-            false,
-            Some("mls-group-a"),
+            &ordinary,
             "mls-group-b"
         ));
+        ordinary.claimed_by_mls_group_id = None;
+        ordinary.claimed_at = None;
         assert!(!ordinary_keypackage_is_same_group_claim(
-            false,
-            None,
+            &ordinary,
             "mls-group-a"
         ));
+        ordinary.last_resort = true;
         assert!(!ordinary_keypackage_is_same_group_claim(
-            true,
-            Some("mls-group-a"),
+            &ordinary,
             "mls-group-a"
         ));
     }

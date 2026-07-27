@@ -56,7 +56,10 @@ pub(super) async fn resolve_agent_pairing(
         })?,
         agent_id: Did::new(agent_id)
             .map_err(|error| AppError::internal(format!("agent principal DID invalid: {error}")))?,
-        pairing_request_id: pairing_request_id.to_owned(),
+        pairing_request_id: arkret_wire::OpaqueLocalId::new(pairing_request_id.to_owned())
+            .map_err(|error| {
+                AppError::internal(format!("stored pairing request id invalid: {error}"))
+            })?,
         pairing_code: pairing_code.to_owned(),
         pairing_expires_at,
     };
@@ -140,10 +143,14 @@ pub(super) async fn submit_agent_runtime_key_request(
         .await
         .map_err(|error| AppError::internal(format!("controller account lookup failed: {error}")))?
         .ok_or_else(|| AppError::internal("controller account is missing"))?;
-    let proposed_approval_request_id = agent_record
-        .approval_request_id
-        .clone()
-        .unwrap_or_else(|| format!("agent_runtime_approval:{}", uuid::Uuid::now_v7()));
+    let proposed_approval_request_id =
+        agent_record.approval_request_id.clone().unwrap_or_else(|| {
+            arkret_wire::OpaqueLocalId::new(format!(
+                "agent_runtime_approval:{}",
+                uuid::Uuid::now_v7()
+            ))
+            .expect("generated approval request id must be valid")
+        });
     let proposed_notification_id = agent_record
         .approval_notification_id
         .map(|id| ids::format_typed_uuid("notification", &id))
@@ -151,11 +158,10 @@ pub(super) async fn submit_agent_runtime_key_request(
     let proposed_requested_at = agent_record
         .approval_requested_at
         .unwrap_or_else(chrono::Utc::now);
-    let expires_at =
-        arkret_canonical::format_timestamp_canonical(required_pairing_expires_at(&agent_record)?);
+    let expires_at = required_pairing_expires_at(&agent_record)?;
     let write = soland_services::identity::StoreAgentRuntimeApprovalCommand {
         agent_id: agent_id.to_owned(),
-        pairing_request_id: body.pairing_request_id.to_string(),
+        pairing_request_id: body.pairing_request_id.clone(),
         approval_request_id: proposed_approval_request_id.clone(),
         approval_notification_id: proposed_notification_id.clone(),
         approval_requested_at: proposed_requested_at,
@@ -190,39 +196,61 @@ pub(super) async fn submit_agent_runtime_key_request(
             pairing_failed_precondition("agent pairing metadata is incomplete")
                 .with_reason_detail("missing approval_notification_id")
         })?;
-    let requested_at = arkret_canonical::format_timestamp_canonical(
-        stored.approval_requested_at.ok_or_else(|| {
-            pairing_failed_precondition("agent pairing metadata is incomplete")
-                .with_reason_detail("missing approval_requested_at")
-        })?,
-    );
+    let requested_at = stored.approval_requested_at.ok_or_else(|| {
+        pairing_failed_precondition("agent pairing metadata is incomplete")
+            .with_reason_detail("missing approval_requested_at")
+    })?;
     let projection_action = if existing_binding.is_none()
         && approval_request_id == proposed_approval_request_id
         && notification_id == proposed_notification_id
     {
-        "add"
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Add
     } else {
-        "update"
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Update
     };
+    let delta =
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+            arkret_wire::NotificationId::new(notification_id.clone()).map_err(|error| {
+                AppError::internal(format!("approval notification id is invalid: {error}"))
+            })?,
+            arkret_wire::NotificationKind::Agent,
+            projection_action,
+            Some(
+                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
+                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
+                        kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
+                        approval_request_id: approval_request_id.clone(),
+                        agent_id: body.agent_id.clone(),
+                        requested_at,
+                        expires_at,
+                    },
+                ),
+            ),
+        )
+        .map_err(|error| {
+            AppError::internal(format!("approval notification delta is invalid: {error}"))
+        })?;
     state
         .deliveries()
         .store_account_delta(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
-                record: json!({
-                    "notification_id": notification_id.clone(),
-                    "recipient_id": controller_id,
-                    "controller_account_id": account.account_id.clone(),
-                    "recipient_service_id": state.service_id().clone(),
-                    "source_account_artifact_id": approval_request_id.clone(),
-                    "projection_action": projection_action,
-                    "projection_data": {
-                        "kind": "agent_runtime_approval",
-                        "approval_request_id": approval_request_id.clone(),
-                        "agent_id": agent_id,
-                        "requested_at": requested_at,
-                        "expires_at": expires_at,
-                    },
-                }),
+                record: soland_services::delivery::AccountNotificationDeltaWrite {
+                    delta,
+                    recipient_id: Did::new(controller_id).map_err(|error| {
+                        AppError::internal(format!(
+                            "approval notification recipient is invalid: {error}"
+                        ))
+                    })?,
+                    controller_account_id: account.account_id.clone(),
+                    recipient_service_id: Did::new(state.service_id().clone()).map_err(
+                        |error| {
+                            AppError::internal(format!(
+                                "approval notification service is invalid: {error}"
+                            ))
+                        },
+                    )?,
+                    source_account_artifact_id: approval_request_id.to_string(),
+                },
             },
         )
         .await
@@ -307,11 +335,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(approval_request_id) = agent_record.approval_request_id.clone() else {
         return Ok(agent_record);
     };
-    let Some(runtime_request) = agent_record
-        .runtime_key_request
-        .as_ref()
-        .filter(|value| value.is_object())
-    else {
+    let Some(runtime_request) = agent_record.runtime_key_request.as_ref() else {
         return Ok(agent_record);
     };
     let agent_id = agent_record.id.clone();
@@ -319,13 +343,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(pairing_request_id) = agent_record.pairing_request_id.clone() else {
         return Ok(agent_record);
     };
-    let Some(verification_method) = runtime_request
-        .get("verification_method")
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned)
-    else {
-        return Ok(agent_record);
-    };
+    let verification_method = runtime_request.verification_method.to_string();
     let Some(public_key_digest) = agent_record.runtime_public_key_digest.clone() else {
         return Ok(agent_record);
     };
@@ -443,9 +461,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         authorized_event_ref: accepted.event_id,
         authorized_verification_method: verification_method,
         authorized_public_key_digest: public_key_digest,
-        authorized_signing_key_binding: serde_json::to_value(signing_key_binding).map_err(
-            |error| AppError::internal(format!("signing-key binding encode failed: {error}")),
-        )?,
+        authorized_signing_key_binding: signing_key_binding,
         authorized_at: accepted.received_at,
     };
     let activated = state
@@ -472,11 +488,17 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             });
     }
     if let Some(context) = terminal_notification {
-        finalize_terminal_account_notification(state, &agent_id, context, "approved").await?;
+        finalize_terminal_account_notification(
+            state,
+            &agent_id,
+            context,
+            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
+        )
+        .await?;
     }
     tracing::info!(
         agent_id,
-        approval_request_id,
+        approval_request_id = %approval_request_id,
         "reconciled accepted Agent authorization into activation projection"
     );
     state
@@ -518,11 +540,16 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     // pairing_expired; an expired replacement handle projects ready with no
     // authorized fields for this request, which the runtime treats as expired.
     let status = agent_lifecycle_from_record(agent_record);
-    let has_active_authorization = agent_record.authorized_event_ref.is_some();
-    let handle_live = agent_pairing_handle_is_open(agent_record)
-        && agent_record
-            .pairing_expires_at
-            .is_some_and(|expires_at| expires_at > now);
+    let bindings = agent_record.runtime_bindings().map_err(|error| {
+        AppError::internal(format!(
+            "persisted Agent runtime binding state is invalid: {error}"
+        ))
+    })?;
+    let has_active_authorization = bindings.active_binding.is_some();
+    let handle_live = bindings
+        .open_handle
+        .as_ref()
+        .is_some_and(|handle| handle.is_live_at(now));
     let runtime_state = AgentRuntimeState::derive(has_active_authorization, handle_live);
     let approval_request_id = if runtime_state == AgentRuntimeState::PendingRuntimeKey {
         agent_record.approval_request_id.clone()
@@ -534,34 +561,23 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     // outcome for this handle: runtimes may reuse the same key digest, which
     // would otherwise make a pending replacement look approved and persist a
     // reference that is revoked as soon as replacement completes.
-    let pairing_completed_for_request =
-        agent_record.paired_pairing_request_id.as_deref() == Some(body.pairing_request_id.as_str());
-    let authorized_event_ref = pairing_completed_for_request
-        .then_some(agent_record.authorized_event_ref.as_deref())
-        .flatten()
-        .map(EventId::new)
-        .transpose()
-        .map_err(|err| AppError::internal(format!("authorized event ref invalid: {err}")))?;
-    let authorized_signing_key_binding = pairing_completed_for_request
-        .then_some(agent_record.authorized_signing_key_binding.clone())
-        .flatten()
-        .map(serde_json::from_value)
-        .transpose()
-        .map_err(|error| {
-            AppError::internal(format!("authorized signing-key binding invalid: {error}"))
-        })?;
+    let completed_binding = bindings.active_binding.as_ref().filter(|binding| {
+        binding.completed_pairing_request_id.as_str() == body.pairing_request_id.as_str()
+    });
+    let authorized_event_ref =
+        completed_binding.map(|binding| binding.authorized_event_ref.clone());
+    let authorized_signing_key_binding =
+        completed_binding.map(|binding| binding.signing_key_binding.clone());
     Ok(AgentRuntimeApprovalStatusOutcome {
         ok: true,
         status,
         runtime_state,
         approval_request_id,
         authorized_event_ref,
-        authorized_verification_method: pairing_completed_for_request
-            .then_some(agent_record.authorized_verification_method.clone())
-            .flatten(),
-        authorized_public_key_digest: pairing_completed_for_request
-            .then_some(agent_record.authorized_public_key_digest.clone())
-            .flatten(),
+        authorized_verification_method: completed_binding
+            .map(|binding| binding.verification_method.to_string()),
+        authorized_public_key_digest: completed_binding
+            .map(|binding| binding.public_key_digest.to_string()),
         authorized_signing_key_binding,
     })
 }
@@ -630,7 +646,13 @@ pub(super) async fn agent_key_pair(
             .with_wire_code("duplicate_conflict"));
         }
         if let Some(context) = account_notification_context(&agent_record) {
-            finalize_terminal_account_notification(state, agent_id, context, "approved").await?;
+            finalize_terminal_account_notification(
+                state,
+                agent_id,
+                context,
+                arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
+            )
+            .await?;
         }
         return json_ok(AgentKeyPairOutcome {
             ok: true,
@@ -701,14 +723,12 @@ pub(super) async fn agent_key_pair(
         runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().ok_or_else(
             || pairing_failed_precondition("agent runtime key binding metadata is incomplete"),
         )?,
-        pairing_request_id: body.pairing_request_id.to_string(),
+        pairing_request_id: body.pairing_request_id.clone(),
         paired_request_digest,
         authorized_event_ref: authorized_event_ref.as_str().to_owned(),
         authorized_verification_method: body.verification_method.to_string(),
         authorized_public_key_digest: runtime_public_key_digest.clone(),
-        authorized_signing_key_binding: serde_json::to_value(&body.signing_key_binding).map_err(
-            |error| AppError::invalid_param(format!("signing_key_binding invalid: {error}")),
-        )?,
+        authorized_signing_key_binding: body.signing_key_binding.clone(),
         authorized_at,
     };
     // The compare-and-set below records the authorized binding fields for the
@@ -725,7 +745,13 @@ pub(super) async fn agent_key_pair(
         ));
     }
     if let Some(context) = terminal_notification {
-        finalize_terminal_account_notification(state, agent_id, context, "approved").await?;
+        finalize_terminal_account_notification(
+            state,
+            agent_id,
+            context,
+            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
+        )
+        .await?;
     }
     json_ok(AgentKeyPairOutcome {
         ok: true,
@@ -992,25 +1018,13 @@ fn ensure_current_runtime_key_request_matches(
     let current = agent_record
         .runtime_key_request
         .as_ref()
-        .filter(|value| value.is_object())
         .ok_or_else(|| pairing_failed_precondition("runtime key request is no longer pending"))?;
-    let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
-    let public_key_value = serde_json::to_value(&body.public_key)
-        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
-    let proof_value = serde_json::to_value(&body.proof_of_possession).map_err(|error| {
-        AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
-    })?;
-    let fields_match = current.get("pairing_request_id").and_then(Value::as_str)
-        == Some(body.pairing_request_id.as_str())
-        && current.get("agent_id").and_then(Value::as_str) == Some(body.agent_id.as_str())
-        && current.get("verification_method").and_then(Value::as_str)
-            == Some(body.verification_method.as_str())
-        && current.get("public_key") == Some(&public_key_value)
-        && current.get("proof_of_possession") == Some(&proof_value)
-        && current
-            .get("runtime_attestation")
-            .filter(|value| !value.is_null())
-            == runtime_attestation.as_ref();
+    let fields_match = current.pairing_request_id == body.pairing_request_id
+        && current.agent_id == body.agent_id
+        && current.verification_method == body.verification_method
+        && current.public_key == body.public_key
+        && current.proof_of_possession == body.proof_of_possession
+        && current.runtime_attestation == body.runtime_attestation;
     if !fields_match {
         return Err(pairing_failed_precondition(
             "controller approval does not match the current runtime key request",
@@ -1023,7 +1037,7 @@ fn ensure_current_runtime_key_request_matches(
         &body.pairing_request_id,
         &body.verification_method,
         &body.public_key,
-        runtime_attestation.as_ref(),
+        runtime_attestation_value(body.runtime_attestation.as_ref())?.as_ref(),
     )
     .map_err(|error| AppError::invalid_param(format!("runtime key binding invalid: {error}")))?;
     if agent_record.runtime_key_binding_digest.as_deref() != Some(current_binding.as_str()) {
@@ -1035,27 +1049,28 @@ fn ensure_current_runtime_key_request_matches(
 }
 
 pub(super) struct AccountNotificationContext {
-    notification_id: String,
-    recipient_id: String,
+    notification_id: arkret_wire::NotificationId,
+    recipient_id: Did,
     controller_account_id: String,
-    recipient_service_id: String,
-    approval_request_id: String,
+    recipient_service_id: Did,
+    approval_request_id: arkret_wire::OpaqueLocalId,
 }
 
 pub(super) fn account_notification_context(
     agent_record: &AgentPrincipalRecord,
 ) -> Option<AccountNotificationContext> {
     Some(AccountNotificationContext {
-        notification_id: ids::format_typed_uuid(
+        notification_id: arkret_wire::NotificationId::new(ids::format_typed_uuid(
             "notification",
             &agent_record.approval_notification_id?,
-        ),
-        recipient_id: agent_record.controller_id.clone(),
+        ))
+        .ok()?,
+        recipient_id: Did::new(agent_record.controller_id.clone()).ok()?,
         controller_account_id: ids::format_typed_uuid(
             "account",
             &agent_record.controller_account_id?,
         ),
-        recipient_service_id: agent_record.recipient_service_id.clone()?,
+        recipient_service_id: Did::new(agent_record.recipient_service_id.clone()?).ok()?,
         approval_request_id: agent_record.approval_request_id.clone()?,
     })
 }
@@ -1063,24 +1078,36 @@ pub(super) fn account_notification_context(
 pub(super) async fn persist_terminal_account_notification(
     state: &AppState,
     context: AccountNotificationContext,
-    reason: &str,
+    reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason,
 ) -> Result<(), AppError> {
+    let delta =
+        arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+            context.notification_id,
+            arkret_wire::NotificationKind::Agent,
+            arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Remove,
+            Some(
+                arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApprovalRemoval(
+                    arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationRemovalData {
+                        kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
+                        reason,
+                    },
+                ),
+            ),
+        )
+        .map_err(|error| {
+            AppError::internal(format!("terminal notification delta is invalid: {error}"))
+        })?;
     state
         .deliveries()
         .store_account_delta(
             soland_services::delivery::StoreAccountNotificationDeltaCommand {
-                record: json!({
-                    "notification_id": context.notification_id,
-                    "recipient_id": context.recipient_id,
-                    "controller_account_id": context.controller_account_id.clone(),
-                    "recipient_service_id": context.recipient_service_id.clone(),
-                    "source_account_artifact_id": context.approval_request_id,
-                    "projection_action": "remove",
-                    "projection_data": {
-                        "kind": "agent_runtime_approval",
-                        "reason": reason,
-                    },
-                }),
+                record: soland_services::delivery::AccountNotificationDeltaWrite {
+                    delta,
+                    recipient_id: context.recipient_id,
+                    controller_account_id: context.controller_account_id.clone(),
+                    recipient_service_id: context.recipient_service_id.clone(),
+                    source_account_artifact_id: context.approval_request_id.to_string(),
+                },
             },
         )
         .await
@@ -1091,7 +1118,7 @@ pub(super) async fn persist_terminal_account_notification(
         })?;
     let _ = state.publish_event_notification(crate::state::EventNotification::account(
         context.controller_account_id,
-        context.recipient_service_id,
+        context.recipient_service_id.to_string(),
     ));
     Ok(())
 }
@@ -1105,7 +1132,7 @@ async fn finalize_terminal_account_notification(
     state: &AppState,
     agent_id: &str,
     context: AccountNotificationContext,
-    reason: &str,
+    reason: arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason,
 ) -> Result<(), AppError> {
     let approval_request_id = context.approval_request_id.clone();
     persist_terminal_account_notification(state, context, reason).await?;
@@ -1314,14 +1341,16 @@ fn paired_request_digest_from_record_event(
     agent_record: &AgentPrincipalRecord,
     authorize_event: &Value,
 ) -> Result<String, AppError> {
-    let mut request = agent_record
-        .runtime_key_request
-        .as_ref()
-        .and_then(Value::as_object)
+    let request = agent_record.runtime_key_request.as_ref().ok_or_else(|| {
+        AppError::internal("accepted Agent authorization has no persisted runtime request")
+    })?;
+    let mut request = serde_json::to_value(request)
+        .map_err(|error| {
+            AppError::internal(format!("persisted runtime request encode failed: {error}"))
+        })?
+        .as_object()
         .cloned()
-        .ok_or_else(|| {
-            AppError::internal("accepted Agent authorization has no persisted runtime request")
-        })?;
+        .ok_or_else(|| AppError::internal("typed runtime request did not encode as an object"))?;
     request.insert("authorize_event".to_owned(), authorize_event.clone());
     let canonical =
         arkret_canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
@@ -1342,7 +1371,7 @@ pub(super) fn ensure_pairing_request_open(
     // `pairing_request_id` while leaving the last consumed handle in
     // `paired_pairing_request_id`, so a live handle exists iff the current one
     // has not yet been consumed.
-    if agent_record.state == "deactivated" {
+    if agent_record.state == AgentLifecycleState::Deactivated {
         return Err(pairing_failed_precondition(
             "agent is not accepting runtime key pairing",
         ));
@@ -1378,7 +1407,7 @@ pub(super) fn agent_record_reserves_selector_slug(
     // first pairing) always reserves it. A never-keyed agent reserves the slug
     // only while its bootstrap window is still live; once it lapses the slug is
     // released for a fresh provision (key-management.md §3.6.1).
-    if agent_record.state == "deactivated" {
+    if agent_record.state == AgentLifecycleState::Deactivated {
         return false;
     }
     if agent_record.authorized_event_ref.is_some() {
@@ -1404,15 +1433,17 @@ pub(super) fn ensure_pairing_request_id_matches(
     Ok(())
 }
 
-pub(super) fn runtime_key_request_for_controller(body: &AgentRuntimeApprovalRequestBody) -> Value {
-    json!({
-        "pairing_request_id": body.pairing_request_id.clone(),
-        "agent_id": body.agent_id.clone(),
-        "verification_method": body.verification_method.clone(),
-        "public_key": body.public_key.clone(),
-        "proof_of_possession": body.proof_of_possession.clone(),
-        "runtime_attestation": body.runtime_attestation.clone(),
-    })
+pub(super) fn runtime_key_request_for_controller(
+    body: &AgentRuntimeApprovalRequestBody,
+) -> arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
+    arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
+        pairing_request_id: body.pairing_request_id.clone(),
+        agent_id: body.agent_id.clone(),
+        verification_method: body.verification_method.clone(),
+        public_key: body.public_key.clone(),
+        proof_of_possession: body.proof_of_possession.clone(),
+        runtime_attestation: body.runtime_attestation.clone(),
+    }
 }
 
 fn runtime_attestation_value(
@@ -1717,8 +1748,8 @@ mod requested_scope_tests {
             "did:webvh:agent.example:agents:test".to_owned(),
             "did:webvh:controller.example:users:test".to_owned(),
             "ak:realm:019f6000-0000-7000-8000-000000000001".to_owned(),
-            "did:webvh:agent.example:agents:test#controller".to_owned(),
-            "active".to_owned(),
+            arkret_wire::DidUrl::new("did:webvh:agent.example:agents:test#controller").unwrap(),
+            AgentLifecycleState::Active,
             chrono::Utc::now(),
         );
         record.requested_scope = requested_scope;
@@ -1820,12 +1851,13 @@ mod requested_scope_tests {
                 .expect("valid account uuid"),
         );
         record.recipient_service_id = Some("did:webvh:soland.example".to_owned());
-        record.approval_request_id = Some("agent_runtime_approval:test".to_owned());
+        record.approval_request_id =
+            Some(arkret_wire::OpaqueLocalId::new("agent_runtime_approval:test").unwrap());
 
         let context = account_notification_context(&record).expect("complete notification context");
 
         assert_eq!(
-            context.notification_id,
+            context.notification_id.as_str(),
             "ak:notification:019f6131-3dc4-76f1-ade6-00f4225a8528"
         );
         assert_eq!(
@@ -1838,23 +1870,24 @@ mod requested_scope_tests {
     fn active_and_paused_agents_complete_pairing_without_forced_pause() {
         let now = chrono::Utc::now();
         let mut record = agent_record(None);
-        record.pairing_request_id = Some("agent_pairing_request:open".to_owned());
+        record.pairing_request_id =
+            Some(arkret_wire::OpaqueLocalId::new("agent_pairing_request:open").unwrap());
         record.pairing_expires_at = Some(now + chrono::Duration::minutes(5));
 
         // Both active and paused agents may complete an open bootstrap or
         // replacement handle; there is no forced pause (key-management.md
         // §3.6.1) and resume never interlocks with an open handle.
-        record.state = "active".to_owned();
+        record.state = AgentLifecycleState::Active;
         assert!(ensure_pairing_request_open(&record).is_ok());
-        record.state = "paused".to_owned();
+        record.state = AgentLifecycleState::Paused;
         assert!(ensure_pairing_request_open(&record).is_ok());
 
         // Deactivation is terminal.
-        record.state = "deactivated".to_owned();
+        record.state = AgentLifecycleState::Deactivated;
         assert!(ensure_pairing_request_open(&record).is_err());
 
         // A consumed handle is no longer open.
-        record.state = "active".to_owned();
+        record.state = AgentLifecycleState::Active;
         record.paired_pairing_request_id = record.pairing_request_id.clone();
         assert!(ensure_pairing_request_open(&record).is_err());
 

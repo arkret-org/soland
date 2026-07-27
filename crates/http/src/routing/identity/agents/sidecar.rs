@@ -1,6 +1,6 @@
 use arkret_identifiers::SidecarId;
 use arkret_models_collaboration::agent_operations::{
-    AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
+    AgentLifecycleState, AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
     AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
     AgentSidecarList, AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState,
     AgentSidecarView, PendingSidecarAccessReconciliationItem,
@@ -250,7 +250,7 @@ fn agent_record_is_sidecar_eligible(
 ) -> bool {
     let agent_id = record.id.as_str();
     record.controller_id == controller
-        && record.state == "active"
+        && record.state == AgentLifecycleState::Active
         && realm_member_joined(state, realm_id, agent_id)
         && {
             let projection = state.projections().snapshot();

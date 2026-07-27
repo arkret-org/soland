@@ -5244,6 +5244,7 @@ dependencies = [
  "diesel-async",
  "diesel_migrations",
  "parking_lot",
+ "serde",
  "serde_json",
  "soland-domain",
  "soland-storage",

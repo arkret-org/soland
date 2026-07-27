@@ -62,12 +62,18 @@ fn application_push_contract_drift(
 }
 #[async_trait::async_trait]
 impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
-    async fn store_notification(&self, record: Value) -> crate::ServiceResult<()> {
+    async fn store_notification(
+        &self,
+        record: RecipientNotificationRecord,
+    ) -> crate::ServiceResult<()> {
         self.0.notifications().put(record).await?;
         Ok(())
     }
 
-    async fn store_account_delta(&self, record: Value) -> crate::ServiceResult<()> {
+    async fn store_account_delta(
+        &self,
+        record: AccountNotificationDeltaWrite,
+    ) -> crate::ServiceResult<()> {
         self.0.notifications().put_account_delta(record).await?;
         Ok(())
     }
@@ -77,7 +83,7 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
         controller_account_id: &str,
         recipient_service_id: &str,
         after_position: Option<i64>,
-    ) -> crate::ServiceResult<Vec<Value>> {
+    ) -> crate::ServiceResult<Vec<StoredAccountNotificationDelta>> {
         Ok(self
             .0
             .notifications()
@@ -85,7 +91,10 @@ impl crate::delivery::NotificationWritePort for PersistenceNotificationWriter {
             .await?)
     }
 
-    async fn list_for_recipient(&self, recipient_id: &str) -> crate::ServiceResult<Vec<Value>> {
+    async fn list_for_recipient(
+        &self,
+        recipient_id: &str,
+    ) -> crate::ServiceResult<Vec<RecipientNotificationRecord>> {
         Ok(self
             .0
             .notifications()

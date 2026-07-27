@@ -2,9 +2,9 @@ use diesel_async::AsyncConnection;
 
 use super::{
     BigInt, Binary, Bool, Jsonb, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitGenesis,
-    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord,
-    MlsWelcomeStore, Nullable, OptionalExtension, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Nullable, OptionalExtension,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PgPool,
     PgTransactionError, QueryableByName, RunQueryDsl, SqlUuid, Text, Uuid, Value, async_trait,
     db_ssk_generation, json_string_array, mls_effective_scope_parts, pg_conn, sql_query,
@@ -21,6 +21,11 @@ pub struct PgMlsCommitStore {
 #[async_trait]
 impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
+        record.lifecycle().map_err(|error| {
+            PersistenceError::SchemaViolation(format!(
+                "invalid MLS KeyPackage lifecycle before insert: {error}"
+            ))
+        })?;
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -77,8 +82,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MlsKeyPackageRow::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(validated_keypackage_row)
+        .transpose()
     }
 
     async fn get_by_ref(
@@ -100,8 +106,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MlsKeyPackageRow::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(validated_keypackage_row)
+        .transpose()
     }
 
     async fn try_claim(
@@ -110,7 +117,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let MlsKeyPackageClaim {
             id,
-            mls_group_id: group_id,
+            target,
             intended_realm_id,
             ssk_generation,
             device_authorize_event_id,
@@ -118,6 +125,11 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
             claimed_at,
             claim_expires_at_unix_ms,
         } = claim;
+        const REVOKED_CLAIM_SENTINEL: &str = "revoked";
+        let group_id = match target {
+            MlsKeyPackageClaimTarget::Group(group_id) => group_id,
+            MlsKeyPackageClaimTarget::Revoke => REVOKED_CLAIM_SENTINEL,
+        };
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
@@ -129,9 +141,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                  ssk_generation = COALESCE($4, ssk_generation), \
                  device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
                  agent_key_authorize_event_id = COALESCE($6, agent_key_authorize_event_id), \
-                 claimed_at = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_at ELSE $7 END, \
-                 claim_expires_at_unix_ms = CASE WHEN last_resort AND $2 <> 'revoked' THEN claim_expires_at_unix_ms ELSE $8 END, \
-                 consumed_at = CASE WHEN $2 = 'revoked' THEN consumed_at ELSE NULL END \
+                 claimed_at = CASE WHEN $2 = 'revoked' THEN NULL WHEN last_resort THEN claimed_at ELSE $7 END, \
+                 claim_expires_at_unix_ms = CASE WHEN $2 = 'revoked' THEN NULL WHEN last_resort THEN claim_expires_at_unix_ms ELSE $8 END, \
+                 consumed_at = NULL \
              WHERE id = $1 \
                AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
                AND (claimed_by_mls_group_id IS NULL \
@@ -160,8 +172,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MlsKeyPackageRow::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(validated_keypackage_row)
+        .transpose()
     }
 
     async fn consume_claim(
@@ -192,8 +205,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .get_result::<MlsKeyPackagePgRow>(&mut *conn)
         .await
         .optional()
-        .map(|row| row.map(MlsKeyPackageRow::from))
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .map(validated_keypackage_row)
+        .transpose()
     }
 
     async fn get_peer_claim(
@@ -261,7 +275,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                 };
                 insert_peer_claim_strict(conn, attempt.ledger).await?;
                 Ok(PeerKeyPackageClaimAttemptResult::Claimed(Box::new(
-                    claimed.into(),
+                    validated_keypackage_row(claimed)?,
                 )))
             })
             .await;
@@ -325,7 +339,9 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
                    WHERE state = 'claimed' AND claim_expires_at_unix_ms <= $1 \
                  ), revoked AS ( \
                    UPDATE mls_key_packages kp \
-                   SET claimed_by_mls_group_id = 'revoked' \
+                   SET claimed_by_mls_group_id = 'revoked', \
+                       claimed_at = NULL, \
+                       claim_expires_at_unix_ms = NULL \
                    FROM expired e \
                    WHERE kp.id = e.keypackage_id AND kp.consumed_at IS NULL \
                      AND kp.claimed_by_mls_group_id <> 'revoked' \
@@ -363,8 +379,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         )
         .load::<MlsKeyPackagePgRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(validated_keypackage_row)
+        .collect()
     }
 
     async fn list_claimed_by_group(
@@ -389,8 +407,10 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         .bind::<Text, _>(mls_group_id)
         .load::<MlsKeyPackagePgRow>(&mut *conn)
         .await
-        .map(|rows| rows.into_iter().map(MlsKeyPackageRow::from).collect())
-        .map_err(PersistenceError::database)
+        .map_err(PersistenceError::database)?
+        .into_iter()
+        .map(validated_keypackage_row)
+        .collect()
     }
 }
 
@@ -792,6 +812,16 @@ impl From<MlsKeyPackagePgRow> for MlsKeyPackageRow {
             created_at: row.created_at,
         }
     }
+}
+
+fn validated_keypackage_row(row: MlsKeyPackagePgRow) -> PersistenceResult<MlsKeyPackageRow> {
+    let row = MlsKeyPackageRow::from(row);
+    row.lifecycle().map_err(|error| {
+        PersistenceError::SchemaViolation(format!(
+            "stored MLS KeyPackage lifecycle is invalid: {error}"
+        ))
+    })?;
+    Ok(row)
 }
 #[derive(QueryableByName)]
 struct MlsWelcomeRow {

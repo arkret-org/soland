@@ -112,29 +112,10 @@ pub(super) async fn set_agent_participation(
         "accepted",
     )
     .await;
-    // AKP-0016 §5.2 / AKP-0008 §4.9 (dev option B) — materialise the effective
-    // participation decision into a durable capability grant. effective reply
-    // ⇒ `ak.capability.grant` (ak.message.create + ak.reaction.add over the
-    // scope resource); otherwise `ak.capability.revoke` (idempotent). The
-    // grant id is deterministic per (agent, scope_key) so set/unset/set
-    // converge on a single cell. Production submits these from inkson.
-    if state.config().development_mode {
-        // The materialized capability belongs to the participation target
-        // Realm, not the controller's private agent-control Realm. Keeping
-        // the event and its resource selector in the same Realm is required
-        // for the issuer upper-bound check to evaluate the controller's
-        // authority over this scope rather than accidentally using unrelated
-        // self-Realm ownership.
-        let realm = body.scope.realm_id().as_str().to_owned();
-        let grant_id = participation_grant_id(&agent_id, &body.scope.scope_key());
-        if effective.reply {
-            let resource = participation_scope_resource(&body.scope);
-            materialize_capability_grant(state, &session, &realm, &agent_id, resource, &grant_id)
-                .await?;
-        } else {
-            revoke_capability_grant(state, &session, &realm, &grant_id).await?;
-        }
-    }
+    // Capability materialization is controller-authored durable history.
+    // Inkson submits the matching signed `ak.capability.{grant,revoke}` Event
+    // after this aggregate has resolved and persisted the effective selection.
+    // Soland must never impersonate the controller, including in development.
     json_ok(AgentParticipationOutcome {
         ok: true,
         agent_id,
@@ -145,57 +126,6 @@ pub(super) async fn set_agent_participation(
             effective,
         }],
     })
-}
-
-/// Deterministic capability grant id for a materialised participation
-/// selection, keyed by (agent_id, scope_key) so toggling the
-/// selection converges on one grant cell (AKP-0016 §5.2).
-pub(super) fn participation_grant_id(agent_id: &str, scope_key: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let mut hasher = Sha256::new();
-    hasher.update(b"ak:grant:agent_participation:v1:");
-    hasher.update(agent_id.as_bytes());
-    hasher.update(b"\0");
-    hasher.update(scope_key.as_bytes());
-    let digest = hasher.finalize();
-    let mut bytes = [0u8; 16];
-    bytes.copy_from_slice(&digest[..16]);
-    // Force UUIDv7 version + RFC-9562 variant so the id matches the
-    // ak:grant:<uuidv7> wire pattern.
-    bytes[6] = (bytes[6] & 0x0F) | 0x70;
-    bytes[8] = (bytes[8] & 0x3F) | 0x80;
-    let g = |slice: &[u8]| slice.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    format!(
-        "ak:grant:{}-{}-{}-{}-{}",
-        g(&bytes[0..4]),
-        g(&bytes[4..6]),
-        g(&bytes[6..8]),
-        g(&bytes[8..10]),
-        g(&bytes[10..16]),
-    )
-}
-
-/// Map a participation scope to a capability `resource-selector` object. The
-/// grant authorizes the agent over the scope's realm (Realm scope) or the
-/// specific strand (Strand scope); a Circle scope narrows to the circle id.
-pub(super) fn participation_scope_resource(scope: &AgentParticipationScope) -> Value {
-    match scope {
-        AgentParticipationScope::Realm { realm_id } => {
-            json!({ "kind": "realm", "realm_id": realm_id.as_str() })
-        }
-        AgentParticipationScope::Circle {
-            realm_id,
-            circle_id,
-        } => {
-            json!({ "kind": "circle", "realm_id": realm_id.as_str(), "circle_id": circle_id.as_str() })
-        }
-        AgentParticipationScope::Strand {
-            realm_id,
-            strand_id,
-        } => {
-            json!({ "kind": "strand", "realm_id": realm_id.as_str(), "strand_id": strand_id.as_str() })
-        }
-    }
 }
 
 pub(super) fn normalize_sidecar_exposure_ack(

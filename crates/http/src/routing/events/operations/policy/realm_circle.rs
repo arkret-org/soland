@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+
 use super::*;
 
 pub(super) fn realm_frozen_operation_exempt(kind: &str) -> bool {
@@ -260,7 +262,9 @@ pub(super) async fn sidecar_member_state_shape_is_constrained(
         return false;
     };
     let record_matches = records.iter().any(|record| {
-        record.id == target && record.controller_id == controller && record.state == "active"
+        record.id == target
+            && record.controller_id == controller
+            && record.state == AgentLifecycleState::Active
     });
     if !record_matches {
         return false;

@@ -1,3 +1,5 @@
+use arkret_wire::OpaqueLocalId;
+
 use super::{AgentPrincipalRecord, PersistenceResult, Value, async_trait};
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
@@ -38,21 +40,22 @@ pub fn agent_participation_record_key(record: &Value) -> (Option<String>, Option
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeActivation {
     pub agent_id: String,
-    pub approval_request_id: String,
+    pub approval_request_id: OpaqueLocalId,
     pub runtime_key_binding_digest: String,
-    pub pairing_request_id: String,
+    pub pairing_request_id: OpaqueLocalId,
     pub paired_request_digest: String,
     pub authorized_event_ref: String,
     pub authorized_verification_method: String,
     pub authorized_public_key_digest: String,
-    pub authorized_signing_key_binding: Value,
+    pub authorized_signing_key_binding:
+        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeApprovalWrite {
     pub agent_id: String,
-    pub pairing_request_id: String,
-    pub approval_request_id: String,
+    pub pairing_request_id: OpaqueLocalId,
+    pub approval_request_id: OpaqueLocalId,
     pub approval_notification_id: String,
     pub approval_requested_at: chrono::DateTime<chrono::Utc>,
     pub controller_account_id: String,
@@ -60,7 +63,8 @@ pub struct AgentRuntimeApprovalWrite {
     pub runtime_key_binding_digest: String,
     pub runtime_public_key_digest: String,
     pub runtime_attestation_digest: String,
-    pub runtime_key_request: Value,
+    pub runtime_key_request:
+        arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection,
 }
 #[async_trait]
 pub trait AgentStore: Send + Sync {
@@ -77,7 +81,7 @@ pub trait AgentStore: Send + Sync {
     async fn set_state(
         &self,
         agent_id: &str,
-        state: &str,
+        state: arkret_models_collaboration::agent_operations::AgentLifecycleState,
         changed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool>;
     async fn activate_runtime_if_current(

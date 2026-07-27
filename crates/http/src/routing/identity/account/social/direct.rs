@@ -1,3 +1,5 @@
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+
 use super::*;
 
 /// Capability the direct-conversation KeyPackage claim requires. MUST be a
@@ -49,7 +51,7 @@ pub(crate) async fn ensure_direct_peer_resolvable(
                 AppError::internal(format!("managed Agent lookup failed: {error}"))
             })?;
         if let Some(record) = managed_agent
-            && record.state == "active"
+            && record.state == AgentLifecycleState::Active
             && record.authorized_event_ref.is_some()
             && crate::routing::identity::managed_agent_pcr::validate_agent_controller_binding(
                 state,
@@ -518,7 +520,7 @@ async fn validate_direct_binding_event_refs(
                 .await
                 .map_err(|_| "direct_conversation_binding_invalid")?
                 .ok_or("direct_conversation_binding_invalid")?;
-            if record.controller_id != creator || record.state != "active" {
+            if record.controller_id != creator || record.state != AgentLifecycleState::Active {
                 return Err("managed_agent_record");
             }
             let provision_refs = record

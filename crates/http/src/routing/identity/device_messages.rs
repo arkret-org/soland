@@ -566,16 +566,29 @@ async fn active_agent_keypackage_endpoint(
         .key_packages()
         .await
         .map_err(|error| AppError::internal(format!("mls keypackage snapshot failed: {error}")))?;
-    let Some(authorize_event_id) = rows.iter().find_map(|row| {
-        (row.actor_id == principal_id
+    let mut authorize_event_id = None;
+    for row in &rows {
+        let lifecycle = row.lifecycle().map_err(|error| {
+            AppError::internal(format!(
+                "invalid persisted MLS KeyPackage lifecycle for `{}`: {error}",
+                row.id
+            ))
+        })?;
+        if row.actor_id == principal_id
             && row.device_id == device_id
             && row.agent_key_authorize_event_id.is_some()
-            && row.consumed_at.is_none()
-            && row.claimed_by_mls_group_id.as_deref() != Some("revoked")
-            && row.lifetime_not_after > now_unix)
-            .then(|| row.agent_key_authorize_event_id.clone())
-            .flatten()
-    }) else {
+            && matches!(
+                lifecycle.claim_state,
+                soland_services::events::PersistedKeyPackageClaimState::Available
+                    | soland_services::events::PersistedKeyPackageClaimState::Claimed { .. }
+            )
+            && row.lifetime_not_after > now_unix
+        {
+            authorize_event_id = row.agent_key_authorize_event_id.clone();
+            break;
+        }
+    }
+    let Some(authorize_event_id) = authorize_event_id else {
         return Ok(false);
     };
     let principal = arkret_identifiers::Did::new(principal_id.to_owned())

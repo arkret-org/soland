@@ -6,6 +6,9 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures_util::stream::BoxStream;
 use serde_json::Value;
+pub use soland_storage::{
+    AccountNotificationDeltaWrite, RecipientNotificationRecord, StoredAccountNotificationDelta,
+};
 
 use crate::ServiceResult;
 
@@ -26,12 +29,12 @@ pub trait ObjectStoragePort: Send + Sync {
 
 #[derive(Clone, Debug)]
 pub struct StoreNotificationCommand {
-    pub record: Value,
+    pub record: RecipientNotificationRecord,
 }
 
 #[derive(Clone, Debug)]
 pub struct StoreAccountNotificationDeltaCommand {
-    pub record: Value,
+    pub record: AccountNotificationDeltaWrite,
 }
 
 #[derive(Clone, Debug)]
@@ -48,15 +51,19 @@ pub struct ListRecipientNotificationsQuery {
 
 #[async_trait]
 pub trait NotificationWritePort: Send + Sync {
-    async fn store_notification(&self, record: Value) -> ServiceResult<()>;
-    async fn store_account_delta(&self, record: Value) -> ServiceResult<()>;
+    async fn store_notification(&self, record: RecipientNotificationRecord) -> ServiceResult<()>;
+    async fn store_account_delta(&self, record: AccountNotificationDeltaWrite)
+    -> ServiceResult<()>;
     async fn list_for_account(
         &self,
         controller_account_id: &str,
         recipient_service_id: &str,
         after_position: Option<i64>,
-    ) -> ServiceResult<Vec<Value>>;
-    async fn list_for_recipient(&self, recipient_id: &str) -> ServiceResult<Vec<Value>>;
+    ) -> ServiceResult<Vec<StoredAccountNotificationDelta>>;
+    async fn list_for_recipient(
+        &self,
+        recipient_id: &str,
+    ) -> ServiceResult<Vec<RecipientNotificationRecord>>;
 }
 
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
@@ -455,7 +462,7 @@ impl DeliveryService {
     pub async fn list_account_deltas(
         &self,
         query: ListAccountNotificationDeltasQuery,
-    ) -> ServiceResult<Vec<Value>> {
+    ) -> ServiceResult<Vec<StoredAccountNotificationDelta>> {
         self.notifications
             .list_for_account(
                 &query.controller_account_id,
@@ -468,7 +475,7 @@ impl DeliveryService {
     pub async fn list_recipient_notifications(
         &self,
         query: ListRecipientNotificationsQuery,
-    ) -> ServiceResult<Vec<Value>> {
+    ) -> ServiceResult<Vec<RecipientNotificationRecord>> {
         self.notifications
             .list_for_recipient(&query.recipient_id)
             .await
@@ -753,7 +760,7 @@ mod tests {
     use super::*;
 
     #[derive(Default)]
-    struct RecordingNotifications(Mutex<Vec<Value>>);
+    struct RecordingNotifications(Mutex<usize>);
 
     struct NoDeviceDelivery;
 
@@ -1034,13 +1041,19 @@ mod tests {
 
     #[async_trait]
     impl NotificationWritePort for RecordingNotifications {
-        async fn store_notification(&self, record: Value) -> ServiceResult<()> {
-            self.0.lock().expect("notification lock").push(record);
+        async fn store_notification(
+            &self,
+            _record: RecipientNotificationRecord,
+        ) -> ServiceResult<()> {
+            *self.0.lock().expect("notification lock") += 1;
             Ok(())
         }
 
-        async fn store_account_delta(&self, record: Value) -> ServiceResult<()> {
-            self.0.lock().expect("notification lock").push(record);
+        async fn store_account_delta(
+            &self,
+            _record: AccountNotificationDeltaWrite,
+        ) -> ServiceResult<()> {
+            *self.0.lock().expect("notification lock") += 1;
             Ok(())
         }
 
@@ -1049,12 +1062,15 @@ mod tests {
             _controller_account_id: &str,
             _recipient_service_id: &str,
             _after_position: Option<i64>,
-        ) -> ServiceResult<Vec<Value>> {
-            Ok(self.0.lock().expect("notification lock").clone())
+        ) -> ServiceResult<Vec<StoredAccountNotificationDelta>> {
+            Ok(Vec::new())
         }
 
-        async fn list_for_recipient(&self, _recipient_id: &str) -> ServiceResult<Vec<Value>> {
-            Ok(self.0.lock().expect("notification lock").clone())
+        async fn list_for_recipient(
+            &self,
+            _recipient_id: &str,
+        ) -> ServiceResult<Vec<RecipientNotificationRecord>> {
+            Ok(Vec::new())
         }
     }
 
@@ -1073,10 +1089,42 @@ mod tests {
         });
         service
             .store_notification(StoreNotificationCommand {
-                record: serde_json::json!({"notification_id": "notification:test"}),
+                record: RecipientNotificationRecord {
+                    notification: arkret_models_collaboration::objects::read_receipts::Notification {
+                        id: arkret_wire::NotificationId::new(
+                            "ak:notification:019fa233-5ab8-75c0-8497-376bafe172a4"
+                                .to_owned(),
+                        )
+                        .expect("notification id"),
+                        schema: arkret_models_collaboration::objects::read_receipts::NotificationSchema::V1,
+                        actor_id: arkret_wire::Did::new("did:web:alice.example".to_owned())
+                            .expect("actor DID"),
+                        source: arkret_models_collaboration::objects::read_receipts::NotificationSource::Event(
+                            arkret_models_collaboration::objects::read_receipts::NotificationEventSource {
+                                source_event_id: arkret_wire::EventId::new(
+                                    "ak:event:019fa233-5ab8-75c0-8497-376bafe172a5"
+                                        .to_owned(),
+                                )
+                                .expect("event id"),
+                                realm_id: None,
+                                source_ref: None,
+                                strand_id: None,
+                                track_name: None,
+                            },
+                        ),
+                        notification_kind: arkret_wire::NotificationKind::Message,
+                        priority: arkret_wire::NotificationPriority::Normal,
+                        state: arkret_wire::NotificationState::Unread,
+                        preview: None,
+                        created_at: chrono::Utc::now(),
+                        updated_at: None,
+                    },
+                    event_kind: arkret_wire::events::EventKind::MessageCreate,
+                    source_actor_id: None,
+                },
             })
             .await
             .expect("store notification");
-        assert_eq!(port.0.lock().expect("notification lock").len(), 1);
+        assert_eq!(*port.0.lock().expect("notification lock"), 1);
     }
 }

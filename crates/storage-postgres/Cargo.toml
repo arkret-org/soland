@@ -28,6 +28,7 @@ diesel = {workspace = true,features = ["postgres", "serde_json", "chrono", "uuid
 diesel-async = {workspace = true,features = ["postgres", "deadpool", "async-connection-wrapper"]}
 diesel_migrations = {workspace = true,features = ["postgres"]}
 parking_lot = {workspace = true}
+serde = {workspace = true}
 serde_json = {workspace = true}
 soland-storage = {workspace = true}
 tokio = {workspace = true,features = ["rt-multi-thread", "sync", "time", "macros", "net", "io-util"]}

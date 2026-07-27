@@ -1087,7 +1087,7 @@ impl MlsCommitQueryService {
 
 pub struct ClaimMlsKeyPackageCommand<'a> {
     pub id: &'a str,
-    pub mls_group_id: &'a str,
+    pub target: ClaimMlsKeyPackageTarget<'a>,
     pub intended_realm_id: Option<&'a str>,
     pub ssk_generation: Option<u64>,
     pub device_authorize_event_id: Option<&'a str>,
@@ -1095,6 +1095,13 @@ pub struct ClaimMlsKeyPackageCommand<'a> {
     pub claimed_at: i64,
     pub claim_expires_at_unix_ms: Option<i64>,
 }
+
+pub enum ClaimMlsKeyPackageTarget<'a> {
+    Group(&'a str),
+    Revoke,
+}
+
+pub use soland_storage::{PersistedKeyPackageClaimState, PersistedKeyPackageReusePolicy};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsKeyPackageState {
@@ -1119,6 +1126,19 @@ pub struct MlsKeyPackageState {
     pub claim_expires_at_unix_ms: Option<i64>,
     pub consumed_at: Option<i64>,
     pub created_at: i64,
+}
+
+impl MlsKeyPackageState {
+    pub fn lifecycle(&self) -> Result<soland_storage::PersistedKeyPackageLifecycle, String> {
+        soland_storage::classify_key_package_lifecycle(
+            self.last_resort,
+            self.last_resort_realm_id.as_deref(),
+            self.claimed_by_mls_group_id.as_deref(),
+            self.claimed_at,
+            self.claim_expires_at_unix_ms,
+            self.consumed_at,
+        )
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

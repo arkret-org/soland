@@ -1,10 +1,10 @@
 use super::{
     BTreeMap, MlsCommitEpochAdvance, MlsCommitEpochRecord, MlsCommitEpochStoreKey,
-    MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageRow, MlsKeyPackageStore,
-    MlsWelcomeRecord, MlsWelcomeStore, Mutex, PeerKeyPackageClaimAttempt,
-    PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, PersistenceResult, Uuid, Value, VecDeque, async_trait,
-    mls_epoch_key,
+    MlsCommitGenesis, MlsCommitStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget,
+    MlsKeyPackageRow, MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, Mutex,
+    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, Uuid, Value,
+    VecDeque, async_trait, mls_epoch_key,
 };
 
 #[derive(Default)]
@@ -25,6 +25,9 @@ impl MemoryMlsKeyPackageStore {
 #[async_trait]
 impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
     async fn put(&self, record: &MlsKeyPackageRow) -> PersistenceResult<bool> {
+        record
+            .lifecycle()
+            .map_err(PersistenceError::SchemaViolation)?;
         let mut state = self.state.lock();
         let fresh = !state.rows.contains_key(&record.id);
         state.rows.insert(record.id.clone(), record.clone());
@@ -54,7 +57,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let MlsKeyPackageClaim {
             id,
-            mls_group_id: group_id,
+            target,
             intended_realm_id,
             ssk_generation,
             device_authorize_event_id,
@@ -62,6 +65,10 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             claimed_at,
             claim_expires_at_unix_ms,
         } = claim;
+        let (group_id, revoking) = match target {
+            MlsKeyPackageClaimTarget::Group(group_id) => (group_id, false),
+            MlsKeyPackageClaimTarget::Revoke => ("revoked", true),
+        };
         let mut state = self.state.lock();
         let Some(row) = state.rows.get_mut(id) else {
             return Ok(None);
@@ -69,7 +76,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         if row.claimed_by_mls_group_id.as_deref() == Some("revoked") {
             return Ok(None);
         }
-        if group_id != "revoked"
+        if !revoking
             && (claimed_at >= row.lifetime_not_after
                 || claim_expires_at_unix_ms.is_some_and(|expires_at_unix_ms| {
                     expires_at_unix_ms <= claimed_at.saturating_mul(1000)
@@ -82,7 +89,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             .claimed_by_mls_group_id
             .as_deref()
             .is_some_and(|claimed| claimed != group_id)
-            && !(row.last_resort && group_id != "revoked")
+            && !(row.last_resort && !revoking)
         {
             // Already claimed by a different group — CAS loser path. A repeat
             // claim by the same group is idempotent renewal (mirrors the
@@ -104,7 +111,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         {
             return Ok(None);
         }
-        if row.last_resort && group_id != "revoked" {
+        if row.last_resort && !revoking {
             let Some(realm_id) = intended_realm_id else {
                 return Ok(None);
             };
@@ -121,8 +128,12 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             return Ok(Some(row.clone()));
         }
         row.claimed_by_mls_group_id = Some(group_id.to_owned());
-        row.claimed_at = Some(claimed_at);
-        row.claim_expires_at_unix_ms = claim_expires_at_unix_ms;
+        row.claimed_at = (!revoking).then_some(claimed_at);
+        row.claim_expires_at_unix_ms = if revoking {
+            None
+        } else {
+            claim_expires_at_unix_ms
+        };
         row.consumed_at = None;
         Ok(Some(row.clone()))
     }

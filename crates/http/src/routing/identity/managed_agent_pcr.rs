@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{Did, Hash, RealmId};
 use arkret_models_collaboration::agent_operations::{
-    AgentPcrRecoveryState, agent_requested_scope_digest,
+    AgentLifecycleState, AgentPcrRecoveryState, agent_requested_scope_digest,
 };
 use arkret_models_collaboration::event_sync::RealmSealFrontierView;
 use arkret_models_collaboration::events_payloads::agent::AgentKeyScope;
@@ -10,7 +10,7 @@ use arkret_models_crypto::{
     BackupKind, KeyBackup, KeyBackupRecipientMethod, ManagedFrontierRef, ManagedPrincipalBinding,
     RecoveryHpkeSuite, RecoveryKeyAgreementEntry, RecoveryKeyAgreementUse, RecoveryPolicy,
 };
-use arkret_wire::Seal;
+use arkret_wire::{DidUrl, Seal};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Utc};
@@ -38,8 +38,12 @@ pub(crate) fn allocate_principal_control_realm_id() -> Result<RealmId, AppError>
         .map_err(|error| AppError::internal(format!("allocated Agent PCR id invalid: {error}")))
 }
 
-pub(crate) fn controller_authorization_ref(agent_id: &str) -> String {
-    format!("{agent_id}#{CONTROLLER_DELEGATION_FRAGMENT}")
+pub(crate) fn controller_authorization_ref(agent_id: &str) -> Result<DidUrl, AppError> {
+    DidUrl::new(format!("{agent_id}#{CONTROLLER_DELEGATION_FRAGMENT}")).map_err(|error| {
+        AppError::internal(format!(
+            "generated Agent controller authorization ref is invalid: {error}"
+        ))
+    })
 }
 
 pub(crate) async fn persist_managed_agent_did_binding(
@@ -664,7 +668,8 @@ pub(crate) async fn managed_agent_record_for_controller_pcr(
         .await
         .map_err(|error| AppError::internal(format!("managed Agent PCR lookup failed: {error}")))?;
     Ok(agents.into_iter().find(|record| {
-        record.principal_control_realm_id == pcr_id && record.state != "deactivated"
+        record.principal_control_realm_id == pcr_id
+            && record.state != AgentLifecycleState::Deactivated
     }))
 }
 
@@ -1027,7 +1032,7 @@ async fn validate_binding_against_record(
         || binding.controller_id.as_str() != controller_id
         || binding.principal_control_realm_id.as_str() != pcr_id
         || binding.authorization_ref != authorization_ref
-        || record.state == "deactivated"
+        || record.state == AgentLifecycleState::Deactivated
     {
         return Err(schema_error(
             "managed_principal_binding does not match the current active Agent controller/PCR binding",

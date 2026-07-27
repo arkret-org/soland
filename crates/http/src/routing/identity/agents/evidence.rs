@@ -579,7 +579,6 @@ fn binding_for_event(
         (record.authorized_event_ref.as_deref() == Some(event.event_id.as_str()))
             .then(|| record.authorized_signing_key_binding.clone())
             .flatten()
-            .and_then(|value| serde_json::from_value(value).ok())
     })
 }
 

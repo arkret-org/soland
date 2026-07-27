@@ -64,7 +64,7 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                 .mls_key_packages()
                 .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                     id: keypackage_id,
-                    mls_group_id: group_id,
+                    target: soland_services::events::ClaimMlsKeyPackageTarget::Group(group_id),
                     intended_realm_id: intended_realm_id.as_deref(),
                     ssk_generation: None,
                     device_authorize_event_id: None,

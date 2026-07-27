@@ -18,6 +18,7 @@ use arkret_models_collaboration::account_lifecycle::{
     AccountRegisterOutcome, AccountRegisterRequestBody, AccountUpdateProfileRequestBody,
     AccountView,
 };
+use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
@@ -645,10 +646,10 @@ async fn managed_agent_direct_authorization_basis(
         )
         .with_private_detail(detail)
     };
-    if record.state != "active" {
+    if record.state != AgentLifecycleState::Active {
         return Err(unavailable(format!(
             "owned Agent is not active: agent_id={agent_id}, state={}",
-            record.state
+            record.state.as_wire_str()
         )));
     }
     if let Err(error) =
@@ -1620,8 +1621,9 @@ mod tests {
             "did:web:agents.example:assistant".to_owned(),
             "did:web:alice.example".to_owned(),
             "ak:realm:019f0000-0000-7000-8000-000000000001".to_owned(),
-            "ak:event:019f0000-0000-7000-8000-000000000002".to_owned(),
-            "active".to_owned(),
+            arkret_wire::DidUrl::new("did:web:agents.example:assistant#managed-controller")
+                .unwrap(),
+            AgentLifecycleState::Active,
             created_at,
         );
         record.provision_event_refs = Some(json!({

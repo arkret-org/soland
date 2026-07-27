@@ -146,12 +146,12 @@ impl AgentStore for MemoryAgentStore {
     async fn set_state(
         &self,
         agent_id: &str,
-        state: &str,
+        state: arkret_models_collaboration::agent_operations::AgentLifecycleState,
         changed_at: chrono::DateTime<chrono::Utc>,
     ) -> PersistenceResult<bool> {
         let mut guard = self.data.lock();
         if let Some(record) = guard.get_mut(agent_id) {
-            record.state = state.to_owned();
+            record.state = state;
             record.state_changed_at = Some(changed_at);
             record.updated_at = changed_at;
             Ok(true)
@@ -169,7 +169,11 @@ impl AgentStore for MemoryAgentStore {
             return Ok(false);
         };
         if record.approval_request_id.as_deref() != Some(&activation.approval_request_id)
-            || !matches!(record.state.as_str(), "active" | "paused")
+            || !matches!(
+                record.state,
+                arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+                    | arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused
+            )
             || record.runtime_key_binding_digest.as_deref()
                 != Some(&activation.runtime_key_binding_digest)
             || record.pairing_request_id.as_deref() != Some(&activation.pairing_request_id)
@@ -232,7 +236,11 @@ impl AgentStore for MemoryAgentStore {
             record.paired_pairing_request_id.as_deref() == Some(&write.pairing_request_id);
         if record.pairing_request_id.as_deref() != Some(&write.pairing_request_id)
             || pairing_handle_was_consumed
-            || !matches!(record.state.as_str(), "active" | "paused")
+            || !matches!(
+                record.state,
+                arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+                    | arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused
+            )
             || record
                 .runtime_key_binding_digest
                 .as_deref()

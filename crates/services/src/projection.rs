@@ -1489,6 +1489,8 @@ impl ProjectionService {
                 && row.consumed_at.is_none()
             {
                 row.claimed_by = Some("revoked".to_owned());
+                row.claimed_at = None;
+                row.claim_expires_at_unix_ms = None;
             }
         }
     }

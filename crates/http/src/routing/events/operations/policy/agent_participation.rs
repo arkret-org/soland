@@ -251,9 +251,13 @@ pub(super) async fn agent_lifecycle_rejection_reason(
         .await
         .map_err(|_| "agent_principal_lookup_unavailable")?
         .map(|record| record.state);
-    match record_state.as_deref() {
-        Some("paused") => return Ok(Some("agent_paused")),
-        Some("deactivated") => return Ok(Some("agent_deactivated")),
+    match record_state {
+        Some(arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused) => {
+            return Ok(Some("agent_paused"));
+        }
+        Some(arkret_models_collaboration::agent_operations::AgentLifecycleState::Deactivated) => {
+            return Ok(Some("agent_deactivated"));
+        }
         _ => {}
     }
 
@@ -470,7 +474,7 @@ async fn operation_agent_write_context(
             .is_some_and(|record| {
                 record.controller_id == executed_by
                     && record.principal_control_realm_id == operation.realm_id.as_str()
-                    && record.controller_authorization_ref == authorization_ref
+                    && record.controller_authorization_ref.as_str() == authorization_ref
             });
         if managed {
             return Ok(None);
