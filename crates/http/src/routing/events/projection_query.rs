@@ -403,7 +403,12 @@ fn document_projection_document(
         json!(projection_object_state(morph.state)),
     );
     if let Some(state_changed_at) = morph.state_changed_at {
-        document.insert("state_changed_at".to_owned(), json!(state_changed_at));
+        document.insert(
+            "state_changed_at".to_owned(),
+            Value::String(arkret_canonical::format_timestamp_canonical(
+                state_changed_at,
+            )),
+        );
     }
     document.insert("fields".to_owned(), json!(morph.fields));
     document.insert("body".to_owned(), body);
@@ -413,12 +418,20 @@ fn document_projection_document(
         "created_by".to_owned(),
         Value::String(morph.created_by.clone()),
     );
-    document.insert("created_at".to_owned(), json!(morph.created_at));
+    document.insert(
+        "created_at".to_owned(),
+        Value::String(arkret_canonical::format_timestamp_canonical(
+            morph.created_at,
+        )),
+    );
     if let Some(updated_by) = &morph.updated_by {
         document.insert("updated_by".to_owned(), Value::String(updated_by.clone()));
     }
     if let Some(updated_at) = morph.updated_at {
-        document.insert("updated_at".to_owned(), json!(updated_at));
+        document.insert(
+            "updated_at".to_owned(),
+            Value::String(arkret_canonical::format_timestamp_canonical(updated_at)),
+        );
     }
     serde_json::from_value(Value::Object(document))
         .map_err(|error| AppError::internal(format!("invalid document projection: {error}")))
@@ -438,7 +451,7 @@ fn document_projection_versions(morph: &MorphProjection) -> Vec<BTreeMap<String,
                 "version_id": version.version_id,
                 "event_id": version.event_id,
                 "author": author,
-                "created_at": version.created_at,
+                "created_at": arkret_canonical::format_timestamp_canonical(version.created_at),
                 "body_digest": version.body_digest,
                 "body": version.body,
             }))
