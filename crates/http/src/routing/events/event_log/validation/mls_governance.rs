@@ -67,7 +67,7 @@ pub(crate) fn projected_mls_governance_binding_covers_policy_root(
 }
 
 /// SEC-03 — project the `discussion_metadata_digest` the realm's current MLS
-/// epoch governance binding covers, so [`realm_policy_components_check`] can
+/// epoch governance binding covers, so [`realm_policy_bundle_check`] can
 /// recompute the `media_service_decrypts` fact and reject a stale / forged
 /// binding (`media-service-binding.md` §8.2 rule 5). Mirrors the cell-selection
 /// logic of [`projected_mls_governance_binding_covers_policy_root`]; returns the

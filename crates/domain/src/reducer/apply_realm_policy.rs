@@ -22,8 +22,8 @@ impl ProjectionState {
         operation: &Operation,
     ) -> ProjectionEffect {
         let kind = operation.object_kind.as_str();
-        if kind == arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS {
-            return self.apply_realm_policy_components(operation);
+        if kind == arkret_wire::events::EventKind::REALM_POLICY_BUNDLE {
+            return self.apply_realm_policy_bundle(operation);
         }
         if !matches!(
             kind,
@@ -210,14 +210,11 @@ impl ProjectionState {
         ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
     }
 
-    /// Project `ak.realm.policy_components` into the canonical Realm policy
+    /// Project `ak.realm.policy_bundle` into the canonical Realm policy
     /// components cell. The Event Envelope wire shape is a generic state
     /// payload (`{"value": ...}`), while reducer tests and Move-era callers may
     /// pass the value directly; both forms are accepted and normalized here.
-    pub(crate) fn apply_realm_policy_components(
-        &mut self,
-        operation: &Operation,
-    ) -> ProjectionEffect {
+    pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = state_payload_value(&operation.payload).clone();
         if let Some(join_policy) = value.get("join_policy")
@@ -284,7 +281,7 @@ impl ProjectionState {
             }
         }
         // realm-and-space.md §2.3.1 — `durability_policy` (Realm Recovery Key)
-        // is reducer-derived from `ak.realm.policy_components`. Validate its
+        // is reducer-derived from `ak.realm.policy_bundle`. Validate its
         // structural invariants and that `mode != none` is only declared on a
         // `content_scheme=mls_exporter_aead_v1` Realm (else
         // `durability_scheme_incompatible`). The effective scheme is the
@@ -296,9 +293,9 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        self.realm_policy_components_cells
+        self.realm_policy_bundle_cells
             .insert(realm_id.clone(), CellState::Value(value));
-        ProjectionEffect::RealmPolicyComponentsProjected { realm_id }
+        ProjectionEffect::RealmPolicyBundleProjected { realm_id }
     }
 
     pub(crate) fn apply_realm_disappearing_policy(
@@ -329,7 +326,7 @@ impl ProjectionState {
     /// Project `ak.realm.media_service` into the canonical
     /// `ak.component.realm.media_service.v1` cas-register cell consumed by
     /// the AKP-0010 media token exchange (`routing::interop::webrtc`). The
-    /// payload is normalized like `apply_realm_policy_components`, then the
+    /// payload is normalized like `apply_realm_policy_bundle`, then the
     /// `foci[]` array is required to be non-empty so a realm cannot advertise
     /// a media service that exposes no focus.
     pub(crate) fn apply_realm_media_service(&mut self, operation: &Operation) -> ProjectionEffect {

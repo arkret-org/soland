@@ -95,7 +95,7 @@ fn seed_invite(state: &mut ProjectionState, hlc: &ServerHlc, expires_at: &str) {
 fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, services: Vec<&str>) {
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             REALM,
             json!({
                 "third_party_invite_verification_services": services
@@ -105,7 +105,7 @@ fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, ser
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
 }
 

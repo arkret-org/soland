@@ -918,7 +918,7 @@ pub(crate) fn encryption_profile_requires_content_encryption(profile: Option<&st
         .is_some_and(|profile| !matches!(profile, "none" | "plaintext" | "allow_plaintext"))
 }
 
-/// Extract an encryption-floor field from a `ak.realm.policy_components`
+/// Extract an encryption-floor field from a `ak.realm.policy_bundle`
 /// value, accepting both the top-level and `/components/`-nested wire forms
 /// (mirrors `realm_join_policy_cell_value`).
 pub(crate) fn policy_floor_field<'a>(value: &'a Value, field: &str) -> Option<&'a str> {
@@ -948,7 +948,7 @@ pub(crate) fn metadata_floor_rank(floor: Option<&str>) -> u8 {
     }
 }
 
-/// Extract the Realm `content_scheme` field from a `ak.realm.policy_components`
+/// Extract the Realm `content_scheme` field from a `ak.realm.policy_bundle`
 /// value, accepting both the top-level and `/components/`-nested wire forms
 /// (mirrors [`policy_floor_field`]). Returns `None` when the field is absent.
 pub(crate) fn content_scheme_field(value: &Value) -> Option<&str> {
@@ -974,7 +974,7 @@ pub(crate) fn content_scheme_is_known(scheme: &str) -> bool {
     matches!(scheme.trim(), "mls_rfc9420" | "mls_exporter_aead_v1")
 }
 
-/// Extract the `durability_policy` object from a `ak.realm.policy_components`
+/// Extract the `durability_policy` object from a `ak.realm.policy_bundle`
 /// value, accepting both the top-level and `/components/`-nested wire forms
 /// (mirrors [`policy_floor_field`]). Returns `None` when the field is absent.
 pub(crate) fn durability_policy_field(value: &Value) -> Option<&Value> {

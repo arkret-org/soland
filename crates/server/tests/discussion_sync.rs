@@ -752,7 +752,7 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         alice_did,
         alice_device_id,
         &realm_id,
-        "ak.realm.policy_components",
+        "ak.realm.policy_bundle",
         json!({
             "value": {
                 "content_encryption_floor": "e2ee_required",
@@ -769,7 +769,7 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         alice_did,
         alice_device_id,
         &realm_id,
-        "ak.realm.policy_components",
+        "ak.realm.policy_bundle",
         json!({
             "value": {
                 "content_encryption_floor": "e2ee_required",

@@ -173,7 +173,7 @@ pub fn frozen_realm_check(realm_frozen: bool, kind: &str) -> Option<&'static str
     None
 }
 
-pub(super) fn policy_components_value_from_state_payload(payload: &Value) -> &Value {
+pub(super) fn policy_bundle_value_from_state_payload(payload: &Value) -> &Value {
     payload.get("value").unwrap_or(payload)
 }
 
@@ -245,7 +245,7 @@ pub fn cross_signing_reset_replay_check(
     Ok(())
 }
 
-/// Validate a `ak.realm.policy_components` payload. Spec T09 + T12 + SEC-03.
+/// Validate a `ak.realm.policy_bundle` payload. Spec T09 + T12 + SEC-03.
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
@@ -261,7 +261,7 @@ pub fn cross_signing_reset_replay_check(
 ///    band. `binding_discussion_metadata_digest` is the digest the current epoch governance binding
 ///    covers, as projected from the realm's MLS cell; `None` means the binding carried no digest,
 ///    in which case only the policy_root coverage gate (check 3) applies.
-pub fn realm_policy_components_check(
+pub fn realm_policy_bundle_check(
     payload: &Value,
     active_profiles: &[String],
     media_plaintext_service_present: bool,
@@ -273,7 +273,7 @@ pub fn realm_policy_components_check(
             |reason| {
                 (
                     ErrorCode::SchemaViolation,
-                    format!("ak.realm.policy_components.join_policy invalid: {reason}"),
+                    format!("ak.realm.policy_bundle payload path join_policy invalid: {reason}"),
                 )
             },
         )?;
@@ -380,7 +380,7 @@ pub fn realm_policy_components_check(
 }
 
 /// SEC-03 — build a `arkret_models_crypto::MediaDecryptPolicyValue`
-/// from a `ak.realm.policy_components` payload and derive its canonical
+/// from a `ak.realm.policy_bundle` payload and derive its canonical
 /// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
 /// digest derivation fails (it never does for well-formed input), so callers
 /// treat that as a fail-closed mismatch.

@@ -69,7 +69,7 @@ pub(super) fn agent_participation_ceiling_change(
             .map(ToOwned::to_owned)
     };
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS) => {
+        Some(arkret_wire::events::EventKind::REALM_POLICY_BUNDLE) => {
             let value = find()?;
             Some((
                 "realm",

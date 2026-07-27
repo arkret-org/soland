@@ -152,8 +152,8 @@ impl ProjectionState {
         let Some(subject_proof) = payload.get("subject_proof") else {
             return rejected("subject_proof_required");
         };
-        let realm_policy_components = self
-            .realm_policy_components_cell_value(operation.realm_id.as_str())
+        let realm_policy_bundle = self
+            .realm_policy_bundle_cell_value(operation.realm_id.as_str())
             .cloned();
 
         let Some(invite) = self.invites.get_mut(&invite_id) else {
@@ -207,7 +207,7 @@ impl ProjectionState {
             &claim_nonce,
             admission_time,
             invite.expires_at,
-            realm_policy_components.as_ref(),
+            realm_policy_bundle.as_ref(),
         ) {
             return rejected(reason);
         }
@@ -383,7 +383,7 @@ fn validate_binding_proof(
     claim_nonce: &str,
     now: chrono::DateTime<chrono::Utc>,
     invite_expires_at: chrono::DateTime<chrono::Utc>,
-    realm_policy_components: Option<&Value>,
+    realm_policy_bundle: Option<&Value>,
 ) -> Result<(), &'static str> {
     let binding_proof: arkret_models_collaboration::governance::membership_invite::InviteClaimBindingProof =
         serde_json::from_value(binding_proof.clone()).map_err(|_| "binding_proof_invalid")?;
@@ -398,7 +398,7 @@ fn validate_binding_proof(
     if service_id != expected_service_id {
         return Err("verification_service_not_authorized");
     }
-    if !realm_policy_components.is_some_and(|value| value_allowlists_service(value, service_id)) {
+    if !realm_policy_bundle.is_some_and(|value| value_allowlists_service(value, service_id)) {
         return Err("verification_service_not_authorized");
     }
     if binding_proof.subject_id.as_str() != subject_id {

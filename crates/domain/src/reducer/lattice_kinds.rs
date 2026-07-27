@@ -21,7 +21,7 @@ pub use arkret_lattice_registry::{
     RealmDeliveryBindingPolicy, RealmDestroy, RealmDisappearingPolicy, RealmDiscovery, RealmFreeze,
     RealmHistorySharingPolicy, RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule,
     RealmLink, RealmMediaService, RealmModerationPolicy, RealmOrganization,
-    RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyComponents, RealmPolicyServer,
+    RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyBundle, RealmPolicyServer,
     RealmPreviewPolicy, RealmReadReceiptPolicy, RealmSchema, RealmSearchPolicy, RealmTombstone,
     RealmUpgrade, SessionGrant, SpaceParent, StrandPosition, StrandStage, ViewCreate,
     ViewReconcile, ViewUpdate, build_sdk_cell_registry, default_lattice_registry,

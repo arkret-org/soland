@@ -130,9 +130,7 @@ fn derive_cursor_handle_is_deterministic_and_spec_shaped() {
 #[test]
 fn initial_security_baseline_is_limited_to_current_create_and_policy_facets() {
     assert!(required_security_baseline_kind("ak.realm.create"));
-    assert!(required_security_baseline_kind(
-        "ak.realm.policy_components"
-    ));
+    assert!(required_security_baseline_kind("ak.realm.policy_bundle"));
     assert!(!required_security_baseline_kind("ak.message.create"));
     assert!(!required_security_baseline_kind(
         "ak.realm.history_visibility"

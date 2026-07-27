@@ -51,7 +51,7 @@ pub(crate) async fn validate_history_visibility_content_scheme_policy(
     match kinds::canonical_kind_for_operation(operation) {
         Some(arkret_wire::events::EventKind::REALM_CREATE)
         | Some(arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY)
-        | Some(arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS) => {}
+        | Some(arkret_wire::events::EventKind::REALM_POLICY_BUNDLE) => {}
         _ => return Ok(()),
     }
     let realm_id = operation.realm_id.as_str();
@@ -160,8 +160,8 @@ async fn intended_content_scheme_for_realm(
             continue;
         }
         if kinds::canonical_kind_for_operation(operation)
-            == Some(arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS)
-            && let Some(value) = policy_components_content_scheme(&operation.payload)
+            == Some(arkret_wire::events::EventKind::REALM_POLICY_BUNDLE)
+            && let Some(value) = policy_bundle_content_scheme(&operation.payload)
         {
             return Some(value);
         }
@@ -209,7 +209,7 @@ async fn intended_encryption_profile_for_realm(
         .and_then(|meta| meta.encryption_profile)
 }
 
-fn policy_components_content_scheme(payload: &Value) -> Option<String> {
+fn policy_bundle_content_scheme(payload: &Value) -> Option<String> {
     let value = projection_context_stripped_payload(payload);
     let value = value.get("value").unwrap_or(&value);
     value

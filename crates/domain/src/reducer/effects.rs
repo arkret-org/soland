@@ -140,9 +140,9 @@ pub enum ProjectionEffect {
     DeliveryBindingPolicyProjected {
         realm_id: String,
     },
-    /// `ak.realm.policy_components` projected into the canonical
-    /// `ak.component.realm.policy_components.v1` cas-register cell.
-    RealmPolicyComponentsProjected {
+    /// `ak.realm.policy_bundle` projected into the canonical
+    /// `ak.component.realm.policy_bundle.v1` cas-register cell.
+    RealmPolicyBundleProjected {
         realm_id: String,
     },
     /// A registry-validated Realm bootstrap facet was written to its exact

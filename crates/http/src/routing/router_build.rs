@@ -75,6 +75,10 @@ pub fn router_with_rate_limiter_and_request_size_config(
     };
     let router = Router::new()
         .hoop(crate::metrics::MetricsMiddleware)
+        // scalability-constraints.md 2.1.8 orders the Content-Encoding rejection (step 3)
+        // ahead of the Content-Length precheck (step 4), so this hoop precedes SecureMaxSize:
+        // an encoded body must fail 415 on the coding, not 413 on a size it never legally had.
+        .hoop(soland_http::content_encoding::RejectContentEncodingMiddleware)
         .hoop(SecureMaxSize::new(max_request_size_bytes))
         .hoop(affix_state::inject(error_exposure))
         .hoop(affix_state::inject(state))

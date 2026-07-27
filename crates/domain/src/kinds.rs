@@ -321,7 +321,7 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
 }
 
 /// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /
-/// `ak.realm.policy_components`) declare the minimal-metadata profile
+/// `ak.realm.policy_bundle`) declare the minimal-metadata profile
 /// [`arkret_mls::MINIMAL_METADATA_REALM_PROFILE`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///

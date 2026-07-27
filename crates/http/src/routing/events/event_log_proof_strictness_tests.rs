@@ -260,7 +260,7 @@ fn declared_required_feature_is_accepted() {
 }
 
 #[tokio::test]
-async fn policy_components_media_plaintext_reads_realm_meta() {
+async fn policy_bundle_media_plaintext_reads_realm_meta() {
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let now = chrono::Utc::now();
@@ -844,7 +844,7 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
 }
 
 #[test]
-fn policy_components_mls_governance_reads_projection_cell() {
+fn policy_bundle_mls_governance_reads_projection_cell() {
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000001";
     let policy_root = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -1795,7 +1795,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     if include_relaxed_policy {
         let policy_move_id = data_event_move_id(0xb2);
         let policy_cell = arkret_identifiers::CellRef::new(
-            "ak:cell:ak.component.realm.policy_components.v1:null".to_owned(),
+            "ak:cell:ak.component.realm.policy_bundle.v1:null".to_owned(),
         )
         .unwrap();
         let policy_op = arkret_wire::LatticeOp {

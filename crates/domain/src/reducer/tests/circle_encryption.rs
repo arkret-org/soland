@@ -215,7 +215,7 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
         };
         state.apply(
             &make_operation(
-                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
                 realm,
                 payload,
             ),
@@ -225,12 +225,12 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
     // baseline allow_plaintext -> projected
     assert!(matches!(
         apply_floor(&mut state, Some("allow_plaintext")),
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     // in-place enable: allow_plaintext -> e2ee_required is accepted
     assert!(matches!(
         apply_floor(&mut state, Some("e2ee_required")),
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     // downgrade e2ee_required -> allow_plaintext is rejected
     assert!(matches!(
@@ -252,7 +252,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     let apply_meta = |state: &mut ProjectionState, level: &str| {
         state.apply(
             &make_operation(
-                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
                 realm,
                 serde_json::json!({ "metadata_encryption_floor": level }),
             ),
@@ -261,7 +261,7 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     };
     assert!(matches!(
         apply_meta(&mut state, "e2ee_required"),
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     // tightening to the same level is fine; lowering is rejected
     assert!(matches!(
@@ -285,7 +285,7 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
         };
         state.apply(
             &make_operation(
-                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
                 realm,
                 payload,
             ),
@@ -295,17 +295,17 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
     // baseline mls_rfc9420 -> projected
     assert!(matches!(
         apply_scheme(&mut state, Some("mls_rfc9420")),
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     // upgrade rfc9420 -> exporter-aead is accepted
     assert!(matches!(
         apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     // re-asserting the same scheme is an idempotent no-op (accepted)
     assert!(matches!(
         apply_scheme(&mut state, Some("mls_exporter_aead_v1")),
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     // downgrade exporter-aead -> rfc9420 is rejected
     assert!(matches!(
@@ -328,7 +328,7 @@ fn content_scheme_rejects_unknown_value() {
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892064";
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
         ),
@@ -365,7 +365,7 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({ "content_scheme": "mls_rfc9420" }),
         ),
@@ -399,7 +399,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({ "content_scheme": "mls_exporter_aead_v1" }),
         ),
@@ -407,7 +407,7 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
 }
 
@@ -433,7 +433,7 @@ fn content_scheme_falls_back_to_realm_create_log() {
     );
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({ "content_scheme": "mls_rfc9420" }),
         ),
@@ -462,7 +462,7 @@ fn durability_policy_requires_exporter_aead_scheme() {
     // No scheme committed yet (defaults to mls_rfc9420) → incompatible.
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({
                 "durability_policy": {
@@ -494,7 +494,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
     // Same-update set of scheme + durability policy is accepted.
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({
                 "content_scheme": "mls_exporter_aead_v1",
@@ -508,7 +508,7 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
     );
     assert!(matches!(
         effect,
-        ProjectionEffect::RealmPolicyComponentsProjected { .. }
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
     ));
     let projected = state
         .realm_durability_policy(realm)
@@ -529,7 +529,7 @@ fn durability_policy_rejects_empty_recipients() {
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d003";
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({
                 "content_scheme": "mls_exporter_aead_v1",
@@ -560,7 +560,7 @@ fn durability_policy_threshold_validates_k_of_n() {
     // n=3 but only 2 recipients → invalid.
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             realm,
             serde_json::json!({
                 "content_scheme": "mls_exporter_aead_v1",

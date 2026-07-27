@@ -430,39 +430,34 @@ pub(super) fn seal_view_declares_relaxed_e2ee(
     >,
 ) -> bool {
     let Ok(policy_cell) = arkret_identifiers::CellRef::new(
-        "ak:cell:ak.component.realm.policy_components.v1:null".to_owned(),
+        "ak:cell:ak.component.realm.policy_bundle.v1:null".to_owned(),
     ) else {
         return false;
     };
-    let Some(arkret_state::lattice::CellState::Value(policy_components)) =
+    let Some(arkret_state::lattice::CellState::Value(policy_bundle)) =
         state_at_ref.get(&policy_cell)
     else {
         return false;
     };
-    policy_components_declare_relaxed_e2ee(policy_components_value_from_state_payload(
-        policy_components,
-    ))
+    policy_bundle_declare_relaxed_e2ee(policy_bundle_value_from_state_payload(policy_bundle))
 }
 
-pub(super) fn policy_components_declare_relaxed_e2ee(policy_components: &Value) -> bool {
-    profile_array_contains(policy_components.get("profiles"), E2EE_RELAXED_PROFILE)
+pub(super) fn policy_bundle_declare_relaxed_e2ee(policy_bundle: &Value) -> bool {
+    profile_array_contains(policy_bundle.get("profiles"), E2EE_RELAXED_PROFILE)
+        || profile_array_contains(policy_bundle.get("active_profiles"), E2EE_RELAXED_PROFILE)
         || profile_array_contains(
-            policy_components.get("active_profiles"),
+            policy_bundle.pointer("/components/profiles"),
             E2EE_RELAXED_PROFILE,
         )
         || profile_array_contains(
-            policy_components.pointer("/components/profiles"),
+            policy_bundle.pointer("/components/active_profiles"),
             E2EE_RELAXED_PROFILE,
         )
-        || profile_array_contains(
-            policy_components.pointer("/components/active_profiles"),
-            E2EE_RELAXED_PROFILE,
-        )
-        || policy_components
+        || policy_bundle
             .pointer("/e2ee_relaxed/profile")
             .and_then(Value::as_str)
             == Some(E2EE_RELAXED_PROFILE)
-        || policy_components
+        || policy_bundle
             .pointer("/components/e2ee_relaxed/profile")
             .and_then(Value::as_str)
             == Some(E2EE_RELAXED_PROFILE)

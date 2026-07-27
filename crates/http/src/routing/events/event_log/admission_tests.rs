@@ -97,16 +97,16 @@ fn cross_signing_reset_replay_passes_when_matched() {
 }
 
 #[test]
-fn realm_policy_components_relaxed_window_ceiling() {
+fn realm_policy_bundle_relaxed_window_ceiling() {
     let payload = json!({"e2ee_relaxed": {"relaxed_window_max_ms": 300_001 }});
-    let err = realm_policy_components_check(&payload, &[], false, false, None).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, &[], false, false, None).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
-fn realm_policy_components_e2ee_relaxed_compliance_mutex() {
+fn realm_policy_bundle_e2ee_relaxed_compliance_mutex() {
     let payload = json!({"e2ee_relaxed": {"profile": "ak.profile.e2ee_relaxed.v1"}});
-    let err = realm_policy_components_check(
+    let err = realm_policy_bundle_check(
         &payload,
         &["ak.profile.attested_audit.e2ee.v1".to_owned()],
         false,
@@ -118,18 +118,18 @@ fn realm_policy_components_e2ee_relaxed_compliance_mutex() {
 }
 
 #[test]
-fn realm_policy_components_media_plaintext_triple_binding() {
+fn realm_policy_bundle_media_plaintext_triple_binding() {
     let payload = json!({"media_service_decrypts": true});
-    let err = realm_policy_components_check(&payload, &[], false, true, None).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, &[], false, true, None).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
-    let err2 = realm_policy_components_check(&payload, &[], true, false, None).unwrap_err();
+    let err2 = realm_policy_bundle_check(&payload, &[], true, false, None).unwrap_err();
     assert_eq!(err2.0, ErrorCode::FailedPrecondition);
     // No binding digest projected → only the policy_root coverage gate runs.
-    realm_policy_components_check(&payload, &[], true, true, None).unwrap();
+    realm_policy_bundle_check(&payload, &[], true, true, None).unwrap();
 }
 
 #[test]
-fn realm_policy_components_media_decrypt_digest_recompute_gate() {
+fn realm_policy_bundle_media_decrypt_digest_recompute_gate() {
     // SEC-03 — `media_service_decrypts=true` with an authorised plaintext
     // service: the digest the governance binding covers MUST equal the
     // digest recomputed from the policy cell value, else fail closed with
@@ -160,17 +160,16 @@ fn realm_policy_components_media_decrypt_digest_recompute_gate() {
     .unwrap();
 
     // Matching digest → accepted.
-    realm_policy_components_check(&payload, &[], true, true, Some(honest.as_str())).unwrap();
+    realm_policy_bundle_check(&payload, &[], true, true, Some(honest.as_str())).unwrap();
 
     // Mismatching digest (attacker asserts decrypt fact not covered by the
     // member-visible metadata) → rejected, fail closed.
     let stale = format!("sha256:{}", "c".repeat(64));
-    let err = realm_policy_components_check(&payload, &[], true, true, Some(&stale)).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, &[], true, true, Some(&stale)).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 
     // A malformed covered digest is also rejected (cannot be trusted).
-    let err =
-        realm_policy_components_check(&payload, &[], true, true, Some("not-a-hash")).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, &[], true, true, Some("not-a-hash")).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 

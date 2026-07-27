@@ -242,7 +242,7 @@ pub(in crate::routing) fn realm_is_indexed(state: &AppState, realm_id: &str) -> 
 /// Spec realm-and-space.md §2.6 step 2 — when a `ak.realm.create` event
 /// commits, materialise the in-memory Realm index entry with the
 /// creator as the first member so subsequent facet events (join_rule /
-/// history_visibility / discovery / policy_components / ...) from the
+/// history_visibility / discovery / policy_bundle / ...) from the
 /// same actor pass the regular `realm_has_member` check without a
 /// separate `ak.member.state(join)` event.
 ///

@@ -739,7 +739,7 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: &[],
             validate: Some(validate_read_receipt_policy_payload),
         },
-        arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS => OperationPayloadSchema {
+        arkret_wire::events::EventKind::REALM_POLICY_BUNDLE => OperationPayloadSchema {
             requirements: REALM_POLICY_VALUE_REQUIREMENTS,
             validate: None,
         },

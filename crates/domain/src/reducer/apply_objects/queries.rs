@@ -374,15 +374,15 @@ impl ProjectionState {
         )
     }
 
-    pub fn realm_policy_components_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        match self.realm_policy_components_cells.get(realm_id)? {
+    pub fn realm_policy_bundle_cell_value(&self, realm_id: &str) -> Option<&Value> {
+        match self.realm_policy_bundle_cells.get(realm_id)? {
             CellState::Value(value) => Some(value),
             CellState::Bottom(_) => None,
         }
     }
 
     pub fn realm_join_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let components = self.realm_policy_components_cell_value(realm_id)?;
+        let components = self.realm_policy_bundle_cell_value(realm_id)?;
         components
             .get("join_policy")
             .or_else(|| components.pointer("/components/join_policy"))
@@ -774,31 +774,31 @@ impl ProjectionState {
     }
 
     /// Effective Realm `content_encryption_floor` projected from the
-    /// `ak.component.realm.policy_components.v1` cell. `None` means the spec
+    /// `ak.component.realm.policy_bundle.v1` cell. `None` means the spec
     /// default `allow_plaintext`. Independent of `encryption_profile`, which
     /// only declares the encryption mechanism (realm-and-space.md §2.3).
     pub fn realm_content_encryption_floor(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_components_cell_value(realm_id)?;
+        let components = self.realm_policy_bundle_cell_value(realm_id)?;
         policy_floor_field(components, "content_encryption_floor").map(ToOwned::to_owned)
     }
 
     /// Effective Realm `metadata_encryption_floor` projected from the
-    /// `ak.component.realm.policy_components.v1` cell. `None` means the
+    /// `ak.component.realm.policy_bundle.v1` cell. `None` means the
     /// reducer default is inferred elsewhere (`e2ee_required` for MLS /
     /// e2ee_required Realms, else `allow_plaintext`).
     pub fn realm_metadata_encryption_floor(&self, realm_id: &str) -> Option<String> {
-        let components = self.realm_policy_components_cell_value(realm_id)?;
+        let components = self.realm_policy_bundle_cell_value(realm_id)?;
         policy_floor_field(components, "metadata_encryption_floor").map(ToOwned::to_owned)
     }
 
     /// Effective Realm `content_scheme` projected from the
-    /// `ak.component.realm.policy_components.v1` cell, falling back to the
+    /// `ak.component.realm.policy_bundle.v1` cell, falling back to the
     /// create-log genesis value. `None` means no scheme has been negotiated
     /// yet — callers treat that as the application-message default
     /// (`mls_rfc9420`). Drives the one-way `content_scheme` ratchet in
-    /// `apply_realm_policy_components`.
+    /// `apply_realm_policy_bundle`.
     pub fn realm_content_scheme(&self, realm_id: &str) -> Option<String> {
-        self.realm_policy_components_cell_value(realm_id)
+        self.realm_policy_bundle_cell_value(realm_id)
             .and_then(content_scheme_field)
             .or_else(|| {
                 self.realm_create_log(realm_id)
@@ -825,7 +825,7 @@ impl ProjectionState {
     }
 
     /// Effective Realm `durability_policy` (Realm Recovery Key, realm-and-space.md
-    /// §2.3.1) projected from the `ak.component.realm.policy_components.v1` cell.
+    /// §2.3.1) projected from the `ak.component.realm.policy_bundle.v1` cell.
     /// `None` means no policy has been declared yet — callers treat that as the
     /// spec default `mode=none` (no organizational recovery path). Deserialized
     /// into the authoritative SDK [`arkret_models_collaboration::objects::realm::DurabilityPolicy`]
@@ -835,7 +835,7 @@ impl ProjectionState {
         &self,
         realm_id: &str,
     ) -> Option<arkret_models_collaboration::objects::realm::DurabilityPolicy> {
-        let components = self.realm_policy_components_cell_value(realm_id)?;
+        let components = self.realm_policy_bundle_cell_value(realm_id)?;
         let durability = crate::reducer::durability_policy_field(components)?;
         serde_json::from_value(durability.clone()).ok()
     }

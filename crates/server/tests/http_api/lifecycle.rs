@@ -396,7 +396,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
 
     // Content admission is decoupled from `encryption_profile` (the MLS
     // mechanism) and gated on the effective `content_encryption_floor`. The
-    // Realm raises its floor to `e2ee_required` via `ak.realm.policy_components`;
+    // Realm raises its floor to `e2ee_required` via `ak.realm.policy_bundle`;
     // the reducer projection then rejects plaintext private Strand content.
     {
         let hlc = soland_domain::hlc::ServerHlc::new("lifecycle-test");
@@ -409,7 +409,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                 ))
                 .unwrap(),
                 arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap(),
-                arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+                arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
                 serde_json::json!({ "content_encryption_floor": "e2ee_required" }),
             ),
             &hlc,

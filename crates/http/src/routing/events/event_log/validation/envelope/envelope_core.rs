@@ -370,17 +370,17 @@ pub(crate) async fn validate_event_envelope_with_context(
             ));
         }
     }
-    // Round R2/R3 (T09 + T12) — realm.policy_components hard ceiling,
+    // Round R2/R3 (T09 + T12) — realm.policy_bundle hard ceiling,
     // e2ee_relaxed mutex, and media plaintext triple binding. Active
     // profile set comes from the submitted policy-components payload;
     // cross-policy bindings come from the materialized Realm metadata /
     // MLS cells, with the current payload used only for same-event writes.
-    if kind == "ak.realm.policy_components" {
+    if kind == "ak.realm.policy_bundle" {
         let payload = object.get("payload").cloned().unwrap_or(Value::Null);
-        let policy_components = policy_components_value_from_state_payload(&payload);
+        let policy_bundle = policy_bundle_value_from_state_payload(&payload);
         // Best-effort: collect active profiles from the payload's own
         // `profiles[]` field plus any payload-asserted "active_profiles".
-        let mut active_profiles: Vec<String> = policy_components
+        let mut active_profiles: Vec<String> = policy_bundle
             .get("profiles")
             .and_then(Value::as_array)
             .map(|arr| {
@@ -389,7 +389,7 @@ pub(crate) async fn validate_event_envelope_with_context(
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(extra) = policy_components
+        if let Some(extra) = policy_bundle
             .get("active_profiles")
             .and_then(Value::as_array)
         {
@@ -400,17 +400,13 @@ pub(crate) async fn validate_event_envelope_with_context(
             }
         }
         let media_plaintext_service_present =
-            projected_media_plaintext_service_present(state, &realm_id, policy_components).await;
+            projected_media_plaintext_service_present(state, &realm_id, policy_bundle).await;
         let mls_governance_binding_covers_policy_root =
-            projected_mls_governance_binding_covers_policy_root(
-                state,
-                &realm_id,
-                policy_components,
-            );
+            projected_mls_governance_binding_covers_policy_root(state, &realm_id, policy_bundle);
         let binding_discussion_metadata_digest =
             projected_mls_governance_binding_metadata_digest(state, &realm_id);
-        if let Err((code, reason)) = realm_policy_components_check(
-            policy_components,
+        if let Err((code, reason)) = realm_policy_bundle_check(
+            policy_bundle,
             &active_profiles,
             media_plaintext_service_present,
             mls_governance_binding_covers_policy_root,

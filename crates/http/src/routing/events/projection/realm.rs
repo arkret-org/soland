@@ -204,7 +204,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                 }
             }
             // SEC-08 — latch the minimal-metadata declaration. A subsequent
-            // `ak.realm.policy_components` that declares the profile flips the
+            // `ak.realm.policy_bundle` that declares the profile flips the
             // realm into minimal-metadata mode; soland never relaxes it back.
             if !record.minimal_metadata_realm
                 && kinds::payload_declares_minimal_metadata_realm(&operation.payload)

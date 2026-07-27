@@ -9,7 +9,7 @@ pub(crate) async fn realm_requires_content_encryption(state: &AppState, realm_id
 
 /// Whether the Realm's effective `content_encryption_floor` requires E2EE
 /// content, read from the authoritative reducer projection (set by
-/// `ak.realm.policy_components`). This is independent of `encryption_profile`,
+/// `ak.realm.policy_bundle`). This is independent of `encryption_profile`,
 /// which only declares the encryption mechanism: a `mls_rfc9420` Realm admits
 /// plaintext content until its content floor is raised to `e2ee_required`
 /// (realm-and-space.md §2.3 / §2.5, circle.md §7). The floor is a one-way

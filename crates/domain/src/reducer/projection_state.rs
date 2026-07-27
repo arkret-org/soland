@@ -133,7 +133,7 @@ pub struct ProjectionState {
     pub realm_metadata_cells: BTreeMap<String, CellState>,
     pub realm_create_cells: BTreeMap<String, CellState>,
     pub realm_notary_cells: BTreeMap<String, CellState>,
-    pub realm_policy_components_cells: BTreeMap<String, CellState>,
+    pub realm_policy_bundle_cells: BTreeMap<String, CellState>,
     /// Other canonical null-subject Realm facets keyed by
     /// `(realm_id, canonical_cell_ref)`.
     pub realm_null_subject_cells: BTreeMap<(String, String), CellState>,
@@ -897,8 +897,8 @@ impl ProjectionState {
                     self.realm_notary_cells
                         .insert(realm_id.to_string(), resolved);
                 }
-                "ak:cell:ak.component.realm.policy_components.v1:null" => {
-                    self.realm_policy_components_cells
+                "ak:cell:ak.component.realm.policy_bundle.v1:null" => {
+                    self.realm_policy_bundle_cells
                         .insert(realm_id.to_string(), resolved);
                 }
                 _ if cell.as_str().ends_with(":null") => {

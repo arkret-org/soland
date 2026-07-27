@@ -300,7 +300,7 @@ pub struct RealmMetaRecord {
     /// SEC-08 — the Realm declared `ak.profile.mls.minimal_metadata_realm.v1`
     /// (`crypto-media/encryption-and-audit.md` §2.9). Projected from the
     /// `profiles[]` / `active_profiles[]` declaration on a `ak.realm.create` /
-    /// `ak.realm.policy_components` operation. Once observed it latches true:
+    /// `ak.realm.policy_bundle` operation. Once observed it latches true:
     /// soland is not the committer and never relaxes a minimal-metadata Realm
     /// back to a wider profile on its own. Drives the server-side
     /// defence-in-depth reject of non-`hidden` `aad_visibility_event_id` on

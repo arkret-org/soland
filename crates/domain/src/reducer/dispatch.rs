@@ -663,14 +663,14 @@ fn apply_delivery_binding_policy_dispatch(
     s.apply_delivery_binding_policy(op)
 }
 
-/// Dispatch for `ak.realm.policy_components`; cell family is
-/// `ak.component.realm.policy_components.v1`.
-fn apply_realm_policy_components_dispatch(
+/// Dispatch for `ak.realm.policy_bundle`; cell family is
+/// `ak.component.realm.policy_bundle.v1`.
+fn apply_realm_policy_bundle_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_policy_components(op)
+    s.apply_realm_policy_bundle(op)
 }
 
 fn apply_realm_disappearing_policy_dispatch(
@@ -1242,8 +1242,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         apply_delivery_binding_policy_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
-        apply_realm_policy_components_dispatch,
+        arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
+        apply_realm_policy_bundle_dispatch,
     );
     m.insert(
         arkret_wire::events::EventKind::REALM_DISAPPEARING_POLICY,

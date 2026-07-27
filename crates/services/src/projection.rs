@@ -1225,7 +1225,7 @@ impl ProjectionService {
     pub fn preflight_realm_policy_rejection(&self, operation: &Operation) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
-            &[arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS],
+            &[arkret_wire::events::EventKind::REALM_POLICY_BUNDLE],
         )
     }
 

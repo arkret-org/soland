@@ -1256,7 +1256,7 @@ async fn state_events_for_realm(
 }
 
 pub(crate) fn required_security_baseline_kind(kind: &str) -> bool {
-    matches!(kind, "ak.realm.create" | "ak.realm.policy_components")
+    matches!(kind, "ak.realm.create" | "ak.realm.policy_bundle")
 }
 
 fn projection_event_position(event: &soland_services::events::ProjectedEvent) -> i64 {

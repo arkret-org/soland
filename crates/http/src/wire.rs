@@ -880,7 +880,7 @@ pub fn describe(
         max_visibility: Some(arkret_models_discovery::service_description::PlaintextMaxVisibility::PrivatePlaintext),
         event_kinds: vec![
             "ak.message.create".to_owned(),
-            "ak.realm.policy_components".to_owned(),
+            "ak.realm.policy_bundle".to_owned(),
             "ak.realm.plaintext_visible_services".to_owned(),
         ],
         payload_paths: vec![

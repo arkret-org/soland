@@ -5,7 +5,11 @@ use std::sync::Arc;
 
 use zeroize::{Zeroize, Zeroizing};
 
-pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 1024 * 1024;
+/// v1 interoperability bound for HTTP message content of a non-streaming JSON operation, from
+/// `zh/conformance/scalability-constraints.md` §2.1.3. A deployment MUST NOT declare a lower
+/// global value (§2.1.6): a legal 8 MiB canonical body has to stay portable across services, and
+/// a federation origin cannot split batches safely if peers cap the wire below the constant.
+pub const DEFAULT_MAX_REQUEST_SIZE_BYTES: usize = 16 * 1024 * 1024;
 pub const DEFAULT_TO_DEVICE_QUEUE_CAPACITY: usize = 10_000;
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ENV: &str = "SOLAND_PQ_TLS_DEPLOYMENT_PROBE";
 
@@ -1080,11 +1084,17 @@ impl AppConfig {
 
     /// Maximum bytes Salvo will read from a request body before returning
     /// `413 Payload Too Large`. Env: `SOLAND_MAX_REQUEST_SIZE`, in bytes.
+    ///
+    /// The env override may only raise the bound. `scalability-constraints.md` §2.1.6 makes
+    /// 16 MiB a fixed interoperability constant that a deployment or proxy MUST NOT declare
+    /// lower, so a smaller value is clamped back up instead of silently making this service
+    /// reject requests every other v1 service accepts.
     pub fn max_request_size_bytes_from_env() -> usize {
         std::env::var("SOLAND_MAX_REQUEST_SIZE")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
             .filter(|value| *value > 0)
+            .map(|value| value.max(DEFAULT_MAX_REQUEST_SIZE_BYTES))
             .unwrap_or(DEFAULT_MAX_REQUEST_SIZE_BYTES)
     }
 

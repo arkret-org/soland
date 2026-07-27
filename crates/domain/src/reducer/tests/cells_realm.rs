@@ -723,7 +723,7 @@ fn invite_entry_evaluates_principal_admission_hard_gate() {
     let mut state = ProjectionState::new();
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892038";
     let invitee = "did:web:denied.example";
-    state.realm_policy_components_cells.insert(
+    state.realm_policy_bundle_cells.insert(
         realm_id.to_owned(),
         CellState::Value(serde_json::json!({
             "join_policy": {
@@ -776,7 +776,7 @@ fn public_entry_skips_c_axis_but_still_enforces_cooldown() {
             reason: None,
         },
     );
-    state.realm_policy_components_cells.insert(
+    state.realm_policy_bundle_cells.insert(
         realm_id.to_owned(),
         CellState::Value(serde_json::json!({
             "join_policy": {

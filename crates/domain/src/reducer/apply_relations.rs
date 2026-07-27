@@ -211,7 +211,7 @@ impl ProjectionState {
 
     fn relation_profile_values(&self, realm_id: &str) -> Vec<&Value> {
         let mut values = Vec::new();
-        if let Some(components) = self.realm_policy_components_cell_value(realm_id) {
+        if let Some(components) = self.realm_policy_bundle_cell_value(realm_id) {
             values.extend(
                 components
                     .get("relation_profiles")

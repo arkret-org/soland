@@ -2288,7 +2288,7 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
     let strict_scheme = op(
         realm_id,
         "00000000c102",
-        arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+        arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
         json!({
             "value": {
                 "content_scheme": "mls_rfc9420"
@@ -2335,7 +2335,7 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
     let exporter_scheme = op(
         realm_id,
         "00000000c202",
-        arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+        arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
         json!({
             "value": {
                 "content_scheme": "mls_exporter_aead_v1"
@@ -2443,7 +2443,7 @@ async fn mls_strict_existing_realm_rejects_prejoin_history_update() {
         .expect("realm meta stored");
     {
         let mut projection = state.test_projection().lock();
-        projection.realm_policy_components_cells.insert(
+        projection.realm_policy_bundle_cells.insert(
             realm_id.to_string(),
             CellState::Value(json!({
                 "content_scheme": "mls_rfc9420"
@@ -2483,11 +2483,11 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
     .unwrap();
     let recovery_principal = "did:web:hr.example";
 
-    // Seed the projected policy_components cell with an exporter-AEAD scheme +
+    // Seed the projected policy_bundle cell with an exporter-AEAD scheme +
     // org RRK durability policy naming `recovery_principal` as a recipient.
     {
         let mut projection = state.test_projection().lock();
-        projection.realm_policy_components_cells.insert(
+        projection.realm_policy_bundle_cells.insert(
             realm_id.to_string(),
             CellState::Value(json!({
                 "content_scheme": "mls_exporter_aead_v1",
@@ -2667,7 +2667,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
     .unwrap();
     {
         let mut projection = state.test_projection().lock();
-        projection.realm_policy_components_cells.insert(
+        projection.realm_policy_bundle_cells.insert(
             realm_id.to_string(),
             CellState::Value(json!({
                 "content_scheme": "mls_exporter_aead_v1",

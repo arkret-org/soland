@@ -201,12 +201,12 @@ below. Producers on the old wire MUST upgrade.
   `reset_event_id` are now required wire fields. Verification order is
   `cross_domain_replay_rejected` → `reset_event_id_mismatch` →
   `invalid_signature` (T08).
-- **`ak.realm.policy_components` reducer** — `relaxed_window_max_ms`
+- **`ak.realm.policy_bundle` reducer** — `relaxed_window_max_ms`
   hard-rejects above 300 000 ms (`relaxed_window_exceeds_ceiling`);
   `ak.profile.e2ee_relaxed.v1` is mutually exclusive with the audit
   compliance profiles (`e2ee_relaxed_disallowed_in_compliance_profile`);
   `media_service_decrypts=true` requires the triple binding
-  (policy_components ∧ plaintext_visible_services ∧ MLS governance
+  (policy_bundle ∧ plaintext_visible_services ∧ MLS governance
   policy_root) or surfaces `media_plaintext_service_not_authorised` /
   `mls_governance_binding_stale` (T09 + T12).
 - **`POST /api/v1/seals` frontier validation** — every entry in

@@ -352,6 +352,11 @@ impl AppError {
     pub fn unsupported_feature(message: impl Into<String>) -> Self {
         Self::new(ErrorCode::UnsupportedFeature, message)
     }
+    /// HTTP 415 for a canonical non-streaming JSON operation that carried a
+    /// `Content-Encoding` header. See `zh/conformance/scalability-constraints.md` §2.1.4.
+    pub fn unsupported_content_encoding(message: impl Into<String>) -> Self {
+        Self::new(ErrorCode::UnsupportedContentEncoding, message)
+    }
 }
 
 impl std::fmt::Display for AppError {

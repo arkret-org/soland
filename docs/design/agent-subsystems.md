@@ -8,7 +8,7 @@
 
 现状基线(已勘察):
 - 事件提交:`routing/events/event_log.rs::submit_event_value` → `store.put(CanonicalEventRecord)` → `routing/events/projection.rs::project_accepted_operations_from_device` → `reducer.rs::ProjectionState::apply` 经 `APPLY_REGISTRY`(`kind → apply_*`)分发。
-- reducer 范式:`apply_circle_update`(tighten-only floor + 字段 patch)、`apply_realm_policy_components`(floor ratchet + cell write `ak.component.realm.policy_components.v1`)、`apply_realm_policy_server`(cell + side-band BTreeMap 缓存)。
+- reducer 范式:`apply_circle_update`(tighten-only floor + 字段 patch)、`apply_realm_policy_bundle`(floor ratchet + cell write `ak.component.realm.policy_bundle.v1`)、`apply_realm_policy_server`(cell + side-band BTreeMap 缓存)。
 - capability grant:存于 cell `ak:cell:ak.component.capability.grant.v1:<capability_id>`,authz 经 `capability_grant_cells` / `grants_for_realm` 读取;`ak.capability.derived` 已注册 reducer(`apply_capability_derived_dispatch`)——capability 事件→cell 的先例。
 - 消息:`apply_message` 仅写 `MessageState`,无 fanout。
 - 通知:**无** NotificationStore / fanout / mention→notification。mention 仅在 `wire_validators/mention.rs` + `routing/events/operations.rs::validate_mentions` 做语法校验。
@@ -87,11 +87,11 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 
 **目标**:把 `agent_participation` ceiling 写进 reducer 与 `agent_participation_ceiling` 表(participation.set 的 `resolve_effective_ceiling` 读侧已就绪)。
 
-### Realm ceiling(`ak.realm.policy_components` 的 `agent_participation` 组件)
-扩展 `apply_realm_policy_components`(reducer.rs):
+### Realm ceiling(`ak.realm.policy_bundle` 的 `agent_participation` 组件)
+扩展 `apply_realm_policy_bundle`(reducer.rs):
 - payload 含 `agent_participation.native_agent.{reply,accept_third_party_mention,act_on_behalf}` 时:
   - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `arkret_sdk::models::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
-  - 写 cell `ak:cell:ak.component.realm.policy_components.v1:<realm_id>`(已存在,合并字段)。
+  - 写 cell `ak:cell:ak.component.realm.policy_bundle.v1:<realm_id>`(已存在,合并字段)。
   - **投影到 ceiling 表**:`ProjectionEffect` 触发把 `{scope_kind:"realm", scope_key:"realm:<uuid>", realm_id, bits}` UPSERT 进 `agent_participation_ceiling`(经 S2 的 ceiling store 写方法,见下)。
 
 ### Circle / Strand ceiling
@@ -102,7 +102,7 @@ fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
 `persistence.rs::AgentParticipationStore` 增 `put_ceiling(record: Value)`(UPSERT `agent_participation_ceiling`,key=scope_key);内存实现写 `ceilings` Vec(去重 scope_key);Pg 实现 UPSERT。reducer 投影阶段调用(reducer 是同步纯函数 → 经 `ProjectionEffect::AgentParticipationCeilingProjected` 在 `project_accepted_operations_from_device` 的 effect 处理段异步落库,与现有 effect→persistence 落库范式一致)。
 
 ### 验收
-- realm admin 写 `policy_components{agent_participation.native_agent.reply=true, accept_third_party_mention=false}`;controller 对某 strand `participation.set accept_third_party_mention=true` → `agent_participation_exceeds_ceiling` 被拒。
+- realm admin 写 `policy_bundle{agent_participation.native_agent.reply=true, accept_third_party_mention=false}`;controller 对某 strand `participation.set accept_third_party_mention=true` → `agent_participation_exceeds_ceiling` 被拒。
 - Circle ceiling 试图放宽父 Realm → `agent_participation_ceiling_widen` 被拒。
 
 ---

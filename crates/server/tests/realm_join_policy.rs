@@ -1,7 +1,7 @@
 //! Reducer-level tests for Join Policy `principal_admission`.
 //!
 //! The gate is a hard pre-admission constraint: when the projected
-//! `ak.realm.policy_components.join_policy` contains it, `membership=join`
+//! the `ak.realm.policy_bundle` payload path `join_policy` contains it, `membership=join`
 //! must pass before the member FSM is updated.
 
 use arkret_event_draft::Operation;
@@ -28,7 +28,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value) {
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
                 "value": {
@@ -40,11 +40,8 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
         hlc,
     );
     assert!(
-        matches!(
-            effect,
-            ProjectionEffect::RealmPolicyComponentsProjected { .. }
-        ),
-        "policy_components projection must write the canonical cell, got {effect:?}"
+        matches!(effect, ProjectionEffect::RealmPolicyBundleProjected { .. }),
+        "policy_bundle projection must write the canonical cell, got {effect:?}"
     );
 }
 
@@ -132,8 +129,8 @@ fn principal_admission_allows_configured_did_method() {
     );
 
     assert!(
-        state.realm_policy_components_cell_value(REALM_A).is_some(),
-        "policy_components cell must be projected"
+        state.realm_policy_bundle_cell_value(REALM_A).is_some(),
+        "policy_bundle cell must be projected"
     );
 
     let accepted = join_op(
@@ -193,7 +190,7 @@ fn principal_admission_requires_selector_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
                 "value": {
@@ -227,7 +224,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
                 "value": {

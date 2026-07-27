@@ -186,10 +186,10 @@ fn circle_content_floor_below_realm_rejected() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("circles-content-floor-test");
     seed_realm(&mut state, &hlc, REALM_A, ALICE);
-    // Realm raises its content floor to e2ee_required via policy_components.
+    // Realm raises its content floor to e2ee_required via policy_bundle.
     state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_COMPONENTS,
+            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({ "content_encryption_floor": "e2ee_required" }),
         ),
