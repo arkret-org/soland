@@ -381,13 +381,19 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     let Ok(actor_did) = arkret_identifiers::Did::new(actor.to_owned()) else {
         return false;
     };
-    state
-        .realm_directory()
-        .snapshot()
-        .entries_iter()
-        .any(|(_, entry)| {
-            entry.members.contains(&requester_did) && entry.members.contains(&actor_did)
-        })
+    let realms = state.realm_directory().snapshot();
+    let projection = state.projections().snapshot();
+    realms.entries_iter().any(|(realm_id, entry)| {
+        if !entry.members.contains(&requester_did) {
+            return false;
+        }
+        if entry.members.contains(&actor_did) {
+            return true;
+        }
+        projection
+            .member(realm_id.as_str(), actor)
+            .is_some_and(|membership| matches!(membership.state.as_str(), "join" | "leave" | "ban"))
+    })
 }
 
 fn keys_upload_signing_input(
