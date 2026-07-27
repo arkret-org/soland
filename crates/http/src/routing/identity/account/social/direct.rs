@@ -2274,7 +2274,7 @@ pub(super) async fn claim_direct_keypackage(
         mls_group_id: Some(mls_group_id.to_owned()),
         proofs: Vec::new(),
     };
-    let outcome = crate::routing::mls::claim_keypackages_for_request(state, &body)
+    let outcome = crate::routing::mls::claim_keypackages_for_materialization_recovery(state, &body)
         .await
         .map_err(|error| match error.wire_code_override.as_deref() {
             Some("claim_generation_mismatch") => direct_resolve_precondition(

@@ -385,7 +385,35 @@ async fn mls_lifecycle_end_to_end() {
         .unwrap()
         .to_owned();
 
-    // ── 2b. required capabilities must be a subset of the published set ─
+    // ── 2b. a new request cannot re-claim the package for the same group ─
+    let same_group_claim_resp = TestClient::post(&claim_url)
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&json!({
+            "target_principal_id": alice_did,
+            "intended_realm_id": realm_id,
+            "requester": alice_did,
+            "required_capabilities": ["ak.mls.profile.full"],
+            "claim_nonce": b64(b"claim-nonce-same-group"),
+            "expires_at": "2100-01-01T00:00:00.000Z",
+            "mls_group_id": "ak:mls_group:abc"
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(same_group_claim_resp.status_code, Some(StatusCode::OK));
+    let mut same_group_claim_resp = same_group_claim_resp;
+    let same_group_claim_json: Value = same_group_claim_resp.take_json().await.unwrap();
+    assert!(
+        same_group_claim_json["claims"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        same_group_claim_json["failures"][0]["reason_code"],
+        json!("claim_failed")
+    );
+
+    // ── 2c. another group cannot claim the same package ─
     let rejected_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&json!({

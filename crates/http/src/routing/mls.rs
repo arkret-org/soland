@@ -1305,6 +1305,21 @@ pub(crate) async fn claim_keypackages_for_request(
     state: &AppState,
     body: &KeyPackagesClaimRequestBody,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
+    claim_keypackages_for_request_inner(state, body, false).await
+}
+
+pub(crate) async fn claim_keypackages_for_materialization_recovery(
+    state: &AppState,
+    body: &KeyPackagesClaimRequestBody,
+) -> Result<KeyPackagesClaimOutcome, AppError> {
+    claim_keypackages_for_request_inner(state, body, true).await
+}
+
+async fn claim_keypackages_for_request_inner(
+    state: &AppState,
+    body: &KeyPackagesClaimRequestBody,
+    allow_same_group_recovery: bool,
+) -> Result<KeyPackagesClaimOutcome, AppError> {
     if body.expires_at <= Utc::now() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1337,10 +1352,9 @@ pub(crate) async fn claim_keypackages_for_request(
         Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
-    // A claim may be renewed only by the same MLS group. This is required for
-    // crash recovery after an authoring lease expires: the immutable
-    // materialization draft must keep using the KeyPackage it already bound,
-    // while a different group must never be allowed to reuse it.
+    // The public claim operation is strictly single-use. Only the internal
+    // materialization-recovery path may reconstruct the claim already bound to
+    // the same immutable draft after its authoring lease expires.
     let mls_group_ref = body
         .mls_group_id
         .clone()
@@ -1348,25 +1362,31 @@ pub(crate) async fn claim_keypackages_for_request(
         .unwrap_or_else(|| body.intended_realm_id.to_string());
     let selected_keypackage = {
         let keypackages = state.projections().mls_key_package_records();
-        let matching_claim = keypackages
-            .iter()
-            .filter(|kp| ordinary_keypackage_is_same_group_claim(kp, mls_group_ref.as_str()))
-            .filter(|kp| {
-                keypackage_matches_claim(
-                    kp,
-                    &target_principal_id,
-                    &target_device_ids,
-                    &trust_selector,
-                    now_secs,
-                    &required_capabilities,
-                )
+        let matching_claim = allow_same_group_recovery
+            .then(|| {
+                keypackages
+                    .iter()
+                    .filter(|kp| {
+                        ordinary_keypackage_is_same_group_claim(kp, mls_group_ref.as_str())
+                    })
+                    .filter(|kp| {
+                        keypackage_matches_claim(
+                            kp,
+                            &target_principal_id,
+                            &target_device_ids,
+                            &trust_selector,
+                            now_secs,
+                            &required_capabilities,
+                        )
+                    })
+                    .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
+                    .and_then(|kp| {
+                        KeyPackageTrustBinding::from_keypackage(kp)
+                            .ok()
+                            .map(|binding| (kp.id.clone(), binding))
+                    })
             })
-            .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-            .and_then(|kp| {
-                KeyPackageTrustBinding::from_keypackage(kp)
-                    .ok()
-                    .map(|binding| (kp.id.clone(), binding))
-            });
+            .flatten();
         let ordinary = keypackages
             .iter()
             .filter(|kp| ordinary_keypackage_is_available(kp))
