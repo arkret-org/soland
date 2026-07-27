@@ -831,6 +831,38 @@ mod tests {
     }
 
     #[test]
+    fn runtime_approval_status_does_not_report_previous_binding_for_replacement() {
+        let mut record = pending_pairing_record(
+            "did:web:agent.example",
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00.000Z",
+        );
+        record.state = "active".to_owned();
+        record.authorized_event_ref =
+            Some("ak:event:01999999-0000-7000-8000-000000000001".to_owned());
+        record.authorized_verification_method = Some("did:web:agent.example#runtime-1".to_owned());
+        record.authorized_public_key_digest = Some(
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        );
+
+        let outcome = agent_runtime_key_request_status_outcome(
+            &record,
+            &status_request_body("12345678", "did:web:agent.example"),
+            status_now(),
+        )
+        .expect("replacement status must resolve");
+
+        assert_eq!(outcome.status, AgentLifecycleState::Active);
+        assert_eq!(outcome.runtime_state, AgentRuntimeState::Replacing);
+        assert!(outcome.authorized_event_ref.is_none());
+        assert!(outcome.authorized_verification_method.is_none());
+        assert!(outcome.authorized_public_key_digest.is_none());
+        assert!(outcome.authorized_signing_key_binding.is_none());
+    }
+
+    #[test]
     fn runtime_approval_status_lazily_reports_expired_open_pairing() {
         let mut record = pending_pairing_record(
             "did:web:agent.example",

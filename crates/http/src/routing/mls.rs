@@ -1336,10 +1336,10 @@ pub(crate) async fn claim_keypackages_for_request(
         Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
-    // The claim operation is not retry-safe and each successful request must
-    // consume a previously published single-use KeyPackage. The group ref is
-    // recorded on the winning claim for subsequent Welcome/consume binding,
-    // but it never makes an already claimed package eligible for selection.
+    // A claim may be renewed only by the same MLS group. This is required for
+    // crash recovery after an authoring lease expires: the immutable
+    // materialization draft must keep using the KeyPackage it already bound,
+    // while a different group must never be allowed to reuse it.
     let mls_group_ref = body
         .mls_group_id
         .clone()
@@ -1347,6 +1347,31 @@ pub(crate) async fn claim_keypackages_for_request(
         .unwrap_or_else(|| body.intended_realm_id.to_string());
     let selected_keypackage = {
         let keypackages = state.projections().mls_key_package_records();
+        let matching_claim = keypackages
+            .iter()
+            .filter(|kp| {
+                ordinary_keypackage_is_same_group_claim(
+                    kp.last_resort,
+                    kp.claimed_by_mls_group_id.as_deref(),
+                    mls_group_ref.as_str(),
+                )
+            })
+            .filter(|kp| {
+                keypackage_matches_claim(
+                    kp,
+                    &target_principal_id,
+                    &target_device_ids,
+                    &trust_selector,
+                    now_secs,
+                    &required_capabilities,
+                )
+            })
+            .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
+            .and_then(|kp| {
+                KeyPackageTrustBinding::from_keypackage(kp)
+                    .ok()
+                    .map(|binding| (kp.id.clone(), binding))
+            });
         let ordinary = keypackages
             .iter()
             .filter(|kp| !kp.last_resort)
@@ -1367,7 +1392,7 @@ pub(crate) async fn claim_keypackages_for_request(
                     .ok()
                     .map(|binding| (kp.id.clone(), binding))
             });
-        ordinary.or_else(|| {
+        matching_claim.or(ordinary).or_else(|| {
             keypackages
                 .iter()
                 .filter(|kp| kp.last_resort)
@@ -2671,6 +2696,14 @@ pub(crate) async fn has_claimable_realm_membership_keypackage(
         })
 }
 
+fn ordinary_keypackage_is_same_group_claim(
+    last_resort: bool,
+    claimed_group: Option<&str>,
+    requested_group: &str,
+) -> bool {
+    !last_resort && claimed_group == Some(requested_group)
+}
+
 fn keypackage_matches_claim(
     kp: &MlsKeyPackageRow,
     actor_id: &str,
@@ -2783,6 +2816,30 @@ mod trust_binding_tests {
             )
             .is_err()
         );
+    }
+
+    #[test]
+    fn ordinary_claim_retry_only_matches_the_original_group() {
+        assert!(ordinary_keypackage_is_same_group_claim(
+            false,
+            Some("mls-group-a"),
+            "mls-group-a"
+        ));
+        assert!(!ordinary_keypackage_is_same_group_claim(
+            false,
+            Some("mls-group-a"),
+            "mls-group-b"
+        ));
+        assert!(!ordinary_keypackage_is_same_group_claim(
+            false,
+            None,
+            "mls-group-a"
+        ));
+        assert!(!ordinary_keypackage_is_same_group_claim(
+            true,
+            Some("mls-group-a"),
+            "mls-group-a"
+        ));
     }
 
     #[tokio::test]

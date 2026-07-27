@@ -547,18 +547,7 @@ async fn account_notification_delta(
         if !is_incremental && action == "remove" {
             continue;
         }
-        let mut delta = json!({
-            "id": row.get("notification_id").cloned().unwrap_or(Value::Null),
-            "type": "agent",
-            "action": if is_incremental { action } else { "add" },
-        });
-        if let Some(data) = row.get("projection_data").filter(|value| !value.is_null()) {
-            delta["data"] = data.clone();
-        }
-        match serde_json::from_value::<
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDelta,
-        >(delta)
-        {
+        match account_notification_delta_from_row(&row, is_incremental, action) {
             Ok(delta) => items.push(delta),
             Err(error) => tracing::error!(%error, "ignored invalid persisted account notification"),
         }
@@ -567,6 +556,25 @@ async fn account_notification_delta(
         arkret_models_collaboration::sync_frames::account_sync::NotificationContainer { items },
         position,
     )
+}
+
+fn account_notification_delta_from_row(
+    row: &Value,
+    is_incremental: bool,
+    action: &str,
+) -> Result<
+    arkret_models_collaboration::sync_frames::account_sync::NotificationDelta,
+    serde_json::Error,
+> {
+    let mut delta = json!({
+        "id": row.get("notification_id").cloned().unwrap_or(Value::Null),
+        "notification_kind": "agent",
+        "action": if is_incremental { action } else { "add" },
+    });
+    if let Some(data) = row.get("projection_data").filter(|value| !value.is_null()) {
+        delta["data"] = data.clone();
+    }
+    serde_json::from_value(delta)
 }
 
 /// SYNC-MEM-1..4 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — build the
@@ -1514,6 +1522,39 @@ fn notification_projection_payload(row: &Value, actor_id: &str) -> Option<Value>
         }
     }
     Some(payload)
+}
+
+#[cfg(test)]
+mod account_notification_tests {
+    use super::*;
+
+    #[test]
+    fn persisted_agent_approval_uses_notification_delta_wire_field() {
+        let row = json!({
+            "notification_id": "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475",
+            "projection_data": {
+                "kind": "agent_runtime_approval",
+                "approval_request_id": "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
+                "agent_id": "did:web:agent.example",
+                "requested_at": "2026-07-27T04:57:02.959Z",
+                "expires_at": "2026-07-27T05:07:02.959Z"
+            }
+        });
+
+        let delta = account_notification_delta_from_row(&row, true, "add")
+            .expect("persisted Agent approval must decode as NotificationDelta");
+        let wire = serde_json::to_value(delta).expect("NotificationDelta must serialize");
+
+        assert_eq!(
+            wire.get("notification_kind").and_then(Value::as_str),
+            Some("agent")
+        );
+        assert_eq!(wire.get("action").and_then(Value::as_str), Some("add"));
+        assert_eq!(
+            wire.pointer("/data/kind").and_then(Value::as_str),
+            Some("agent_runtime_approval")
+        );
+    }
 }
 
 async fn deliver_ephemeral_events_for_subscriber(

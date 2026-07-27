@@ -310,14 +310,15 @@ async fn introspect_session_grant_remote(
     let mut response = None;
     for attempt in 0..2 {
         let (validated_url, client) =
-            introspection_http_client(introspection_url, state.config().development_mode)
-                .map_err(|_| {
+            introspection_http_client(introspection_url, state.config().development_mode).map_err(
+                |_| {
                     (
                         StatusCode::SERVICE_UNAVAILABLE,
                         "auth_unavailable",
                         "session grant introspection service unavailable",
                     )
-                })?;
+                },
+            )?;
         match client
             .post(validated_url)
             .bearer_auth(bearer)

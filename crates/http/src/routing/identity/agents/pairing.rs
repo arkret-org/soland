@@ -529,15 +529,22 @@ pub(super) fn agent_runtime_key_request_status_outcome(
     } else {
         None
     };
-    let authorized_event_ref = agent_record
-        .authorized_event_ref
-        .as_deref()
+    // Replacement pairing keeps the previous authorization active until the
+    // new request is approved. Do not expose that previous binding as the
+    // outcome for this handle: runtimes may reuse the same key digest, which
+    // would otherwise make a pending replacement look approved and persist a
+    // reference that is revoked as soon as replacement completes.
+    let pairing_completed_for_request =
+        agent_record.paired_pairing_request_id.as_deref() == Some(body.pairing_request_id.as_str());
+    let authorized_event_ref = pairing_completed_for_request
+        .then_some(agent_record.authorized_event_ref.as_deref())
+        .flatten()
         .map(EventId::new)
         .transpose()
         .map_err(|err| AppError::internal(format!("authorized event ref invalid: {err}")))?;
-    let authorized_signing_key_binding = agent_record
-        .authorized_signing_key_binding
-        .clone()
+    let authorized_signing_key_binding = pairing_completed_for_request
+        .then_some(agent_record.authorized_signing_key_binding.clone())
+        .flatten()
         .map(serde_json::from_value)
         .transpose()
         .map_err(|error| {
@@ -549,8 +556,12 @@ pub(super) fn agent_runtime_key_request_status_outcome(
         runtime_state,
         approval_request_id,
         authorized_event_ref,
-        authorized_verification_method: agent_record.authorized_verification_method.clone(),
-        authorized_public_key_digest: agent_record.authorized_public_key_digest.clone(),
+        authorized_verification_method: pairing_completed_for_request
+            .then_some(agent_record.authorized_verification_method.clone())
+            .flatten(),
+        authorized_public_key_digest: pairing_completed_for_request
+            .then_some(agent_record.authorized_public_key_digest.clone())
+            .flatten(),
         authorized_signing_key_binding,
     })
 }
