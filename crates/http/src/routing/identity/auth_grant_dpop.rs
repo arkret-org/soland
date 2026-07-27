@@ -224,6 +224,11 @@ fn introspection_http_client_cache_key(raw_url: &str, development_mode: bool) ->
     format!("{raw_url}\nprivate_networks={private_networks_allowed}")
 }
 
+fn invalidate_introspection_http_client(raw_url: &str, development_mode: bool) {
+    let cache_key = introspection_http_client_cache_key(raw_url, development_mode);
+    INTROSPECTION_HTTP_CLIENTS.lock().remove(&cache_key);
+}
+
 /// Drop any cached introspection entry for `grant_jwt`. Called by logout so the
 /// next introspection of that grant goes to coauth and observes `active=false`
 /// (account-lifecycle.md §4.1 step 3 — the local-side invalidation).
@@ -296,29 +301,54 @@ async fn introspect_session_grant_remote(
     };
     // SOL-03-002: pin validated IPs into the client to close the DNS-rebinding
     // TOCTOU window between the egress check and the connection.
-    let (introspection_url, client) =
-        introspection_http_client(introspection_url, state.config().development_mode).map_err(
-            |_| {
-                (
+    // Introspection is read-only. A pooled keep-alive connection can be closed
+    // by the Auth Server between requests, especially during long conformance
+    // runs that force fresh introspection on every sensitive operation. Retry
+    // one transport failure after discarding the pinned client; URL validation
+    // and address pinning are repeated before the replacement connection is
+    // used. Authentication/protocol failures below remain single-shot.
+    let mut response = None;
+    for attempt in 0..2 {
+        let (validated_url, client) =
+            introspection_http_client(introspection_url, state.config().development_mode)
+                .map_err(|_| {
+                    (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "auth_unavailable",
+                        "session grant introspection service unavailable",
+                    )
+                })?;
+        match client
+            .post(validated_url)
+            .bearer_auth(bearer)
+            .json(&request)
+            .send()
+            .await
+        {
+            Ok(value) => {
+                response = Some(value);
+                break;
+            }
+            Err(_) if attempt == 0 => {
+                invalidate_introspection_http_client(
+                    introspection_url,
+                    state.config().development_mode,
+                );
+            }
+            Err(_) => {
+                return Err((
                     StatusCode::SERVICE_UNAVAILABLE,
                     "auth_unavailable",
-                    "session grant introspection service unavailable",
-                )
-            },
-        )?;
-    let response = client
-        .post(introspection_url)
-        .bearer_auth(bearer)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|_| {
-            (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "auth_unavailable",
-                "session grant introspection request failed",
-            )
-        })?;
+                    "session grant introspection request failed",
+                ));
+            }
+        }
+    }
+    let response = response.ok_or((
+        StatusCode::SERVICE_UNAVAILABLE,
+        "auth_unavailable",
+        "session grant introspection request failed",
+    ))?;
     if !response.status().is_success() {
         return Err(unauthenticated(
             "session grant introspection was rejected by the Auth Server",
