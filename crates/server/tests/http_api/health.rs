@@ -394,16 +394,10 @@ async fn describe_separates_claim_levels() {
     let compat = describe["compat_surfaces"]
         .as_array()
         .expect("compat_surfaces array present");
-    for surface in compat {
-        assert_eq!(surface["name"], "soland_private_local_routes");
-        assert_eq!(surface["kind"], "external_interop");
-        assert_eq!(surface["base_path"], "/_soland");
-        assert_eq!(surface["status"], "soland_private_local");
-        assert!(surface["notes"].as_str().is_some_and(|notes| {
-            notes.contains("moved out of /_arkret")
-                && notes.contains("operation-registry canonical paths")
-        }));
-    }
+    assert!(
+        compat.is_empty(),
+        "Soland product-private routes are not compat surfaces"
+    );
     let _: arkret_models_discovery::ServiceDescribe = serde_json::from_value(describe)
         .expect("server describe must deserialize with the SDK client model");
 }

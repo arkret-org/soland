@@ -23,11 +23,14 @@
 //! list MUST be non-empty; an empty list resolves nothing.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 use std::time::Duration;
 
+use arkret_egress_policy::OutboundPolicy;
+use arkret_http_client::http_did_resolver::HttpDidResolver;
 use arkret_identity::{
     CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
-    DidWebvhResolver, IdentityError,
+    DidWebvhResolver, IdentityError, ResolverFailMode, ResolverPolicy,
 };
 use arkret_wire::Did;
 use parking_lot::RwLock;
@@ -69,6 +72,7 @@ fn build_fallback_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver
 /// and the no-IO SDK fallback chain, so it never blocks an async runtime.
 pub struct SolandDidResolver {
     fallback: CompositeDidResolver,
+    external: Option<Arc<HttpDidResolver>>,
     allowed_methods: Vec<String>,
     local_snapshot: RwLock<BTreeMap<Did, CachedDidDocument>>,
 }
@@ -83,8 +87,35 @@ struct CachedDidDocument {
 
 impl SolandDidResolver {
     fn new(config: &AppConfig) -> Self {
+        let external_allowed_methods = config
+            .did_resolver_allow_methods
+            .iter()
+            .filter_map(|method| match method.as_str() {
+                "webvh" => Some("did:webvh:".to_owned()),
+                "web" => Some("did:web:".to_owned()),
+                _ => None,
+            })
+            .collect();
+        let outbound_policy = if config.development_mode {
+            OutboundPolicy::local_development()
+        } else {
+            OutboundPolicy::public_https()
+        };
+        let external = HttpDidResolver::with_policy_and_egress(
+            ResolverPolicy {
+                allowed_methods: external_allowed_methods,
+                default_principal_method: Some("did:webvh:".to_owned()),
+                trust_roots: Vec::new(),
+                ttl: Some(chrono::Duration::days(7)),
+                fail_mode: ResolverFailMode::FailClosed,
+            },
+            outbound_policy,
+        )
+        .ok()
+        .map(Arc::new);
         Self {
             fallback: build_fallback_did_resolver_chain(config),
+            external,
             allowed_methods: config.did_resolver_allow_methods.clone(),
             local_snapshot: RwLock::new(BTreeMap::new()),
         }
@@ -159,6 +190,14 @@ impl SolandDidResolver {
         }
         if let Some(document) = self.cached_document(did) {
             return Ok(document);
+        }
+        if matches!(did.method(), "web" | "webvh")
+            && let Some(external) = &self.external
+        {
+            return external
+                .resolve_did_async(did)
+                .await
+                .map_err(|error| IdentityError::Protocol(error.to_string()));
         }
         self.fallback.resolve_did(did)
     }

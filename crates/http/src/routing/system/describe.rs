@@ -34,11 +34,6 @@ use crate::wire::{
 };
 use crate::{JsonResult, json_ok};
 
-const SOLAND_LOCAL_COMPAT_SURFACE_NAME: &str = "soland_private_local_routes";
-const SOLAND_LOCAL_COMPAT_BASE_PATH: &str = "/_soland";
-const SOLAND_LOCAL_COMPAT_STATUS: &str = "soland_private_local";
-const SOLAND_LOCAL_COMPAT_NOTES: &str = "non-registry REST routes were moved out of /_arkret; clients should prefer operation-registry canonical paths";
-
 #[derive(salvo::oapi::ToSchema, Clone, Debug, Serialize, Deserialize)]
 struct ReadyzOutcome {
     ok: bool,
@@ -640,19 +635,7 @@ pub(crate) fn apply_claim_level_partition(
         "development_mode=true requires verified_profiles=[] (service-surface.md §3.0)"
     );
     description.verified_profiles = verified_profiles;
-    description.compat_surfaces = soland_compat_surfaces();
-}
-
-fn soland_compat_surfaces() -> Vec<arkret_models_discovery::service_description::CompatSurfaceEntry>
-{
-    vec![
-        arkret_models_discovery::service_description::CompatSurfaceEntry::external_interop(
-            SOLAND_LOCAL_COMPAT_SURFACE_NAME,
-        )
-        .with_extra_string("base_path", SOLAND_LOCAL_COMPAT_BASE_PATH)
-        .with_extra_string("status", SOLAND_LOCAL_COMPAT_STATUS)
-        .with_notes(SOLAND_LOCAL_COMPAT_NOTES),
-    ]
+    description.compat_surfaces.clear();
 }
 
 #[endpoint(operation_id = "org.arkret.soland.auth.bridge.describe")]

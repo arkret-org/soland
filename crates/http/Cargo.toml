@@ -30,6 +30,7 @@ arkret-bootstrap.workspace = true
 arkret-crypto = { workspace = true, features = ["account-data"] }
 arkret-egress-policy.workspace = true
 arkret-hlc.workspace = true
+arkret-http-client.workspace = true
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-keystore = { workspace = true, features = ["keystore-macos", "keystore-linux", "keystore-windows", "keystore-encrypted-file"] }

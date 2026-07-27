@@ -392,7 +392,7 @@ pub(super) async fn push_notify(
         .cloned()
         .unwrap_or_default();
     let registered = state.deliveries().push_devices().await.unwrap_or_default();
-    let mut rejected = Vec::new();
+    let mut outcomes = Vec::new();
     let max_age = chrono::Duration::hours(PUSH_GATEWAY_CONTRACT_MAX_AGE_HOURS);
     for device in devices {
         let device_id = device
@@ -412,7 +412,12 @@ pub(super) async fn push_notify(
             } else {
                 "unknown_device"
             };
-            rejected.push(push_rejection(push_target_id, device, reason, None));
+            let reason = if reason == "push_target_mismatch" {
+                arkret_models_integration::models_push::PushNotifyReasonCode::PushTargetUnknown
+            } else {
+                arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown
+            };
+            outcomes.push(push_rejection(device, reason, None)?);
             continue;
         };
         let actor = registered_device
@@ -452,16 +457,29 @@ pub(super) async fn push_notify(
                 "rejected",
             )
             .await;
-            rejected.push(push_rejection(
-                push_target_id,
+            outcomes.push(push_rejection(
                 device,
-                "contract_drift",
-                Some(drift_label.to_owned()),
-            ));
+                arkret_models_integration::models_push::PushNotifyReasonCode::DeliveryBindingStale,
+                None,
+            )?);
             continue;
         }
+        let device_id = device
+            .get("device_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| AppError::internal("validated push device lacks device_id"))?;
+        let device_id =
+            arkret_identifiers::DeviceId::new(device_id.to_owned()).map_err(|error| {
+                AppError::internal(format!("validated device_id rejected: {error}"))
+            })?;
+        outcomes.push(
+            arkret_models_integration::models_push::PushNotifyDeviceOutcome::accepted(device_id),
+        );
     }
-    json_ok(PushNotifyOutcome { rejected })
+    json_ok(PushNotifyOutcome {
+        push_target_id: push_target_id.to_owned(),
+        outcomes,
+    })
 }
 
 /// Resolve the gateway URL of a registered device into a `bridge_describe_url`
@@ -661,21 +679,23 @@ fn push_notification_leaks_private_payload(
 }
 
 fn push_rejection(
-    push_target_id: &str,
     device: Value,
-    reason: &str,
-    _detail: Option<String>,
-) -> arkret_models_integration::models_push::PushNotifyRejection {
+    reason: arkret_models_integration::models_push::PushNotifyReasonCode,
+    retry_after_ms: Option<u64>,
+) -> Result<arkret_models_integration::models_push::PushNotifyDeviceOutcome, AppError> {
     let device_id = device
         .get("device_id")
         .and_then(Value::as_str)
-        .and_then(|value| arkret_identifiers::DeviceId::new(value.to_owned()).ok());
-    arkret_models_integration::models_push::PushNotifyRejection {
-        push_target_id: push_target_id.to_owned(),
-        device_id,
-        reason_code: reason.to_owned(),
-        retry_after_ms: None,
-    }
+        .ok_or_else(|| AppError::internal("validated push device lacks device_id"))?;
+    let device_id = arkret_identifiers::DeviceId::new(device_id.to_owned())
+        .map_err(|error| AppError::internal(format!("validated device_id rejected: {error}")))?;
+    Ok(
+        arkret_models_integration::models_push::PushNotifyDeviceOutcome::rejected(
+            device_id,
+            reason,
+            retry_after_ms,
+        ),
+    )
 }
 
 #[cfg(test)]

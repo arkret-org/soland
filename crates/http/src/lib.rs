@@ -35,8 +35,8 @@ pub mod wire_validators;
 pub mod webvh_validation {
     pub use crate::routing::identity::webvh_validation::{
         WebvhLogEntry, validate_log_chain, validate_rotation_authorization_for_log,
-        validate_witness_policy_for_log, verify_log_subject, verify_scid_against_did,
-        verify_webvh_log_proof,
+        validate_witness_policy_for_log, verify_log_and_witness_bytes, verify_log_subject,
+        verify_scid_against_did, verify_webvh_log_proof,
     };
 }
 
