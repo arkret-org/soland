@@ -1194,15 +1194,18 @@ fn seed_call_state(
 }
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
-    let cell_id = CellRef::new(format!(
-        "ak:cell:ak.component.realm.media_service.v1:{DEMO_REALM_ID}"
+    let cell_id = CellRef::new(arkret_wire::null_subject_cell(
+        "ak.component.realm.media_service.v1",
     ))
     .unwrap();
     state
         .test_projection()
         .lock()
-        .cells
-        .insert(cell_id, CellState::Value(media_service));
+        .realm_null_subject_cells
+        .insert(
+            (DEMO_REALM_ID.to_owned(), cell_id.as_str().to_owned()),
+            CellState::Value(media_service),
+        );
 }
 
 fn good_media_service_epoch() -> Value {

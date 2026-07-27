@@ -628,10 +628,14 @@ impl ProjectionState {
     /// process cache keeps the Realm id as a separate key dimension.
     pub fn realm_cell_value(&self, realm_id: &str, cell_id: &CellRef) -> Option<&Value> {
         let realm_key = (realm_id.to_owned(), cell_id.as_str().to_owned());
-        let state = self
-            .realm_null_subject_cells
-            .get(&realm_key)
-            .or_else(|| self.cells.get(cell_id))?;
+        let realm_state = self.realm_null_subject_cells.get(&realm_key);
+        let is_null_subject =
+            arkret_wire::CellId::from_ref(cell_id).is_ok_and(|parsed| parsed.subject() == "null");
+        let state = if is_null_subject {
+            realm_state
+        } else {
+            realm_state.or_else(|| self.cells.get(cell_id))
+        }?;
         match state {
             CellState::Value(value) => Some(value),
             CellState::Bottom(_) => None,

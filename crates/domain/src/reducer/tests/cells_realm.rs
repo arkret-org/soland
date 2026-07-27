@@ -980,6 +980,50 @@ fn read_receipt_policy_cell_value_helper_extracts_canonical_value() {
     );
 }
 
+#[test]
+fn realm_cell_value_keeps_null_subject_singletons_realm_scoped() {
+    use arkret_state::lattice::CellState;
+
+    let mut state = ProjectionState::new();
+    let cell_id = arkret_identifiers::CellRef::new(
+        "ak:cell:ak.component.realm.media_service.v1:null".to_owned(),
+    )
+    .unwrap();
+    state.realm_null_subject_cells.insert(
+        ("ak:realm:first".to_owned(), cell_id.as_str().to_owned()),
+        CellState::Value(serde_json::json!({"service_id": "did:web:first.example"})),
+    );
+    state.realm_null_subject_cells.insert(
+        ("ak:realm:second".to_owned(), cell_id.as_str().to_owned()),
+        CellState::Value(serde_json::json!({"service_id": "did:web:second.example"})),
+    );
+    state.cells.insert(
+        cell_id.clone(),
+        CellState::Value(serde_json::json!({"service_id": "did:web:legacy.example"})),
+    );
+
+    assert_eq!(
+        state
+            .realm_cell_value("ak:realm:first", &cell_id)
+            .and_then(|value| value.get("service_id"))
+            .and_then(Value::as_str),
+        Some("did:web:first.example")
+    );
+    assert_eq!(
+        state
+            .realm_cell_value("ak:realm:second", &cell_id)
+            .and_then(|value| value.get("service_id"))
+            .and_then(Value::as_str),
+        Some("did:web:second.example")
+    );
+    assert!(
+        state
+            .realm_cell_value("ak:realm:missing", &cell_id)
+            .is_none(),
+        "a legacy global null-subject cell must not leak across Realm namespaces"
+    );
+}
+
 fn base_search_policy() -> Value {
     serde_json::json!({
         "enabled_profile_refs": ["ak.profile.search.blind_index.v1"],
