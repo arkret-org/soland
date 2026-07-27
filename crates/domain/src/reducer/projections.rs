@@ -577,6 +577,18 @@ pub struct StrandProjection {
     /// `scope_circle_id` (spec: `scope_circle_id` is a Strand field, not a
     /// message field); messages never carry their own scope.
     pub scope_circle_id: Option<String>,
+    /// `schema_refs` — the profile activation axis. Its calendar entry and the
+    /// `metadata.fields.calendar` subtree co-occur in both directions.
+    pub schema_refs: Vec<String>,
+    /// Canonical schedule revision frontier, as `event_digest` values of the
+    /// accepted Events that actually changed the calendar subtree.
+    ///
+    /// A responder signs a subset of this into the RSVP entry, so it has to be
+    /// readable: without it a client cannot author an RSVP at all, which is
+    /// exactly the fail-closed state the calendar UI is in until this is
+    /// populated. An `ak.strand.update` that leaves the calendar subtree
+    /// untouched is not a schedule revision and does not appear here.
+    pub schedule_revision_heads: Vec<String>,
 }
 
 pub(crate) fn default_strand_tracks() -> BTreeMap<String, StrandTrackConfig> {
@@ -1056,15 +1068,40 @@ pub struct ReactionState {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// One `mv_register` head of `ak.component.calendar.rsvp.v1`.
+///
+/// The lattice value is the whole `payload.entry`, so a head independently
+/// carries the schedule basis the responder observed and the response itself.
+/// `source_event_digest` is what later RSVPs name in `causal_refs` to dominate
+/// this head; nothing here is ordered by HLC or arrival.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RsvpHead {
+    pub entry: Value,
+    pub source_event_id: String,
+    pub source_event_digest: String,
+    pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Converged RSVP cell for one `(event_ref, occurrence, actor_id)` subject.
+///
+/// Concurrent responses stay side by side: the projection exposes every head
+/// rather than picking a winner, because the spec forbids resolving them by
+/// HLC, `created_at`, `event_id` or arrival order. A causally later response by
+/// the same responder dominates the heads it observed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RsvpProjection {
     pub event_ref: String,
-    pub status: String,
     pub occurrence: Option<String>,
-    pub comment: Option<Value>,
     pub actor_id: String,
-    pub updated_hlc: String,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
+    pub heads: Vec<RsvpHead>,
+}
+
+impl RsvpProjection {
+    /// True when the responder has more than one live head, i.e. concurrent
+    /// responses that only that responder can resolve.
+    pub fn is_conflicted(&self) -> bool {
+        self.heads.len() > 1
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

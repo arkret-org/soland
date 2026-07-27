@@ -195,6 +195,28 @@ pub(in crate::routing) fn projection_operation_from_event(
             .entry("requirements".to_owned())
             .or_insert_with(|| requirements.clone());
     }
+    // ak.rsvp.set converges through the mv_register cell, so the projection
+    // needs the envelope causal edges: they decide both the schedule-basis
+    // subset admission and which existing heads this response dominates.
+    // Scoped to this kind so other reducers keep their payload shape.
+    if matches!(
+        parsed.kind.as_str(),
+        arkret_wire::events::EventKind::RSVP_SET | arkret_wire::events::EventKind::STRAND_UPDATE
+    ) {
+        if let Some(causal_refs) = envelope.get("causal_refs") {
+            payload_object.insert("envelope_causal_refs".to_owned(), causal_refs.clone());
+        }
+    }
+    if parsed.kind == arkret_wire::events::EventKind::RSVP_SET {
+        if let Some(digest) = envelope
+            .get("proof")
+            .and_then(|proof| proof.get("event_digest"))
+        {
+            payload_object
+                .entry("canonical_event_digest".to_owned())
+                .or_insert_with(|| digest.clone());
+        }
+    }
     if parsed.kind == arkret_wire::events::EventKind::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }

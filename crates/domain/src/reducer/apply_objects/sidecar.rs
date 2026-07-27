@@ -187,6 +187,8 @@ mod tests {
                 history_basis_seals: Vec::new(),
                 updated_by: None,
                 updated_at: None,
+                schema_refs: Vec::new(),
+                schedule_revision_heads: Vec::new(),
                 scope_circle_id: Some("ak:circle:01964137-0000-7000-8000-000000000041".to_owned()),
             },
         );

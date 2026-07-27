@@ -111,6 +111,9 @@ impl ProjectionState {
             })
             .unwrap_or_default();
 
+        let has_calendar_subtree = fields.contains_key(
+            arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE,
+        );
         let projection = StrandProjection {
             strand_id: strand_id.clone(),
             realm_id,
@@ -130,6 +133,14 @@ impl ProjectionState {
                 .and_then(Value::as_str)
                 .filter(|value| !value.is_empty())
                 .map(ToOwned::to_owned),
+            schema_refs: strand_schema_refs(object),
+            // Create is the first schedule revision when it carries a calendar
+            // subtree; a plain Strand starts with an empty frontier.
+            schedule_revision_heads: if has_calendar_subtree {
+                strand_event_digest(operation).into_iter().collect()
+            } else {
+                Vec::new()
+            },
         };
         self.strands.insert(strand_id.clone(), projection);
         if let Some((board_space_id, list_space_id, rank)) =
@@ -205,7 +216,33 @@ impl ProjectionState {
             if let Some(summary) = patch_metadata_string_value(patch, "summary") {
                 strand.summary = summary;
             }
+            // Only a patch that actually changes the calendar subtree is a
+            // schedule revision. A title-only update leaves the frontier alone,
+            // so previously authored RSVP bases stay current instead of being
+            // invalidated by unrelated edits.
+            const CALENDAR_NAMESPACE: &str =
+                arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE;
+            let calendar_changed =
+                strand.fields.get(CALENDAR_NAMESPACE) != next_fields.get(CALENDAR_NAMESPACE);
             strand.fields = next_fields;
+            if let Some(refs) = patched_schema_refs(patch) {
+                strand.schema_refs = refs;
+            }
+            if calendar_changed {
+                // Remove exactly the schedule heads this update observed.
+                // Unobserved heads are concurrent and remain on the frontier;
+                // replacing the whole frontier here would silently choose the
+                // last-arriving schedule.
+                let causal_refs = strand_causal_refs(operation);
+                strand
+                    .schedule_revision_heads
+                    .retain(|head| !causal_refs.iter().any(|value| value == head));
+                if let Some(digest) = strand_event_digest(operation) {
+                    strand.schedule_revision_heads.push(digest);
+                    strand.schedule_revision_heads.sort();
+                    strand.schedule_revision_heads.dedup();
+                }
+            }
         }
         strand.updated_by = operation
             .payload
@@ -691,4 +728,70 @@ fn validate_strand_tracks(
             .map_err(|_| "strand_track_name_invalid")?;
     }
     Ok(())
+}
+
+/// `schema_refs` as written on a create payload object.
+fn strand_schema_refs(object: &serde_json::Map<String, Value>) -> Vec<String> {
+    object
+        .get("schema_refs")
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `schema_refs` written by a patch, when the patch touches it at all.
+fn patched_schema_refs(patch: &serde_json::Map<String, Value>) -> Option<Vec<String>> {
+    let entry = patch.get("schema_refs")?;
+    if entry.get("$op").and_then(Value::as_str) == Some("unset") {
+        return Some(Vec::new());
+    }
+    let values = entry.get("value").unwrap_or(entry).as_array()?;
+    Some(
+        values
+            .iter()
+            .filter_map(Value::as_str)
+            .map(ToOwned::to_owned)
+            .collect(),
+    )
+}
+
+/// Canonical `event_digest` of the Event behind this projection operation.
+///
+/// A revision head has to be nameable in a later `causal_refs`, so an operation
+/// with no resolvable digest contributes no head rather than a synthetic one a
+/// responder could never reference.
+fn strand_event_digest(operation: &Operation) -> Option<String> {
+    operation
+        .canonical_event_digest
+        .clone()
+        .or_else(|| {
+            operation
+                .payload
+                .get("canonical_event_digest")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .filter(|digest| arkret_identifiers::Hash::new(digest.clone()).is_ok())
+}
+
+fn strand_causal_refs(operation: &Operation) -> Vec<String> {
+    operation
+        .payload
+        .get("envelope_causal_refs")
+        .or_else(|| operation.payload.get("causal_refs"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
 }

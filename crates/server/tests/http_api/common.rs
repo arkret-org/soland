@@ -813,6 +813,15 @@ pub(crate) fn signed_canonical_event(
         .into_iter()
         .map(|event_id| arkret_wire::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
         .collect();
+    // Admission runs the registry cell contract over every reducer input, so a
+    // fixture that hand-builds an effect-less Event is simply not a valid
+    // producer Event. Derive the effects from the registry here instead of
+    // teaching each test to write them: the fixture then exercises the same
+    // path a real client takes. Kinds with no registered cell contract are
+    // left untouched.
+    if event.effects.is_empty() {
+        let _ = arkret_schema::materialize_registered_cell_writes(&mut event);
+    }
     let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
         [21_u8; 32],
         actor,

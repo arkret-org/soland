@@ -1164,6 +1164,8 @@ fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabl
             history_basis_seals: Vec::new(),
             updated_by: None,
             updated_at: None,
+            schema_refs: Vec::new(),
+            schedule_revision_heads: Vec::new(),
             scope_circle_id: None,
         },
     );

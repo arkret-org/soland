@@ -26,10 +26,13 @@ pub struct ProjectionState {
     pub messages: BTreeMap<String, MessageState>,
     /// Reactions keyed by (event_id, actor, reaction_key). OR-Set.
     pub reactions: BTreeMap<String, BTreeMap<String, BTreeMap<String, ReactionState>>>,
-    /// Calendar RSVP projection keyed by `(event_ref, occurrence, actor_id)`.
-    /// The event has no spec-declared cell family; this is a durable-event
-    /// side-band cache for agenda/detail views.
-    pub rsvps: BTreeMap<(String, String, String), RsvpProjection>,
+    /// Calendar RSVP projection keyed by the registered composite cell subject
+    /// `(event_ref, occurrence, actor_id)`, where `occurrence` keeps the signed
+    /// JSON null as `None` rather than a sentinel string.
+    ///
+    /// This mirrors the `ak.component.calendar.rsvp.v1` `mv_register` cell: it
+    /// holds every live head, never a single last-writer value.
+    pub rsvps: BTreeMap<(String, Option<String>, String), RsvpProjection>,
     /// Shared pin projection keyed by `(pin_scope_key, target_ref)`.
     /// Saved items remain holder-private account-data and never enter this
     /// shared Realm cache.

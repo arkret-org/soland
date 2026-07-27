@@ -15,6 +15,7 @@ mod admin_production_queries;
 mod agents;
 mod auth;
 mod blob_resumable;
+mod calendar_rsvp;
 mod cors_config;
 mod devices_webrtc;
 mod direct_conversations;

@@ -874,6 +874,8 @@ pub async fn hydrate_projections_from_persistence(
                     history_basis_seals: record.history_basis_seals,
                     updated_by: record.updated_by,
                     updated_at: record.updated_at,
+                    schema_refs: Vec::new(),
+                    schedule_revision_heads: Vec::new(),
                     scope_circle_id: record.scope_circle_id,
                 },
             );

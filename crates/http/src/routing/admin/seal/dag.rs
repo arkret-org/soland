@@ -142,14 +142,22 @@ pub(crate) async fn admin_compact_seal_dag(
     // just like a normal Seal; downstream pruning walks consult
     // `CompactionPolicy` per-candidate and call
     // `SealStore::prune_predecessor`.
-    if let Err(crate::notary::NotaryError::NotAuthorized(_)) =
-        crate::notary::run_one_signing_pass(state, &realm, max_pending)
-    {
-        return Err(AppError::new(
-            ErrorCode::CapabilityDenied,
-            "not authorized to compact seals for this Realm".to_owned(),
-        )
-        .with_status(StatusCode::FORBIDDEN));
+    // A failed signing pass must surface. Swallowing it lets compaction
+    // proceed over a leaf set that still has pending Moves behind it,
+    // which then mints a Seal the caller believes covers them.
+    if let Err(err) = crate::notary::run_one_signing_pass(state, &realm, max_pending) {
+        return Err(match err {
+            crate::notary::NotaryError::NotAuthorized(_) => AppError::new(
+                ErrorCode::CapabilityDenied,
+                "not authorized to compact seals for this Realm".to_owned(),
+            )
+            .with_status(StatusCode::FORBIDDEN),
+            other => AppError::new(
+                ErrorCode::InternalError,
+                format!("notary signing pass before compaction failed: {other}"),
+            )
+            .with_status(StatusCode::INTERNAL_SERVER_ERROR),
+        });
     }
 
     // Step 1: snapshot the leaf set + recompute the effective seal view
@@ -181,11 +189,16 @@ pub(crate) async fn admin_compact_seal_dag(
     // per-admin key so the Seal's `verification_method` carries
     // operator attribution (falls back to the service signer when no
     // per-admin key is provisioned).
+    // `control_event_set_root` is cumulative, so it must come from the
+    // view (predecessor coverage ∪ delta) rather than from this Seal's
+    // empty delta — `apply_seal` recomputes it the same way and rejects
+    // a delta-only root as `ControlEventSetRootMismatch`.
     let signer = admin_signer_for(state, &admin_session.actor)?;
-    let compaction = arkret_wire::Seal::sign_single_kind(
+    let compaction = arkret_wire::Seal::sign_single_kind_with_control_root(
         realm.clone(),
         view.predecessor_refs.clone(),
         Vec::new(),
+        view.control_event_set_root.clone(),
         view.state_root.clone(),
         fresh_hlc(state)?,
         arkret_wire::SealKind::Compaction,

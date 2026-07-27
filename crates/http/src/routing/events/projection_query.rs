@@ -1166,6 +1166,22 @@ struct StrandProjectionView {
     title: String,
     summary: Option<String>,
     fields: BTreeMap<String, Value>,
+    /// Profile activation axis. Its calendar entry and the
+    /// `metadata.fields.calendar` subtree co-occur in both directions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    schema_refs: Vec<String>,
+    /// Canonical schedule revision frontier as `event_digest` values. A client
+    /// signs a subset of this into an RSVP entry, so without it RSVP authoring
+    /// has to fail closed rather than claim an unobserved schedule.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    schedule_revision_heads: Vec<String>,
+    /// Every live RSVP `mv_register` head for this Strand.
+    ///
+    /// Concurrent responses are exposed side by side rather than reduced to one
+    /// value: only the responder can resolve them, and the spec forbids
+    /// choosing between them by HLC, arrival order or event id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    rsvps: Vec<StrandRsvpProjectionView>,
     board_space_id: Option<String>,
     list_space_id: Option<String>,
     rank: Option<String>,
@@ -1177,6 +1193,27 @@ struct StrandProjectionView {
         serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp"
     )]
     updated_at: Option<DateTime<Utc>>,
+}
+
+/// One RSVP cell of a Calendar Strand, keyed by occurrence and responder.
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+struct StrandRsvpProjectionView {
+    /// `null` is the whole series; a string is a canonical instance key.
+    occurrence: Option<String>,
+    actor_id: String,
+    /// More than one head means the responder has concurrent answers that only
+    /// they can resolve.
+    heads: Vec<StrandRsvpHeadView>,
+}
+
+/// One `mv_register` head. `entry` is the complete signed lattice value, so a
+/// reader can classify it on both the basis and response axes without going
+/// back to the Event.
+#[derive(Debug, serde::Serialize, salvo::oapi::ToSchema)]
+struct StrandRsvpHeadView {
+    source_event_id: String,
+    source_event_digest: String,
+    entry: Value,
 }
 
 /// One relation edge in the `org.arkret.soland.relations.list` response.
@@ -1267,6 +1304,29 @@ async fn get_strand_projection(
         .with_status(StatusCode::FORBIDDEN));
     }
     let (board_space_id, list_space_id, rank) = strand_position_fields(&proj, &strand_id)?;
+    let rsvps = if strand.state == ObjectLifecycleState::Redacted {
+        // A redacted Calendar target must not keep leaking responder identity
+        // or response content through its historical RSVP cells.
+        Vec::new()
+    } else {
+        proj.rsvps
+            .values()
+            .filter(|cell| cell.event_ref == strand_id)
+            .map(|cell| StrandRsvpProjectionView {
+                occurrence: cell.occurrence.clone(),
+                actor_id: cell.actor_id.clone(),
+                heads: cell
+                    .heads
+                    .iter()
+                    .map(|head| StrandRsvpHeadView {
+                        source_event_id: head.source_event_id.clone(),
+                        source_event_digest: head.source_event_digest.clone(),
+                        entry: head.entry.clone(),
+                    })
+                    .collect(),
+            })
+            .collect::<Vec<_>>()
+    };
     drop(proj);
     json_ok(StrandProjectionView {
         strand_id: strand.strand_id,
@@ -1276,6 +1336,9 @@ async fn get_strand_projection(
         title: strand.title,
         summary: strand.summary,
         fields: strand.fields,
+        schema_refs: strand.schema_refs,
+        schedule_revision_heads: strand.schedule_revision_heads,
+        rsvps,
         board_space_id: board_space_id.map(|id| id.to_string()),
         list_space_id: list_space_id.map(|id| id.to_string()),
         rank,

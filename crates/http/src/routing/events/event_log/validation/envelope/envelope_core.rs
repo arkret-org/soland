@@ -481,7 +481,7 @@ pub(crate) async fn validate_event_envelope_with_context(
     )
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
-    enforce_changed_multi_target_cell_contract(envelope, &kind)?;
+    enforce_registered_cell_contract(envelope, &kind)?;
     enforce_ordered_log_cell_contract(state, envelope, &kind, &realm_id, object)?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
@@ -621,19 +621,32 @@ async fn enforce_device_generation_fence(
     Ok(())
 }
 
-fn enforce_changed_multi_target_cell_contract(
+/// Run the registry cell contract for every reducer-input kind whose registry
+/// row declares a contract a producer can satisfy exactly.
+///
+/// `models/event-and-patch.md` §2.4.2 makes the registry — not a
+/// producer-selected effect — the authority for a reducer target, so admission
+/// must not be a hand-maintained per-kind allow-list: a kind nobody remembered
+/// to add is simply unchecked, which is how effect-less `ak.rsvp.set` Events
+/// reached the projection.
+///
+/// The gate is therefore driven by the registry itself. It covers a kind when
+/// the row declares `effect_projection` for every cell write, i.e. when the
+/// complete op is a pure function of the Event and a receiver can recompute it.
+/// Rows that declare a cell family without a projection are deliberately left
+/// alone for now: enforcing them would reject writes current producers cannot
+/// construct yet, so tightening those is a producer-side migration (every
+/// client materializes registry effects) that has to land before the server can
+/// fail closed on it.
+fn enforce_registered_cell_contract(
     envelope: &Value,
     kind: &str,
 ) -> Result<(), EventValidationError> {
-    if !matches!(
-        kind,
-        arkret_wire::events::EventKind::REALM_CREATE
-            | arkret_wire::events::EventKind::INVITE_CREATE
-            | arkret_wire::events::EventKind::INVITE_CANCEL
-            | arkret_wire::events::EventKind::INVITE_REVOKE
-            | arkret_wire::events::EventKind::CALL_STATE
-            | arkret_wire::events::EventKind::CALL_RECORDING_START
-    ) {
+    let event_kind = arkret_wire::events::EventKind::from(kind);
+    let Some(descriptor) = event_kind.descriptor() else {
+        return Ok(());
+    };
+    if !descriptor.reducer_input {
         return Ok(());
     }
     let event =
@@ -641,9 +654,18 @@ fn enforce_changed_multi_target_cell_contract(
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
-                format!("multi-target reducer input is not a valid Event Envelope: {error}"),
+                format!("reducer input is not a valid Event Envelope: {error}"),
             )
         })?;
+    // Probe: re-derive the effects the registry declares for this Event. A
+    // success means the row is fully projected and the contract is enforceable
+    // exactly; a failure means the row declares no derivable contract, which is
+    // the case this gate deliberately leaves alone.
+    let mut probe = event.clone();
+    probe.effects.clear();
+    if arkret_schema::materialize_registered_cell_writes(&mut probe).is_err() {
+        return Ok(());
+    }
     arkret_schema::validate_registered_cell_writes(&event).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,

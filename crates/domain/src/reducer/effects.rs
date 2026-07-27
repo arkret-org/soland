@@ -32,7 +32,9 @@ pub enum ProjectionEffect {
         event_ref: String,
         actor_id: String,
         occurrence: Option<String>,
-        status: String,
+        /// Live `mv_register` heads after the join. More than one means the
+        /// responder has concurrent responses that only they can resolve.
+        head_count: usize,
     },
     PinProjected {
         pin_scope_key: String,

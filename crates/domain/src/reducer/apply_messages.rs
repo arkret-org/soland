@@ -435,23 +435,40 @@ impl ProjectionState {
                 reason: "rsvp_event_ref_missing".to_owned(),
             };
         };
-        let Some(status) = operation.payload.get("status").and_then(Value::as_str) else {
+        let Some(entry) = operation.payload.get("entry") else {
             return ProjectionEffect::Rejected {
-                reason: "rsvp_status_missing".to_owned(),
+                reason: "rsvp_entry_missing".to_owned(),
             };
         };
-        if !matches!(status, "accepted" | "declined" | "tentative") {
+        // The whole entry is the lattice value, so it has to be a complete,
+        // schema-valid object before it can become a head.
+        let parsed_entry = match serde_json::from_value::<
+            arkret_models_collaboration::objects::productivity::RsvpEntry,
+        >(entry.clone())
+        {
+            Ok(parsed) => parsed,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "rsvp_entry_invalid".to_owned(),
+                };
+            }
+        };
+        if parsed_entry.validate().is_err() {
             return ProjectionEffect::Rejected {
-                reason: "rsvp_status_invalid".to_owned(),
+                reason: "rsvp_entry_invalid".to_owned(),
             };
         }
-        if let Err(reason) = validate_encrypted_projection_field(
-            operation,
-            "comment",
-            "rsvp_comment_encrypted_payload_required",
-        ) {
+        // Shape admission: the basis MUST be a subset of the envelope
+        // causal_refs. This is decidable without resolving anything, so an
+        // e2ee and a plaintext deployment reach the same verdict.
+        let causal_refs = rsvp_causal_refs(operation);
+        if parsed_entry
+            .schedule_basis_refs
+            .iter()
+            .any(|basis| !causal_refs.iter().any(|value| value == basis.as_str()))
+        {
             return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
+                reason: "rsvp_basis_not_causal".to_owned(),
             };
         }
         let Some(strand) = self.strands.get(event_ref) else {
@@ -466,53 +483,85 @@ impl ProjectionState {
                 reason: "rsvp_event_not_active".to_owned(),
             };
         }
-        let occurrence_value = match operation.payload.get("occurrence") {
+        if strand.realm_id != operation.realm_id.as_str() {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_event_cross_realm".to_owned(),
+            };
+        }
+        if !strand
+            .schema_refs
+            .iter()
+            .any(|schema| schema == "ak.schema.calendar_event.v1")
+        {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_event_not_calendar".to_owned(),
+            };
+        }
+        let occurrence = match operation.payload.get("occurrence") {
             Some(Value::Null) | None => None,
-            Some(Value::String(value)) => Some(value.as_str()),
+            Some(Value::String(value)) => Some(value.clone()),
             Some(_) => {
                 return ProjectionEffect::Rejected {
                     reason: "rsvp_occurrence_invalid".to_owned(),
                 };
             }
         };
-        let occurrence_key =
-            match arkret_models_collaboration::objects::productivity::canonical_calendar_rsvp_occurrence_key(
-                &strand.fields,
-                occurrence_value,
-            ) {
-                Ok(value) => value,
-                Err(_) => {
-                    return ProjectionEffect::Rejected {
-                        reason: "rsvp_occurrence_invalid".to_owned(),
-                    };
-                }
+        // The cell subject derives from the signed occurrence, so a
+        // non-canonical key is rejected rather than repaired: rewriting it
+        // here would address a different cell than the one the Event promised.
+        if let Some(key) = &occurrence
+            && arkret_models_collaboration::objects::productivity::validate_canonical_occurrence_key(
+                key,
+            )
+            .is_err()
+        {
+            return ProjectionEffect::Rejected {
+                reason: "rsvp_occurrence_not_canonical".to_owned(),
             };
-        let occurrence = (occurrence_key != "series").then(|| occurrence_key.clone());
+        }
         let actor_id = operation_actor_id(operation);
-        let key = (event_ref.to_owned(), occurrence_key, actor_id.clone());
-        let updated_hlc = rsvp_lww_hlc(operation);
-        if let Some(existing) = self.rsvps.get(&key)
-            && (existing.status == status || existing.updated_hlc >= updated_hlc)
+        let key = (event_ref.to_owned(), occurrence.clone(), actor_id.clone());
+        let head = RsvpHead {
+            entry: entry.clone(),
+            source_event_id: rsvp_source_event_id(operation),
+            source_event_digest: rsvp_source_event_digest(operation),
+            updated_at: now,
+        };
+
+        let cell = self.rsvps.entry(key).or_insert_with(|| RsvpProjection {
+            event_ref: event_ref.to_owned(),
+            occurrence: occurrence.clone(),
+            actor_id: actor_id.clone(),
+            heads: Vec::new(),
+        });
+        // Only a byte-identical entry is a value-level no-op. Two responses
+        // that merely share a status are still distinct heads, otherwise a
+        // changed basis or comment would silently disappear.
+        if cell
+            .heads
+            .iter()
+            .any(|existing| existing.entry == head.entry)
         {
             return ProjectionEffect::Ignored;
         }
-        self.rsvps.insert(
-            key,
-            RsvpProjection {
-                event_ref: event_ref.to_owned(),
-                status: status.to_owned(),
-                occurrence: occurrence.clone(),
-                comment: operation.payload.get("comment").cloned(),
-                actor_id: actor_id.clone(),
-                updated_hlc,
-                updated_at: now,
-            },
-        );
+        // Causal domination: drop exactly the heads this Event observed. Heads
+        // it did not observe are genuinely concurrent and stay exposed; the
+        // responder resolves them with a later RSVP that names both.
+        cell.heads.retain(|existing| {
+            !causal_refs
+                .iter()
+                .any(|value| value == &existing.source_event_digest)
+        });
+        cell.heads.push(head);
+        cell.heads
+            .sort_by(|left, right| left.source_event_digest.cmp(&right.source_event_digest));
+        let head_count = cell.heads.len();
+
         ProjectionEffect::RsvpProjected {
             event_ref: event_ref.to_owned(),
             actor_id,
             occurrence,
-            status: status.to_owned(),
+            head_count,
         }
     }
 
@@ -990,21 +1039,52 @@ fn encrypted_projection_field_matches_operation(value: &Value, operation: &Opera
     envelope.aad.realm_id == operation.realm_id && envelope.aad.event_kind == kind
 }
 
-fn rsvp_lww_hlc(operation: &Operation) -> String {
-    if let Some(hlc) = operation
+/// Envelope `causal_refs` surfaced onto the RSVP projection payload.
+///
+/// They are the only causal signal the projection needs: they decide both the
+/// basis subset admission and which existing heads a new response dominates.
+fn rsvp_causal_refs(operation: &Operation) -> Vec<String> {
+    operation
         .payload
-        .get("hlc")
+        .get("envelope_causal_refs")
+        .or_else(|| operation.payload.get("causal_refs"))
+        .and_then(Value::as_array)
+        .map(|values| {
+            values
+                .iter()
+                .filter_map(Value::as_str)
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn rsvp_source_event_id(operation: &Operation) -> String {
+    operation
+        .payload
+        .get("event_id")
         .and_then(Value::as_str)
-        .filter(|value| arkret_identifiers::Hlc::new((*value).to_owned()).is_ok())
-    {
-        return hlc.to_owned();
-    }
-    let millis = operation
-        .created_at
-        .timestamp_millis()
-        .clamp(0, 0xFFFF_FFFF_FFFF);
-    let operation_hash = arkret_canonical::sha256_hex(operation.operation_id.as_str().as_bytes());
-    format!("{millis:012x}-0000-{}", &operation_hash[..8])
+        .map(ToOwned::to_owned)
+        .unwrap_or_else(|| operation.operation_id.as_str().to_owned())
+}
+
+/// Identity a later RSVP names in `causal_refs` to dominate this head.
+///
+/// A head with no resolvable digest can never be dominated, so it would stay
+/// exposed forever; the fallback keeps that visible instead of silently
+/// merging unrelated responses.
+fn rsvp_source_event_digest(operation: &Operation) -> String {
+    operation
+        .canonical_event_digest
+        .clone()
+        .or_else(|| {
+            operation
+                .payload
+                .get("canonical_event_digest")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| format!("operation-id:{}", operation.operation_id))
 }
 
 struct PinEffectiveScope {
