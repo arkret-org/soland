@@ -15,7 +15,7 @@ async fn prepare_ghost_event(
     session: &SessionRecord,
     envelope: Value,
     admission: &InternalEventAdmission,
-    batch_event_ids: &BTreeSet<String>,
+    _batch_event_ids: &BTreeSet<String>,
     preceding_operations: &[arkret_event_draft::Operation],
 ) -> Result<PreparedGhostEvent, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
@@ -120,26 +120,6 @@ async fn prepare_ghost_event(
             "schema_violation",
             "prev_refs must include the preceding actor sequence in the same Realm",
         ));
-    }
-    for authorized_ref in &parsed.authorized_refs {
-        if !batch_event_ids.contains(authorized_ref)
-            && !service
-                .has_canonical_event(authorized_ref)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "internal_error",
-                        format!("events store unavailable: {error}"),
-                    )
-                })?
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "refs[role=authorized_by] must reference accepted authorization events",
-            ));
-        }
     }
     enforce_sibling_fork_limit(state, session, &parsed, &scoped_actor_records).await?;
 

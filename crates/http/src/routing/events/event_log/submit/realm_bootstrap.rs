@@ -30,12 +30,20 @@ pub(super) async fn submit_realm_bootstrap_batch(
     session: &SessionRecord,
     envelopes: Vec<Value>,
     internal_admissions: Option<&[InternalEventAdmission]>,
+    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if internal_admissions.is_some_and(|admissions| admissions.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
             "Realm bootstrap federation admission cardinality mismatch",
+        ));
+    }
+    if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "Realm bootstrap publication lease cardinality mismatch",
         ));
     }
     let typed_events = envelopes
@@ -75,7 +83,9 @@ pub(super) async fn submit_realm_bootstrap_batch(
 
     let actor_lock = actor_submit_lock(&unit.realm_id, &unit.actor_id);
     let _guard = actor_lock.lock().await;
-    if let Some(outcome) = identical_historical_retry(state, &envelopes).await? {
+    if authorization_leases.is_none()
+        && let Some(outcome) = identical_historical_retry(state, &envelopes).await?
+    {
         return Ok(outcome);
     }
     let context = RealmBootstrapBatchContext {
@@ -100,6 +110,18 @@ pub(super) async fn submit_realm_bootstrap_batch(
         );
     }
     validate_actor_chain(&validated)?;
+    let received_at = now();
+    let mut ingress_receipts = Vec::new();
+    if let Some(leases) = authorization_leases {
+        for (parsed, lease) in validated.iter().zip(leases) {
+            ingress_receipts
+                .push(mint_and_store_ingress_receipt(state, parsed, lease, received_at).await?);
+        }
+        if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
+            outcome.ingress_receipts = ingress_receipts;
+            return Ok(outcome);
+        }
+    }
 
     let existing = state
         .event_queries()
@@ -128,22 +150,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
             ));
         }
     }
-    for parsed in &validated {
-        for dependency in &parsed.authorized_refs {
-            if !existing.iter().any(|record| record.event_id == *dependency)
-                && !validated
-                    .iter()
-                    .any(|candidate| candidate.event_id == *dependency)
-            {
-                return Err(SubmitOneError::new(
-                    StatusCode::CONFLICT,
-                    "dependency_missing",
-                    "Realm bootstrap authorization reference is not in accepted history",
-                ));
-            }
-        }
-    }
-
     let operations = validated
         .iter()
         .zip(envelopes.iter())
@@ -224,7 +230,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
             )
         })?;
 
-    let received_at = now();
     let bootstrap_realm_id = RealmId::new(unit.realm_id.clone()).map_err(|error| {
         SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
     })?;
@@ -347,6 +352,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         Vec::new(),
         Some(super::super::super::sync::sync_token_for_state(state).await),
     );
+    outcome.ingress_receipts = ingress_receipts;
     outcome.control_proposal_receipts = proposal_receipts;
     Ok(outcome)
 }

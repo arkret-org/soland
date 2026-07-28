@@ -22,7 +22,13 @@ pub(super) async fn submit_identity_anchor_batch(
     state: &AppState,
     session: &SessionRecord,
     envelopes: Vec<Value>,
+    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
+        return Err(unit_error(
+            "identity anchor publication lease cardinality mismatch",
+        ));
+    }
     if envelopes.len() != 2 {
         return Err(unit_error(
             "identity anchor unit must contain exactly two ordered Events",
@@ -60,7 +66,9 @@ pub(super) async fn submit_identity_anchor_batch(
     let generation_lock =
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
     let _generation_guard = generation_lock.lock().await;
-    if let Some(outcome) = identical_historical_retry(state, &envelopes).await? {
+    if authorization_leases.is_none()
+        && let Some(outcome) = identical_historical_retry(state, &envelopes).await?
+    {
         return Ok(outcome);
     }
     let self_principal_pcr_context = if is_bootstrap {
@@ -95,6 +103,14 @@ pub(super) async fn submit_identity_anchor_batch(
         validate_event_envelope_with_context(state, session, &envelopes[1], second_contexts, None)
             .await?;
     validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
+    let received_at = now();
+    let mut ingress_receipts = Vec::new();
+    if let Some(leases) = authorization_leases {
+        for (parsed, lease) in [(&first, &leases[0]), (&second, &leases[1])] {
+            ingress_receipts
+                .push(mint_and_store_ingress_receipt(state, parsed, lease, received_at).await?);
+        }
+    }
 
     let existing = state
         .event_queries()
@@ -118,14 +134,16 @@ pub(super) async fn submit_identity_anchor_batch(
             if a.canonical_bytes == first.canonical_bytes
                 && b.canonical_bytes == second.canonical_bytes =>
         {
-            return Ok(events_submit_outcome(
+            let mut outcome = events_submit_outcome(
                 EventsSubmitStatus::Duplicate,
                 vec![first.event_id.clone(), second.event_id.clone()],
                 vec![first.event_id, second.event_id],
                 Vec::new(),
                 Vec::new(),
                 Some(super::super::super::sync::sync_token_for_state(state).await),
-            ));
+            );
+            outcome.ingress_receipts = ingress_receipts;
+            return Ok(outcome);
         }
         (None, None) => {}
         _ => {
@@ -142,22 +160,6 @@ pub(super) async fn submit_identity_anchor_batch(
                 StatusCode::CONFLICT,
                 "dependency_missing",
                 "identity anchor predecessor is not in accepted history",
-            ));
-        }
-    }
-    for dependency in first
-        .authorized_refs
-        .iter()
-        .chain(second.authorized_refs.iter())
-    {
-        if dependency != &first.event_id
-            && dependency != &second.event_id
-            && !existing.iter().any(|record| record.event_id == *dependency)
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "identity anchor authorization reference is not in accepted history",
             ));
         }
     }
@@ -181,7 +183,6 @@ pub(super) async fn submit_identity_anchor_batch(
         Vec::new()
     };
     let mut reanchor_conflict = !conflict_evidence.is_empty();
-    let received_at = now();
     let typed_control_events = envelopes
         .iter()
         .cloned()
@@ -398,14 +399,16 @@ pub(super) async fn submit_identity_anchor_batch(
         conflict_evidence.extend([first.event_id.clone(), second.event_id.clone()]);
         conflict_evidence.sort_unstable();
         conflict_evidence.dedup();
-        Ok(events_submit_outcome(
+        let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Partial,
             Vec::new(),
             Vec::new(),
             Vec::new(),
             conflict_evidence,
             Some(super::super::super::sync::sync_token_for_state(state).await),
-        ))
+        );
+        outcome.ingress_receipts = ingress_receipts;
+        Ok(outcome)
     } else {
         let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Accepted,
@@ -415,6 +418,7 @@ pub(super) async fn submit_identity_anchor_batch(
             Vec::new(),
             Some(super::super::super::sync::sync_token_for_state(state).await),
         );
+        outcome.ingress_receipts = ingress_receipts;
         outcome.control_proposal_receipts = proposal_receipts;
         Ok(outcome)
     }

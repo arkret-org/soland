@@ -62,11 +62,11 @@ pub(in crate::routing) fn event_semantic_refs(
             )
         })?;
         if role == "authorized_by" {
-            if !is_valid_event_id(&id) {
+            if arkret_identifiers::GrantId::new(id.clone()).is_err() {
                 return Err(event_validation_error(
                     StatusCode::BAD_REQUEST,
                     "invalid_param",
-                    "authorized_by refs must use the ak:event: typed prefix",
+                    "authorized_by refs must use the ak:grant: typed prefix",
                 ));
             }
             authorized_refs.push(id);
@@ -223,7 +223,9 @@ pub(in crate::routing) fn projection_operation_from_event(
     }
     if parsed.kind == arkret_wire::events::EventKind::RSVP_SET {
         if let Some(digest) = envelope
-            .get("proof")
+            .get("proofs")
+            .and_then(Value::as_array)
+            .and_then(|proofs| proofs.first())
             .and_then(|proof| proof.get("event_digest"))
         {
             payload_object
@@ -1190,7 +1192,12 @@ mod refs_limit_tests {
     #[test]
     fn authorized_by_over_max_rejected_as_refs_too_large() {
         let refs: Vec<Value> = (0..(arkret_wire::event_envelope::MAX_AUTHORIZED_BY_REFS + 1))
-            .map(|_| json!({"id": "ak:event:e1", "role": "authorized_by"}))
+            .map(|index| {
+                json!({
+                    "id": format!("ak:grant:019fa9da-0000-7000-8000-{index:012x}"),
+                    "role": "authorized_by"
+                })
+            })
             .collect();
         let err = event_semantic_refs(&refs_object(json!(refs)), MAX_EVENT_REFS).unwrap_err();
         assert_eq!(err.code, "refs_too_large");
@@ -1199,10 +1206,26 @@ mod refs_limit_tests {
     #[test]
     fn within_limits_collects_only_authorized_by_refs() {
         let refs = json!([
-            {"id": "ak:event:e1", "role": "authorized_by"},
+            {
+                "id": "ak:grant:019fa9da-0000-7000-8000-000000000001",
+                "role": "authorized_by"
+            },
             {"id": "ak:event:e2", "role": "after"}
         ]);
         let out = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap();
-        assert_eq!(out, vec!["ak:event:e1".to_owned()]);
+        assert_eq!(
+            out,
+            vec!["ak:grant:019fa9da-0000-7000-8000-000000000001".to_owned()]
+        );
+    }
+
+    #[test]
+    fn authorized_by_rejects_event_id_alias() {
+        let refs = json!([{
+            "id": "ak:event:019fa9da-0000-7000-8000-000000000001",
+            "role": "authorized_by"
+        }]);
+        let err = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap_err();
+        assert_eq!(err.code, "invalid_param");
     }
 }

@@ -42,6 +42,8 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
             "preconditions",
             "effects",
             "accepted_event_id",
+            "envelope_causal_refs",
+            "canonical_event_digest",
         ] {
             object.remove(field);
         }
@@ -1042,6 +1044,39 @@ mod tests {
                 },
                 "introduction_evidence_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 "expires_at": "2026-07-20T00:00:00.000Z"
+            })
+        );
+    }
+
+    #[test]
+    fn causal_projection_context_is_not_revalidated_as_wire_payload() {
+        let payload = json!({
+            "event_ref": "ak:strand:01904100-0000-7000-8000-0000000000e3",
+            "occurrence": null,
+            "entry": {
+                "schedule_basis_refs": [
+                    "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                ],
+                "response": {"status": "accepted"}
+            },
+            "envelope_causal_refs": [
+                "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+            ],
+            "canonical_event_digest":
+                "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+        });
+
+        assert_eq!(
+            projection_context_stripped_payload(&payload),
+            json!({
+                "event_ref": "ak:strand:01904100-0000-7000-8000-0000000000e3",
+                "occurrence": null,
+                "entry": {
+                    "schedule_basis_refs": [
+                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    ],
+                    "response": {"status": "accepted"}
+                }
             })
         );
     }

@@ -173,6 +173,7 @@ fn engine_grant_from_cell_body(
     body: &Value,
     revoked: bool,
 ) -> Option<crate::capability::Grant> {
+    let body = grant_body(body);
     if validate_grant_body_scope(body).is_err() {
         return None;
     }
@@ -251,6 +252,53 @@ pub fn engine_grant_from_capability_cell_state(
     let last = items.last()?;
     let body = last.get("value").unwrap_or(last);
     engine_grant_from_cell_body(grant_id, body, revoked)
+}
+
+#[cfg(test)]
+mod cba_capability_cell_tests {
+    use arkret_state::lattice::CellState;
+    use serde_json::{Value, json};
+
+    use super::engine_grant_from_capability_cell_state;
+
+    #[test]
+    fn engine_grant_reads_registry_projected_wrapper() {
+        let grant_id = "ak:grant:019fa9d5-0000-7000-8000-000000000001";
+        let realm_id = "ak:realm:019fa9d5-0000-7000-8000-000000000002";
+        let registry_digest = arkret_policy::current_capability_action_registry_digest().unwrap();
+        let state = CellState::Value(Value::Array(vec![json!({
+            "tag": "ak:event:019fa9d5-0000-7000-8000-000000000003:0",
+            "value": {
+                "grant_id": grant_id,
+                "grant": {
+                    "id": grant_id,
+                    "realm_id": realm_id,
+                    "issuer": "did:web:owner.example",
+                    "subject": "did:web:owner.example",
+                    "actions": ["ak.realm.admin"],
+                    "capability_action_registry_digest": registry_digest,
+                    "resources": [{
+                        "kind": "realm",
+                        "realm_id": realm_id,
+                        "match_scope": "realm_wide"
+                    }],
+                    "issued_at": "2026-07-28T00:00:00.000Z"
+                }
+            }
+        })]));
+
+        let grant = engine_grant_from_capability_cell_state(grant_id, &state)
+            .expect("the CBA registry wrapper must resolve to an effective grant");
+        assert_eq!(grant.grant_id, grant_id);
+        assert_eq!(grant.realm_id, realm_id);
+        assert_eq!(grant.subject, "did:web:owner.example");
+        assert!(
+            grant
+                .actions
+                .iter()
+                .any(|action| action == "ak.realm.admin")
+        );
+    }
 }
 
 fn validate_grant_body_scope(body: &Value) -> Result<(), &'static str> {

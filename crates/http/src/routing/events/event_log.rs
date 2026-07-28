@@ -105,7 +105,7 @@ use submit::{
     EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,
     SubmittedEventOutcome, ValidatedEventEnvelope, event_validation_error, events_submit_outcome,
     render_submit_one_error, submit_event_batch, submit_event_batch_outcome,
-    submit_event_value_with_idempotency,
+    submit_event_value_with_idempotency, submit_initial_event_batch_outcome,
 };
 
 mod validation;

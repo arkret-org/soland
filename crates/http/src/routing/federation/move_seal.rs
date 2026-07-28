@@ -1229,9 +1229,39 @@ pub(crate) async fn apply_inbound_seal(
     }
     verify_realm_notary_seal(state, seal).await?;
     let verifier = select_jws_verifier(state);
+    let context = if seal.predecessor_refs.is_empty() {
+        let events_with_digests = seal
+            .delta
+            .iter()
+            .map(|digest| {
+                state
+                    .projections()
+                    .control_event(digest)
+                    .map_err(|error| {
+                        AppError::new(
+                            ErrorCode::InternalError,
+                            format!("load first-Seal Control Move: {error}"),
+                        )
+                    })?
+                    .map(|event| (digest.clone(), event))
+                    .ok_or_else(|| {
+                        seal_admission_error(format!("first Seal is missing Control Move {digest}"))
+                    })
+            })
+            .collect::<Result<Vec<_>, AppError>>()?;
+        let events = arkret_state::deterministic_order(events_with_digests)
+            .into_iter()
+            .map(|(_, event)| event)
+            .collect::<Vec<_>>();
+        arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events)
+            .map_err(|error| seal_admission_error(error.to_string()))?;
+        arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+    } else {
+        arkret_wire::event_envelope::EventSubmitContext::Standard
+    };
     state
         .projections()
-        .apply_seal(seal, verifier)
+        .apply_seal_in_context(seal, verifier, context)
         .map_err(app_error_from_seal_reject)
 }
 

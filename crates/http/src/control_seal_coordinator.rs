@@ -43,6 +43,10 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str) {
         }
     };
     let worker = NotaryWorker::for_service(state.service_id().clone());
+    tracing::debug!(
+        pending_realm_count = realms.len(),
+        "control-seal reconciliation scanned durable pending index"
+    );
     for realm_id in realms {
         run_realm_pass(state, &worker, &realm_id, holder).await;
     }
@@ -51,7 +55,10 @@ async fn run_reconciliation_pass(state: &AppState, holder: &str) {
 async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &RealmId, holder: &str) {
     let slot = match worker.signing_lease_slot(state, realm_id, MAX_CONTROL_MOVES_PER_REALM) {
         Ok(Some(slot)) => slot,
-        Ok(None) => return,
+        Ok(None) => {
+            tracing::debug!(%realm_id, "control-seal Realm is not locally signable");
+            return;
+        }
         Err(error) => {
             tracing::warn!(%error, %realm_id, "control-seal coordinator could not resolve signer slot");
             return;
@@ -73,21 +80,37 @@ async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &Real
         }
     };
 
-    if let Err(error) = worker.sign_pending_for_realm(state, realm_id, MAX_CONTROL_MOVES_PER_REALM)
-    {
-        tracing::error!(
-            %error,
+    match worker.sign_pending_for_realm(state, realm_id, MAX_CONTROL_MOVES_PER_REALM) {
+        Ok(Some(outcome)) => tracing::info!(
+            %realm_id,
+            seal_id = %outcome.seal_id,
+            signer_slot = %slot,
+            fence,
+            "control-seal signing pass published a Seal"
+        ),
+        Ok(None) => tracing::debug!(
             %realm_id,
             signer_slot = %slot,
             fence,
-            "control-seal signing pass failed"
-        );
-        if let Err(defer_error) = defer_due_proposals_after_failed_signing(state, realm_id).await {
+            "control-seal signing pass had no accepted Moves"
+        ),
+        Err(error) => {
             tracing::error!(
-                %defer_error,
+                %error,
                 %realm_id,
-                "control-seal coordinator could not persist bounded defer decisions"
+                signer_slot = %slot,
+                fence,
+                "control-seal signing pass failed"
             );
+            if let Err(defer_error) =
+                defer_due_proposals_after_failed_signing(state, realm_id).await
+            {
+                tracing::error!(
+                    %defer_error,
+                    %realm_id,
+                    "control-seal coordinator could not persist bounded defer decisions"
+                );
+            }
         }
     }
     match state

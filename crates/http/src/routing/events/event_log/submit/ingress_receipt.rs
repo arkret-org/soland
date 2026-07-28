@@ -205,11 +205,20 @@ fn publication_reject(message: String) -> SubmitOneError {
 pub(in crate::routing) fn validate_initial_submission(
     submission: &arkret_wire::EventInitialSubmission,
 ) -> Result<(), SubmitOneError> {
-    submission.validate_structural().map_err(|error| {
-        SubmitOneError::new(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("initial publication wrapper is invalid: {error}"),
-        )
-    })
+    validate_initial_submission_in_context(submission, arkret_wire::EventSubmitContext::Standard)
+}
+
+pub(super) fn validate_initial_submission_in_context(
+    submission: &arkret_wire::EventInitialSubmission,
+    context: arkret_wire::EventSubmitContext,
+) -> Result<(), SubmitOneError> {
+    submission
+        .validate_structural_in_context(context)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("initial publication wrapper is invalid: {error}"),
+            )
+        })
 }

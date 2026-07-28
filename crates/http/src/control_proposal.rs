@@ -4,8 +4,26 @@ use arkret_wire::{
     ControlProposalReceipt, ControlProposalReceiptKind, ControlProposalRejectReason, Event,
     PayloadSignature,
 };
+use chrono::Duration;
+use serde::Deserialize;
 
 use crate::state::AppState;
+
+#[derive(Deserialize)]
+struct RealmCreateProposalPolicyPayload {
+    object: RealmCreateProposalPolicy,
+}
+
+#[derive(Deserialize)]
+struct RealmCreateProposalPolicy {
+    id: RealmId,
+    #[serde(default)]
+    proposal_decision_window_ms: Option<u64>,
+    #[serde(default)]
+    proposal_absolute_deadline_ms: Option<u64>,
+    #[serde(default)]
+    max_proposal_defers: Option<u8>,
+}
 
 fn policy_from_realm_create(
     realm_id: &RealmId,
@@ -14,19 +32,38 @@ fn policy_from_realm_create(
     if event.kind != arkret_wire::events::EventKind::REALM_CREATE {
         return Ok(None);
     }
-    let payload: arkret_models_collaboration::events_payloads::realm::RealmCreatePayload =
-        serde_json::from_value(serde_json::Value::Object(
-            event.payload.clone().into_iter().collect(),
-        ))
-        .map_err(|error| format!("Realm create policy payload is invalid: {error}"))?;
+    // A proposal receipt acknowledges ingress before semantic admission. Read
+    // only the create-locked decision-policy fields here; full Realm schema
+    // validation belongs to admission and must not turn a receipt request into
+    // a quorum failure because the payload carries an unrelated extension.
+    let payload: RealmCreateProposalPolicyPayload = serde_json::from_value(
+        serde_json::Value::Object(event.payload.clone().into_iter().collect()),
+    )
+    .map_err(|error| format!("Realm create policy payload is invalid: {error}"))?;
     if payload.object.id != *realm_id {
         return Err("Realm create policy does not bind the proposal Realm".to_owned());
     }
-    payload
-        .object
-        .control_proposal_decision_policy()
-        .map(Some)
-        .map_err(|error| error.to_string())
+    let duration_from_ms = |value: u64, field: &str| {
+        i64::try_from(value)
+            .map(Duration::milliseconds)
+            .map_err(|_| format!("{field} exceeds the signed duration range"))
+    };
+    let policy = ControlProposalDecisionPolicy {
+        decision_window: duration_from_ms(
+            payload.object.proposal_decision_window_ms.unwrap_or(30_000),
+            "proposal_decision_window_ms",
+        )?,
+        absolute_horizon: duration_from_ms(
+            payload
+                .object
+                .proposal_absolute_deadline_ms
+                .unwrap_or(90_000),
+            "proposal_absolute_deadline_ms",
+        )?,
+        max_defers: payload.object.max_proposal_defers.unwrap_or(2),
+    };
+    policy.validate().map_err(|error| error.to_string())?;
+    Ok(Some(policy))
 }
 
 pub(crate) async fn control_proposal_policy(

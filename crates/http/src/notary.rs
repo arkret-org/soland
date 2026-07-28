@@ -371,6 +371,14 @@ impl NotaryWorker {
         let replay_default = state.config().jws_replay_window_seconds;
         let replay_overrides = &state.config().jws_replay_window_per_family;
         let ordered = arkret_state::state::deterministic_order(pending);
+        if leaves.is_empty() {
+            let anchor_events = ordered
+                .iter()
+                .map(|(_, event)| event.clone())
+                .collect::<Vec<_>>();
+            arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&anchor_events)
+                .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        }
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(Hash, String)> = Vec::new();
         for (digest, event) in ordered {
@@ -405,18 +413,29 @@ impl NotaryWorker {
                     continue;
                 }
             };
-            if let Err(reject) = crate::jws_verify::verify_replay_window_for_projection(
-                &hlc,
-                &writes,
-                replay_default,
-                replay_overrides,
-            ) {
+            // A closed anchor unit has already passed its dedicated admission
+            // transaction and may need to be sealed after restart or delayed
+            // coordinator recovery. Applying the ordinary Move replay window
+            // here would make an accepted Realm permanently unsealable.
+            if !leaves.is_empty()
+                && let Err(reject) = crate::jws_verify::verify_replay_window_for_projection(
+                    &hlc,
+                    &writes,
+                    replay_default,
+                    replay_overrides,
+                )
+            {
                 rejected.push((digest, format!("replay_window: {reject}")));
                 continue;
             }
+            let context = if leaves.is_empty() {
+                arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+            } else {
+                arkret_wire::event_envelope::EventSubmitContext::Standard
+            };
             match state
                 .projections()
-                .verify_control_move(&event, realm_id, &pre_state, verifier)
+                .verify_control_move_in_context(&event, realm_id, &pre_state, verifier, context)
             {
                 Ok(effects) => accepted.push(AcceptedControlMove {
                     event_digest: digest,
@@ -425,6 +444,14 @@ impl NotaryWorker {
                 }),
                 Err(reject) => rejected.push((digest, reject.to_string())),
             }
+        }
+        for (digest, reason) in &rejected {
+            tracing::warn!(
+                %realm_id,
+                proposal_digest = %digest,
+                %reason,
+                "control-seal coordinator signed a proposal rejection"
+            );
         }
         self.record_signed_rejections(state, realm_id, &rejected)?;
         if accepted.is_empty() {
@@ -506,9 +533,26 @@ impl NotaryWorker {
         // `Copy` bound apply_seal's `F: Copy` requires.
         let effect = state
             .projections()
-            .apply_seal(&seal, verifier)
+            .apply_seal_in_context(
+                &seal,
+                verifier,
+                if leaves.is_empty() {
+                    arkret_wire::event_envelope::EventSubmitContext::AnchorUnit
+                } else {
+                    arkret_wire::event_envelope::EventSubmitContext::Standard
+                },
+            )
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
         self.record_signed_rejections(state, realm_id, &effect.rejected_events)?;
+        if tracing::enabled!(tracing::Level::DEBUG) {
+            let projected_cells = state.projections().realm_cells(realm_id)?;
+            tracing::debug!(
+                %realm_id,
+                seal_id = %effect.seal,
+                ?projected_cells,
+                "control Seal persisted receiver-derived cell effects"
+            );
+        }
 
         // Refresh ProjectionState::cells
         // from the now-updated CellStore so cell-keyed reads see the new

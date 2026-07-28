@@ -32,10 +32,19 @@ pub enum SolandEventsSubmitRequestBody {
     /// are strictly more permissive shapes — `Single(Value)` matches any JSON
     /// object at all, so it MUST stay last.
     Initial(arkret_wire::EventInitialSubmission),
-    /// Batch form — multiple envelopes, optional `idempotency_key`.
+    /// Current account-client batch form. Every Event carries its own
+    /// authorization lease outside the signed Event envelope.
+    InitialBatch(SolandEventsInitialSubmitBatchRequestBody),
+    /// Legacy internal batch form retained for implementation-owned callers.
+    /// Protocol producers use [`Self::InitialBatch`].
     Batch(SolandEventsSubmitBatchRequestBody),
     /// Single Event Envelope (dominant shape).
     Single(Value),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct SolandEventsInitialSubmitBatchRequestBody {
+    pub events: Vec<arkret_wire::EventInitialSubmission>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

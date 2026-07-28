@@ -570,6 +570,50 @@ pub(super) async fn submit_event_batch_outcome(
     session: &SessionRecord,
     envelopes: Vec<Value>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    submit_event_batch_outcome_with_leases(state, session, envelopes, None).await
+}
+
+pub(super) async fn submit_initial_event_batch_outcome(
+    state: &AppState,
+    session: &SessionRecord,
+    submissions: Vec<arkret_wire::EventInitialSubmission>,
+) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    let mut envelopes = Vec::with_capacity(submissions.len());
+    let mut leases = Vec::with_capacity(submissions.len());
+    for submission in &submissions {
+        envelopes.push(typed_event_to_canonical_value(submission.event.clone())?);
+    }
+    let submit_context =
+        if batch_contains_identity_anchor(&envelopes) || batch_begins_realm_create(&envelopes) {
+            arkret_wire::EventSubmitContext::AnchorUnit
+        } else {
+            arkret_wire::EventSubmitContext::Standard
+        };
+    for submission in submissions {
+        validate_initial_submission_in_context(&submission, submit_context)?;
+        let arkret_wire::EventInitialSubmission {
+            event: _,
+            authorization_lease,
+            cba_proof_bundles: _,
+        } = submission;
+        leases.push(authorization_lease);
+    }
+    submit_event_batch_outcome_with_leases(state, session, envelopes, Some(&leases)).await
+}
+
+async fn submit_event_batch_outcome_with_leases(
+    state: &AppState,
+    session: &SessionRecord,
+    envelopes: Vec<Value>,
+    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "initial publication batch lease cardinality mismatch",
+        ));
+    }
     if envelopes.is_empty() {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -585,15 +629,17 @@ pub(super) async fn submit_event_batch_outcome(
         ));
     }
     if batch_contains_identity_anchor(&envelopes) {
-        return submit_identity_anchor_batch(state, session, envelopes).await;
+        return submit_identity_anchor_batch(state, session, envelopes, authorization_leases).await;
     }
     if batch_begins_realm_create(&envelopes) && !batch_is_managed_agent_pcr_create(&envelopes) {
-        return submit_realm_bootstrap_batch(state, session, envelopes, None).await;
+        return submit_realm_bootstrap_batch(state, session, envelopes, None, authorization_leases)
+            .await;
     }
     let mut accepted = Vec::new();
     let mut duplicate = Vec::new();
     let mut rejected = Vec::new();
     let mut quarantine = Vec::new();
+    let mut ingress_receipts = Vec::new();
     let mut realm_actor_frontiers = BTreeMap::new();
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
     // `event-auth-state-resolution.md` §5(1) — the managed Agent PCR genesis is
@@ -617,7 +663,7 @@ pub(super) async fn submit_event_batch_outcome(
         }
     }
 
-    for envelope in envelopes {
+    for (index, envelope) in envelopes.into_iter().enumerate() {
         let id = event_string_field_from_value(&envelope, "event_id")
             .unwrap_or_else(|| "unknown".to_owned());
         let kind = event_string_field_from_value(&envelope, "kind");
@@ -630,7 +676,7 @@ pub(super) async fn submit_event_batch_outcome(
             &realm_bootstrap_contexts,
             None,
             None,
-            None,
+            authorization_leases.and_then(|leases| leases.get(index)),
         )
         .await
         {
@@ -644,6 +690,7 @@ pub(super) async fn submit_event_batch_outcome(
                         frontier,
                     );
                 }
+                ingress_receipts.extend(response.outcome.ingress_receipts.iter().cloned());
                 accepted.push(response.event_id.clone());
                 if response.duplicate {
                     duplicate.push(response.event_id);
@@ -691,6 +738,7 @@ pub(super) async fn submit_event_batch_outcome(
         quarantine,
         Some(super::super::sync::sync_token_for_state(state).await),
     );
+    outcome.ingress_receipts = ingress_receipts;
     outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
     Ok(outcome)
 }
@@ -1476,8 +1524,14 @@ pub(crate) async fn submit_federation_events(
                 )
             })
             .collect::<Vec<_>>();
-        match submit_realm_bootstrap_batch(state, &session, events, Some(admissions.as_slice()))
-            .await
+        match submit_realm_bootstrap_batch(
+            state,
+            &session,
+            events,
+            Some(admissions.as_slice()),
+            None,
+        )
+        .await
         {
             Ok(outcome) => {
                 project_verified_federated_device_evidence(

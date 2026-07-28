@@ -294,6 +294,12 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
                 Err(error) => render_submit_one_error(res, error),
             }
         }
+        SolandEventsSubmitRequestBody::InitialBatch(batch) => {
+            match submit_initial_event_batch_outcome(state, &session, batch.events).await {
+                Ok(outcome) => res.render(Json(outcome)),
+                Err(error) => render_submit_one_error(res, error),
+            }
+        }
         SolandEventsSubmitRequestBody::Batch(batch) => {
             submit_event_batch(state, &session, batch.events, res).await;
         }
@@ -328,6 +334,12 @@ async fn submit_event_dispatch(
         SolandEventsSubmitRequestBody::Initial(submission) => {
             match submit_initial_event_submission(state, session, submission).await {
                 Ok(response) => (StatusCode::OK, submit_outcome_value(&response.outcome)),
+                Err(error) => submit_one_error_value(error),
+            }
+        }
+        SolandEventsSubmitRequestBody::InitialBatch(batch) => {
+            match submit_initial_event_batch_outcome(state, session, batch.events).await {
+                Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
                 Err(error) => submit_one_error_value(error),
             }
         }

@@ -895,13 +895,34 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String>,
     {
-        arkret_state::verify_control_move(
+        self.verify_control_move_in_context(
+            event,
+            realm_id,
+            pre_state,
+            verify_proofs,
+            arkret_wire::event_envelope::EventSubmitContext::Standard,
+        )
+    }
+
+    pub fn verify_control_move_in_context<F>(
+        &self,
+        event: &Event,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    where
+        F: Fn(&Event) -> Result<(), String>,
+    {
+        arkret_state::verify_control_move_in_context(
             event,
             realm_id,
             pre_state,
             self.cell_registry(),
             verify_proofs,
             |event| self.project_cell_writes(event),
+            context,
         )
     }
 
@@ -909,7 +930,23 @@ impl ProjectionService {
     where
         F: Fn(&Event) -> Result<(), String> + Copy,
     {
-        arkret_state::apply_seal(
+        self.apply_seal_in_context(
+            seal,
+            verify_proofs,
+            arkret_wire::event_envelope::EventSubmitContext::Standard,
+        )
+    }
+
+    pub fn apply_seal_in_context<F>(
+        &self,
+        seal: &Seal,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<SealEffect, SealReject>
+    where
+        F: Fn(&Event) -> Result<(), String> + Copy,
+    {
+        arkret_state::apply_seal_in_context(
             seal,
             self.control_event_store(),
             self.seal_store(),
@@ -917,6 +954,7 @@ impl ProjectionService {
             self.cell_registry(),
             verify_proofs,
             |event| self.project_cell_writes(event),
+            context,
         )
     }
 

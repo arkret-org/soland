@@ -569,25 +569,6 @@ pub(super) async fn submit_event_value_with_context(
             "prev_refs must include the preceding actor sequence in the same Realm",
         ));
     }
-    for authorized_ref in &parsed.authorized_refs {
-        if !service
-            .has_canonical_event(authorized_ref)
-            .await
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("events store unavailable: {error}"),
-                )
-            })?
-        {
-            return Err(SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "dependency_missing",
-                "refs[role=authorized_by] must reference accepted authorization events",
-            ));
-        }
-    }
     enforce_sibling_fork_limit(state, session, &parsed, &scoped_actor_records).await?;
 
     let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
