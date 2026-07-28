@@ -46,10 +46,11 @@ pub(crate) use soland_storage::{
     RecoveryPolicyRecord, RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore,
     RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore,
     RetentionTombstoneRecord, RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM, SINGLETON_ID,
-    ServiceIdentityStore, ServiceRegistrationCommitOutcome, SessionRecord, SessionStore,
-    SidecarStore, SignalRelayRecord, SignalRelayStore, SpaceContainerProjectionRecord,
-    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord,
-    SyncCursorStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+    SecurityTransactionRecord, SecurityTransactionStore, ServiceIdentityStore,
+    ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
+    SignalRelayStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
+    StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord, SyncCursorStore,
+    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
     account_with_primary_localpart_select, applet_registration_select_sql,
     applet_transaction_replay_select_sql, audit_uuid_index, db_ssk_generation, decode_grant_dots,
     decode_registration_outcome, decode_session_agent_payload, encode_grant_dots,
@@ -61,7 +62,7 @@ pub(crate) use soland_storage::{
     projected_operation_realm_discoverability, projected_operation_realm_summary,
     projected_operation_realm_title, registration_as_existing, registrations_match,
     required_record_str, required_record_timestamp, valid_new_service_registration_records,
-    webvh_freshness_on_put,
+    validate_security_transaction_update, webvh_freshness_on_put,
 };
 pub(crate) use uuid::Uuid;
 
@@ -100,6 +101,7 @@ mod push;
 mod realm_invites;
 mod recovery;
 mod registry;
+mod security_transactions;
 mod service_identity;
 mod sessions;
 mod settings;
@@ -138,6 +140,7 @@ pub use push::*;
 pub use realm_invites::*;
 pub use recovery::*;
 pub use registry::PgPersistenceStore;
+pub use security_transactions::*;
 pub use service_identity::*;
 pub use sessions::*;
 pub use settings::*;

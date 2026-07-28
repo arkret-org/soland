@@ -166,6 +166,7 @@ pub trait DeliveryPolicyStoreRegistry: Send + Sync {
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
     fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore;
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore;
+    fn security_transactions(&self) -> &dyn SecurityTransactionStore;
     fn webvh(&self) -> &dyn WebvhStore;
     fn service_identity(&self) -> &dyn ServiceIdentityStore;
     fn realm_invites(&self) -> &dyn RealmInviteStore;

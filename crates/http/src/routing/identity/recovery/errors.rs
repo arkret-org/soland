@@ -48,14 +48,3 @@ pub(super) fn recovery_policy_store_error(error: PersistenceError) -> AppError {
         AppError::conflict(message).with_wire_code("recovery_policy_conflict")
     }
 }
-
-pub(super) fn recovery_receipt_store_error(error: PersistenceError) -> AppError {
-    if !error.is_conflict_kind() {
-        return recovery_store_error(error);
-    }
-    if error.detail().contains("recovery_session_id") {
-        AppError::conflict(error.detail()).with_wire_code("recovery_session_id_reused")
-    } else {
-        AppError::conflict(error.detail()).with_wire_code("recovery_receipt_conflict")
-    }
-}

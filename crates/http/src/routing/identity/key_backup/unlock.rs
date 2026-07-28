@@ -209,29 +209,6 @@ pub(super) fn key_backup_canonical_digest_without_signature(
     Ok(arkret_canonical::sha256_digest(&bytes))
 }
 
-pub(super) fn recovery_session_proof_summary(
-    record: &soland_services::identity::RecoverySessionState,
-) -> Option<(String, String)> {
-    let proof = record.proof_payload.as_ref()?.get("proof")?.as_object()?;
-    let kind = proof.get("kind").and_then(Value::as_str)?;
-    let transcript = json!({
-        "type": "ak.identity.recovery_proof.v1",
-        "kind": kind,
-        "principal_id": record.principal_id.as_str(),
-        "requesting_device_id": record.requesting_device_id.as_str(),
-        "trust_domain": record.trust_domain.as_str(),
-        "policy_id": record.policy_id.as_str(),
-        "policy_version": record.policy_version,
-        "recovery_session_id": record.recovery_session_id.as_str(),
-        "ssk_generation": record.ssk_generation,
-        "challenge": record.challenge.as_str(),
-        "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),
-    });
-    let bytes = arkret_canonical::canonical_json_bytes(&transcript).ok()?;
-    Some((kind.to_owned(), arkret_canonical::sha256_digest(&bytes)))
-}
-
 pub(super) fn required_proof_string<'a>(
     proof: &'a Value,
     field: &str,
@@ -483,7 +460,8 @@ pub(super) async fn enforce_recovery_session_binding_when_present(
         )
         .with_wire_code("recovery_evidence_unbound"));
     }
-    if let Some((kind, digest)) = recovery_session_proof_summary(&record)
+    if let Some((kind, digest)) =
+        super::super::recovery::recovery_session_proof_kind_and_digest(&record)
         && (required_proof_string(proof, "proof_kind")? != kind
             || required_proof_string(proof, "proof_digest")? != digest)
     {

@@ -230,6 +230,7 @@ async fn seed_verified_reset_recovery_session(
             proof_payload: Some(serde_json::json!({
                 "proof": { "kind": "principal_signing" }
             })),
+            transaction_id: None,
             created_at: now - chrono::Duration::seconds(1),
             updated_at: now,
             expires_at: now + chrono::Duration::minutes(10),
@@ -608,6 +609,125 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
     )
     .await;
     assert_eq!(fetched["state"], "pending");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recovery_session_recovery_unlock_binds_policy_transcript_and_key() {
+    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+    let principal_signing = SigningKey::from_bytes(&[141u8; 32]);
+    let (principal_id, principal_vm) = did_key_principal(&principal_signing);
+    let recovery_signing = SigningKey::from_bytes(&[142u8; 32]);
+    let recovery_ref = format!("{principal_id}#recovery-proof-0");
+    let recovery_public = test_ed25519_multibase_public(&recovery_signing);
+    let not_before = arkret_canonical::format_timestamp_canonical(
+        chrono::Utc::now() - chrono::Duration::hours(1),
+    );
+    let expires_at = arkret_canonical::format_timestamp_canonical(
+        chrono::Utc::now() + chrono::Duration::days(1),
+    );
+    let key_agreement_ref = format!("{principal_id}#backup-hpke-0");
+    seed_reset_recovery_policy(
+        &state,
+        &principal_id,
+        "recovery_unlock",
+        serde_json::json!({
+            "recovery_keys": [{
+                "verification_method": recovery_ref.clone(),
+                "public_key_multibase": recovery_public,
+                "key_agreement_ref": key_agreement_ref.clone(),
+                "alg": "Ed25519",
+                "not_before": not_before,
+                "expires_at": expires_at,
+            }],
+            "recovery_key_agreements": [{
+                "key_agreement_ref": key_agreement_ref,
+                "alg": "X25519",
+                "public_key_multibase": "z6LSr8KVwSrjSa7Bj6KagU93mSi8zQM6VfmmUoTb8xXJFEr7",
+                "hpke_suites": ["ak.hpke_x25519_aead_chacha20poly1305.v1"],
+                "use": "backup_hpke",
+                "not_before": not_before,
+                "expires_at": expires_at,
+            }],
+        }),
+    )
+    .await;
+    ensure_cross_signing(
+        state.clone(),
+        &principal_id,
+        &principal_vm,
+        &principal_signing,
+    );
+    let token = dev_token_for_device(
+        state.clone(),
+        &principal_id,
+        RECOVERY_TEST_DEVICE,
+        "Recovery",
+    )
+    .await;
+    let session = post_recovery(
+        state.clone(),
+        &token,
+        "/_arkret/root/identity/recovery-sessions",
+        &serde_json::json!({
+            "principal_id": principal_id,
+            "trust_domain": "ak:trust_domain:soland.local",
+            "requesting_device_id": "ak:device:01904100-0000-7000-8000-000000000141",
+        }),
+        StatusCode::CREATED,
+    )
+    .await;
+    let session_id = session["recovery_session_id"].as_str().unwrap();
+
+    let mut bad_commitment = recovery_unlock_proof(&recovery_signing, &session, &recovery_ref);
+    bad_commitment["proof"]["unlock_commitment"] =
+        serde_json::json!(format!("sha256:{}", "00".repeat(32)));
+    let rejected = post_recovery(
+        state.clone(),
+        &token,
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &bad_commitment,
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    assert_eq!(rejected["error"]["code"], "recovery_evidence_unbound");
+
+    let attacker = SigningKey::from_bytes(&[143u8; 32]);
+    let bad_signature = recovery_unlock_proof(&attacker, &session, &recovery_ref);
+    let rejected = post_recovery(
+        state.clone(),
+        &token,
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &bad_signature,
+        StatusCode::UNAUTHORIZED,
+    )
+    .await;
+    assert_eq!(rejected["error"]["code"], "proof_invalid");
+
+    let fetched = get_recovery(
+        state.clone(),
+        &token,
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}"),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(fetched["state"], "pending");
+
+    let accepted = post_recovery(
+        state,
+        &token,
+        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
+        &recovery_unlock_proof(&recovery_signing, &session, &recovery_ref),
+        StatusCode::OK,
+    )
+    .await;
+    assert_eq!(accepted["state"], "verified");
+    assert_eq!(accepted["proof_summary"]["kind"], "recovery_unlock");
+    assert!(
+        accepted["proof_summary"]["proof_digest"]
+            .as_str()
+            .unwrap()
+            .starts_with("sha256:")
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

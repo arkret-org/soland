@@ -17,12 +17,11 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 //
 // A recovery session binds a *requesting device* to the principal's currently
 // accepted recovery policy snapshot + a server-issued anti-replay challenge,
-// and advances `pending -> verified -> completed` (or `rejected` / `expired`).
+// and advances `pending -> verified` (or `rejected` / `expired`).
 //
 //   POST recovery-sessions                  — create (snapshot policy + challenge)
 //   GET  recovery-sessions/{id}             — read status (principal-isolated)
 //   POST recovery-sessions/{id}/proofs      — verify a proof (pending -> verified)
-//   POST recovery-sessions/{id}/complete    — finalize (only when state == verified)
 //
 // C-P3 — `/proofs` verifies the `principal_signing` kind cryptographically
 // (Ed25519 over the canonical recovery-proof transcript binding every
@@ -30,19 +29,8 @@ fn constant_time_str_eq(left: &str, right: &str) -> bool {
 // Other policy-permitted proof kinds return 501 `recovery_proof_kind_unimplemented`
 // rather than silently leaving the session pending.
 //
-// C-P4 — `/complete` requires the client-signed `ak.device.authorize` material
-// (recovery-session.schema.json complete_request), validates every session
-// binding (device_id / principal_id / recovery_session_id / ssk_generation +
-// cross_signing_binding + device_signature shape), then EMITS the authorize plus
-// a `ak.device.list_update` onto the principal's control realm (a deterministic
-// per-principal `ak:realm:` auto-materialized by the projector) via
-// `accept_local_operations` — real schema validation + reducer apply. The
-// session transitions to `completed` and the response is the schema's
-// complete_response (authorization_event_id / device_list_update_event_id).
-// Remaining nuance (not faked): the SSK signature inside cross_signing_binding
-// is not re-verified here (no accepted ak.cross_signing.publish state yet —
-// Phase 4), and these ids identify accepted operations in the reducer/projection;
-// wiring them into the durable event-envelope read store is Phase 3.
+// Completion is exclusively owned by the bound RecoveryTransaction. There is
+// no second public recovery-session completion command.
 
 pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> Value {
     let mut out = json!({
@@ -91,6 +79,9 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> 
         && let Some(summary) = recovery_proof_summary(record)
     {
         out["proof_summary"] = summary;
+    }
+    if let Some(transaction_id) = &record.transaction_id {
+        out["transaction_id"] = json!(transaction_id);
     }
     out
 }
@@ -404,6 +395,7 @@ pub(super) async fn recovery_session_create(
         challenge: generate_recovery_challenge(),
         state: "pending".to_owned(),
         proof_payload: None,
+        transaction_id: None,
         created_at: now,
         updated_at: now,
         expires_at: now + chrono::Duration::seconds(RECOVERY_SESSION_TTL_SECS),
@@ -763,7 +755,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 /// (b) `signature` (under the entry's `alg`, Ed25519) MUST verify over the
 ///     generic recovery transcript whose proof_body is this proof object with
 ///     `signature` and `unlock_commitment` removed, using the public key
-///     decoded from the entry's verification_method;
+///     decoded from the entry's `public_key_multibase`;
 /// (c) `unlock_commitment` MUST equal
 ///     SHA-256(utf8("ak.recovery-session-unlock-binding-v1\n")
 ///       || utf8(recovery_secret_ref) || unlock_binding_input_bytes),
@@ -805,7 +797,7 @@ pub(super) async fn verify_recovery_unlock_proof(
             "recovery_unlock proof.alg does not match the recovery key entry alg",
         ));
     }
-    let recovery_key = decode_recovery_key_public_key(verification_method)?;
+    let recovery_key = decode_recovery_key_public_key(&entry)?;
 
     // (b)/(c) Build the binding transcript (proof_body excluding signature +
     // unlock_commitment) once; both the signature and the commitment cover it.
@@ -912,32 +904,22 @@ fn recovery_key_entry_authoritative_at(
     }
 }
 
-/// Decode the Ed25519 public key carried self-describingly by a recovery key
-/// `verification_method`. The trust root is the principal-signed recovery
-/// policy, so the key material is the `did:key` multibase encoded in the
-/// verification_method itself (no DID-document lookup): the `z…` multibase is
-/// taken from the fragment when present, else from the method-specific id.
-fn decode_recovery_key_public_key(verification_method: &str) -> Result<VerifyingKey, AppError> {
-    let multibase = recovery_key_multibase(verification_method).ok_or_else(|| {
-        recovery_evidence_unbound_error(
-            "recovery key verification_method does not carry a did:key multibase public key",
-        )
-    })?;
+/// Decode the Ed25519 key material carried by the resolved, principal-signed
+/// recovery-policy entry. `verification_method` is only its stable DID URL;
+/// B-model principals intentionally do not need to publish this recovery-only
+/// key in their DID Document.
+fn decode_recovery_key_public_key(entry: &Map<String, Value>) -> Result<VerifyingKey, AppError> {
+    let multibase = entry
+        .get("public_key_multibase")
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| {
+            recovery_evidence_unbound_error(
+                "recovery key entry does not carry public_key_multibase",
+            )
+        })?;
     crate::routing::identity::cross_signing::decode_ed25519_key(multibase, "multibase")
         .map_err(|error| recovery_evidence_unbound_error(format!("recovery key invalid: {error}")))
-}
-
-/// Extract the base58btc multibase (`z…`) public key from a `did:key`
-/// verification method. Accepts `did:key:z…#z…` (fragment carries the key id)
-/// and bare `did:key:z…`.
-fn recovery_key_multibase(verification_method: &str) -> Option<&str> {
-    let body = verification_method.strip_prefix("did:key:")?;
-    let candidate = match body.split_once('#') {
-        Some((_, fragment)) if fragment.starts_with('z') => fragment,
-        Some((id, _)) => id,
-        None => body,
-    };
-    candidate.starts_with('z').then_some(candidate)
 }
 
 fn required_proof_string<'a>(
@@ -1044,7 +1026,7 @@ fn recovery_proof_authority_error(message: impl Into<String>) -> AppError {
 /// MUST construct this identically.
 pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, kind: &str) -> Value {
     json!({
-        "type": "ak.identity.recovery_proof.v1",
+        "schema": "ak.identity.recovery_proof.v1",
         "kind": kind,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -1068,7 +1050,7 @@ pub(super) fn generic_recovery_proof_transcript(
     proof_body: Value,
 ) -> Value {
     json!({
-        "type": "ak.identity.recovery_proof.v1",
+        "schema": "ak.identity.recovery_proof.v1",
         "kind": kind,
         "principal_id": record.principal_id,
         "requesting_device_id": record.requesting_device_id,
@@ -1085,6 +1067,7 @@ pub(super) fn generic_recovery_proof_transcript(
     })
 }
 
+#[cfg(any())]
 #[salvo::oapi::endpoint(
     operation_id = "ak.root.identity.recovery_session.command.complete",
     tags("identity")
@@ -1557,6 +1540,7 @@ pub(super) async fn recovery_session_complete(
 /// event is absent or not the expected kind. (Events reach the store via the
 /// normal `POST /events` path, where §3a verifies the cross_signing_binding at
 /// ingest and actor_seq monotonicity is enforced.)
+#[cfg(any())]
 pub(super) async fn resolve_control_event_payload(
     state: &AppState,
     event_id: &str,

@@ -29,23 +29,6 @@ pub(crate) const POLICY_FIELDS: &[&str] = &[
     "expires_at",
 ];
 
-pub(crate) const RECEIPT_FIELDS: &[&str] = &[
-    "schema",
-    "receipt_id",
-    "principal_id",
-    "recovery_session_id",
-    "policy_id",
-    "policy_version",
-    "trust_domain",
-    "new_device_id",
-    "proof_summary",
-    "backup_classes_unlocked",
-    "welcome_count",
-    "outcome",
-    "started_at",
-    "completed_at",
-];
-
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
 pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-a11ce0000002";
@@ -99,7 +82,7 @@ pub(crate) fn ensure_cross_signing(
 pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> String {
     let model_generation_ref = recovery_model_generation_ref(session);
     let transcript = serde_json::json!({
-        "type": "ak.identity.recovery_proof.v1",
+        "schema": "ak.identity.recovery_proof.v1",
         "kind": "principal_signing",
         "principal_id": session["principal_id"],
         "requesting_device_id": session["requesting_device_id"],
@@ -138,7 +121,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         proof_body["attestation_ref"] = serde_json::json!(attestation_ref);
     }
     let transcript = serde_json::json!({
-        "type": "ak.identity.recovery_proof.v1",
+        "schema": "ak.identity.recovery_proof.v1",
         "kind": "trusted_recovery_service",
         "principal_id": session["principal_id"],
         "requesting_device_id": session["requesting_device_id"],
@@ -157,6 +140,53 @@ pub(crate) fn sign_trusted_recovery_service_proof(
     URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes())
 }
 
+pub(crate) fn recovery_unlock_proof(
+    signing: &SigningKey,
+    session: &Value,
+    recovery_secret_ref: &str,
+) -> Value {
+    let proof_body = serde_json::json!({
+        "kind": "recovery_unlock",
+        "challenge": session["challenge"],
+        "recovery_secret_ref": recovery_secret_ref,
+        "verification_method": recovery_secret_ref,
+        "alg": "Ed25519",
+    });
+    let transcript = serde_json::json!({
+        "schema": "ak.identity.recovery_proof.v1",
+        "kind": "recovery_unlock",
+        "principal_id": session["principal_id"],
+        "requesting_device_id": session["requesting_device_id"],
+        "trust_domain": session["trust_domain"],
+        "policy_id": session["policy_id"],
+        "policy_version": session["policy_version"],
+        "recovery_session_id": session["recovery_session_id"],
+        "identity_model": session["identity_model"],
+        "model_generation_ref": recovery_model_generation_ref(session),
+        "challenge": session["challenge"],
+        "created_at": session["created_at"],
+        "expires_at": session["expires_at"],
+        "proof_body": proof_body,
+    });
+    let bytes = arkret_canonical::canonical_json_bytes(&transcript).unwrap();
+    let mut hasher = Sha256::new();
+    hasher.update(b"ak.recovery-session-unlock-binding-v1\n");
+    hasher.update(recovery_secret_ref.as_bytes());
+    hasher.update(&bytes);
+
+    serde_json::json!({
+        "proof": {
+            "kind": "recovery_unlock",
+            "challenge": session["challenge"],
+            "recovery_secret_ref": recovery_secret_ref,
+            "verification_method": recovery_secret_ref,
+            "alg": "Ed25519",
+            "unlock_commitment": format!("sha256:{}", hex::encode(hasher.finalize())),
+            "signature": URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes()),
+        }
+    })
+}
+
 fn recovery_model_generation_ref(session: &Value) -> Value {
     match session["identity_model"].as_str() {
         Some("cross_signing") => session["ssk_generation"].clone(),
@@ -169,86 +199,6 @@ fn recovery_model_generation_ref(session: &Value) -> Value {
 /// at authorization and used to verify a later recovery_receipt's signature.
 pub(crate) fn recovery_device_key() -> SigningKey {
     SigningKey::from_bytes(&[230u8; 32])
-}
-
-/// Run a full recovery completion so the requesting device is authorized (its
-/// `recovery_device_key()` public key recorded). Returns `(policy_id, device_id)`.
-pub(crate) async fn authorize_device_via_recovery(
-    state: &AppState,
-    signing: &SigningKey,
-    principal_id: &str,
-    vm: &str,
-) -> (String, String) {
-    let ssk = SigningKey::from_bytes(&[231u8; 32]);
-    let usk = SigningKey::from_bytes(&[232u8; 32]);
-    seed_cross_signing(state, principal_id, vm, signing, &ssk, &usk);
-    let token = dev_token_for_device(
-        state.clone(),
-        principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    // `verified_session_for` → `open_recovery_session` already publishes the v1
-    // policy; read its id from the session rather than double-posting.
-    let (session, session_id) =
-        verified_session_for(state, &token, signing, principal_id, vm).await;
-    let policy_id = session["policy_id"].as_str().unwrap().to_owned();
-    let device_id = session["requesting_device_id"].as_str().unwrap().to_owned();
-    let complete_body =
-        seed_completion_events(state, &session, device_authorize_material(&session, &ssk)).await;
-    post_recovery(
-        state.clone(),
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::OK,
-    )
-    .await;
-    (policy_id, device_id)
-}
-
-/// Build a recovery_receipt signed by the authorized device key (§15 step 7).
-pub(crate) fn signed_device_recovery_receipt(
-    device_key: &SigningKey,
-    principal_id: &str,
-    policy_id: &str,
-    policy_version: u32,
-    new_device_id: &str,
-    signed_fields: &[&str],
-) -> Value {
-    let mut receipt = serde_json::json!({
-        "schema": "ak.schema.recovery_receipt.v1",
-        "receipt_id": new_prefixed_uuid7("ak:receipt:"),
-        "principal_id": principal_id,
-        "recovery_session_id": new_prefixed_uuid7("ak:recovery_session:"),
-        "policy_id": policy_id,
-        "policy_version": policy_version,
-        "trust_domain": "ak:trust_domain:soland.local",
-        "new_device_id": new_device_id,
-        "proof_summary": {
-            "kind": "principal_signing",
-            "proof_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        },
-        "backup_classes_unlocked": [],
-        "welcome_count": 0,
-        "outcome": "completed",
-        "started_at": "2026-05-30T00:00:00.000Z",
-        "completed_at": "2026-05-30T00:00:01.000Z",
-        "auth_data": {
-            "verification_method": format!("{principal_id}#{new_device_id}"),
-            "signature_algorithm": "EdDSA",
-            "signed_fields": signed_fields,
-            "signature": ""
-        }
-    });
-    sign_recovery_payload(
-        &mut receipt,
-        "ak.identity.recovery_receipt.signature.v1",
-        signed_fields,
-        device_key,
-    );
-    receipt
 }
 
 /// Build a well-formed client `device_authorize` material bound to `session`,
@@ -411,7 +361,7 @@ pub(crate) async fn verified_session_for(
     let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
     let challenge = session["challenge"].as_str().unwrap().to_owned();
     let signature = sign_recovery_proof(signing, &session);
-    post_recovery(
+    let proof_outcome = post_recovery(
         state.clone(),
         token,
         &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
@@ -427,6 +377,9 @@ pub(crate) async fn verified_session_for(
         StatusCode::OK,
     )
     .await;
+    let mut session = session;
+    session["state"] = proof_outcome["state"].clone();
+    session["proof_summary"] = proof_outcome["proof_summary"].clone();
     (session, session_id)
 }
 
@@ -796,51 +749,6 @@ pub(crate) fn signed_recovery_policy(
     policy
 }
 
-pub(crate) fn signed_recovery_receipt(
-    signing: &SigningKey,
-    principal_id: &str,
-    verification_method: &str,
-    policy_id: &str,
-    policy_version: u32,
-    recovery_session_id: Option<&str>,
-    signed_fields: &[&str],
-) -> Value {
-    let mut receipt = serde_json::json!({
-        "schema": "ak.schema.recovery_receipt.v1",
-        "receipt_id": new_prefixed_uuid7("ak:receipt:"),
-        "principal_id": principal_id,
-        "recovery_session_id": recovery_session_id
-            .map(ToOwned::to_owned)
-            .unwrap_or_else(|| new_prefixed_uuid7("ak:recovery_session:")),
-        "policy_id": policy_id,
-        "policy_version": policy_version,
-        "trust_domain": "ak:trust_domain:soland.local",
-        "new_device_id": "ak:device:01904100-0000-7000-8000-000000000042",
-        "proof_summary": {
-            "kind": "principal_signing",
-            "proof_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-        },
-        "backup_classes_unlocked": [],
-        "welcome_count": 0,
-        "outcome": "completed",
-        "started_at": "2026-05-30T00:00:00.000Z",
-        "completed_at": "2026-05-30T00:00:01.000Z",
-        "auth_data": {
-            "verification_method": verification_method,
-            "signature_algorithm": "EdDSA",
-            "signed_fields": signed_fields,
-            "signature": ""
-        }
-    });
-    sign_recovery_payload(
-        &mut receipt,
-        "ak.identity.recovery_receipt.signature.v1",
-        signed_fields,
-        signing,
-    );
-    receipt
-}
-
 pub(crate) fn sign_recovery_payload(
     payload: &mut Value,
     transcript_type: &str,
@@ -875,23 +783,6 @@ pub(crate) async fn post_recovery_policy(
         ingest_fresh_recovery_did_document(&state, principal_id).await;
     }
     let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(body)
-        .send(&app_from_state(state))
-        .await;
-    let status = response.status_code.unwrap();
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, expected_status, "response body: {body}");
-    body
-}
-
-pub(crate) async fn post_recovery_receipt(
-    state: AppState,
-    token: &str,
-    body: &Value,
-    expected_status: StatusCode,
-) -> Value {
-    let mut response = TestClient::post("http://server/_soland/root/identity/recovery-receipt")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
         .send(&app_from_state(state))

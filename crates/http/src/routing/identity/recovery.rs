@@ -1,17 +1,12 @@
-//! AKP-0010 / R3 (REC-1) — recovery policy + recovery receipt endpoints.
+//! Recovery policy and recovery-session endpoints.
 //!
 //! Mounts recovery policy / receipt endpoints introduced in arkret-spec b47ff6ec:
 //!
 //! - `GET /_arkret/root/identity/recovery-policy` — read the active recovery policy.
 //! - `POST /_arkret/root/identity/recovery-policy` — persist + advance a recovery policy.
-//! - `POST /_soland/root/identity/recovery-receipt` — record a recovery receipt for a witnessed
-//!   session.
-//!
 //! Wire-level validation lands here (proof_kind enum, recovery_session
 //! uuid pattern, expires/policy_version monotonicity,
-//! `recovery_witness_revoke_lagging` freshness window) plus the REC-1
-//! Ed25519 principal signature checks over canonical signed_fields
-//! transcripts.
+//! `recovery_witness_revoke_lagging` freshness window).
 //!
 //! The implementation is split across sibling submodules under `recovery/`;
 //! this module root keeps the routers, the shared `use` surface (re-exported to
@@ -19,16 +14,12 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{
-    DeviceId, Did, Hash, PolicyId, RealmId, ReceiptId, RecoverySessionId, TypedTrustDomainId,
-};
+use arkret_identifiers::{DeviceId, Did, Hash, PolicyId, RealmId, RecoverySessionId};
 use arkret_models_crypto::{
     DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
-    RecoveryPolicySummary, RecoveryReceiptOutcome, RecoverySessionCompleteOutcome,
-    RecoverySessionCompleteRequestBody, RecoverySessionCreateRequestBody,
-    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
-    SessionState,
+    RecoveryPolicySummary, RecoverySessionCreateRequestBody, RecoverySessionProofSubmitOutcome,
+    RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState,
 };
 use arkret_wire::{EventBatchReceiptScope, NonEmptyString};
 use base64::Engine as _;
@@ -54,8 +45,6 @@ mod errors;
 use errors::*;
 mod policy_endpoints;
 use policy_endpoints::*;
-mod receipt_endpoints;
-use receipt_endpoints::*;
 mod session_endpoints;
 use session_endpoints::*;
 mod signatures;
@@ -65,11 +54,25 @@ use validation::*;
 mod wire;
 use wire::*;
 
+/// Return the proof kind and canonical transcript digest recorded by a
+/// verified recovery session. Key-backup release uses this exact helper so it
+/// cannot drift from recovery-session proof verification.
+pub(super) fn recovery_session_proof_kind_and_digest(
+    record: &soland_services::identity::RecoverySessionState,
+) -> Option<(String, String)> {
+    let summary = recovery_proof_summary(record)?;
+    Some((
+        summary.get("kind")?.as_str()?.to_owned(),
+        summary.get("proof_digest")?.as_str()?.to_owned(),
+    ))
+}
+
 /// Spec-canonical recovery surface mounted under `/_arkret/root/identity`.
 ///
 /// The standard surface exposes recovery policy read/publish plus recovery
 /// session lifecycle operations. Policy history and recovery receipt
-/// write/history remain product-private on the `/_soland` track.
+/// write is part of the standard recovery lifecycle. Policy and receipt
+/// history remain product-private on the `/_soland` track.
 pub(super) fn protocol_router() -> Router {
     Router::with_path("identity")
         .push(
@@ -87,15 +90,9 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
                 .post(recovery_session_proof_submit),
         )
-        .push(
-            Router::with_path("recovery-sessions/{recovery_session_id}/complete")
-                .post(recovery_session_complete),
-        )
 }
 
 pub(super) fn router() -> Router {
     Router::with_path("identity")
         .push(Router::with_path("recovery-policies").get(recovery_policies_get))
-        .push(Router::with_path("recovery-receipt").post(recovery_receipt_put))
-        .push(Router::with_path("recovery-receipts").get(recovery_receipts_get))
 }

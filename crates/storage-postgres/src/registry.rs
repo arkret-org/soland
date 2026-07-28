@@ -52,6 +52,7 @@ pub struct PgPersistenceStore {
     recovery_policies: PgRecoveryPolicyStore,
     recovery_receipts: PgRecoveryReceiptStore,
     recovery_sessions: PgRecoverySessionStore,
+    security_transactions: PgSecurityTransactionStore,
     space_container_projections: PgSpaceContainerProjectionStore,
     strand_projections: PgStrandProjectionStore,
     morph_projections: PgMorphProjectionStore,
@@ -115,6 +116,7 @@ impl PgPersistenceStore {
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
             recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
             recovery_sessions: PgRecoverySessionStore { pool: pool.clone() },
+            security_transactions: PgSecurityTransactionStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             strand_projections: PgStrandProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
@@ -352,6 +354,10 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
 
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore {
         &self.recovery_sessions
+    }
+
+    fn security_transactions(&self) -> &dyn SecurityTransactionStore {
+        &self.security_transactions
     }
 
     fn webvh(&self) -> &dyn WebvhStore {

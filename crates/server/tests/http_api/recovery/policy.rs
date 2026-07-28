@@ -9,33 +9,18 @@ use super::helpers::*;
 use crate::common::*;
 
 #[tokio::test(flavor = "multi_thread")]
-async fn recovery_persistence_survives_state_restart_and_rejects_replays() {
+async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
     let signing = SigningKey::from_bytes(&[71u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
 
-    // Authorize a device via the full recovery strand (persists the policy + the
-    // device's accepted public key).
-    let (policy_id, device_id) =
-        authorize_device_via_recovery(&state, &signing, &principal_id, &vm).await;
+    seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
 
-    // Restart: fresh in-memory state over the same persistence. The device
-    // inventory (and policy) survive; the receipt verifies against the persisted
-    // device key.
+    // Restart over the same persistence and verify that the active policy still
+    // participates in monotonic version admission.
     let restarted = shared_recovery_state(persistence.clone());
     let token = recovery_token_for_principal(restarted.clone(), &principal_id).await;
-    let receipt = signed_device_recovery_receipt(
-        &recovery_device_key(),
-        &principal_id,
-        &policy_id,
-        1,
-        &device_id,
-        RECEIPT_FIELDS,
-    );
-    post_recovery_receipt(restarted.clone(), &token, &receipt, StatusCode::CREATED).await;
-    // Replaying the same receipt (same recovery_session_id) is rejected.
-    post_recovery_receipt(restarted.clone(), &token, &receipt, StatusCode::CONFLICT).await;
 
     let duplicate_version =
         signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
