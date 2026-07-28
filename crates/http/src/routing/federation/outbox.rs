@@ -368,20 +368,21 @@ fn peer_event_partial_retry(
         serde_json::from_str(request_body).ok()?;
     request
         .events
-        .retain(|event| pending_ids.contains(event.event_id.as_str()));
+        .retain(|submission| pending_ids.contains(submission.event.event_id.as_str()));
     if request.events.is_empty() {
         return None;
     }
+    let retained_events: Vec<arkret_wire::Event> =
+        request.transported_events().cloned().collect::<Vec<_>>();
     request.signer_key_evidence.retain(|evidence| {
-        request
-            .events
+        retained_events
             .iter()
             .any(|event| evidence.matches_event_proof(event, &evidence.verification_method))
     });
     if let Some(bundle) = &mut request.agent_signer_evidence_bundle {
         bundle.evidence.retain(|evidence| {
             let binding = &evidence.signing_key_binding;
-            request.events.iter().any(|event| {
+            retained_events.iter().any(|event| {
                 event.applet_id.is_none()
                     && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id
                     && event.proofs.iter().any(|proof| {
@@ -394,13 +395,16 @@ fn peer_event_partial_retry(
         }
     }
 
+    // Bundles are receiver-relative and MAY overlap, so flatten them into one
+    // id-keyed view before deciding which Seals the narrowed batch still needs.
     let seals_by_id = request
-        .seals
+        .cba_proof_bundles
         .iter()
-        .map(|seal| (seal.id.clone(), seal))
+        .flat_map(|bundle| bundle.seals.iter())
+        .map(|seal| (seal.id.clone(), seal.clone()))
         .collect::<std::collections::BTreeMap<_, _>>();
     let mut pending_seals = Vec::new();
-    for event in &request.events {
+    for event in &retained_events {
         if let Some(seal_ref) = &event.seal_ref
             && seals_by_id.contains_key(seal_ref)
         {
@@ -430,9 +434,23 @@ fn peer_event_partial_retry(
             );
         }
     }
-    request
-        .seals
-        .retain(|seal| retained_seals.contains(&seal.id));
+    let mut retained: Vec<arkret_wire::Seal> = retained_seals
+        .iter()
+        .filter_map(|seal_id| seals_by_id.get(seal_id).cloned())
+        .collect();
+    retained.sort_by(|left, right| {
+        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
+    });
+    request.cba_proof_bundles = match retained.last().map(|seal| seal.id.clone()) {
+        Some(target_seal_ref) => vec![arkret_wire::CbaProofBundle {
+            target_seal_ref,
+            seals: retained,
+            control_moves: Vec::new(),
+            inclusion_proofs: Vec::new(),
+            availability_proofs: Vec::new(),
+        }],
+        None => Vec::new(),
+    };
     request.validate_federation_transport().ok()?;
     let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
     let payload_json = String::from_utf8(bytes.clone()).ok()?;
@@ -913,64 +931,199 @@ mod tests {
 
     #[test]
     fn partial_success_rebuilds_only_pending_events_with_a_new_header_key() {
-        let event = |suffix: &str| {
-            serde_json::json!({
-                "event_id": format!("ak:event:019f0000-0000-7000-8000-{suffix}"),
-                "kind": "ak.message.create",
-                "realm_id": "ak:realm:019f0000-0000-7000-8000-000000000000",
-                "actor_id": "did:web:alice.example",
-                "actor_seq": 1,
-                "created_at": "2026-07-26T00:00:00.000Z",
-                "prev_refs": [],
-                "payload": {},
-                "proofs": [{
-                    "kind": "detached_jws",
-                    "alg": "EdDSA",
-                    "verification_method": "did:web:alice.example#device-1",
-                    "event_digest": format!("sha256:{}", "a".repeat(64)),
-                    "created_at": "2026-07-26T00:00:00.000Z",
-                    "jws": "a..b"
-                }]
-            })
+        // offline-publication.md 2.1 -- a federated Event travels inside an
+        // EventFederationSubmission: the Event, the lease it was published
+        // under, and the original ingress receipts. `validate_federation_transport`
+        // binds every one of those digests, so the fixture computes them instead
+        // of asserting placeholders: the retry rebuilder has to carry the whole
+        // submission through, and it must never re-stamp a receipt.
+        let realm_id =
+            arkret_identifiers::RealmId::new("ak:realm:019f0000-0000-7000-8000-000000000000")
+                .unwrap();
+        let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+        let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
+            authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+            authority_set_digest: arkret_identifiers::Hash::new(format!(
+                "sha256:{}",
+                "e".repeat(64)
+            ))
+            .unwrap(),
         };
-        let request = serde_json::json!({
-            "service_binding_ref": {
-                "realm_id": "ak:realm:019f0000-0000-7000-8000-000000000000",
-                "realm_policy_digest": format!("sha256:{}", "b".repeat(64)),
-                "membership_frontier": [],
-                "delivery_binding_frontier": [],
-                "destination_service_kind": "principal_server",
-                "reducer_profile_digest": format!("sha256:{}", "c".repeat(64))
-            },
-            "events": [
-                event("000000000001"),
-                event("000000000002")
-            ]
-        });
-        let response = r#"{
+        let issued_at: chrono::DateTime<chrono::Utc> = "2026-07-26T00:00:00.000Z".parse().unwrap();
+        let received_at: chrono::DateTime<chrono::Utc> =
+            "2026-07-26T00:00:01.000Z".parse().unwrap();
+
+        let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
+            let mut event = arkret_wire::Event::new_with_id_at(
+                arkret_identifiers::EventId::new(format!(
+                    "ak:event:019f0000-0000-7000-8000-{suffix}"
+                ))
+                .unwrap(),
+                arkret_wire::events::EventKind::MESSAGE_CREATE,
+                arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                actor_id.clone(),
+                1,
+                arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
+                serde_json::json!({}),
+                issued_at,
+            )
+            .unwrap();
+            // A data-plane reducer input is a DataEvent: it MUST carry
+            // `seal_ref` + `auth_context` (`event-and-patch.md` 2.4).
+            event.seal_ref = Some(
+                arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
+                    .unwrap(),
+            );
+            event.auth_context = Some(arkret_wire::event_envelope::AuthContext {
+                did: actor_id.clone(),
+                key_id: "did:web:alice.example#device-1".to_owned(),
+                key_epoch: 0,
+                credential_epoch: None,
+            });
+            let event_digest =
+                arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+            event.proofs = vec![arkret_wire::primitives::Proof {
+                kind: "detached_jws".to_owned(),
+                alg: "EdDSA".to_owned(),
+                verification_method: "did:web:alice.example#device-1".to_owned(),
+                event_digest: event_digest.clone(),
+                created_at: issued_at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: "a..b".to_owned(),
+            }];
+            let event_digest =
+                arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+
+            let mut lease = arkret_wire::offline_publication::AuthorizationLease {
+                authorization_lease_id: arkret_identifiers::AuthorizationLeaseId::new(format!(
+                    "ak:authorization_lease:019f0000-0000-7000-8000-{lease_suffix}"
+                ))
+                .unwrap(),
+                basis_ref: arkret_wire::offline_publication::LeaseBasisRef::Seal(
+                    arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64)))
+                        .unwrap(),
+                ),
+                actor_id: actor_id.clone(),
+                device_id: arkret_identifiers::DeviceId::new(
+                    "ak:device:019f0000-0000-7000-8000-00000000de01",
+                )
+                .unwrap(),
+                scope_ref: arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+                action: "ak.message.create".to_owned(),
+                risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
+                issued_at,
+                expires_at: issued_at + chrono::Duration::hours(4),
+                authority_set_ref: authority_set_ref.clone(),
+                proofs: Vec::new(),
+            };
+            let lease_digest = lease.lease_digest().unwrap();
+            lease.proofs = vec![arkret_wire::primitives::Proof {
+                kind: "detached_jws".to_owned(),
+                alg: "EdDSA".to_owned(),
+                verification_method: "did:web:authority.example#key-1".to_owned(),
+                event_digest: lease_digest,
+                created_at: issued_at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: "a..b".to_owned(),
+            }];
+
+            let mut receipt = arkret_wire::offline_publication::IngressReceipt {
+                receipt_id: arkret_identifiers::ReceiptId::new(format!(
+                    "ak:receipt:019f0000-0000-7000-8000-{receipt_suffix}"
+                ))
+                .unwrap(),
+                event_digest,
+                authorization_lease_id: lease.authorization_lease_id.clone(),
+                received_at,
+                service_id: arkret_identifiers::Did::new("did:web:alpha.example").unwrap(),
+                authority_set_ref: authority_set_ref.clone(),
+                proofs: Vec::new(),
+            };
+            let receipt_digest = receipt.receipt_digest().unwrap();
+            receipt.proofs = vec![arkret_wire::primitives::Proof {
+                kind: "detached_jws".to_owned(),
+                alg: "EdDSA".to_owned(),
+                verification_method: "did:web:alpha.example#notary-key".to_owned(),
+                event_digest: receipt_digest,
+                created_at: received_at,
+                domain: None,
+                audience: None,
+                proof_purpose: None,
+                jws: "a..b".to_owned(),
+            }];
+
+            arkret_wire::EventFederationSubmission {
+                event,
+                authorization_lease: lease,
+                ingress_receipts: vec![receipt],
+            }
+        };
+
+        let request = arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody {
+            service_binding_ref:
+                arkret_models_collaboration::event_sync::FederationServiceBindingRef {
+                    realm_id: realm_id.clone(),
+                    realm_policy_digest: arkret_identifiers::Hash::new(format!(
+                        "sha256:{}",
+                        "b".repeat(64)
+                    ))
+                    .unwrap(),
+                    membership_frontier: Vec::new(),
+                    delivery_binding_frontier: Vec::new(),
+                    destination_service_kind: "principal_server".to_owned(),
+                    reducer_profile_digest: arkret_identifiers::Hash::new(format!(
+                        "sha256:{}",
+                        "c".repeat(64)
+                    ))
+                    .unwrap(),
+                },
+            events: vec![
+                submission("000000000001", "00000000ae01", "00000000ce01"),
+                submission("000000000002", "00000000ae02", "00000000ce02"),
+            ],
+            cba_proof_bundles: Vec::new(),
+            signer_key_evidence: Vec::new(),
+            agent_signer_evidence_bundle: None,
+        };
+        let pending_event_id = request.events[1].event.event_id.as_str().to_owned();
+        let original_receipt =
+            serde_json::to_value(&request.events[1].ingress_receipts[0]).unwrap();
+        let response = format!(
+            r#"{{
             "status":"partial",
-            "accepted":["ak:event:019f0000-0000-7000-8000-000000000001"],
-            "rejected":[{
-                "id":"ak:event:019f0000-0000-7000-8000-000000000002",
+            "accepted":["{}"],
+            "rejected":[{{
+                "id":"{pending_event_id}",
                 "reason_code":"federation_dependencies_pending"
-            }]
-        }"#;
+            }}]
+        }}"#,
+            request.events[0].event.event_id.as_str()
+        );
         let Some(PeerEventPartialRetry::Rebuilt {
             payload_json,
             idempotency_key,
         }) = peer_event_partial_retry(
             "/_arkret/peer/events",
             &serde_json::to_string(&request).unwrap(),
-            response,
+            &response,
         )
         else {
             panic!("expected a rebuilt partial retry");
         };
         let rebuilt: serde_json::Value = serde_json::from_str(&payload_json).unwrap();
         assert_eq!(rebuilt["events"].as_array().unwrap().len(), 1);
+        assert_eq!(rebuilt["events"][0]["event"]["event_id"], pending_event_id);
         assert_eq!(
-            rebuilt["events"][0]["event_id"],
-            "ak:event:019f0000-0000-7000-8000-000000000002"
+            rebuilt["events"][0]["ingress_receipts"][0], original_receipt,
+            "the retry carries the original ingress receipt byte-identically"
         );
         assert!(rebuilt.get("idempotency_key").is_none());
         assert!(idempotency_key.starts_with("ak:outbox:partial:sha256:"));

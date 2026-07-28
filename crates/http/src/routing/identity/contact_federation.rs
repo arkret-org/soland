@@ -240,8 +240,15 @@ fn build_contact_envelope(
         .map_err(|error| AppError::invalid_param(format!("invalid contact issuer DID: {error}")))?;
     let hlc = Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("contact event HLC invalid: {error}")))?;
-    let mut event = Event::new(fact_kind.as_str(), realm_id, actor_id, 0, hlc, fact_payload)
-        .map_err(|error| AppError::internal(format!("contact event build failed: {error}")))?;
+    let mut event = Event::new(
+        fact_kind.as_str(),
+        arkret_wire::ScopeRef::Realm { realm_id },
+        actor_id,
+        0,
+        hlc,
+        fact_payload,
+    )
+    .map_err(|error| AppError::internal(format!("contact event build failed: {error}")))?;
     event.event_id = EventId::new(contact_event_id.to_owned())
         .map_err(|error| AppError::internal(format!("contact event_id invalid: {error}")))?;
     let event_digest = event

@@ -7,7 +7,6 @@ pub(crate) async fn build_sync_snapshot(
     session: Option<&SessionRecord>,
     body: &SyncRequestBody,
     after_cursor: &SyncCursor,
-    include_presence_delta: bool,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     let filter_value = sync_filter_value(body.filter.as_ref());
     // SYNC-MEM-1 + ROST-SOL-1..3 (arkret-spec @ b56cab1) — `members[]` is
@@ -80,11 +79,6 @@ pub(crate) async fn build_sync_snapshot(
     if let Some(session) = session {
         visible_actors.insert(session.actor.clone());
     }
-    let presence = if body.after.is_none() || include_presence_delta {
-        presence_events_for_actors(state, visible_actors.clone(), session).await
-    } else {
-        Vec::new()
-    };
     let (device_lists, device_list_positions) = device_lists_for_actors(
         state,
         session,
@@ -101,7 +95,6 @@ pub(crate) async fn build_sync_snapshot(
     let mut sync_realms = std::collections::BTreeMap::new();
     let mut timeline_positions = BTreeMap::new();
     let mut account_positions = BTreeMap::new();
-    let mut typing_positions = BTreeMap::new();
     let is_incremental = body.after.is_some();
     let (account_notifications, notification_position) =
         account_notification_delta(state, session, after_cursor, is_incremental).await;
@@ -121,11 +114,6 @@ pub(crate) async fn build_sync_snapshot(
             .unwrap_or_default();
         let after_account_position = after_cursor
             .account_positions
-            .get(&realm_id)
-            .copied()
-            .unwrap_or_default();
-        let after_typing_position = after_cursor
-            .typing_positions
             .get(&realm_id)
             .copied()
             .unwrap_or_default();
@@ -149,9 +137,6 @@ pub(crate) async fn build_sync_snapshot(
             account_realm_projection_position(meta.as_ref(), &realm_id).max(state_position);
         timeline_positions.insert(realm_id.clone(), timeline_position);
         account_positions.insert(realm_id.clone(), account_position);
-        let (typing_events, typing_position) =
-            typing_envelopes_for_subscriber(state, &realm_id, session, after_typing_position).await;
-        typing_positions.insert(realm_id.clone(), typing_position);
         let account_projection_changed = if known_account_to_cursor {
             account_position != after_account_position
         } else {
@@ -163,18 +148,7 @@ pub(crate) async fn build_sync_snapshot(
             || !timeline_conflicts.is_empty()
             || !state_events.is_empty()
             || account_projection_changed;
-        let ephemeral_events = deliver_ephemeral_events_for_subscriber(
-            state,
-            &realm_id,
-            session,
-            full_sync,
-            typing_events,
-        )
-        .await;
-        // A Realm entry is a collection of independent stream deltas. Do not
-        // attach the full durable projection to a typing/receipt/call-only
-        // wakeup: doing so makes downstream clients mistake transient state
-        // for a roster/timeline change and fan out unrelated reads.
+        // A Realm entry is a collection of independent stream deltas.
         //
         // Timeline and account projection positions are separate cursor
         // vectors. Visible timeline events drive `positions.realms`; Realm /
@@ -188,11 +162,7 @@ pub(crate) async fn build_sync_snapshot(
         // metadata, while their accepted state Events independently advance the
         // account position. They therefore cannot depend on a later timeline
         // message to surface the updated roster.
-        if is_incremental
-            && known_timeline_to_cursor
-            && !durable_projection_changed
-            && ephemeral_events.is_empty()
-        {
+        if is_incremental && known_timeline_to_cursor && !durable_projection_changed {
             continue;
         }
         let mut entry =
@@ -251,13 +221,6 @@ pub(crate) async fn build_sync_snapshot(
                 highlight_count: Some(0),
             });
         }
-        if full_sync || !ephemeral_events.is_empty() {
-            entry.ephemeral = Some(
-                arkret_models_collaboration::sync_frames::account_sync::EphemeralEventContainer {
-                    events: ephemeral_events,
-                },
-            );
-        }
         sync_realms.insert(realm_id.clone(), entry);
     }
     drop(projection);
@@ -315,7 +278,6 @@ pub(crate) async fn build_sync_snapshot(
                         BTreeMap::new(),
                         BTreeMap::new(),
                         BTreeMap::new(),
-                        typing_positions.clone(),
                         to_device_position,
                         after_cursor.notification_position,
                     )
@@ -344,7 +306,6 @@ pub(crate) async fn build_sync_snapshot(
         timeline_positions,
         account_positions,
         device_list_positions,
-        typing_positions,
         to_device_position,
         notification_position,
     )
@@ -370,7 +331,6 @@ pub(crate) async fn build_sync_snapshot(
                 extra: BTreeMap::new(),
             },
         ),
-        presence: Some(arkret_models_collaboration::sync_frames::account_sync::EphemeralEventContainer { events: presence }),
         notifications: Some(account_notifications),
         agent_signer_evidence_bundle,
         partial: None,
@@ -1523,129 +1483,6 @@ mod account_notification_tests {
             Some("agent_runtime_approval")
         );
     }
-}
-
-async fn deliver_ephemeral_events_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-    full_sync: bool,
-    typing_events: Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope>,
-) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
-    let Some(session) = session else {
-        return Vec::new();
-    };
-    let mut events = typing_events;
-    events.extend(
-        deliver_call_signal_envelopes_for_subscriber(state, realm_id, session, full_sync).await,
-    );
-    events.extend(
-        deliver_read_receipt_envelopes_for_subscriber(state, realm_id, Some(session), full_sync)
-            .await,
-    );
-    events
-}
-
-pub(super) async fn typing_envelopes_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: Option<&SessionRecord>,
-    after_position: i64,
-) -> (
-    Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope>,
-    i64,
-) {
-    let Some(session) = session else {
-        return (Vec::new(), after_position);
-    };
-    if !realm_has_member(state, realm_id, &session.actor).await {
-        return (Vec::new(), after_position);
-    }
-    let mut events = Vec::new();
-    let mut newest_position = after_position;
-    for record in state
-        .deliveries()
-        .typing_for_realm(realm_id)
-        .await
-        .unwrap_or_default()
-    {
-        if record.position <= after_position {
-            continue;
-        }
-        if !crate::routing::spaces::space::presence_visible_to_session(
-            state,
-            &record.actor,
-            Some(session),
-        )
-        .await
-        {
-            continue;
-        }
-        if crate::routing::spaces::space::typing_scope_allows_actor(
-            state,
-            realm_id,
-            &session.actor,
-            record.scope_id.as_deref(),
-        )
-        .await
-        .is_ok()
-        {
-            newest_position = newest_position.max(record.position);
-            events.push(record.envelope);
-        }
-    }
-    (events, newest_position)
-}
-
-async fn pending_call_signal_records_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: &SessionRecord,
-    full_sync: bool,
-) -> Vec<soland_services::delivery::CallSignalState> {
-    let watermark = if full_sync {
-        0
-    } else {
-        state
-            .deliveries()
-            .call_signal_watermark(&session.actor, &session.device_id, realm_id)
-            .await
-            .unwrap_or(0)
-    };
-    state
-        .deliveries()
-        .call_signals_for_realm(realm_id)
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|record| record.expires_at > Utc::now())
-        .filter(|record| record.position > watermark)
-        .filter(|record| {
-            record.sender_actor != session.actor || record.sender_device != session.device_id
-        })
-        .collect()
-}
-
-async fn deliver_call_signal_envelopes_for_subscriber(
-    state: &AppState,
-    realm_id: &str,
-    session: &SessionRecord,
-    full_sync: bool,
-) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
-    let records =
-        pending_call_signal_records_for_subscriber(state, realm_id, session, full_sync).await;
-    if let Some(max_position) = records.iter().map(|record| record.position).max() {
-        let _ = state
-            .deliveries()
-            .advance_call_signal_watermark(
-                &session.actor,
-                &session.device_id,
-                realm_id,
-                max_position,
-            )
-            .await;
-    }
-    records.into_iter().map(|record| record.envelope).collect()
 }
 
 async fn timeline_event_received_at(

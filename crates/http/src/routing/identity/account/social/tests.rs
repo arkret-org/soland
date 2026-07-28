@@ -215,7 +215,20 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
         event.preconditions.is_empty(),
         "data-plane strand draft must not carry Move preconditions"
     );
-    assert_eq!(event.effects.len(), 1);
+    // v1 carries no producer `effects[]`: the single write on the Strand object
+    // cell is what the registered `ak.strand.create` contract derives from
+    // `kind + payload` (`event-and-patch.md` §2.4.2). Asserting the derived set
+    // is the surviving form of the old "the draft declares exactly one effect".
+    let derived = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("direct strand draft projects its registered cell writes");
+    assert_eq!(derived.len(), 1);
+    assert_eq!(
+        derived[0].cell.as_str(),
+        format!("ak:cell:ak.component.strand.object.v1:{strand_id}")
+    );
 }
 
 #[tokio::test]

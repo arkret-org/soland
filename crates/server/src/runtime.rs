@@ -38,7 +38,7 @@ pub fn build_app_state(
         .service_id
         .to_string();
     let projections = soland_services::projection::ProjectionService::new(
-        stores.move_store,
+        stores.control_event_store,
         stores.seal_store,
         stores.cell_store,
         stores.cell_registry,
@@ -92,7 +92,7 @@ impl EventSealCommitPort for RuntimeEventSealCommitter {
             arkret_identifiers::CellRef,
             arkret_state::lattice::ordered_log::IssuedOp,
         )],
-        covered: &BTreeSet<arkret_wire::MoveId>,
+        covered: &BTreeSet<arkret_wire::Hash>,
     ) -> arkret_state::state::StoreResult<bool> {
         self.0
             .commit_if_frontier(seal, expected_store_frontier, new_ops, covered)

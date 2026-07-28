@@ -1,11 +1,32 @@
 use super::*;
 
+/// Verify a DataEvent's authorization against the accepted governance basis at
+/// its `seal_ref`.
+///
+/// `event-auth-state-resolution.md` §4.1(3) / §4.3(2): the verifier resolves
+/// every capability the `kind`, the scope and the receiver-derived targets need
+/// from the `seal_ref` governance state — **the producer does not select
+/// candidate grants**. `event-and-patch.md` §2.2 states the same in the
+/// negative: `effects` and producer-selected `auth_context.capability_refs` are
+/// not v1 wire fields and a receiver MUST answer `schema_violation` when it
+/// meets either.
+///
+/// So the two producer-supplied inputs this check used to read are refused
+/// here, and what it reads instead is what v1 actually carries:
+///
+/// - `derived_cells` — the receiver's own registry projection of `kind + payload`
+///   (`arkret_schema::project_registered_cell_writes`), which replaces the producer's `effects[]`
+///   as the set the capability must cover;
+/// - `refs[]` entries with `role=authorized_by` — semantic, non-authoritative citations that MUST
+///   still resolve and be valid at `seal_ref`, exactly as `arkret_state`'s `verify_capability_refs`
+///   requires of a Control Move.
 pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs(
     state: &AppState,
     actor_id: &str,
     realm_id: &str,
     kind: &str,
     object: &serde_json::Map<String, Value>,
+    derived_cells: &[String],
 ) -> Result<(), EventValidationError> {
     let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
     if !is_data_event {
@@ -16,6 +37,13 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
             StatusCode::BAD_REQUEST,
             "schema_violation",
             "DataEvent must not carry seal_basis",
+        ));
+    }
+    if object.contains_key("effects") {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "effects is not a v1 Event Envelope field; reducer targets are derived from kind + payload",
         ));
     }
     let seal_ref = object
@@ -42,48 +70,28 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
             "DataEvent realm_id must be a valid ak:realm id",
         )
     })?;
-    let effects = object
-        .get("effects")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "DataEvent requires effects[] to verify capability coverage",
-            )
-        })?;
-    if effects.is_empty() {
-        return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "DataEvent effects[] must be non-empty for capability coverage",
-        ));
-    }
     let auth_context = object
         .get("auth_context")
         .and_then(Value::as_object)
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "DataEvent requires auth_context.capability_refs[]",
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "DataEvent requires auth_context",
             )
         })?;
-    let refs = auth_context
-        .get("capability_refs")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "DataEvent requires auth_context.capability_refs[]",
-            )
-        })?;
-    if refs.is_empty() {
+    if auth_context.contains_key("capability_refs") {
         return Err(event_validation_error(
-            StatusCode::FORBIDDEN,
-            "capability_denied",
-            "DataEvent capability_refs[] must be non-empty",
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "auth_context is closed over {did, key_id, key_epoch, credential_epoch}; effective capabilities are derived from the governance basis at seal_ref",
+        ));
+    }
+    if derived_cells.is_empty() {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "DataEvent derives no data-plane write from its registered reducer contract",
         ));
     }
 
@@ -95,90 +103,128 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         historical_grants.values().cloned().collect();
     let effective_by_id =
         effective_historical_grants_for_subject(&historical_grants, actor_id, realm_id, auth_time);
-    let mut referenced = Vec::with_capacity(refs.len());
-    for value in refs {
-        let grant_id = value.as_str().ok_or_else(|| {
-            event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                "DataEvent capability_refs[] entries must be grant ids",
-            )
-        })?;
+
+    // `refs[role=authorized_by]` is a critical semantic citation, not a
+    // capability selector: it never widens the effective set, but an entry that
+    // does not resolve to a live grant at `seal_ref` MUST fail the Event closed
+    // (`event-and-patch.md` §2.2 — unrecognized critical refs fail closed;
+    // `arkret_state::verify_capability_refs` applies the same rule on the
+    // control plane).
+    for reference in data_event_authorized_by_refs(object)? {
+        let grant_id = reference.as_str();
         if crate::ids::parse_typed_uuid(grant_id, "grant").is_none() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                "DataEvent capability_refs[] entry is not a valid ak:grant id",
+                format!("DataEvent refs[role=authorized_by] {grant_id} is not a valid ak:grant id"),
             ));
         }
         let stored = historical_grants.get(grant_id).ok_or_else(|| {
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent capability_ref {grant_id} is not projected at seal_ref"),
+                format!("DataEvent authorized_by grant {grant_id} is not projected at seal_ref"),
             )
         })?;
         if crate::authz::grant_revoked_upstream(&historical_snapshot, grant_id, auth_time) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM,
-                format!("DataEvent capability_ref {grant_id} was revoked upstream"),
+                format!("DataEvent authorized_by grant {grant_id} was revoked upstream"),
             ));
         }
         if stored.revoked {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent capability_ref {grant_id} is revoked"),
+                format!("DataEvent authorized_by grant {grant_id} is revoked"),
             ));
         }
         if stored.subject != actor_id || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent capability_ref {grant_id} does not cover actor/realm"),
+                format!("DataEvent authorized_by grant {grant_id} does not cover actor/realm"),
             ));
         }
         if crate::authz::grant_scope_valid(stored).is_err() {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent capability_ref {grant_id} has invalid scope"),
+                format!("DataEvent authorized_by grant {grant_id} has invalid scope"),
             ));
         }
         validate_data_event_joined_capability_view(state, realm_id, grant_id)?;
-        let Some(effective) = effective_by_id.get(grant_id) else {
+        if !effective_by_id.contains_key(grant_id) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!("DataEvent capability_ref {grant_id} is expired or delegation-broken"),
+                format!("DataEvent authorized_by grant {grant_id} is expired or delegation-broken"),
             ));
-        };
-        referenced.push(effective.clone());
+        }
     }
 
-    for effect in effects {
-        let cell = effect.get("cell").and_then(Value::as_str).ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                "DataEvent effects[] entries require cell",
-            )
-        })?;
-        if !referenced
-            .iter()
+    // Coverage is decided over the whole effective set the governance basis
+    // yields for this actor, never over a producer-chosen subset, and over the
+    // cells the receiver itself derived, never over a producer-chosen write
+    // list.
+    for cell in derived_cells {
+        if !effective_by_id
+            .values()
             .any(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell))
         {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
-                format!(
-                    "DataEvent capability_refs[] do not cover action {kind} on effect cell {cell}"
-                ),
+                format!("no capability at seal_ref covers action {kind} on derived cell {cell}"),
             ));
         }
     }
     Ok(())
+}
+
+/// `refs[]` entries carrying `role=authorized_by`.
+///
+/// `refs[]` is a required envelope member whose items are `SemanticRef`
+/// objects; a malformed entry is a schema violation rather than a silently
+/// skipped ref.
+fn data_event_authorized_by_refs(
+    object: &serde_json::Map<String, Value>,
+) -> Result<Vec<String>, EventValidationError> {
+    let Some(refs) = object.get("refs") else {
+        return Ok(Vec::new());
+    };
+    let refs = refs.as_array().ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "refs must be an array of SemanticRef objects",
+        )
+    })?;
+    let mut authorized_by = Vec::new();
+    for reference in refs {
+        let reference = reference.as_object().ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "refs[] entries must be SemanticRef objects",
+            )
+        })?;
+        if reference.get("role").and_then(Value::as_str)
+            != Some(arkret_wire::event_envelope::EVENT_REF_ROLE_AUTHORIZED_BY)
+        {
+            continue;
+        }
+        let id = reference.get("id").and_then(Value::as_str).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "refs[] entries require id",
+            )
+        })?;
+        authorized_by.push(id.to_owned());
+    }
+    Ok(authorized_by)
 }
 
 pub(super) fn validate_data_event_joined_capability_view(
@@ -364,13 +410,14 @@ pub(super) fn validate_data_event_covered_seals(
         return Ok(());
     }
 
-    let covered_cell = arkret_state::mls_move::covered_seals_cell_id(realm).map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            format!("DataEvent covered_seals cell id failed: {error}"),
-        )
-    })?;
+    let covered_cell =
+        arkret_state::mls_move::covered_seals_cell_id(realm.as_str()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("DataEvent covered_seals cell id failed: {error}"),
+            )
+        })?;
     let Some(arkret_state::lattice::CellState::Value(cell_value)) = state_at_ref.get(&covered_cell)
     else {
         return Err(data_event_covered_seals_failed_precondition(
@@ -409,17 +456,25 @@ pub(super) fn data_event_payload_is_mls_e2ee(object: &serde_json::Map<String, Va
     let Some(payload) = object.get("payload") else {
         return false;
     };
-    encrypted_content_is_mls(payload.get("encrypted_content"))
+    encrypted_content_is_mls_e2ee(payload.get("encrypted_content"))
         || payload
             .get("object")
-            .is_some_and(|object| encrypted_content_is_mls(object.get("encrypted_content")))
+            .is_some_and(|object| encrypted_content_is_mls_e2ee(object.get("encrypted_content")))
 }
 
-pub(super) fn encrypted_content_is_mls(value: Option<&Value>) -> bool {
-    value
-        .and_then(|value| value.get("scheme"))
-        .and_then(Value::as_str)
-        == Some("mls_rfc9420")
+/// Both MLS-backed content schemes are gated by `covered_seals_cell`.
+///
+/// `encryption-and-audit.md` §2.5 phrases the gate over "E2EE application
+/// DataEvent", not over one scheme: `mls_exporter_aead_v1` derives its content
+/// key from the same MLS key schedule as `mls_rfc9420`, so a ban / revoke that
+/// has not reached `covered_seals_cell` is just as invisible to it.
+pub(super) fn encrypted_content_is_mls_e2ee(value: Option<&Value>) -> bool {
+    matches!(
+        value
+            .and_then(|value| value.get("scheme"))
+            .and_then(Value::as_str),
+        Some("mls_rfc9420" | "mls_exporter_aead_v1")
+    )
 }
 
 pub(super) fn seal_view_declares_relaxed_e2ee(

@@ -148,54 +148,12 @@ pub enum DeviceMessageBatchCommitOutcome {
     MessageConflict { message_key: String },
 }
 
-#[derive(Clone, Debug)]
-pub struct PresenceState {
-    pub actor: String,
-    pub device_id: String,
-    pub status: String,
-    pub status_message: Option<String>,
-    pub last_active_at: Option<String>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub updated_at: DateTime<Utc>,
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-}
-
-#[derive(Clone, Debug)]
-pub struct TypingState {
-    pub actor: String,
-    pub realm_id: String,
-    pub scope_id: Option<String>,
-    pub position: i64,
-    pub expires_at: DateTime<Utc>,
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-}
-
-#[derive(Clone, Debug)]
-pub struct CallSignalState {
-    pub realm_id: String,
-    pub sender_actor: String,
-    pub sender_device: String,
-    pub call_id: String,
-    pub expires_at: DateTime<Utc>,
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-    pub position: u64,
-}
-
-#[derive(Clone, Debug)]
-pub struct ReadReceiptState {
-    pub realm_id: String,
-    pub actor_id: String,
-    pub sender_device: Option<String>,
-    pub event_id: String,
-    pub read_scope: Value,
-    pub target_actor: Option<String>,
-    pub visibility: String,
-    pub receipt: Value,
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
-    pub position: u64,
-}
+/// One admitted `SignalEnvelope` held for its TTL (`sync/signal.md` §4).
+///
+/// Presence, typing, call signalling and read receipts are all Signals in v1:
+/// they share this one opaque relay record instead of four plaintext shapes,
+/// and the server sees only the AAD-bound envelope header.
+pub type SignalRelayState = soland_storage::SignalRelayRecord;
 
 #[derive(Clone, Debug)]
 pub struct BlobState {
@@ -282,42 +240,31 @@ pub trait PushBridgeCachePort: Send + Sync {
     ) -> ServiceResult<PushContractDrift>;
 }
 
+/// Live Signal relay (`sync/signal.md` §4).
+///
+/// A Signal is not durable: it produces no Event id, advances no `actor_seq`
+/// and enters no Seal coverage, so this port only holds admitted envelopes
+/// until `expires_at` and tracks a per-subscriber-device deliver-once
+/// watermark.
 #[async_trait]
-pub trait EphemeralDeliveryPort: Send + Sync {
-    async fn store_presence(&self, presence: PresenceState) -> ServiceResult<()>;
-    async fn presence_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<PresenceState>>;
-    async fn delete_presence(&self, actor_id: &str) -> ServiceResult<()>;
-    async fn store_typing(&self, typing: TypingState) -> ServiceResult<()>;
-    async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> ServiceResult<()>;
-    async fn typing_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<TypingState>>;
-    async fn prune_expired_typing(&self) -> ServiceResult<usize>;
-    async fn store_call_signal(&self, signal: CallSignalState) -> ServiceResult<()>;
-    async fn call_signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<CallSignalState>>;
-    async fn call_signal_watermark(
+pub trait SignalRelayPort: Send + Sync {
+    async fn append_signal(&self, record: SignalRelayState) -> ServiceResult<()>;
+    async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayState>>;
+    /// Short-lived replay suppression: whether this exact envelope digest was
+    /// already admitted inside the retention window (`signal.md` §2).
+    async fn signal_digest_seen(
+        &self,
+        realm_id: &str,
+        envelope_digest: &str,
+    ) -> ServiceResult<bool>;
+    async fn prune_expired_signals(&self) -> ServiceResult<usize>;
+    async fn signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
     ) -> ServiceResult<u64>;
-    async fn advance_call_signal_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-        position: u64,
-    ) -> ServiceResult<()>;
-    async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ServiceResult<()>;
-    async fn read_receipts_for_realm(&self, realm_id: &str)
-    -> ServiceResult<Vec<ReadReceiptState>>;
-    async fn read_receipts_for_event(&self, event_id: &str)
-    -> ServiceResult<Vec<ReadReceiptState>>;
-    async fn read_receipt_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-    ) -> ServiceResult<u64>;
-    async fn advance_read_receipt_watermark(
+    async fn advance_signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
@@ -366,7 +313,7 @@ pub struct DeliveryService {
     notifications: Arc<dyn NotificationWritePort>,
     device_delivery: Arc<dyn DeviceDeliveryPort>,
     device_messages: Arc<dyn DeviceMessagePort>,
-    ephemeral: Arc<dyn EphemeralDeliveryPort>,
+    signals: Arc<dyn SignalRelayPort>,
     blobs: Arc<dyn BlobPort>,
     push_bridge_cache: Arc<dyn PushBridgeCachePort>,
     object_storage: Arc<dyn ObjectStoragePort>,
@@ -377,7 +324,7 @@ pub struct DeliveryServiceRuntime {
     pub notifications: Arc<dyn NotificationWritePort>,
     pub device_delivery: Arc<dyn DeviceDeliveryPort>,
     pub device_messages: Arc<dyn DeviceMessagePort>,
-    pub ephemeral: Arc<dyn EphemeralDeliveryPort>,
+    pub signals: Arc<dyn SignalRelayPort>,
     pub blobs: Arc<dyn BlobPort>,
     pub push_bridge_cache: Arc<dyn PushBridgeCachePort>,
     pub object_storage: Arc<dyn ObjectStoragePort>,
@@ -390,7 +337,7 @@ impl DeliveryService {
             notifications,
             device_delivery,
             device_messages,
-            ephemeral,
+            signals,
             blobs,
             push_bridge_cache,
             object_storage,
@@ -400,7 +347,7 @@ impl DeliveryService {
             notifications,
             device_delivery,
             device_messages,
-            ephemeral,
+            signals,
             blobs,
             push_bridge_cache,
             object_storage,
@@ -594,98 +541,48 @@ impl DeliveryService {
             .await
     }
 
-    pub async fn store_presence(&self, presence: PresenceState) -> ServiceResult<()> {
-        self.ephemeral.store_presence(presence).await
+    pub async fn append_signal(&self, record: SignalRelayState) -> ServiceResult<()> {
+        self.signals.append_signal(record).await
     }
 
-    pub async fn presence_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<PresenceState>> {
-        self.ephemeral.presence_for_actor(actor_id).await
+    pub async fn signals_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<SignalRelayState>> {
+        self.signals.signals_for_realm(realm_id).await
     }
 
-    pub async fn delete_presence(&self, actor_id: &str) -> ServiceResult<()> {
-        self.ephemeral.delete_presence(actor_id).await
-    }
-
-    pub async fn store_typing(&self, typing: TypingState) -> ServiceResult<()> {
-        self.ephemeral.store_typing(typing).await
-    }
-
-    pub async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> ServiceResult<()> {
-        self.ephemeral.remove_typing(actor_id, realm_id).await
-    }
-
-    pub async fn typing_for_realm(&self, realm_id: &str) -> ServiceResult<Vec<TypingState>> {
-        self.ephemeral.typing_for_realm(realm_id).await
-    }
-
-    pub async fn prune_expired_typing(&self) -> ServiceResult<usize> {
-        self.ephemeral.prune_expired_typing().await
-    }
-
-    pub async fn store_call_signal(&self, signal: CallSignalState) -> ServiceResult<()> {
-        self.ephemeral.store_call_signal(signal).await
-    }
-    pub async fn call_signals_for_realm(
+    pub async fn signal_digest_seen(
         &self,
         realm_id: &str,
-    ) -> ServiceResult<Vec<CallSignalState>> {
-        self.ephemeral.call_signals_for_realm(realm_id).await
+        envelope_digest: &str,
+    ) -> ServiceResult<bool> {
+        self.signals
+            .signal_digest_seen(realm_id, envelope_digest)
+            .await
     }
-    pub async fn call_signal_watermark(
+
+    pub async fn prune_expired_signals(&self) -> ServiceResult<usize> {
+        self.signals.prune_expired_signals().await
+    }
+
+    pub async fn signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
     ) -> ServiceResult<u64> {
-        self.ephemeral
-            .call_signal_watermark(actor_id, device_id, realm_id)
+        self.signals
+            .signal_watermark(actor_id, device_id, realm_id)
             .await
     }
-    pub async fn advance_call_signal_watermark(
+
+    pub async fn advance_signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
         realm_id: &str,
         position: u64,
     ) -> ServiceResult<()> {
-        self.ephemeral
-            .advance_call_signal_watermark(actor_id, device_id, realm_id, position)
-            .await
-    }
-    pub async fn store_read_receipt(&self, receipt: ReadReceiptState) -> ServiceResult<()> {
-        self.ephemeral.store_read_receipt(receipt).await
-    }
-    pub async fn read_receipts_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> ServiceResult<Vec<ReadReceiptState>> {
-        self.ephemeral.read_receipts_for_realm(realm_id).await
-    }
-    pub async fn read_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> ServiceResult<Vec<ReadReceiptState>> {
-        self.ephemeral.read_receipts_for_event(event_id).await
-    }
-    pub async fn read_receipt_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-    ) -> ServiceResult<u64> {
-        self.ephemeral
-            .read_receipt_watermark(actor_id, device_id, realm_id)
-            .await
-    }
-    pub async fn advance_read_receipt_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-        position: u64,
-    ) -> ServiceResult<()> {
-        self.ephemeral
-            .advance_read_receipt_watermark(actor_id, device_id, realm_id, position)
+        self.signals
+            .advance_signal_watermark(actor_id, device_id, realm_id, position)
             .await
     }
 
@@ -765,7 +662,7 @@ mod tests {
     struct NoDeviceDelivery;
 
     struct NoDeviceMessages;
-    struct NoEphemeralDelivery;
+    struct NoSignalRelay;
     struct NoBlobs;
     struct NoPushBridgeCache;
     struct NoObjectStorage;
@@ -862,38 +759,24 @@ mod tests {
     }
 
     #[async_trait]
-    impl EphemeralDeliveryPort for NoEphemeralDelivery {
-        async fn store_presence(&self, _presence: PresenceState) -> ServiceResult<()> {
+    impl SignalRelayPort for NoSignalRelay {
+        async fn append_signal(&self, _record: SignalRelayState) -> ServiceResult<()> {
             Ok(())
         }
-        async fn presence_for_actor(&self, _actor_id: &str) -> ServiceResult<Vec<PresenceState>> {
+        async fn signals_for_realm(&self, _realm_id: &str) -> ServiceResult<Vec<SignalRelayState>> {
             Ok(Vec::new())
         }
-        async fn delete_presence(&self, _actor_id: &str) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn store_typing(&self, _typing: TypingState) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn remove_typing(&self, _actor_id: &str, _realm_id: &str) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn typing_for_realm(&self, _realm_id: &str) -> ServiceResult<Vec<TypingState>> {
-            Ok(Vec::new())
-        }
-        async fn prune_expired_typing(&self) -> ServiceResult<usize> {
-            Ok(0)
-        }
-        async fn store_call_signal(&self, _signal: CallSignalState) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn call_signals_for_realm(
+        async fn signal_digest_seen(
             &self,
             _realm_id: &str,
-        ) -> ServiceResult<Vec<CallSignalState>> {
-            Ok(Vec::new())
+            _envelope_digest: &str,
+        ) -> ServiceResult<bool> {
+            Ok(false)
         }
-        async fn call_signal_watermark(
+        async fn prune_expired_signals(&self) -> ServiceResult<usize> {
+            Ok(0)
+        }
+        async fn signal_watermark(
             &self,
             _actor_id: &str,
             _device_id: &str,
@@ -901,39 +784,7 @@ mod tests {
         ) -> ServiceResult<u64> {
             Ok(0)
         }
-        async fn advance_call_signal_watermark(
-            &self,
-            _actor_id: &str,
-            _device_id: &str,
-            _realm_id: &str,
-            _position: u64,
-        ) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn store_read_receipt(&self, _receipt: ReadReceiptState) -> ServiceResult<()> {
-            Ok(())
-        }
-        async fn read_receipts_for_realm(
-            &self,
-            _realm_id: &str,
-        ) -> ServiceResult<Vec<ReadReceiptState>> {
-            Ok(Vec::new())
-        }
-        async fn read_receipts_for_event(
-            &self,
-            _event_id: &str,
-        ) -> ServiceResult<Vec<ReadReceiptState>> {
-            Ok(Vec::new())
-        }
-        async fn read_receipt_watermark(
-            &self,
-            _actor_id: &str,
-            _device_id: &str,
-            _realm_id: &str,
-        ) -> ServiceResult<u64> {
-            Ok(0)
-        }
-        async fn advance_read_receipt_watermark(
+        async fn advance_signal_watermark(
             &self,
             _actor_id: &str,
             _device_id: &str,
@@ -1081,7 +932,7 @@ mod tests {
             notifications: port.clone(),
             device_delivery: Arc::new(NoDeviceDelivery),
             device_messages: Arc::new(NoDeviceMessages),
-            ephemeral: Arc::new(NoEphemeralDelivery),
+            signals: Arc::new(NoSignalRelay),
             blobs: Arc::new(NoBlobs),
             push_bridge_cache: Arc::new(NoPushBridgeCache),
             object_storage: Arc::new(NoObjectStorage),

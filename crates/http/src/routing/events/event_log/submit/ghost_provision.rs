@@ -145,6 +145,9 @@ async fn prepare_ghost_event(
 
     let received_at = now();
     let mut operation = projection_operation_from_event(&parsed, &envelope);
+    // The reducer preflight below reads the receiver's own registry-derived
+    // writes; v1 has no producer `effects[]` to take them from.
+    let projected_cell_writes = derive_submit_cell_writes(state, &parsed, &envelope)?;
     if let Some(operation) = operation.as_ref() {
         let mut aggregate_operations = preceding_operations.to_vec();
         aggregate_operations.push(operation.clone());
@@ -175,7 +178,7 @@ async fn prepare_ghost_event(
             })?;
         if let Some(reason) = state
             .projections()
-            .preflight_capability_rejection(operation)
+            .preflight_capability_rejection(operation, &projected_cell_writes)
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,

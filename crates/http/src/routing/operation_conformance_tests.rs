@@ -98,16 +98,34 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "relation create",
             kind: arkret_wire::events::EventKind::RELATION_CREATE,
-            // relation_create_payload: oneOf {relation} |
-            // {relation_id, kind, from_ref, to_ref};
-            // additionalProperties=false.
+            // relation_create_payload requires the whole relation object under
+            // `relation`: the registered effect_projection is
+            // `set value = payload.relation`, and event-and-patch.md 2.4.2 lets
+            // a projection move an existing root path wholesale but never
+            // assemble one, so the old flat {relation_id, kind, from_ref,
+            // to_ref} form has no derivable cell value.
+            payload: json!({
+                "relation": {
+                    "id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b",
+                    "kind": "blocks",
+                    "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
+                    "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"
+                }
+            }),
+            valid: true,
+        },
+        OperationVector {
+            name: "relation create with a flat assembled payload",
+            kind: arkret_wire::events::EventKind::RELATION_CREATE,
+            // The negative half of the same rule: a payload the registered
+            // projection would have to assemble is not derivable.
             payload: json!({
                 "relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b",
                 "kind": "blocks",
                 "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
                 "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"
             }),
-            valid: true,
+            valid: false,
         },
         OperationVector {
             name: "relation update",
@@ -383,7 +401,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "protocols": ["http_custom"],
                 "namespaces": {"realms": ["*"]},
                 "receive_events": true,
-                "receive_ephemeral": false,
+                "receive_signals": false,
                 "rate_limited": true,
                 "requested_scopes": ["read"],
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -405,7 +423,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "bot_actor_id": "did:web:applet.bot.example",
                 "protocols": ["http_custom"],
                 "receive_events": true,
-                "receive_ephemeral": false,
+                "receive_signals": false,
                 "rate_limited": true,
                 "requested_scopes": ["read"],
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",

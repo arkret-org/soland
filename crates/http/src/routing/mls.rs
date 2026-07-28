@@ -2967,7 +2967,7 @@ mod trust_binding_tests {
         .unwrap();
         let authorize_event = arkret_wire::Event::new(
             arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
-            realm_id,
+            arkret_wire::ScopeRef::Realm { realm_id },
             principal.clone(),
             1,
             arkret_identifiers::Hlc::new("019041000000-0001-0000000f").unwrap(),

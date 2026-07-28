@@ -677,12 +677,12 @@ pub(super) async fn signed_handle_claim(
     let canonical_bytes = canonical::canonical_json_bytes(&claim).map_err(|err| {
         AppError::internal(format!("handle claim canonicalization failed: {err}"))
     })?;
-    let signer = Ed25519MoveSigner::new(
+    let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
         signer_did,
         format!("{service_id}#directory-handle-claim"),
     );
-    let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
+    let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
     claim.proofs.push(PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),

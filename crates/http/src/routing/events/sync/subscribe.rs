@@ -1,9 +1,8 @@
 //! Account-aggregate describe + long-lived subscribe stream
-//! (`ak.self.account.stream.subscribe`): the timeline / presence / typing /
+//! (`ak.self.account.stream.subscribe`): the timeline / account-data /
 //! to_device NDJSON delta machinery and its auth-material gate.
 
 use super::*;
-use crate::routing::spaces::space::presence_visible_to_session;
 
 #[endpoint(operation_id = "account_describe")]
 #[tracing::instrument(skip_all, fields(op = "account_describe"))]
@@ -173,19 +172,17 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
             )
             .await;
     }
-    // client-sync.md: the account subscribe surface is read-only.
-    // Presence intent (`set_presence`) is NOT a subscribe parameter —
-    // clients broadcast `ak.presence` through
-    // `POST /_arkret/self/ephemeral`; any `set_presence` query value is
-    // ignored here so establishing or replaying a subscription never
-    // triggers a server-side mutation.
-    prune_expired_typing(&state).await;
+    // client-sync.md: the account subscribe surface is read-only. Transient
+    // state is not carried here at all in v1 — presence, typing, receipts and
+    // call signalling are encrypted Signals on `ak.self.signal.*`, so no
+    // `set_presence`-style subscribe parameter exists and establishing or
+    // replaying a subscription never triggers a server-side mutation.
 
     // Subscribe to broadcast BEFORE building the initial snapshot so an
     // event landing between snapshot-build and long-poll subscribe is not
     // missed.
     let mut rx = state.subscribe_event_notifications();
-    let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor, false).await;
+    let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
     let initial_cursor = response.cursor.clone();
     let initial_has_delta = body.after.is_none() || !delta_is_empty(&response);
     let body_stream = async_stream::stream! {
@@ -214,7 +211,6 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                         Some(&session),
                         &body,
                         &current_cursor,
-                        false,
                     ).await;
                     let final_cursor = final_snapshot.cursor.clone();
                     if delta_is_empty(&final_snapshot) {
@@ -240,8 +236,6 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                         ).await {
                             continue;
                         }
-                        let mut include_presence_delta =
-                            account_subscribe_notification_is_presence(&notification);
                         let drain_until = tokio::time::Instant::now()
                             + Duration::from_millis(SUBSCRIBE_REBUILD_DEBOUNCE_MS);
                         let mut lagged = false;
@@ -249,8 +243,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             tokio::select! {
                                 _ = tokio::time::sleep_until(drain_until) => break,
                                 more = rx.recv() => match more {
-                                    Ok(more) => include_presence_delta |=
-                                        account_subscribe_notification_is_presence(&more),
+                                    Ok(_) => {}
                                     Err(RecvError::Lagged(_)) => {
                                         lagged = true;
                                         break;
@@ -279,7 +272,6 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
                             Some(&session),
                             &body,
                             &current_cursor,
-                            include_presence_delta,
                         ).await;
                         if delta_is_empty(&delta) {
                             continue;
@@ -327,7 +319,6 @@ fn account_frontier_frame(
         to_device: None,
         device_lists: None,
         account_data: None,
-        presence: None,
         notifications: None,
         agent_signer_evidence_bundle: None,
         partial: None,
@@ -346,7 +337,6 @@ fn account_catchup_complete_frame(
         to_device: None,
         device_lists: None,
         account_data: None,
-        presence: None,
         notifications: None,
         agent_signer_evidence_bundle: None,
         partial: None,
@@ -357,7 +347,7 @@ fn account_catchup_complete_frame(
 
 /// A snapshot is "delta-empty" when an incremental sync would carry no
 /// new realm state, no membership departure, no queued device messages,
-/// and no presence ticks. `account_data` is intentionally excluded — it
+/// and no queued notifications. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
 fn delta_is_empty(
@@ -372,22 +362,9 @@ fn delta_is_empty(
             .as_ref()
             .is_none_or(|to_device| to_device.messages.is_empty() && to_device.lost != Some(true))
         && response
-            .presence
-            .as_ref()
-            .is_none_or(|presence| presence.events.is_empty())
-        && response
             .notifications
             .as_ref()
             .is_none_or(|notifications| notifications.items.is_empty())
-}
-
-fn account_subscribe_notification_is_presence(
-    notification: &crate::state::EventNotification,
-) -> bool {
-    matches!(
-        &notification.kind,
-        crate::state::EventNotificationKind::Ephemeral { kind } if kind == "ak.presence"
-    )
 }
 
 async fn account_subscribe_notification_should_wake(
@@ -455,7 +432,6 @@ fn account_reconnect_control_frame(
         to_device: None,
         device_lists: None,
         account_data: None,
-        presence: None,
         notifications: None,
         agent_signer_evidence_bundle: None,
         partial: None,
@@ -486,90 +462,4 @@ pub(crate) fn roster_member_actor_id(member: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|actor| !actor.is_empty())
         .map(ToOwned::to_owned)
-}
-
-pub(crate) async fn presence_events_for_actors(
-    state: &AppState,
-    actors: BTreeSet<String>,
-    session: Option<&SessionRecord>,
-) -> Vec<arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope> {
-    let now = Utc::now();
-    let mut events = Vec::new();
-    for actor in actors {
-        if !presence_visible_to_session(state, &actor, session).await {
-            continue;
-        }
-        events.extend(
-            state
-                .deliveries()
-                .presence_for_actor(&actor)
-                .await
-                .unwrap_or_default()
-                .into_iter()
-                .filter(|record| !presence_record_expired(record, now))
-                .map(|record| record.envelope),
-        );
-    }
-    events.sort_by_key(|event| {
-        (
-            event.actor_id.clone(),
-            event.device_id.clone(),
-            event.sent_at,
-        )
-    });
-    events
-}
-
-/// One actor's presence after merging their per-device broadcasts
-/// (profiles-presence.md §3.3 multi-device aggregation).
-#[derive(Clone, Debug)]
-pub(crate) struct AggregatedPresence {
-    pub status: String,
-    pub updated_at: DateTime<Utc>,
-}
-
-/// Deterministic multi-device merge: unexpired rows aggregate by the
-/// `dnd > online > idle` priority; no unexpired row at all projects as
-/// `offline`.
-pub(crate) fn aggregate_presence_records(
-    records: &[PresenceRecord],
-    now: DateTime<Utc>,
-) -> Option<AggregatedPresence> {
-    let newest_updated_at = records.iter().map(|record| record.updated_at).max()?;
-    let live: Vec<&PresenceRecord> = records
-        .iter()
-        .filter(|record| !presence_record_expired(record, now))
-        .collect();
-    if live.is_empty() {
-        return Some(AggregatedPresence {
-            status: "offline".to_owned(),
-            updated_at: newest_updated_at,
-        });
-    }
-    let status =
-        arkret_models_discovery::presence::aggregate_presence_states(live.iter().filter_map(
-            |record| arkret_models_discovery::presence::PresenceStatus::parse_wire(&record.status),
-        ));
-    let mut by_recency: Vec<&&PresenceRecord> = live.iter().collect();
-    by_recency.sort_by_key(|record| std::cmp::Reverse(record.updated_at));
-    Some(AggregatedPresence {
-        status: status.as_wire().to_owned(),
-        updated_at: by_recency
-            .first()
-            .map(|record| record.updated_at)
-            .unwrap_or(newest_updated_at),
-    })
-}
-
-fn presence_record_expired(record: &PresenceRecord, now: DateTime<Utc>) -> bool {
-    if let Some(expires_at) = record.expires_at
-        && expires_at <= now
-    {
-        return true;
-    }
-    // Stale-online decay back-stop: an `online` row that stopped being
-    // refreshed lapses even when its envelope TTL was generous.
-    record.status == "online"
-        && now.signed_duration_since(record.updated_at)
-            > ChronoDuration::seconds(PRESENCE_ONLINE_TTL_SECONDS)
 }

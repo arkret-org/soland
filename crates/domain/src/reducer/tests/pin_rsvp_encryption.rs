@@ -3,12 +3,24 @@ use super::*;
 const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
 const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-0000000000f1";
 
+/// `purpose` of the exporter-derived content AEAD domain
+/// (`encryption-and-audit.md` §2.10.2).
+const EXPORTER_AEAD_CONTENT_PURPOSE: &str = "mls_exporter_aead_content";
+
+/// `canonical_id` of the v1 mandatory-to-implement MLS ciphersuite
+/// (`mls-ciphersuite-registry.json`). §2.10.2 requires `aead_profile` to be the
+/// registry id of the suite the group actually negotiated, never a local alias.
+const EXPORTER_AEAD_PROFILE: &str = "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519";
+
 fn encrypted_payload(event_kind: &str) -> Value {
     encrypted_payload_with_scheme(event_kind, "mls_rfc9420", "MLS")
 }
 
+/// `purpose` / `aead_profile` are required for `mls_exporter_aead_v1` and
+/// forbidden for `mls_rfc9420`, so the fixture carries them exactly when the
+/// scheme it declares does.
 fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str) -> Value {
-    serde_json::json!({
+    let mut envelope = serde_json::json!({
         "scheme": scheme,
         "version": "1.0",
         "group_id": "Z3JvdXA",
@@ -26,7 +38,12 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
         },
         "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-    })
+    });
+    if scheme == "mls_exporter_aead_v1" {
+        envelope["purpose"] = Value::String(EXPORTER_AEAD_CONTENT_PURPOSE.to_owned());
+        envelope["aead_profile"] = Value::String(EXPORTER_AEAD_PROFILE.to_owned());
+    }
+    envelope
 }
 
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {

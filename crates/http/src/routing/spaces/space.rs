@@ -6,7 +6,7 @@
 //! - `GET    /_soland/self/spaces/{space_id}/cells/{cell_family}` — projected Space-container
 //!   child-order cell.
 //!
-//! Everything else in this module is the visibility / membership / typing
+//! Everything else in this module is the visibility / membership
 //! query helper surface that every other domain (federation, message, blob,
 //! directory, mimi, …) calls into to resolve "is this actor allowed to see /
 //! write in this Realm?".
@@ -529,7 +529,7 @@ pub async fn touch_realm_meta(state: &AppState, realm_id: &str) {
     }
 }
 
-// ── Visibility + membership + typing query helpers ─────────────────────────
+// ── Visibility + membership query helpers ─────────────────────────────────
 
 pub fn realm_scope_to_realm_id(scope_id: &str) -> Option<String> {
     RealmId::new(scope_id.to_owned())
@@ -1160,157 +1160,6 @@ pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_ac
                 .count() as u64
         })
         .unwrap_or(0)
-}
-
-pub async fn prune_expired_typing(state: &AppState) {
-    if let Err(error) = state.deliveries().prune_expired_typing().await {
-        tracing::warn!(%error, "failed to prune expired typing entries");
-    }
-}
-
-const ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum PresenceVisibilityPolicy {
-    Public,
-    ContactsOnly,
-    Nobody,
-}
-
-pub(crate) async fn presence_visibility_for_actor(
-    state: &AppState,
-    actor: &str,
-) -> PresenceVisibilityPolicy {
-    match state
-        .account_data()
-        .entry(actor, ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY)
-        .await
-    {
-        Ok(None) => PresenceVisibilityPolicy::Public,
-        Ok(Some(record)) => presence_visibility_from_payload(&record.payload)
-            .unwrap_or(PresenceVisibilityPolicy::Nobody),
-        Err(error) => {
-            tracing::warn!(%error, actor = %actor, "failed to read presence visibility policy");
-            PresenceVisibilityPolicy::Nobody
-        }
-    }
-}
-
-fn presence_visibility_from_payload(payload: &Value) -> Option<PresenceVisibilityPolicy> {
-    let object = payload.as_object()?;
-    if object.len() != 1 {
-        return None;
-    }
-    match object
-        .get("presence_visibility")
-        .and_then(Value::as_str)
-        .map(str::trim)
-    {
-        Some("public") => Some(PresenceVisibilityPolicy::Public),
-        Some("contacts_only") => Some(PresenceVisibilityPolicy::ContactsOnly),
-        Some("nobody") => Some(PresenceVisibilityPolicy::Nobody),
-        _ => None,
-    }
-}
-
-pub(crate) async fn presence_visible_to_session(
-    state: &AppState,
-    actor: &str,
-    session: Option<&SessionRecord>,
-) -> bool {
-    let Some(session) = session else {
-        return false;
-    };
-    match presence_visibility_for_actor(state, actor).await {
-        PresenceVisibilityPolicy::Nobody => false,
-        PresenceVisibilityPolicy::ContactsOnly => {
-            personal_blocklist_allows_actor(state, session, actor).await
-                && accepted_contact_between(state, &session.actor, actor).await
-        }
-        PresenceVisibilityPolicy::Public => {
-            personal_blocklist_allows_actor(state, session, actor).await
-        }
-    }
-}
-
-async fn accepted_contact_between(state: &AppState, left: &str, right: &str) -> bool {
-    if left == right {
-        return true;
-    }
-    for (requester, target) in [(left, right), (right, left)] {
-        match state.contacts().contact_any(requester, target).await {
-            Ok(Some(contact)) if contact.status == "accepted" => return true,
-            Ok(_) => {}
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    actor = %left,
-                    peer = %right,
-                    "failed to read contact relationship for presence policy"
-                );
-                return false;
-            }
-        }
-    }
-    false
-}
-
-pub async fn typing_scope_allows_actor(
-    state: &AppState,
-    realm_id: &str,
-    actor: &str,
-    strand_id: Option<&str>,
-) -> Result<(), AppError> {
-    let Some(strand_id) = strand_id.map(str::trim).filter(|value| !value.is_empty()) else {
-        return Ok(());
-    };
-    if strand_id.starts_with("ak:realm:") || strand_id == realm_id {
-        return Err(AppError::capability_denied(
-            "ak.typing strand_id must name a visible ak:strand",
-        ));
-    }
-    if !strand_id.starts_with("ak:strand:") {
-        return Err(AppError::invalid_param(
-            "ak.typing strand_id must name a visible ak:strand",
-        ));
-    }
-    let projection = state.projections().snapshot();
-    let Some(strand) = projection.strands.get(strand_id) else {
-        if strand_id == crate::routing::events::strand::strand_id_from_realm_id(realm_id) {
-            return Ok(());
-        }
-        return Err(AppError::capability_denied(
-            "ak.typing strand is not visible",
-        ));
-    };
-    if strand.realm_id != realm_id {
-        return Err(AppError::capability_denied(
-            "ak.typing strand belongs to another realm",
-        ));
-    }
-    if strand.state.as_str() != "active" {
-        return Err(AppError::capability_denied(
-            "ak.typing strand is not active",
-        ));
-    }
-    let Some(discussion_track) = strand.tracks.get(STRAND_TRACK_NAME_DISCUSSION) else {
-        return Err(AppError::capability_denied(
-            "ak.typing discussion track is disabled",
-        ));
-    };
-    if discussion_track.enabled == Some(false) {
-        return Err(AppError::capability_denied(
-            "ak.typing discussion track is disabled",
-        ));
-    }
-    if let Some(scope_circle_id) = strand.scope_circle_id.as_deref()
-        && !projection.circle_scope_visible_to_actor(scope_circle_id, actor)
-    {
-        return Err(AppError::capability_denied(
-            "ak.typing circle is not visible",
-        ));
-    }
-    Ok(())
 }
 
 const ACCOUNT_DATA_KEY_BLOCKLIST: &str = "ak.account.blocklist";

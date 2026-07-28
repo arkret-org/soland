@@ -2,15 +2,17 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use arkret_event_draft::Operation;
-use arkret_identifiers::{CellRef, MoveId, RealmId, SealId};
+use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
-    CellLatticeBinding, MoveReject, MoveStore, SealEffect, SealLeafUnionProof, SealReject,
-    SealStore, SealedMoveRecord, StoreResult,
+    CellLatticeBinding, ControlEventStore, ControlMoveReject, SealEffect, SealLeafUnionProof,
+    SealReject, SealStore, SealedControlEventRecord, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
-use arkret_wire::{Move, Seal};
+use arkret_wire::Seal;
+use arkret_wire::cba::ProjectedCellWrite;
+use arkret_wire::event_envelope::Event;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -107,7 +109,7 @@ pub trait EventSealCommitPort: Send + Sync {
         seal: &Seal,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
-        covered: &std::collections::BTreeSet<MoveId>,
+        covered: &std::collections::BTreeSet<Hash>,
     ) -> StoreResult<bool>;
 }
 
@@ -146,7 +148,7 @@ impl std::ops::Deref for ServiceClock {
 #[derive(Clone)]
 pub struct ProjectionService {
     state: Arc<Mutex<ProjectionState>>,
-    move_store: Arc<dyn MoveStore>,
+    control_event_store: Arc<dyn ControlEventStore>,
     seal_store: Arc<dyn SealStore>,
     cell_store: Arc<dyn CellStore>,
     cell_registry: Arc<dyn CellRegistry>,
@@ -249,6 +251,19 @@ pub enum ProjectionEffectView {
 pub struct StagedRealmBootstrap {
     state: ProjectionState,
     founding_grant_id: Option<String>,
+}
+
+/// One reducer Operation paired with the registry-derived cell writes of the
+/// signed Event it was projected from.
+///
+/// The v1 Event wire carries no producer `effects[]`, so every reducer entry
+/// point that can hit a kind with a declared cell contract has to be handed the
+/// receiver's own projection alongside the Operation. Pairing them in one value
+/// keeps the two from drifting out of index alignment.
+#[derive(Clone, Debug)]
+pub struct ProjectedOperation {
+    pub operation: Operation,
+    pub cell_writes: Vec<ProjectedCellWrite>,
 }
 
 #[derive(Clone, Debug)]
@@ -380,7 +395,7 @@ impl From<ProjectionEffect> for ProjectionEffectView {
 impl ProjectionService {
     #[must_use]
     pub fn new(
-        move_store: Arc<dyn MoveStore>,
+        control_event_store: Arc<dyn ControlEventStore>,
         seal_store: Arc<dyn SealStore>,
         cell_store: Arc<dyn CellStore>,
         cell_registry: Arc<dyn CellRegistry>,
@@ -389,7 +404,7 @@ impl ProjectionService {
     ) -> Self {
         Self {
             state: Arc::new(Mutex::new(ProjectionState::new())),
-            move_store,
+            control_event_store,
             seal_store,
             cell_store,
             cell_registry,
@@ -462,8 +477,8 @@ impl ProjectionService {
         Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry())
     }
 
-    fn move_store(&self) -> &dyn MoveStore {
-        self.move_store.as_ref()
+    fn control_event_store(&self) -> &dyn ControlEventStore {
+        self.control_event_store.as_ref()
     }
 
     fn seal_store(&self) -> &dyn SealStore {
@@ -482,31 +497,36 @@ impl ProjectionService {
         self.event_seal_committer.as_ref()
     }
 
-    pub fn put_pending_move(&self, move_value: &Move) -> StoreResult<()> {
-        self.move_store().put_pending(move_value)
+    /// Stash a Control Move — an [`Event`] carrying `seal_basis` — that passed
+    /// local format / proof pre-check (`event-auth-state-resolution.md` §5).
+    pub fn put_pending_control_event(&self, event: &Event) -> StoreResult<()> {
+        self.control_event_store().put_pending(event)
     }
 
-    pub fn move_by_id(&self, move_id: &MoveId) -> StoreResult<Option<Move>> {
-        self.move_store().get(move_id)
+    /// Control-plane Events are keyed by their canonical `event_digest`, not by
+    /// `event_id`: an equivocated id must stay distinguishable (§6.3.2).
+    pub fn control_event_by_digest(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
+        self.control_event_store().get(event_digest)
     }
 
-    pub fn pending_moves_for_notary(
+    pub fn pending_control_events_for_notary(
         &self,
         realm_id: &RealmId,
-        cursor: Option<&MoveId>,
+        cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<Move>> {
-        self.move_store()
+    ) -> StoreResult<Vec<Event>> {
+        self.control_event_store()
             .list_pending_for_notary(realm_id, cursor, limit)
     }
 
-    pub fn sealed_moves(
+    pub fn sealed_control_events(
         &self,
         realm_id: &RealmId,
-        cursor: Option<&MoveId>,
+        cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<SealedMoveRecord>> {
-        self.move_store().list_sealed(realm_id, cursor, limit)
+    ) -> StoreResult<Vec<SealedControlEventRecord>> {
+        self.control_event_store()
+            .list_sealed(realm_id, cursor, limit)
     }
 
     pub fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
@@ -561,10 +581,27 @@ impl ProjectionService {
         self.cell_registry().resolve(realm_id, cell)
     }
 
+    /// Resolve one registry-projected write against a frozen pre-state.
+    ///
+    /// `event-and-patch.md` §2.4.2 leaves `transition_to`, `apply_patch`,
+    /// `remove_observed` and `reset` unresolved until a receiver supplies the
+    /// pre-state. That rule has exactly one implementation
+    /// (`arkret_state::resolve_projected_write`); this only binds the Realm's
+    /// cell registry to it so callers outside `verify_control_move` cannot
+    /// grow a second answer.
+    pub fn resolve_projected_write(
+        &self,
+        write: &ProjectedCellWrite,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject> {
+        arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
+    }
+
     pub fn predecessor_covered_events(
         &self,
         predecessor_refs: &[SealId],
-    ) -> Result<std::collections::BTreeSet<MoveId>, SealReject> {
+    ) -> Result<std::collections::BTreeSet<Hash>, SealReject> {
         arkret_state::union_predecessor_covered_events(predecessor_refs, self.seal_store())
     }
 
@@ -603,29 +640,67 @@ impl ProjectionService {
         )
     }
 
-    pub fn verify_move<F>(
-        &self,
-        move_value: &Move,
-        pre_state: &BTreeMap<CellRef, CellState>,
-        verify_jws: F,
-    ) -> Result<(), MoveReject>
-    where
-        F: Fn(&[u8], &str, &str, &str) -> Result<(), String>,
-    {
-        arkret_state::verify_move(move_value, pre_state, self.cell_registry(), verify_jws)
+    /// The Realm's effective digest suite
+    /// (`ak.component.realm.digest_suite.v1`). The registry projection derives
+    /// `digest_of` members with it, so a Realm that transitioned to blake3 must
+    /// project under blake3. Absent cell means the Realm never transitioned and
+    /// still runs the protocol baseline.
+    #[must_use]
+    pub fn realm_digest_suite(&self, realm_id: &str) -> arkret_canonical::DigestSuite {
+        self.state
+            .lock()
+            .realm_digest_algorithm(realm_id)
+            .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
+            .unwrap_or_default()
     }
 
-    pub fn apply_seal<F>(&self, seal: &Seal, verify_jws: F) -> Result<SealEffect, SealReject>
+    /// The receiver-derived cell writes for a signed Event.
+    ///
+    /// The v1 wire carries no producer `effects[]`: the only legitimate source
+    /// of cell targets and lattice operations is the registered reducer
+    /// contract (`event-and-patch.md` §2.4.2).
+    pub fn project_cell_writes(&self, event: &Event) -> Result<Vec<ProjectedCellWrite>, String> {
+        arkret_schema::project_registered_cell_writes(
+            event,
+            self.realm_digest_suite(event.realm_id.as_str()),
+        )
+        .map_err(|error| error.to_string())
+    }
+
+    /// Run `event-auth-state-resolution.md` §5.1 steps 1-5 over one Control
+    /// Move and return its receiver-derived writes.
+    pub fn verify_control_move<F>(
+        &self,
+        event: &Event,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        verify_proofs: F,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
     where
-        F: Fn(&[u8], &str, &str, &str) -> Result<(), String> + Copy,
+        F: Fn(&Event) -> Result<(), String>,
+    {
+        arkret_state::verify_control_move(
+            event,
+            realm_id,
+            pre_state,
+            self.cell_registry(),
+            verify_proofs,
+            |event| self.project_cell_writes(event),
+        )
+    }
+
+    pub fn apply_seal<F>(&self, seal: &Seal, verify_proofs: F) -> Result<SealEffect, SealReject>
+    where
+        F: Fn(&Event) -> Result<(), String> + Copy,
     {
         arkret_state::apply_seal(
             seal,
-            self.move_store(),
+            self.control_event_store(),
             self.seal_store(),
             self.cell_store(),
             self.cell_registry(),
-            verify_jws,
+            verify_proofs,
+            |event| self.project_cell_writes(event),
         )
     }
 
@@ -634,7 +709,7 @@ impl ProjectionService {
         seal: &Seal,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
-        covered: &std::collections::BTreeSet<MoveId>,
+        covered: &std::collections::BTreeSet<Hash>,
     ) -> StoreResult<bool> {
         self.event_seal_committer().commit_if_frontier(
             seal,
@@ -819,11 +894,12 @@ impl ProjectionService {
 
     pub fn stage_realm_bootstrap(
         &self,
-        operations: &[Operation],
+        operations: &[ProjectedOperation],
     ) -> Result<StagedRealmBootstrap, RealmBootstrapProjectionError> {
         let mut staged = self.state.lock().clone();
         let mut founding_grant_id = None;
-        for (index, operation) in operations.iter().enumerate() {
+        for (index, projected) in operations.iter().enumerate() {
+            let operation = &projected.operation;
             let effect = if index == 1
                 && operation.object_kind.as_str()
                     == arkret_wire::events::EventKind::CAPABILITY_GRANT
@@ -832,9 +908,9 @@ impl ProjectionService {
             } else if operation.object_kind.as_str().starts_with("ak.realm.")
                 && operation.object_kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE
             {
-                staged.apply_validated_realm_bootstrap_facet(operation)
+                staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
             } else {
-                staged.apply(operation, self.clock())
+                staged.apply_projected(operation, &projected.cell_writes, self.clock())
             };
             match effect {
                 ProjectionEffect::Rejected { reason } => {
@@ -877,15 +953,18 @@ impl ProjectionService {
 
     pub fn project_call_state_cell(
         &self,
-        operations: &[Operation],
+        operations: &[ProjectedOperation],
         cell_id: &CellRef,
     ) -> Option<Value> {
         let mut projection = ProjectionState::new();
-        for operation in operations {
-            if let ProjectionEffect::Rejected { reason } = projection.apply(operation, self.clock())
-            {
+        for projected in operations {
+            if let ProjectionEffect::Rejected { reason } = projection.apply_projected(
+                &projected.operation,
+                &projected.cell_writes,
+                self.clock(),
+            ) {
                 tracing::warn!(
-                    operation_id = %operation.operation_id,
+                    operation_id = %projected.operation.operation_id,
                     %reason,
                     "accepted call state operation did not project during cold projection"
                 );
@@ -1075,19 +1154,36 @@ impl ProjectionService {
         &self.state
     }
 
+    /// Reduce an Operation whose Event contract declares no cell write.
+    ///
+    /// A kind that does declare writes fails closed here with
+    /// `reducer_projection_failed`; use [`Self::apply_projected`] instead.
     pub fn apply(&self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffectView {
-        self.state.lock().apply(operation, hlc).into()
+        self.apply_projected(operation, &[], hlc)
+    }
+
+    pub fn apply_projected(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+        hlc: &ServerHlc,
+    ) -> ProjectionEffectView {
+        self.state
+            .lock()
+            .apply_projected(operation, cell_writes, hlc)
+            .into()
     }
 
     pub fn apply_via_lattice_registry(
         &self,
         operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
     ) -> ProjectionEffectView {
         let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
         self.state
             .lock()
-            .apply_via_lattice_registry(operation, hlc, &registry)
+            .apply_via_lattice_registry(operation, cell_writes, hlc, &registry)
             .into()
     }
 
@@ -1176,9 +1272,14 @@ impl ProjectionService {
             })
     }
 
-    pub fn preflight_capability_rejection(&self, operation: &Operation) -> Option<String> {
+    pub fn preflight_capability_rejection(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
+            cell_writes,
             &[
                 arkret_wire::events::EventKind::CAPABILITY_GRANT,
                 arkret_wire::events::EventKind::CAPABILITY_REVOKE,
@@ -1187,9 +1288,14 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_calendar_rejection(&self, operation: &Operation) -> Option<String> {
+    pub fn preflight_calendar_rejection(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
+            cell_writes,
             &[
                 arkret_wire::events::EventKind::STRAND_CREATE,
                 arkret_wire::events::EventKind::STRAND_UPDATE,
@@ -1198,9 +1304,14 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_moderation_rejection(&self, operation: &Operation) -> Option<String> {
+    pub fn preflight_moderation_rejection(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
+            cell_writes,
             &[
                 arkret_wire::events::EventKind::MODERATION_DECISION,
                 arkret_wire::events::EventKind::MODERATION_DECISION_LIFT,
@@ -1212,9 +1323,14 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_invite_rejection(&self, operation: &Operation) -> Option<String> {
+    pub fn preflight_invite_rejection(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
+            cell_writes,
             &[
                 arkret_wire::events::EventKind::INVITE_THIRD_PARTY,
                 arkret_wire::events::EventKind::INVITE_CLAIM,
@@ -1222,9 +1338,14 @@ impl ProjectionService {
         )
     }
 
-    pub fn preflight_realm_policy_rejection(&self, operation: &Operation) -> Option<String> {
+    pub fn preflight_realm_policy_rejection(
+        &self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+    ) -> Option<String> {
         self.preflight_apply_rejection(
             operation,
+            cell_writes,
             &[arkret_wire::events::EventKind::REALM_POLICY_BUNDLE],
         )
     }
@@ -1272,13 +1393,19 @@ impl ProjectionService {
     fn preflight_apply_rejection(
         &self,
         operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
         accepted_kinds: &[&str],
     ) -> Option<String> {
         let kind = soland_domain::kinds::canonical_kind_string(operation);
         if !accepted_kinds.contains(&kind.as_str()) {
             return None;
         }
-        match self.state.lock().clone().apply(operation, self.clock()) {
+        match self
+            .state
+            .lock()
+            .clone()
+            .apply_projected(operation, cell_writes, self.clock())
+        {
             ProjectionEffect::Rejected { reason } => Some(reason),
             _ => None,
         }

@@ -77,8 +77,11 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     };
     event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE
         && event.executed_by.as_ref() != Some(&event.actor_id)
-        && arkret_bootstrap::materialize_managed_agent_pcr_control(std::slice::from_ref(&event))
-            .is_ok()
+        && arkret_bootstrap::materialize_managed_agent_pcr_control(
+            std::slice::from_ref(&event),
+            &genesis_cell_write_projector,
+        )
+        .is_ok()
 }
 
 #[derive(Debug)]
@@ -593,6 +596,26 @@ pub(super) async fn submit_event_batch_outcome(
     let mut quarantine = Vec::new();
     let mut realm_actor_frontiers = BTreeMap::new();
     let mut realm_bootstrap_contexts: Vec<RealmBootstrapBatchContext> = Vec::new();
+    // `event-auth-state-resolution.md` §5(1) — the managed Agent PCR genesis is
+    // the delegated branch of the closed `ak.realm.create` anchor unit, so its
+    // create carries no `seal_basis` and its registry plane check must run in
+    // the bootstrap context. The ordinary-Realm branch already returned above;
+    // reaching here with a leading create means this branch, and
+    // `batch_is_managed_agent_pcr_create` has already materialized the unit.
+    if batch_begins_realm_create(&envelopes) && batch_is_managed_agent_pcr_create(&envelopes) {
+        if let (Some(realm_id), Some(actor_id)) = (
+            event_string_field_from_value(&envelopes[0], "realm_id"),
+            event_string_field_from_value(&envelopes[0], "actor_id"),
+        ) {
+            realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
+                realm_id,
+                actor_id,
+                identity_anchor_event_id: None,
+                self_principal_pcr_bootstrap: false,
+                ordinary_realm_bootstrap: false,
+            });
+        }
+    }
 
     for envelope in envelopes {
         let id = event_string_field_from_value(&envelope, "event_id")
@@ -605,6 +628,7 @@ pub(super) async fn submit_event_batch_outcome(
             session,
             envelope,
             &realm_bootstrap_contexts,
+            None,
             None,
             None,
         )
@@ -645,6 +669,7 @@ pub(super) async fn submit_event_batch_outcome(
                         id,
                         reason_code: error.code.to_owned(),
                         detail: Some(error.message),
+                        ..Default::default()
                     });
                 }
             }
@@ -911,7 +936,7 @@ async fn accept_federated_seal_prerequisite(
         })?;
     if !event_is_local {
         let event_digest =
-            arkret_identifiers::MoveId::new(event.event_digest().map_err(|error| {
+            arkret_identifiers::Hash::new(event.event_digest().map_err(|error| {
                 AppError::new(
                     ErrorCode::SchemaViolation,
                     format!("federated Event digest failed: {error}"),
@@ -987,22 +1012,55 @@ pub(crate) async fn submit_federation_events(
     }
     let EventsSubmitFederationRequestBody {
         service_binding_ref,
-        events,
-        seals,
+        events: submissions,
+        cba_proof_bundles,
         signer_key_evidence,
         agent_signer_evidence_bundle,
     } = submit;
-    if seals.windows(2).any(|pair| {
-        (pair[0].notary_seq, pair[0].id.as_str()) >= (pair[1].notary_seq, pair[1].id.as_str())
-    }) {
-        render_error(
-            res,
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "federation seals must be unique and ordered by (notary_seq, id)",
-        );
-        return;
-    }
+    // The federation rail no longer carries a bare `seals[]`: Seal
+    // prerequisites are disclosed inside receiver-relative CBA proof bundles,
+    // which MAY overlap, so the flat prerequisite list is the deduplicated
+    // union in (notary_seq, id) order (`event_sync.rs::transported_seals`).
+    let seals = {
+        let mut seen = BTreeSet::new();
+        let mut out: Vec<arkret_wire::Seal> = Vec::new();
+        for bundle in &cba_proof_bundles {
+            for seal in &bundle.seals {
+                if seen.insert(seal.id.clone()) {
+                    out.push(seal.clone());
+                }
+            }
+        }
+        out.sort_by(|left, right| {
+            (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
+        });
+        out
+    };
+    // Each transported Event travels with its authorization lease and the
+    // ingress receipts that authorized its first publication
+    // (`offline-publication.md` §2.1). The receipts are transport evidence:
+    // they never enter the Event digest and MUST NOT be re-stamped here. Keyed
+    // by Event id so the accept loop below can persist them verbatim once the
+    // Event itself is accepted.
+    let inbound_publication_evidence: BTreeMap<String, InboundPublicationEvidence> = submissions
+        .iter()
+        .filter_map(|submission| {
+            let event_digest = submission.event.event_digest().ok()?;
+            Some((
+                submission.event.event_id.as_str().to_owned(),
+                InboundPublicationEvidence {
+                    event_digest,
+                    realm_id: submission.event.realm_id.as_str().to_owned(),
+                    authorization_lease: submission.authorization_lease.clone(),
+                    ingress_receipts: submission.ingress_receipts.clone(),
+                },
+            ))
+        })
+        .collect();
+    let events: Vec<arkret_wire::Event> = submissions
+        .iter()
+        .map(|submission| submission.event.clone())
+        .collect();
     let mut verified_device_generations = BTreeMap::<(String, String), String>::new();
     for evidence in &signer_key_evidence {
         match super::validate_federated_device_signing_key_evidence(state, evidence).await {
@@ -1298,6 +1356,7 @@ pub(crate) async fn submit_federation_events(
                             .unwrap_or_else(|| "unknown".to_owned()),
                         reason_code: rejection.code.to_owned(),
                         detail: Some(rejection.message.clone()),
+                        ..Default::default()
                     })
                     .collect::<Vec<_>>();
                 append_audit_log(
@@ -1453,6 +1512,7 @@ pub(crate) async fn submit_federation_events(
                     .unwrap_or_else(|| "unknown".to_owned()),
                 reason_code: "federation_dependencies_pending".to_owned(),
                 detail: Some("the referenced Realm bootstrap has not arrived yet".to_owned()),
+                ..Default::default()
             }
         }));
         res.render(Json(events_submit_outcome(
@@ -1475,6 +1535,7 @@ pub(crate) async fn submit_federation_events(
                 id,
                 reason_code: "schema_violation".to_owned(),
                 detail: Some("event realm_id must match service_binding_ref.realm_id".to_owned()),
+                ..Default::default()
             });
             continue;
         }
@@ -1483,6 +1544,7 @@ pub(crate) async fn submit_federation_events(
                 id,
                 reason_code: "missing_param".to_owned(),
                 detail: Some("actor_id is required".to_owned()),
+                ..Default::default()
             });
             continue;
         };
@@ -1491,6 +1553,7 @@ pub(crate) async fn submit_federation_events(
                 id,
                 reason_code: "invalid_param".to_owned(),
                 detail: Some("actor_id must be a DID".to_owned()),
+                ..Default::default()
             });
             continue;
         }
@@ -1499,6 +1562,7 @@ pub(crate) async fn submit_federation_events(
                 id,
                 reason_code: rejection.code.to_owned(),
                 detail: Some(rejection.message),
+                ..Default::default()
             });
             continue;
         }
@@ -1510,6 +1574,7 @@ pub(crate) async fn submit_federation_events(
                     id,
                     reason_code: "schema_violation".to_owned(),
                     detail: Some("MLS Welcome payload is required".to_owned()),
+                    ..Default::default()
                 });
                 continue;
             };
@@ -1530,6 +1595,7 @@ pub(crate) async fn submit_federation_events(
                         detail: Some(
                             "the Welcome peer claim ledger entry is not available yet".to_owned(),
                         ),
+                        ..Default::default()
                     });
                     continue;
                 }
@@ -1540,6 +1606,7 @@ pub(crate) async fn submit_federation_events(
                         detail: Some(
                             "MLS Welcome is not bound to the authenticated peer claim".to_owned(),
                         ),
+                        ..Default::default()
                     });
                     continue;
                 }
@@ -1565,6 +1632,7 @@ pub(crate) async fn submit_federation_events(
                 id,
                 reason_code: "capability_denied".to_owned(),
                 detail: Some("actor_id is not hosted by the source service authority and is not a known member of the binding realm".to_owned()),
+                ..Default::default()
             });
             continue;
         }
@@ -1628,6 +1696,7 @@ pub(crate) async fn submit_federation_events(
                     error.wire_code().to_owned()
                 },
                 detail: Some(error.message.to_string()),
+                ..Default::default()
             });
             continue;
         }
@@ -1638,11 +1707,18 @@ pub(crate) async fn submit_federation_events(
             &[],
             None,
             Some(&admission),
+            // No lease is handed to the local minting path: this Event was
+            // already receipted by its origin ingress, and the transported
+            // evidence is stored verbatim below instead.
+            None,
         )
         .await
         {
             Ok(response) => {
                 accepted.push(response.event_id.clone());
+                if let Some(evidence) = inbound_publication_evidence.get(&response.event_id) {
+                    store_inbound_publication_evidence(state, evidence).await;
+                }
                 if response.duplicate {
                     duplicate.push(response.event_id);
                 }
@@ -1660,6 +1736,7 @@ pub(crate) async fn submit_federation_events(
                         id,
                         reason_code: "federation_dependencies_pending".to_owned(),
                         detail: Some("a predecessor Event has not arrived yet".to_owned()),
+                        ..Default::default()
                     });
                     continue;
                 }
@@ -1670,6 +1747,7 @@ pub(crate) async fn submit_federation_events(
                         id,
                         reason_code: error.code.to_owned(),
                         detail: Some(error.message),
+                        ..Default::default()
                     });
                 }
             }
@@ -1746,12 +1824,15 @@ pub(super) fn event_string_field_from_value(value: &Value, field: &str) -> Optio
 }
 
 mod delivery_binding;
+mod ingress_receipt;
 mod outcome;
 mod post_commit;
 mod preflight;
 mod value;
 
 use delivery_binding::*;
+pub(in crate::routing) use ingress_receipt::validate_initial_submission;
+use ingress_receipt::*;
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
@@ -1759,7 +1840,8 @@ use preflight::*;
 pub(in crate::routing::events::event_log) use value::submit_event_value_with_idempotency;
 use value::*;
 pub(in crate::routing) use value::{
-    submit_account_data_event_value, submit_event_value, submit_mimi_event_value,
+    submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
+    submit_mimi_event_value,
 };
 
 #[cfg(test)]
@@ -1820,7 +1902,7 @@ mod managed_agent_pcr_batch_tests {
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
         let mut event = arkret_wire::Event::new(
             arkret_wire::events::EventKind::REALM_CREATE,
-            realm_id,
+            arkret_wire::ScopeRef::Realm { realm_id },
             agent_id,
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
@@ -1837,7 +1919,9 @@ mod managed_agent_pcr_batch_tests {
         event.executed_by =
             Some(arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap());
         event.authorization_ref = Some("did:web:agent.example#managed-controller".to_owned());
-        event.effects = arkret_bootstrap::realm_create_effects(&event).unwrap();
+        // v1 carries no producer `effects[]`: the router recognises a managed
+        // Agent PCR create by whether the registered contract materializes its
+        // control material, so the fixture is the bare signed Event.
         serde_json::to_value(event).unwrap()
     }
 

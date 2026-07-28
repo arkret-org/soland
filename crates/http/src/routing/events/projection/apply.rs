@@ -19,6 +19,87 @@ pub async fn project_accepted_operations_from_device(
     project_accepted_operations_inner(state, origin, source_device_id, operations, None).await;
 }
 
+/// The registry-derived cell writes for an accepted Operation.
+///
+/// `event-and-patch.md` §2.4.2 makes the registered reducer contract the only
+/// source of a cell write; v1 deleted the producer `effects[]` this lane used
+/// to replay. The lane carries Operations rather than signed Events — the
+/// service-authored admin/circle/realm projections never had one — so the
+/// Operation is restated in the shape the single evaluator reads: `kind`,
+/// `event_id`, `actor_id` and the wire payload with the projection-context
+/// fields this crate injected stripped back out. Nothing here decides what an
+/// Event writes; the registry still does.
+///
+/// An unprojectable Operation yields no writes, which is fail-closed: the
+/// reducer rejects a kind whose contract declares writes when handed none.
+fn accepted_operation_cell_writes(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+) -> Vec<arkret_wire::cba::ProjectedCellWrite> {
+    let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
+        return Vec::new();
+    };
+    if !arkret_wire::events::EventKind::from(kind)
+        .descriptor()
+        .is_some_and(|descriptor| descriptor.reducer_input)
+    {
+        return Vec::new();
+    }
+    let event_id = super::event_json::operation_event_id(operation);
+    let event_id = if event_id.starts_with("ak:event:") {
+        event_id
+    } else {
+        match event_id.strip_prefix("ak:operation:") {
+            Some(suffix) => format!("ak:event:{suffix}"),
+            None => return Vec::new(),
+        }
+    };
+    let actor_id = operation
+        .payload
+        .get("sender")
+        .and_then(Value::as_str)
+        .unwrap_or(origin);
+    let realm_id = operation.realm_id.as_str();
+    let envelope = json!({
+        "event_id": event_id,
+        "kind": kind,
+        "realm_id": realm_id,
+        "scope_ref": { "kind": "realm", "realm_id": realm_id },
+        "actor_id": actor_id,
+        "actor_seq": 0,
+        "created_at": arkret_canonical::format_timestamp_canonical(operation.created_at),
+        "prev_refs": [],
+        "payload": crate::routing::events::projection_context_stripped_payload(&operation.payload),
+        "proofs": [],
+    });
+    let event = match serde_json::from_value::<arkret_wire::Event>(envelope) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::error!(
+                operation_id = %operation.operation_id,
+                %kind,
+                %error,
+                "accepted operation cannot be restated as an Event envelope; \
+                 the reducer will see no derived cell write"
+            );
+            return Vec::new();
+        }
+    };
+    match state.projections().project_cell_writes(&event) {
+        Ok(writes) => writes,
+        Err(error) => {
+            tracing::error!(
+                operation_id = %operation.operation_id,
+                %kind,
+                %error,
+                "accepted operation does not project its registered cell writes"
+            );
+            Vec::new()
+        }
+    }
+}
+
 fn accepted_circle_member_reducer_operation(
     operation: &Operation,
     trusted_sidecar_controller: Option<&str>,
@@ -460,11 +541,12 @@ async fn project_accepted_operations_inner(
         let reducer_operation = reducer_context_operation.as_ref().unwrap_or(operation);
         let reducer_effect =
             if actor_private_read_cursor_matches_origin(origin, source_device_id, operation) {
-                Some(
-                    state
-                        .projections()
-                        .apply_via_lattice_registry(reducer_operation, state.hlc()),
-                )
+                let cell_writes = accepted_operation_cell_writes(state, origin, operation);
+                Some(state.projections().apply_via_lattice_registry(
+                    reducer_operation,
+                    &cell_writes,
+                    state.hlc(),
+                ))
             } else {
                 None
             };

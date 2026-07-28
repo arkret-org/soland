@@ -14,6 +14,7 @@ use arkret_identifiers::{CellRef, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
+use arkret_wire::cba::ProjectedCellWrite;
 use serde_json::Value;
 
 use super::*;
@@ -311,11 +312,26 @@ pub struct ProjectionState {
     /// Distinct from the `cooldown` deny gate (which keys off the last
     /// `leave`); this keys off the last review `reject`.
     pub member_application_reject_at: BTreeMap<(String, String), chrono::DateTime<chrono::Utc>>,
+    /// Registry-derived cell writes of the Event currently being reduced.
+    ///
+    /// The v1 Event wire carries no producer `effects[]`: every cell write is
+    /// derived from `kind + payload` by the shared
+    /// `arkret_schema::project_registered_cell_writes` contract evaluator and
+    /// handed to the reducer here. It is transient per
+    /// [`ProjectionState::apply_projected`] call and never part of the durable
+    /// projection; a kind whose contract declares writes therefore fails closed
+    /// when this is empty.
+    projected_cell_writes: Vec<ProjectedCellWrite>,
 }
 
 impl ProjectionState {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// The registry-projected cell writes for the Event under reduction.
+    pub(crate) fn projected_cell_writes(&self) -> &[ProjectedCellWrite] {
+        &self.projected_cell_writes
     }
 
     pub fn set_local_service_id(&mut self, service_id: impl Into<String>) {
@@ -342,6 +358,7 @@ impl ProjectionState {
                 reason: reason.clone(),
                 operation_id: operation_id.clone(),
                 operation: operation.clone(),
+                cell_writes: self.projected_cell_writes.clone(),
                 queued_at: operation.created_at,
             });
         }
@@ -445,7 +462,10 @@ impl ProjectionState {
                     continue;
                 };
                 for entry in entries {
+                    let restored =
+                        std::mem::replace(&mut self.projected_cell_writes, entry.cell_writes);
                     let _ = self.apply_once(&entry.operation, hlc);
+                    self.projected_cell_writes = restored;
                     replayed += 1;
                 }
             }
@@ -946,8 +966,26 @@ impl ProjectionState {
         }
     }
 
+    /// Reduce one Operation whose Event contract declares no cell write.
+    ///
+    /// Kinds that do declare writes reject with `reducer_projection_failed`
+    /// here; the caller must use [`Self::apply_projected`] with the registry
+    /// projection of the signed Event.
     pub fn apply(&mut self, operation: &Operation, hlc: &ServerHlc) -> ProjectionEffect {
+        self.apply_projected(operation, &[], hlc)
+    }
+
+    /// Reduce one Operation together with the registry-derived cell writes of
+    /// its signed Event (`arkret_schema::project_registered_cell_writes`).
+    pub fn apply_projected(
+        &mut self,
+        operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
+        hlc: &ServerHlc,
+    ) -> ProjectionEffect {
+        let restored = std::mem::replace(&mut self.projected_cell_writes, cell_writes.to_vec());
         let effect = self.apply_once(operation, hlc);
+        self.projected_cell_writes = restored;
         self.replay_resolved_pending(hlc);
         effect
     }
@@ -967,6 +1005,7 @@ impl ProjectionState {
     pub fn apply_via_lattice_registry(
         &mut self,
         operation: &Operation,
+        cell_writes: &[ProjectedCellWrite],
         hlc: &ServerHlc,
         registry: &registry::LatticeRegistry,
     ) -> ProjectionEffect {
@@ -992,13 +1031,13 @@ impl ProjectionState {
                 event_kind = %kind,
                 "lattice registry dispatch: routed through LatticeRegistry"
             );
-            self.apply(operation, hlc)
+            self.apply_projected(operation, cell_writes, hlc)
         } else {
             // No cell-family mapping for this kind — durable-Event-only
             // projection (messages / reactions / etc.) goes through the
             // inline cache. This branch is the steady state for the
             // ~10 message-domain kinds.
-            self.apply(operation, hlc)
+            self.apply_projected(operation, cell_writes, hlc)
         }
     }
 

@@ -1449,6 +1449,36 @@ impl crate::events::EventCommitPort for PersistenceEventCommitter {
 }
 
 #[derive(Clone)]
+pub struct PersistencePublicationEvidence(Arc<dyn PersistenceStore>);
+
+#[async_trait::async_trait]
+impl crate::events::PublicationEvidencePort for PersistencePublicationEvidence {
+    async fn store_publication_evidence(
+        &self,
+        record: soland_storage::PublicationEvidenceRecord,
+    ) -> crate::ServiceResult<soland_storage::PublicationEvidenceRecord> {
+        Ok(self.0.publication_evidence().put_if_absent(record).await?)
+    }
+
+    async fn publication_evidence(
+        &self,
+        event_digest: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::PublicationEvidenceRecord>> {
+        Ok(self.0.publication_evidence().get(event_digest).await?)
+    }
+
+    async fn publication_evidence_for_digests(
+        &self,
+        event_digests: &[String],
+    ) -> crate::ServiceResult<Vec<soland_storage::PublicationEvidenceRecord>> {
+        Ok(self
+            .0
+            .publication_evidence()
+            .get_many(event_digests)
+            .await?)
+    }
+}
+
 pub struct PersistenceEventServices {
     pub events: EventService,
     pub queries: EventQueryService,
@@ -1473,6 +1503,7 @@ pub fn build_persistence_event_services(
                 persistence: persistence.clone(),
                 projected_operations,
             }),
+            Arc::new(PersistencePublicationEvidence(persistence.clone())),
         ),
         mls_commits: MlsCommitQueryService::new(Arc::new(PersistenceMlsCommitReader(
             persistence.clone(),

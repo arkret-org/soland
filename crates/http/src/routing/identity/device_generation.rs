@@ -1,8 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::hash::{Hash, Hasher};
+use std::hash::{Hash as _, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{MoveId, RealmId, SealId};
+use arkret_identifiers::{Hash, RealmId, SealId};
 pub use arkret_models_crypto::keys::DeviceGenerationStatus;
 use serde_json::Value;
 use soland_services::ServiceError;
@@ -420,7 +420,7 @@ pub async fn accepted_device_generation_seal_leaves(
     }
     let quarantined = quarantined
         .into_iter()
-        .map(MoveId::new)
+        .map(Hash::new)
         .collect::<Result<BTreeSet<_>, _>>()
         .map_err(|error| {
             ServiceError::internal(format!("quarantined Event digest is invalid: {error}"))

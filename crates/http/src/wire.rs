@@ -168,7 +168,7 @@ pub struct OutboundPushGatewayContractDescriptor {
 #[derive(Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
 pub struct OutboundPushDeliveryDescriptor {
     pub operation_id: String,
-    pub origin_service_id_header: String,
+    pub source_service_id_header: String,
     pub destination_service_id_header: String,
     pub request_id_header: String,
     pub idempotency_key_header: String,
@@ -291,7 +291,7 @@ pub struct OutboundPushResolvedContract {
     pub contract: String,
     pub expected_notify_path: String,
     pub expected_operation_id: String,
-    pub expected_origin_service_id_header: String,
+    pub expected_source_service_id_header: String,
     pub expected_destination_service_id_header: String,
     pub expected_request_id_header: String,
     pub expected_idempotency_key_header: String,

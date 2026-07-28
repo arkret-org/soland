@@ -53,8 +53,10 @@ pub(super) async fn persist_mimi_canonical_message_event(
         arkret_identifiers::EventId::new(event_id.to_owned())
             .map_err(|error| AppError::internal(format!("MIMI event id invalid: {error}")))?,
         arkret_wire::events::EventKind::MESSAGE_CREATE,
-        arkret_identifiers::RealmId::new(realm_id.to_owned())
-            .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .map_err(|error| AppError::internal(format!("MIMI realm id invalid: {error}")))?,
+        },
         service_did.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(state.hlc().now())
@@ -65,7 +67,7 @@ pub(super) async fn persist_mimi_canonical_message_event(
     .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     event.prev_refs = prev_refs;
     let verification_method = format!("{}#notary-key", state.service_id());
-    let signer = arkret_signatures::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,
         verification_method.clone(),

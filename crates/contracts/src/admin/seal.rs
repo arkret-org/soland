@@ -267,11 +267,16 @@ pub enum BottomRepairStrategy {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         state_witness_inclusion_proof_ref: Option<String>,
     },
+    /// Operator-recorded repair that is NOT a `⊥` recovery.
+    ///
+    /// `event-auth-state-resolution.md` §9.5 defines exactly one way out of a
+    /// `bottom=reject` cell's `⊥`: a signed conflict-recovery Control Move
+    /// carrying `refs[]` with `role=recovery_capability` and
+    /// `role=state_witness`. There is no admin-supplied-effects form, so this
+    /// variant carries no writes — only the operator note.
     Manual {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
-        #[serde(default)]
-        effects: Vec<Value>,
     },
 }
 

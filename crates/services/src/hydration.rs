@@ -14,6 +14,16 @@ use crate::authorization::AuthorizationService;
 use crate::events::{RealmDirectoryEntry, RealmDirectoryIndex};
 use crate::identity::CrossSigningRegistry;
 
+/// The Realm's effective digest suite as the already-hydrated projection sees
+/// it. `digest_of` members in the registry projection are derived under it, so
+/// replay has to read it from the same state the live path would.
+fn realm_digest_suite(state: &ProjectionState, realm_id: &str) -> arkret_canonical::DigestSuite {
+    state
+        .realm_digest_algorithm(realm_id)
+        .and_then(|algorithm| arkret_canonical::digest_suite(&algorithm).ok())
+        .unwrap_or_default()
+}
+
 pub trait HydrationProjectionAdapter: Send + Sync {
     fn operation_from_canonical_record(
         &self,
@@ -50,7 +60,6 @@ fn projection_context_stripped_payload(payload: &Value) -> Value {
             "seal_ref",
             "seal_basis",
             "preconditions",
-            "effects",
             "accepted_event_id",
         ] {
             object.remove(field);
@@ -588,12 +597,25 @@ async fn hydrate_canonical_realm_bootstraps(
                     record.event_id
                 )));
             };
+            // The v1 Event wire carries no producer `effects[]`, so hydration
+            // has to re-derive the receiver's own writes from the registered
+            // reducer contract exactly as admission did.
+            let cell_writes = arkret_schema::project_registered_cell_writes(
+                &typed_events[index],
+                realm_digest_suite(&staged, typed_events[index].realm_id.as_str()),
+            )
+            .map_err(|error| {
+                soland_storage::PersistenceError::Internal(format!(
+                    "Realm bootstrap Event {} has no derivable cell contract: {error}",
+                    record.event_id
+                ))
+            })?;
             let effect = if index == 1 {
                 staged.apply_validated_realm_founding_grant(&operation, operation.created_at)
             } else if index > 1 && operation.object_kind.as_str().starts_with("ak.realm.") {
-                staged.apply_validated_realm_bootstrap_facet(&operation)
+                staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
             } else {
-                staged.apply(&operation, hydration_hlc)
+                staged.apply_projected(&operation, &cell_writes, hydration_hlc)
             };
             match effect {
                 ProjectionEffect::Rejected { reason } => {

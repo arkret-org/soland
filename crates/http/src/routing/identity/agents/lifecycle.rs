@@ -1223,19 +1223,22 @@ fn validate_agent_key_revocation_event(
                 "active Agent authorization Event id invalid: {error}"
             ))
         })?;
-    let expected = arkret_event_draft::agent_key_revoke_effects(
-        &payload,
-        std::slice::from_ref(&authorized_event_ref),
-        &event.event_id,
-    )
-    .map_err(|error| {
-        AppError::invalid_param(format!(
-            "key_revocation_events canonical Agent key effects invalid: {error}"
-        ))
-    })?;
-    if event.effects != expected {
+    // v1 carries no producer `effects[]`: `ak.agent.key.revoke` projects a
+    // single or_set remove-observed on the agent-key cell derived from
+    // `(payload.agent_id, payload.key_id)`. Assert the registered contract
+    // derives exactly that, rather than comparing a submitted array.
+    let _ = &authorized_event_ref;
+    let derived =
+        arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "key_revocation_events Agent key projection failed: {error}"
+                ))
+            })?;
+    let expected_cell = super::pairing::agent_key_cell_ref(&payload.agent_id, &payload.key_id)?;
+    if derived.len() != 1 || derived[0].cell != expected_cell {
         return Err(AppError::invalid_param(
-            "key_revocation_events effects must exactly match the canonical Agent key revocation effects",
+            "key_revocation_events must derive a single Agent key revocation write on its own key cell",
         ));
     }
     Ok(key_id)

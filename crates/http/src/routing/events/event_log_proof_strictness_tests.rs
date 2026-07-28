@@ -974,7 +974,12 @@ async fn top_level_effective_scope_is_reducer_managed() {
 fn event_canonical_bytes_use_sdk_canonical_json() {
     let mut event = arkret_wire::Event::new(
         "ak.test.canonical",
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001").unwrap(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+            )
+            .unwrap(),
+        },
         arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
         7,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
@@ -998,7 +1003,12 @@ fn event_canonical_bytes_use_sdk_canonical_json() {
 fn event_canonical_bytes_reject_non_canonical_numbers() {
     let event = arkret_wire::Event::new(
         "ak.test.canonical",
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001").unwrap(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+            )
+            .unwrap(),
+        },
         arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
         7,
         arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
@@ -1512,18 +1522,18 @@ fn data_event_seal_id() -> arkret_identifiers::SealId {
     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
 }
 
-fn data_event_move_id(byte: u8) -> arkret_identifiers::MoveId {
-    arkret_identifiers::MoveId::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
+fn data_event_move_id(byte: u8) -> arkret_identifiers::Hash {
+    arkret_identifiers::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
 fn data_event_hash(byte: u8) -> arkret_identifiers::Hash {
     arkret_identifiers::Hash::new(format!("sha256:{}", format!("{byte:02x}").repeat(32))).unwrap()
 }
 
-fn data_event_dummy_signature() -> arkret_wire::MoveSignature {
+fn data_event_dummy_signature() -> arkret_wire::PayloadSignature {
     use chrono::TimeZone;
 
-    arkret_wire::MoveSignature {
+    arkret_wire::PayloadSignature {
         alg: "EdDSA".to_owned(),
         verification_method: "did:web:notary.example#k1".to_owned(),
         payload_digest: data_event_hash(0xff),
@@ -1532,7 +1542,7 @@ fn data_event_dummy_signature() -> arkret_wire::MoveSignature {
     }
 }
 
-fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_identifiers::MoveId>) -> String {
+fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_identifiers::Hash>) -> String {
     use chrono::TimeZone;
 
     let seal_id = data_event_seal_id();
@@ -1772,7 +1782,7 @@ fn insert_historical_data_event_grant_with_e2ee_state(
 
     if include_covered_seal {
         let covered_move_id = data_event_move_id(0xb1);
-        let covered_cell = arkret_state::mls_move::covered_seals_cell_id(&realm).unwrap();
+        let covered_cell = arkret_state::mls_move::covered_seals_cell_id(realm.as_str()).unwrap();
         let covered_op = arkret_wire::LatticeOp {
             op_type: arkret_wire::LatticeOpType::Add,
             tag: Some(seal_id.as_str().to_owned()),
@@ -1830,23 +1840,36 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     insert_data_event_seal(state, move_ids)
 }
 
+/// The cell an `ak.message.create` in this Realm projects.
+///
+/// v1 carries no producer `effects[]`; the receiver derives the write set from
+/// `kind + payload` and hands it to the capability gate, so the fixture states
+/// the derived set directly instead of putting one on the wire.
+fn data_event_derived_cells() -> Vec<String> {
+    vec![format!(
+        "ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"
+    )]
+}
+
+/// A DataEvent citing `grants` through `refs[role=authorized_by]`, which is
+/// where v1 puts a capability citation — `auth_context` is closed over
+/// `{did, key_id, key_epoch, credential_epoch}`.
 fn data_event_object_with_refs(
     seal_ref: &str,
-    refs: Vec<String>,
+    grants: Vec<String>,
 ) -> serde_json::Map<String, Value> {
     json!({
         "seal_ref": seal_ref,
         "created_at": "2026-05-08T00:02:00.000Z",
+        "refs": grants
+            .into_iter()
+            .map(|grant_id| json!({"id": grant_id, "role": "authorized_by", "critical": true}))
+            .collect::<Vec<Value>>(),
         "auth_context": {
             "did": DATA_EVENT_ACTOR,
             "key_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-            "key_epoch": 1,
-            "capability_refs": refs
-        },
-        "effects": [{
-            "cell": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
-            "op": {"kind": "append"}
-        }]
+            "key_epoch": 1
+        }
     })
     .as_object()
     .unwrap()
@@ -1894,6 +1917,7 @@ fn data_event_capability_ref_must_resolve() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect_err("unknown capability_ref must reject");
 
@@ -1901,8 +1925,10 @@ fn data_event_capability_ref_must_resolve() {
     assert!(err.message.contains("not projected"));
 }
 
+/// Coverage is judged against the cells the *receiver* derived, over the whole
+/// effective set the `seal_ref` basis yields for the actor.
 #[test]
-fn data_event_capability_ref_must_cover_effect_cell() {
+fn data_event_capability_must_cover_derived_cell() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-000000000112";
     let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
@@ -1914,8 +1940,9 @@ fn data_event_capability_ref_must_cover_effect_cell() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
-    .expect("matching grant must cover the DataEvent effect cell");
+    .expect("matching grant must cover the derived DataEvent cell");
 
     let wrong_state = make_state(true);
     let wrong_grant_id = "ak:grant:01904100-0000-7000-8000-000000000113";
@@ -1929,10 +1956,78 @@ fn data_event_capability_ref_must_cover_effect_cell() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &wrong_action_object,
+        &data_event_derived_cells(),
     )
-    .expect_err("wrong action must not cover the DataEvent effect cell");
+    .expect_err("wrong action must not cover the derived DataEvent cell");
     assert_eq!(err.code, "capability_denied");
-    assert!(err.message.contains("do not cover action"));
+    assert!(err.message.contains("covers action"));
+}
+
+/// `event-and-patch.md` §2.2: `effects` and producer-selected
+/// `auth_context.capability_refs` are not v1 wire fields, and a receiver MUST
+/// answer `schema_violation` when it meets either. These were the two inputs
+/// the capability gate used to *require*, so they are asserted refused rather
+/// than merely unread.
+#[test]
+fn data_event_rejects_producer_selected_capability_fields() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011b";
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+
+    let mut with_capability_refs = data_event_object_with_refs(&seal_ref, vec![]);
+    with_capability_refs["auth_context"]["capability_refs"] = json!([grant_id]);
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &with_capability_refs,
+        &data_event_derived_cells(),
+    )
+    .expect_err("auth_context.capability_refs must be refused");
+    assert_eq!(err.code, "schema_violation");
+    assert!(err.message.contains("auth_context is closed over"));
+
+    let mut with_effects = data_event_object_with_refs(&seal_ref, vec![]);
+    with_effects.insert(
+        "effects".to_owned(),
+        json!([{
+            "cell": format!("ak:cell:ak.component.strand.discussion.timeline.v1:{DATA_EVENT_STRAND}"),
+            "op": {"kind": "append"}
+        }]),
+    );
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &with_effects,
+        &data_event_derived_cells(),
+    )
+    .expect_err("effects must be refused");
+    assert_eq!(err.code, "schema_violation");
+    assert!(err.message.contains("not a v1 Event Envelope field"));
+}
+
+/// A conformant DataEvent cites nothing: `refs[role=authorized_by]` is
+/// optional, and the effective capability set comes from the governance basis
+/// at `seal_ref` alone.
+#[test]
+fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011c";
+    let seal_ref = insert_historical_data_event_grant(&state, grant_id, "ak.message.create", false);
+    let object = data_event_object_with_refs(&seal_ref, vec![]);
+
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+    )
+    .expect("a DataEvent citing no grant is authorized by the basis at seal_ref");
 }
 
 #[test]
@@ -1948,6 +2043,7 @@ fn data_event_capability_ref_must_not_be_revoked() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect_err("revoked capability_ref must reject");
 
@@ -1974,6 +2070,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect_err("child capability_ref with revoked parent must reject");
 
@@ -1997,6 +2094,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
 }
@@ -2015,6 +2113,7 @@ fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect_err("E2EE DataEvent without covered_seals coverage must fail closed");
 
@@ -2037,6 +2136,7 @@ fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect("covered E2EE DataEvent should pass the covered_seals gate");
 }
@@ -2055,6 +2155,7 @@ fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
         DATA_EVENT_REALM,
         "ak.message.create",
         &object,
+        &data_event_derived_cells(),
     )
     .expect("relaxed E2EE profile should not require the full covered_seals gate");
 }

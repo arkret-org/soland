@@ -1,21 +1,28 @@
 use super::{
-    BTreeMap, Mutex, PersistenceResult, READ_RECEIPT_RELAY_MAX_PER_REALM, ReadReceiptRelayRecord,
-    ReadReceiptRelayStore, Utc, async_trait,
+    BTreeMap, Mutex, PersistenceResult, SIGNAL_RELAY_MAX_PER_REALM, SignalRelayRecord,
+    SignalRelayStore, Utc, async_trait,
 };
+
+/// In-memory live Signal relay (`sync/signal.md` §4).
+///
+/// Buckets are per Realm and hold only non-expired envelopes; nothing here is
+/// durable state, so a restart legitimately loses in-flight Signals.
 #[derive(Default)]
-pub(crate) struct MemoryReadReceiptRelayStore {
-    data: Mutex<BTreeMap<String, Vec<ReadReceiptRelayRecord>>>,
+pub(crate) struct MemorySignalRelayStore {
+    data: Mutex<BTreeMap<String, Vec<SignalRelayRecord>>>,
     next_position: Mutex<BTreeMap<String, u64>>,
     watermark: Mutex<BTreeMap<(String, String, String), u64>>,
 }
-impl MemoryReadReceiptRelayStore {
+
+impl MemorySignalRelayStore {
     pub(crate) fn new() -> Self {
         Self::default()
     }
 }
+
 #[async_trait]
-impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
-    async fn append(&self, mut record: ReadReceiptRelayRecord) -> PersistenceResult<()> {
+impl SignalRelayStore for MemorySignalRelayStore {
+    async fn append(&self, mut record: SignalRelayRecord) -> PersistenceResult<()> {
         let now = Utc::now();
         let realm_id = record.realm_id.clone();
         let position = {
@@ -30,17 +37,14 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
         let bucket = data.entry(realm_id).or_default();
         bucket.retain(|existing| existing.expires_at > now);
         bucket.push(record);
-        if bucket.len() > READ_RECEIPT_RELAY_MAX_PER_REALM {
-            let overflow = bucket.len() - READ_RECEIPT_RELAY_MAX_PER_REALM;
+        if bucket.len() > SIGNAL_RELAY_MAX_PER_REALM {
+            let overflow = bucket.len() - SIGNAL_RELAY_MAX_PER_REALM;
             bucket.drain(0..overflow);
         }
         Ok(())
     }
 
-    async fn list_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> PersistenceResult<Vec<ReadReceiptRelayRecord>> {
+    async fn list_for_realm(&self, realm_id: &str) -> PersistenceResult<Vec<SignalRelayRecord>> {
         let now = Utc::now();
         Ok(self
             .data
@@ -56,19 +60,17 @@ impl ReadReceiptRelayStore for MemoryReadReceiptRelayStore {
             .unwrap_or_default())
     }
 
-    async fn list_for_event(
+    async fn contains_digest(
         &self,
-        event_id: &str,
-    ) -> PersistenceResult<Vec<ReadReceiptRelayRecord>> {
+        realm_id: &str,
+        envelope_digest: &str,
+    ) -> PersistenceResult<bool> {
         let now = Utc::now();
-        Ok(self
-            .data
-            .lock()
-            .values()
-            .flat_map(|bucket| bucket.iter())
-            .filter(|record| record.event_id == event_id && record.expires_at > now)
-            .cloned()
-            .collect())
+        Ok(self.data.lock().get(realm_id).is_some_and(|bucket| {
+            bucket
+                .iter()
+                .any(|record| record.envelope_digest == envelope_digest && record.expires_at > now)
+        }))
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {

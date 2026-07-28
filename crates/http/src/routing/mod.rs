@@ -49,7 +49,7 @@ use soland_http::util::{
     render_error, sha256_hex, validate_device_id, validate_did, validate_space_id,
 };
 use spaces::space::{
-    invite_token_matches_realm, invite_token_realm_id, is_realm_deleted, prune_expired_typing,
+    invite_token_matches_realm, invite_token_realm_id, is_realm_deleted,
     realm_allows_plaintext_service_for_data_class, realm_discoverability,
     realm_event_visible_to_session, realm_has_member, realm_history_visibility,
     realm_id_accessible, realm_resolvable_to, realm_search_visible_to, realm_visible_to,

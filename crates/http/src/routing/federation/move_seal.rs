@@ -7,7 +7,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{MoveId, RealmId, SealId};
+use arkret_identifiers::{Hash, RealmId, SealId};
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_state::state::{SealEffect, SealReject, StoreError, control_event_set_root};
 use arkret_wire::{Event, NotarySig, Seal, SealKind};
@@ -28,7 +28,7 @@ struct DeviceGenerationEventSealContext {
     accepted_frontier_refs: Vec<SealId>,
     cas_frontier_refs: Vec<SealId>,
     generation_fence: Option<crate::notary::FirstGenerationEventSealRequirement>,
-    bootstrap_required_delta: Vec<MoveId>,
+    bootstrap_required_delta: Vec<Hash>,
     bootstrap_device_id: String,
     bootstrap_device_public_key: String,
 }
@@ -38,9 +38,10 @@ struct DeviceGenerationEventSealContext {
 /// Every reject reason routes through the canonical Arkret error
 /// registry:
 ///
-/// - `UnknownPredecessor`, coverage mismatches, `Structural`, `MissingMove`, `MoveRejected`,
-///   `StateRootMismatch` -> [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally
-///   invalid seal envelope).
+/// - `UnknownPredecessor`, coverage mismatches, `Structural`, `MissingControlEvent`,
+///   `ControlMoveRejected`, `seal_basis` rejects, `StateRootMismatch` ->
+///   [`ErrorCode::SchemaViolation`] (handler-level rejects of a structurally invalid seal
+///   envelope).
 /// - `Store` → [`ErrorCode::InternalError`] (durable-store IO failure).
 ///
 /// The resulting `AppError` is rendered with HTTP `409 Conflict` to match
@@ -54,8 +55,11 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         SealReject::UnknownPredecessor
         | SealReject::DeltaAlreadyCovered
         | SealReject::Structural(_)
-        | SealReject::MissingMove { .. }
-        | SealReject::MoveRejected { .. }
+        | SealReject::MissingControlEvent { .. }
+        | SealReject::ControlMoveRejected { .. }
+        | SealReject::MissingSealBasis { .. }
+        | SealReject::SealBasisOutsideClosure { .. }
+        | SealReject::SealBasisRootMismatch { .. }
         | SealReject::ControlEventSetRootMismatch { .. }
         | SealReject::CoveredSetMismatch
         | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,
@@ -72,23 +76,76 @@ pub(super) fn api_admin_router() -> Router {
 // shape-only (dev mode) and real ed25519 (production) based on
 // `state.config().development_mode`.
 
-/// Pick the JWS verifier based on `config.development_mode`. Returns a
-/// closure of the exact type
-/// `verify_move` / `apply_seal` expect (`Fn(&[u8], &str, &str, &str)
-/// -> Result<(), String> + Copy`). The closure captures `&AppState` by
-/// reference so the production branch can reach the DID resolver chain;
-/// `&AppState` is `Copy`, so the closure is `Copy` too — required by
-/// `apply_seal`'s `F: Copy` bound for batch verify_move calls.
+/// Pick the Control Move proof verifier based on `config.development_mode`.
+///
+/// Returns a closure of the exact type `verify_control_move` / `apply_seal`
+/// expect (`Fn(&Event) -> Result<(), String> + Copy`). The closure captures
+/// `&AppState` by reference so the production branch can reach the DID
+/// resolver chain; `&AppState` is `Copy`, so the closure is `Copy` too —
+/// required by `apply_seal`'s `F: Copy` bound for batch verification.
+///
+/// The v1 control plane has no separate Move envelope: a Control Move is an
+/// [`Event`] carrying `seal_basis`, so the transcript each proof signs is the
+/// canonical Event proof binding (`encoding.md` §6), not a Move body. The
+/// caller's `verify_control_move` has already run
+/// `Event::validate_proof_bindings`, which pins every `proof.event_digest` to
+/// the recomputed Event digest; this closure owns only the cryptographic
+/// check.
 pub fn select_jws_verifier(
     state: &AppState,
-) -> impl Fn(&[u8], &str, &str, &str) -> Result<(), String> + Copy + use<'_> {
-    move |canonical_bytes, jws, vm, issuer| {
+) -> impl Fn(&Event) -> Result<(), String> + Copy + use<'_> {
+    move |event| verify_control_move_proofs(state, event)
+}
+
+/// Verify every proof on a Control Move against its canonical binding bytes.
+///
+/// `encoding.md` §6: the signed transcript names `actor_id` (the record
+/// subject) even under delegated execution; only the resolved signer DID
+/// switches to `executed_by`. The verification method MUST be rooted in that
+/// signer so a Control Move cannot be admitted on a key that belongs to
+/// somebody else.
+fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), String> {
+    if event.proofs.is_empty() {
+        return Err("Control Move carries no proofs".to_owned());
+    }
+    let signer_root = event
+        .executed_by
+        .as_ref()
+        .unwrap_or(&event.actor_id)
+        .as_str()
+        .to_owned();
+    for proof in &event.proofs {
+        if proof.verification_method != signer_root
+            && !proof
+                .verification_method
+                .starts_with(&format!("{signer_root}#"))
+        {
+            return Err(format!(
+                "Control Move proof verification method {} is not rooted in the signer {signer_root}",
+                proof.verification_method
+            ));
+        }
+        let canonical_bytes = proof
+            .canonical_binding_bytes(&event.actor_id)
+            .map_err(|error| format!("proof binding canonicalization failed: {error}"))?;
         if state.config().development_mode {
-            crate::jws_verify::verify_jws_shape(canonical_bytes, jws, vm, issuer)
+            crate::jws_verify::verify_jws_shape(
+                &canonical_bytes,
+                &proof.jws,
+                &proof.verification_method,
+                &signer_root,
+            )?;
         } else {
-            crate::jws_verify::verify_jws_ed25519(canonical_bytes, jws, vm, issuer, state)
+            crate::jws_verify::verify_jws_ed25519(
+                &canonical_bytes,
+                &proof.jws,
+                &proof.verification_method,
+                &signer_root,
+                state,
+            )?;
         }
     }
+    Ok(())
 }
 
 fn seal_admission_error(message: impl Into<String>) -> AppError {
@@ -206,7 +263,7 @@ async fn device_generation_event_seal_context(
         bootstrap_authorize.canonical_digest.as_str(),
     ]
     .into_iter()
-    .map(|digest| MoveId::new(digest.to_owned()))
+    .map(|digest| Hash::new(digest.to_owned()))
     .collect::<Result<Vec<_>, _>>()
     .map_err(|error| seal_admission_error(format!("invalid bootstrap Event digest: {error}")))?;
 
@@ -255,9 +312,9 @@ async fn device_generation_event_seal_context(
 }
 
 fn validate_bootstrap_first_seal(
-    current: &BTreeSet<MoveId>,
-    target: &BTreeSet<MoveId>,
-    required_delta: &[MoveId],
+    current: &BTreeSet<Hash>,
+    target: &BTreeSet<Hash>,
+    required_delta: &[Hash],
 ) -> Result<bool, AppError> {
     let required = required_delta.iter().cloned().collect::<BTreeSet<_>>();
     if required.len() != required_delta.len() {
@@ -392,8 +449,8 @@ async fn try_apply_device_generation_event_seal(
         }
         return Ok(Some(SealEffect {
             seal: seal.id.clone(),
-            accepted_move_ids: seal.delta.clone(),
-            rejected_moves: Vec::new(),
+            accepted_event_digests: seal.delta.clone(),
+            rejected_events: Vec::new(),
             post_state_root: seal.state_root.clone(),
         }));
     }
@@ -714,7 +771,17 @@ async fn try_apply_device_generation_event_seal(
                 "B-model Event Seal delta must contain control Events from the same Realm",
             ));
         }
-        if event.effects.is_empty() && !anchor_event_ids.contains(&record.event_id) {
+        // v1 has no producer `effects[]`: whether an Event is control material
+        // is decided by its registered contract, not by an envelope array.
+        let projects_writes = arkret_schema::project_registered_cell_writes(
+            &event,
+            state
+                .projections()
+                .realm_digest_suite(seal.realm_id.as_str()),
+        )
+        .map(|writes| !writes.is_empty())
+        .unwrap_or(false);
+        if !projects_writes && !anchor_event_ids.contains(&record.event_id) {
             return Err(seal_admission_error(
                 "B-model Event Seal delta contains a non-control Event",
             ));
@@ -754,18 +821,39 @@ async fn try_apply_device_generation_event_seal(
                 ));
             }
         }
-        let member_cell = format!("ak:cell:ak.component.member.state.v1:{}", event.actor_id);
-        let invite_accept_from = event
-            .effects
-            .iter()
-            .find(|effect| effect.cell.as_str() == member_cell)
-            .and_then(|effect| effect.op.from.as_ref())
-            .and_then(serde_json::Value::as_str);
+        // The membership `from` is the frozen pre-state of the member cell, not
+        // a producer-declared value: read it off the ops accumulated for this
+        // Seal delta so far.
+        let member_cell = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{}",
+            event.actor_id
+        ))
+        .map_err(|error| seal_admission_error(format!("member cell invalid: {error}")))?;
+        let mut accumulated: BTreeMap<
+            arkret_identifiers::CellRef,
+            Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+        > = BTreeMap::new();
+        for (cell, issued) in &new_ops {
+            accumulated
+                .entry(cell.clone())
+                .or_default()
+                .push(issued.clone());
+        }
+        let invite_accept_from = accumulated
+            .get(&member_cell)
+            .and_then(|ops| ops.last())
+            .and_then(|issued| issued.op.op.to.as_ref())
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned)
+            .or_else(|| Some("leave".to_owned()));
         new_ops.extend(
             crate::routing::events::event_log::governance_proof::canonical_event_ops(
+                state,
+                &seal.realm_id,
                 &event,
                 digest,
-                invite_accept_from,
+                &accumulated,
+                invite_accept_from.as_deref(),
             )?,
         );
     }
@@ -815,8 +903,8 @@ async fn try_apply_device_generation_event_seal(
     }
     Ok(Some(SealEffect {
         seal: seal.id.clone(),
-        accepted_move_ids: seal.delta.clone(),
-        rejected_moves: Vec::new(),
+        accepted_event_digests: seal.delta.clone(),
+        rejected_events: Vec::new(),
         post_state_root: seal.state_root.clone(),
     }))
 }
@@ -875,8 +963,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
         }
         return Ok(SealEffect {
             seal: seal.id.clone(),
-            accepted_move_ids: seal.delta.clone(),
-            rejected_moves: Vec::new(),
+            accepted_event_digests: seal.delta.clone(),
+            rejected_events: Vec::new(),
             post_state_root: seal.state_root.clone(),
         });
     }
@@ -933,12 +1021,14 @@ pub(crate) async fn apply_managed_agent_event_seal(
         }
         events.push(event);
     }
-    let material =
-        arkret_bootstrap::materialize_managed_agent_pcr_control(&events).map_err(|error| {
-            seal_admission_error(format!(
-                "managed Agent PCR control material is invalid: {error}"
-            ))
-        })?;
+    let material = arkret_bootstrap::materialize_managed_agent_pcr_control(&events, &|event| {
+        state.projections().project_cell_writes(event)
+    })
+    .map_err(|error| {
+        seal_admission_error(format!(
+            "managed Agent PCR control material is invalid: {error}"
+        ))
+    })?;
     if material.realm_id != seal.realm_id
         || material.agent_id.as_str() != agent_record.id
         || material.controller_id.as_str() != agent_record.controller_id
@@ -1108,8 +1198,8 @@ pub(crate) async fn apply_managed_agent_event_seal(
     }
     Ok(SealEffect {
         seal: seal.id.clone(),
-        accepted_move_ids: seal.delta.clone(),
-        rejected_moves: Vec::new(),
+        accepted_event_digests: seal.delta.clone(),
+        rejected_events: Vec::new(),
         post_state_root: seal.state_root.clone(),
     })
 }
@@ -1145,8 +1235,8 @@ pub(crate) async fn apply_inbound_seal(
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RejectedMoveEntry {
-    pub move_id: String,
+pub struct RejectedControlEventEntry {
+    pub event_digest: String,
     pub reason: String,
 }
 
@@ -1170,9 +1260,9 @@ pub struct SignSealOutcome {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seal_id: Option<String>,
     #[serde(default)]
-    pub accepted_move_ids: Vec<String>,
+    pub accepted_event_digests: Vec<String>,
     #[serde(default)]
-    pub rejected_moves: Vec<RejectedMoveEntry>,
+    pub rejected_events: Vec<RejectedControlEventEntry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub post_state_root: Option<String>,
 }
@@ -1216,30 +1306,30 @@ async fn admin_sign_seal(
     match crate::notary::run_one_signing_pass(state, &realm, limit) {
         Ok(Some(outcome)) => {
             let rejected = outcome
-                .rejected_moves
+                .rejected_events
                 .into_iter()
-                .map(|(id, reason)| RejectedMoveEntry {
-                    move_id: id.as_str().to_owned(),
+                .map(|(digest, reason)| RejectedControlEventEntry {
+                    event_digest: digest.as_str().to_owned(),
                     reason,
                 })
                 .collect();
             json_ok(SignSealOutcome {
                 published: true,
                 seal_id: Some(outcome.seal_id.as_str().to_owned()),
-                accepted_move_ids: outcome
-                    .accepted_move_ids
+                accepted_event_digests: outcome
+                    .accepted_event_digests
                     .into_iter()
                     .map(|m| m.as_str().to_owned())
                     .collect(),
-                rejected_moves: rejected,
+                rejected_events: rejected,
                 post_state_root: Some(outcome.post_state_root.as_str().to_owned()),
             })
         }
         Ok(None) => json_ok(SignSealOutcome {
             published: false,
             seal_id: None,
-            accepted_move_ids: vec![],
-            rejected_moves: vec![],
+            accepted_event_digests: vec![],
+            rejected_events: vec![],
             post_state_root: None,
         }),
         Err(crate::notary::NotaryError::NotAuthorized(_)) => Err(AppError::new(
@@ -1300,8 +1390,8 @@ mod seal_delta_tests {
 
     #[test]
     fn bootstrap_first_seal_rejects_missing_and_partial_anchor_units() {
-        let create = MoveId::new(format!("sha256:{}", "a".repeat(64))).unwrap();
-        let authorize = MoveId::new(format!("sha256:{}", "b".repeat(64))).unwrap();
+        let create = Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+        let authorize = Hash::new(format!("sha256:{}", "b".repeat(64))).unwrap();
         let required = vec![create.clone(), authorize.clone()];
         assert!(
             validate_bootstrap_first_seal(
@@ -1376,7 +1466,7 @@ mod seal_delta_tests {
             covered_event_digests: Vec::new(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(arkret_wire::MoveSignature {
+            notary_signature: NotarySig::Single(arkret_wire::PayloadSignature {
                 alg: "EdDSA".to_owned(),
                 verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
                     .to_owned(),
@@ -1390,7 +1480,7 @@ mod seal_delta_tests {
         };
         let canonical_bytes = seal.canonical_bytes_for_id().unwrap();
         seal.id = Seal::id_from_canonical_bytes(&canonical_bytes).unwrap();
-        seal.notary_signature = NotarySig::Single(arkret_wire::MoveSignature {
+        seal.notary_signature = NotarySig::Single(arkret_wire::PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
                 .to_owned(),
@@ -1437,13 +1527,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rejected_move_entry_serializes() {
-        let r = RejectedMoveEntry {
-            move_id: "sha256:00".to_owned(),
+    fn rejected_control_event_entry_serializes() {
+        // Control-plane rejects are keyed by canonical `event_digest`
+        // (§6.3.2), not by a Move id: v1 has no Move object.
+        let r = RejectedControlEventEntry {
+            event_digest: "sha256:00".to_owned(),
             reason: "bad sig".to_owned(),
         };
         let s = serde_json::to_string(&r).unwrap();
-        assert!(s.contains("move_id"));
+        assert!(s.contains("event_digest"));
+        assert!(!s.contains("move_id"));
         assert!(s.contains("reason"));
     }
 }

@@ -35,6 +35,41 @@ pub(super) fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, S
     })
 }
 
+/// The receiver-derived cell writes for one submitted Event.
+///
+/// `event-and-patch.md` §2.4.2 makes the registered reducer contract the only
+/// source of a write's cell and lattice operation. A kind whose registry row is
+/// not an active reducer input declares no contract and legitimately writes
+/// nothing; a reducer input whose contract will not evaluate fails the Event
+/// closed rather than admitting it with an empty projection.
+pub(super) fn derive_submit_cell_writes(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    envelope: &Value,
+) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, SubmitOneError> {
+    let descriptor = arkret_wire::events::EventKind::from(parsed.kind.as_str()).descriptor();
+    if !descriptor.is_some_and(|descriptor| descriptor.reducer_input) {
+        return Ok(Vec::new());
+    }
+    let event = serde_json::from_value::<Event>(envelope.clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("reducer input is not a valid Event Envelope: {error}"),
+        )
+    })?;
+    state
+        .projections()
+        .project_cell_writes(&event)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "reducer_projection_failed",
+                format!("event does not project its registered cell writes: {error}"),
+            )
+        })
+}
+
 async fn validate_active_series_authority_before_commit(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
@@ -107,7 +142,87 @@ pub(in crate::routing) async fn submit_event_value(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
-    submit_event_value_with_context(state, session, envelope, &[], None, None).await
+    // `event-auth-state-resolution.md` §5(1) — a managed Agent PCR genesis is
+    // the delegated branch of the closed `ak.realm.create` anchor unit and
+    // carries no `seal_basis`, so it needs the bootstrap CBA context. Only a
+    // create that `batch_is_managed_agent_pcr_create` already materialized as
+    // that unit reaches this point.
+    let bootstrap_contexts = if event_string_field_from_value(&envelope, "kind").as_deref()
+        == Some(arkret_wire::events::EventKind::REALM_CREATE)
+    {
+        match (
+            event_string_field_from_value(&envelope, "realm_id"),
+            event_string_field_from_value(&envelope, "actor_id"),
+        ) {
+            (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
+                realm_id,
+                actor_id,
+                identity_anchor_event_id: None,
+                self_principal_pcr_bootstrap: false,
+                ordinary_realm_bootstrap: false,
+            }],
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &bootstrap_contexts,
+        None,
+        None,
+        None,
+    )
+    .await
+}
+
+/// First durable publication of one Event with its authorization lease
+/// (`authz/offline-publication.md` §2.1).
+///
+/// The lease is what makes this service mint and store an ingress receipt for
+/// the Event, and the stored receipt is what lets the Event be federated later.
+/// Neither object is copied into the Event.
+pub(in crate::routing) async fn submit_initial_event_submission(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    validate_initial_submission(&submission)?;
+    let arkret_wire::EventInitialSubmission {
+        event,
+        authorization_lease,
+        cba_proof_bundles: _,
+    } = submission;
+    let envelope = typed_event_to_canonical_value(event)?;
+    if event_string_field_from_value(&envelope, "kind").as_deref()
+        == Some(arkret_wire::events::EventKind::REALM_CREATE)
+        && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "realm_founding_grant_missing",
+        ));
+    }
+    if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
+        ));
+    }
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        None,
+        Some(&authorization_lease),
+    )
+    .await
 }
 
 pub(in crate::routing) async fn submit_mimi_event_value(
@@ -119,7 +234,8 @@ pub(in crate::routing) async fn submit_mimi_event_value(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let admission =
         InternalEventAdmission::mimi_provider(realm_id, state.service_id().as_str(), binding_ref);
-    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
+    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission), None)
+        .await
 }
 
 pub(in crate::routing) async fn submit_account_data_event_value(
@@ -137,7 +253,8 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         owner,
         key,
     );
-    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission)).await
+    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission), None)
+        .await
 }
 
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
@@ -163,7 +280,23 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
-    submit_event_value_with_context(state, session, envelope, &[], Some(idempotency), None).await
+    submit_event_value_with_context(state, session, envelope, &[], Some(idempotency), None, None)
+        .await
+}
+
+/// Attach the STORED ingress receipt to a submit outcome.
+///
+/// `offline-publication.md` §2.1 requires the receipt this service persisted for
+/// the digest to come back on every response for that digest, including an
+/// idempotent duplicate — byte-identically, never re-stamped.
+fn with_ingress_receipt(
+    mut response: SubmittedEventOutcome,
+    receipt: Option<&arkret_wire::offline_publication::IngressReceipt>,
+) -> SubmittedEventOutcome {
+    if let Some(receipt) = receipt {
+        response.outcome.ingress_receipts = vec![receipt.clone()];
+    }
+    response
 }
 
 pub(super) async fn submit_event_value_with_context(
@@ -173,6 +306,7 @@ pub(super) async fn submit_event_value_with_context(
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     commit_idempotency: Option<EventCommitIdempotency>,
     internal_admission: Option<&InternalEventAdmission>,
+    authorization_lease: Option<&arkret_wire::AuthorizationLease>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -205,6 +339,17 @@ pub(super) async fn submit_event_value_with_context(
     let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
     let received_at = now();
+    // `offline-publication.md` §2.1 — the receipt is minted once the lease,
+    // Event proofs and scope have been verified, and BEFORE the duplicate
+    // check, so an idempotent retry returns the stored receipt rather than a
+    // re-stamped one. It is deliberately independent of whether the Event
+    // later passes the reducer: a receipt proves arrival, nothing more.
+    let ingress_receipt = match authorization_lease {
+        Some(lease) => {
+            Some(mint_and_store_ingress_receipt(state, &parsed, lease, received_at).await?)
+        }
+        None => None,
+    };
     let service = state.event_queries();
     if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await {
         if existing.canonical_bytes == parsed.canonical_bytes {
@@ -233,13 +378,16 @@ pub(super) async fn submit_event_value_with_context(
                     format!("post-submit frontier unavailable: {error}"),
                 )
             })?;
-            return Ok(event_submit_response(
-                state,
-                EventsSubmitStatus::Duplicate,
-                existing.event_id.clone(),
-                frontier,
-            )
-            .await);
+            return Ok(with_ingress_receipt(
+                event_submit_response(
+                    state,
+                    EventsSubmitStatus::Duplicate,
+                    existing.event_id.clone(),
+                    frontier,
+                )
+                .await,
+                ingress_receipt.as_ref(),
+            ));
         }
         append_audit_log(
             state,
@@ -415,6 +563,13 @@ pub(super) async fn submit_event_value_with_context(
     enforce_sibling_fork_limit(state, session, &parsed, &scoped_actor_records).await?;
 
     let mut projection_operation = projection_operation_from_event(&parsed, &envelope);
+    // v1 carries no producer `effects[]`, so every reducer preflight below has
+    // to be handed the receiver's own registry-derived writes for this Event
+    // (`event-and-patch.md` §2.4.2). Deriving them once here keeps the
+    // preflight clone and the live apply reading the same projection. Kinds
+    // that are not reducer inputs declare no contract and project nothing —
+    // the same guard `enforce_registered_cell_contract` uses at admission.
+    let projected_cell_writes = derive_submit_cell_writes(state, &parsed, &envelope)?;
     // Active-series pointer versions are a per-(actor,class) CAS. Keep the
     // semantic preflight, canonical Event+projection commit, and live reducer
     // application in one admission lane so two concurrent vN successors
@@ -692,7 +847,7 @@ pub(super) async fn submit_event_value_with_context(
             }
             if let Some(reason) = state
                 .projections()
-                .preflight_capability_rejection(operation)
+                .preflight_capability_rejection(operation, &projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -702,7 +857,7 @@ pub(super) async fn submit_event_value_with_context(
             }
             if let Some(reason) = state
                 .projections()
-                .preflight_realm_policy_rejection(operation)
+                .preflight_realm_policy_rejection(operation, &projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -710,7 +865,10 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            if let Some(reason) = state.projections().preflight_calendar_rejection(operation) {
+            if let Some(reason) = state
+                .projections()
+                .preflight_calendar_rejection(operation, &projected_cell_writes)
+            {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason.clone(),
@@ -731,7 +889,7 @@ pub(super) async fn submit_event_value_with_context(
             // resolve against the live moderation_state cell.
             if let Some(reason) = state
                 .projections()
-                .preflight_moderation_rejection(operation)
+                .preflight_moderation_rejection(operation, &projected_cell_writes)
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
@@ -739,7 +897,9 @@ pub(super) async fn submit_event_value_with_context(
                     reason,
                 ));
             }
-            let invite_preflight_reject = state.projections().preflight_invite_rejection(operation);
+            let invite_preflight_reject = state
+                .projections()
+                .preflight_invite_rejection(operation, &projected_cell_writes);
             let invite_proof_context = if invite_preflight_reject.is_none() {
                 invite_claim_proof_context_from_projection(state.projections(), operation).map_err(
                     |reason| SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason),
@@ -1101,13 +1261,16 @@ pub(super) async fn submit_event_value_with_context(
             format!("post-submit frontier unavailable: {error}"),
         )
     })?;
-    let accepted_response = event_submit_response(
-        state,
-        EventsSubmitStatus::Accepted,
-        parsed.event_id.clone(),
-        prospective_frontier,
-    )
-    .await;
+    let accepted_response = with_ingress_receipt(
+        event_submit_response(
+            state,
+            EventsSubmitStatus::Accepted,
+            parsed.event_id.clone(),
+            prospective_frontier,
+        )
+        .await,
+        ingress_receipt.as_ref(),
+    );
     let command = soland_services::events::CommitAcceptedEventCommand {
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.clone(),
@@ -1251,13 +1414,16 @@ pub(super) async fn submit_event_value_with_context(
                             format!("actor frontier unavailable: {frontier_error}"),
                         )
                     })?;
-                    return Ok(event_submit_response(
-                        state,
-                        EventsSubmitStatus::Duplicate,
-                        parsed.event_id.clone(),
-                        frontier,
-                    )
-                    .await);
+                    return Ok(with_ingress_receipt(
+                        event_submit_response(
+                            state,
+                            EventsSubmitStatus::Duplicate,
+                            parsed.event_id.clone(),
+                            frontier,
+                        )
+                        .await,
+                        ingress_receipt.as_ref(),
+                    ));
                 }
                 return Err(SubmitOneError::new(
                     StatusCode::CONFLICT,

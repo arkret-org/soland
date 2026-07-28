@@ -887,14 +887,37 @@ fn validate_agent_pcr_genesis_effect(
             "managed Agent PCR genesis Realm differs from its account binding",
         ));
     }
-    let expected = arkret_bootstrap::realm_create_effects(&event).map_err(|error| {
+    // v1 carries no producer `effects[]`: the four canonical genesis writes
+    // are derived from `kind + payload` by the registered `ak.realm.create`
+    // contract. Only the targets are asserted — the lattice ops come from the
+    // registered `effect_projection`.
+    let derived = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .map_err(|error| {
         schema_error(format!(
-            "managed Agent PCR create effect set is invalid: {error}"
+            "managed Agent PCR create projection failed: {error}"
         ))
     })?;
-    if event.effects != expected {
+    let expected: std::collections::BTreeSet<String> = [
+        arkret_wire::REALM_METADATA_CELL.to_owned(),
+        format!(
+            "ak:cell:ak.component.member.state.v1:{}",
+            event.actor_id.as_str()
+        ),
+        arkret_wire::REALM_CREATE_CELL.to_owned(),
+        arkret_wire::REALM_NOTARY_CELL.to_owned(),
+    ]
+    .into_iter()
+    .collect();
+    let actual: std::collections::BTreeSet<String> = derived
+        .iter()
+        .map(|write| write.cell.as_str().to_owned())
+        .collect();
+    if derived.len() != expected.len() || actual != expected {
         return Err(failed_precondition(
-            "managed Agent PCR genesis must carry the canonical four-effect Realm create set",
+            "managed Agent PCR genesis must derive the canonical four genesis cells",
             "managed_agent_pcr_create_effect_mismatch",
         ));
     }
@@ -1437,29 +1460,51 @@ mod tests {
         assert!(validate_agent_pcr_genesis_object(&ordinary_realm, AGENT, PCR).is_err());
     }
 
+    /// The genesis gate is the registered contract, not a producer array: a
+    /// signed `ak.realm.create` either derives the canonical four genesis cells
+    /// or fails closed (`event-and-patch.md` §2.4.2). The old negative case
+    /// declared a legacy per-Realm create cell in `effects[]`; v1 removed that
+    /// field, so the surviving negative is a genesis payload the contract
+    /// cannot project at all.
     #[test]
-    fn agent_pcr_genesis_requires_canonical_managed_create_effect() {
+    fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
         let realm_id = RealmId::new(PCR).unwrap();
-        let mut event = arkret_wire::Event::new(
+        let event = arkret_wire::Event::new(
             arkret_wire::EventKind::REALM_CREATE,
-            realm_id.clone(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
             Did::new(AGENT).unwrap(),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
-        event.effects = arkret_bootstrap::realm_create_effects(&event).unwrap();
         let envelope = serde_json::to_value(&event).unwrap();
         validate_agent_pcr_genesis_effect(envelope.as_object().unwrap(), &realm_id)
-            .expect("canonical managed Agent PCR create effect must pass");
+            .expect("canonical managed Agent PCR create must derive its genesis cells");
+        // The create-log target is the wire singleton, never a per-Realm
+        // subject (`realm-and-space.md` §2.8.3).
+        let derived = arkret_schema::project_registered_cell_writes(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        assert!(
+            derived
+                .iter()
+                .any(|write| write.cell.as_str() == arkret_wire::REALM_CREATE_CELL)
+        );
+        assert!(!derived.iter().any(|write| {
+            write.cell.as_str() == format!("ak:cell:ak.component.realm.create.v1:{PCR}")
+        }));
 
-        let mut legacy = envelope;
-        legacy["effects"] = json!([{
-            "cell": format!("ak:cell:ak.component.realm.create.v1:{PCR}"),
-            "op": {"kind": "set", "value": pcr_genesis()},
-        }]);
-        assert!(validate_agent_pcr_genesis_effect(legacy.as_object().unwrap(), &realm_id).is_err());
+        let mut unprojectable = envelope;
+        unprojectable["payload"] = json!({});
+        assert!(
+            validate_agent_pcr_genesis_effect(unprojectable.as_object().unwrap(), &realm_id)
+                .is_err()
+        );
     }
 
     #[test]

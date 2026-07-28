@@ -1,7 +1,14 @@
 use super::*;
 
+/// v1 deleted the plaintext ephemeral rail outright: none of these kinds is a
+/// registered Event kind any more (`sync/signal.md` section 5 puts device
+/// verification and secret distribution on `DeviceMessageEnvelope` and
+/// everything else inside an encrypted `SignalEnvelope`). The durable submit
+/// rail therefore refuses them for the strongest possible reason — there is no
+/// such Event kind — rather than by a per-kind entry gate, and the Signal rail
+/// refuses a plaintext ephemeral envelope with `signal_plaintext_forbidden`.
 #[test]
-fn ephemeral_kind_rejected_at_submit_entry() {
+fn legacy_ephemeral_kinds_are_not_registered_event_kinds() {
     for kind in [
         "ak.call.signal",
         "ak.presence",
@@ -11,11 +18,14 @@ fn ephemeral_kind_rejected_at_submit_entry() {
         "ak.key.verification.accept",
         "ak.key.verification.mac",
     ] {
-        let result = events_submit_pre_admit_check(kind);
         assert!(
-            matches!(result, Some((ErrorCode::SchemaViolation, _))),
-            "ephemeral kind {kind} must be rejected by submit entry"
+            arkret_wire::events::EventKind::try_new(kind).is_none(),
+            "{kind} must not be a registered durable Event kind"
         );
+        // The entry gate stays keyed off the live SDK predicate rather than a
+        // hand-maintained list, so it simply has nothing to add for a kind the
+        // registry does not know.
+        assert!(events_submit_pre_admit_check(kind).is_none());
     }
 }
 
@@ -241,7 +251,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
             .unwrap(),
         },
         events: Vec::new(),
-        seals: Vec::new(),
+        cba_proof_bundles: Vec::new(),
         signer_key_evidence: Vec::new(),
         agent_signer_evidence_bundle: None,
     };
@@ -274,7 +284,7 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
             .unwrap(),
         },
         events: Vec::new(),
-        seals: Vec::new(),
+        cba_proof_bundles: Vec::new(),
         signer_key_evidence: Vec::new(),
         agent_signer_evidence_bundle: None,
     };
@@ -307,7 +317,7 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
             .unwrap(),
         },
         events: Vec::new(),
-        seals: Vec::new(),
+        cba_proof_bundles: Vec::new(),
         signer_key_evidence: Vec::new(),
         agent_signer_evidence_bundle: None,
     };

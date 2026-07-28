@@ -13,8 +13,7 @@ pub(crate) use soland_storage::{
     AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
     AgentRuntimeApprovalWrite, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
     AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
-    BlobRecord, BlobStore, CALL_SIGNAL_RELAY_MAX_PER_REALM, CallSignalRelayRecord,
-    CallSignalRelayStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
+    BlobRecord, BlobStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
     ConsentCellStore, ContactKey, ContactRecord, ContactStore, CursorRevocation,
     DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
@@ -35,19 +34,18 @@ pub(crate) use soland_storage::{
     OrganizationStore, OutboundPushBridgeCacheRecord, PeerEventsPageQuery,
     PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
     PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PersistenceStore,
-    PolicyDocumentRecord, PolicyDocumentStore, PresenceRecord, PresenceStore,
-    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
-    PushBridgeCacheStore, PushDeviceStore, READ_RECEIPT_RELAY_MAX_PER_REALM,
-    ReadReceiptRelayRecord, ReadReceiptRelayStore, RealmEventStats, RealmInviteRecord,
-    RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyRecord,
-    RealmModerationPolicyStore, RealmOrganizationStatementRecord, RealmOrganizationStatementStore,
-    RealmOrganizationStore, RecoveryPolicyRecord, RecoveryPolicyStore, RecoveryReceiptRecord,
-    RecoveryReceiptStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
-    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore, ServiceIdentityStore,
-    ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore,
-    SpaceContainerProjectionRecord, SpaceContainerProjectionStore, StrandProjectionRecord,
-    StrandProjectionStore, SyncCursorRecord, SyncCursorStore, TypingRecord, TypingStore,
-    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+    PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
+    ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
+    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
+    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
+    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RecoveryPolicyRecord, RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore,
+    RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore,
+    RetentionTombstoneRecord, RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM,
+    ServiceIdentityStore, ServiceRegistrationCommitOutcome, SessionRecord, SessionStore,
+    SidecarStore, SignalRelayRecord, SignalRelayStore, SpaceContainerProjectionRecord,
+    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord,
+    SyncCursorStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
     agent_participation_record_key, cross_signing_reset_blocks_queued_message,
     device_message_expires_at, document_declares_registration_key, ensure_device_message_id,
     evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
@@ -82,15 +80,15 @@ mod moderation;
 mod multisig;
 mod notifications;
 mod policy;
-mod presence;
 mod projection;
+mod publication_evidence;
 mod push;
-mod read_receipts;
 mod realm_invites;
 mod recovery;
 mod service_identity;
 mod sessions;
 mod sidecars;
+mod signal;
 mod store;
 mod sync_cursor;
 mod unit_of_work;
@@ -134,13 +132,12 @@ pub(crate) use moderation::MemoryModerationStore;
 pub(crate) use multisig::MemoryMultisigPendingStore;
 pub(crate) use notifications::MemoryNotificationStore;
 pub(crate) use policy::MemoryPolicyDocumentStore;
-pub(crate) use presence::{MemoryCallSignalRelayStore, MemoryPresenceStore, MemoryTypingStore};
 pub(crate) use projection::{
     MemoryMorphProjectionStore, MemoryProjectionEventStore, MemoryRealmMetaStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore,
 };
+pub(crate) use publication_evidence::MemoryPublicationEvidenceStore;
 pub(crate) use push::{MemoryPushBridgeCacheStore, MemoryPushDeviceStore};
-pub(crate) use read_receipts::MemoryReadReceiptRelayStore;
 pub(crate) use realm_invites::MemoryRealmInviteStore;
 pub(crate) use recovery::{
     MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore, MemoryRecoverySessionStore,
@@ -148,6 +145,7 @@ pub(crate) use recovery::{
 pub(crate) use service_identity::MemoryServiceIdentityStore;
 pub(crate) use sessions::MemorySessionStore;
 pub(crate) use sidecars::MemorySidecarStore;
+pub(crate) use signal::MemorySignalRelayStore;
 pub use store::SolandMemoryPersistenceStore;
 pub(crate) use sync_cursor::MemorySyncCursorStore;
 pub(crate) use webvh::MemoryWebvhStore;

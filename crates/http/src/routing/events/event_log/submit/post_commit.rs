@@ -113,7 +113,20 @@ pub(super) fn remove_rejected_claim_active_material(
     }
 }
 
-fn federation_seal_prerequisites(state: &AppState, events: &[Event]) -> Result<Vec<Seal>, String> {
+/// Every Seal a receiver needs to close the transported Events' CBA basis,
+/// packaged as the request's `cba_proof_bundles[]`.
+///
+/// One bundle carries the whole closure. `offline-publication.md` §2.1 and the
+/// bundle contract both allow a bounded verifiable superset — a bundle is
+/// receiver-relative and unsigned, and the receiver revalidates every embedded
+/// object — so a single closure bundle is legal and keeps the deduplicated
+/// `(notary_seq, id)` ordering that `validate_federation_transport` requires
+/// trivially satisfied. `target_seal_ref` is the closure's maximum, which is
+/// the leaf the rest of the closure is reachable from.
+fn federation_cba_proof_bundles(
+    state: &AppState,
+    events: &[Event],
+) -> Result<Vec<arkret_wire::CbaProofBundle>, String> {
     let mut pending = Vec::new();
     for event in events {
         if let Some(seal_ref) = &event.seal_ref {
@@ -137,13 +150,83 @@ fn federation_seal_prerequisites(state: &AppState, events: &[Event]) -> Result<V
         by_id.insert(seal_id, seal);
     }
     let mut seals = by_id.into_values().collect::<Vec<_>>();
+    if seals.is_empty() {
+        return Ok(Vec::new());
+    }
     seals.sort_by(|left, right| {
         (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
     });
     if seals.len() > arkret_models_collaboration::event_sync::MAX_FEDERATED_SEAL_PREREQUISITES {
         return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
     }
-    Ok(seals)
+    let target_seal_ref = seals
+        .last()
+        .expect("non-empty closure has a maximum")
+        .id
+        .clone();
+    Ok(vec![arkret_wire::CbaProofBundle {
+        target_seal_ref,
+        seals,
+        control_moves: Vec::new(),
+        inclusion_proofs: Vec::new(),
+        availability_proofs: Vec::new(),
+    }])
+}
+
+/// Pair each transported Event with the publication evidence it was admitted
+/// under (`offline-publication.md` §2.1).
+///
+/// An Event with no stored evidence cannot be federated: a federation
+/// submission structurally requires a lease bound to the Event plus at least
+/// one ingress receipt covering that exact digest, and this service must never
+/// mint a replacement receipt for an Event it did not itself receipt — that
+/// would re-stamp `received_at` and silently widen a fixed revocation window.
+/// Such an Event is dropped from the batch with a warning.
+async fn federation_submissions(
+    state: &AppState,
+    events: &[Event],
+) -> Vec<arkret_wire::EventFederationSubmission> {
+    let mut digests = Vec::with_capacity(events.len());
+    for event in events {
+        match event.event_digest() {
+            Ok(digest) => digests.push(digest),
+            Err(error) => {
+                tracing::warn!(%error, event_id = %event.event_id, "failed to digest an Event for federation");
+                return Vec::new();
+            }
+        }
+    }
+    let evidence = match state
+        .event_queries()
+        .publication_evidence_for_digests(&digests)
+        .await
+    {
+        Ok(evidence) => evidence,
+        Err(error) => {
+            tracing::warn!(%error, "failed to read federation publication evidence");
+            return Vec::new();
+        }
+    };
+    let by_digest = evidence
+        .into_iter()
+        .map(|record| (record.event_digest.clone(), record))
+        .collect::<BTreeMap<_, _>>();
+    let mut submissions = Vec::with_capacity(events.len());
+    for (event, digest) in events.iter().zip(digests) {
+        let Some(record) = by_digest.get(&digest) else {
+            tracing::warn!(
+                event_id = %event.event_id,
+                "Event has no stored publication evidence and cannot be federated"
+            );
+            continue;
+        };
+        submissions.push(arkret_wire::EventFederationSubmission {
+            event: event.clone(),
+            authorization_lease: record.authorization_lease.clone(),
+            ingress_receipts: vec![record.ingress_receipt.clone()],
+        });
+    }
+    submissions
 }
 
 pub(super) async fn enqueue_peer_event_fanout(
@@ -262,13 +345,17 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             state, &events,
         )
         .await;
-    let seals = match federation_seal_prerequisites(state, &events) {
-        Ok(seals) => seals,
+    let cba_proof_bundles = match federation_cba_proof_bundles(state, &events) {
+        Ok(bundles) => bundles,
         Err(error) => {
-            tracing::warn!(%error, realm_id = %first.realm_id, "failed to resolve peer Event batch Seal prerequisites");
+            tracing::warn!(%error, realm_id = %first.realm_id, "failed to resolve peer Event batch CBA proof bundles");
             return;
         }
     };
+    let submissions = federation_submissions(state, &events).await;
+    if submissions.is_empty() {
+        return;
+    }
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -299,8 +386,8 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         let idempotency_key = format!("ak:outbox:event-batch:{}", sha256_hex(&hasher_input));
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
-            events: events.clone(),
-            seals: seals.clone(),
+            events: submissions.clone(),
+            cba_proof_bundles: cba_proof_bundles.clone(),
             signer_key_evidence: signer_key_evidence.clone(),
             agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
         };
@@ -515,22 +602,26 @@ pub(super) async fn peer_event_fanout_records(
             )
             .await
             .or_else(|| agent_signer_evidence_bundle.clone());
-        let seals = match federation_seal_prerequisites(state, &peer_events) {
-            Ok(seals) => seals,
+        let cba_proof_bundles = match federation_cba_proof_bundles(state, &peer_events) {
+            Ok(bundles) => bundles,
             Err(error) => {
                 tracing::warn!(
                     %error,
                     event_id,
                     peer_did = %peer.service_id,
-                    "failed to resolve dynamic peer Event Seal prerequisites"
+                    "failed to resolve dynamic peer Event CBA proof bundles"
                 );
                 continue;
             }
         };
+        let submissions = federation_submissions(state, &peer_events).await;
+        if submissions.is_empty() {
+            continue;
+        }
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
-            events: peer_events,
-            seals,
+            events: submissions,
+            cba_proof_bundles,
             signer_key_evidence: peer_signer_key_evidence,
             agent_signer_evidence_bundle: peer_agent_signer_evidence_bundle,
         };
@@ -792,10 +883,16 @@ async fn realm_bootstrap_fanout_record(
         hasher_input.extend_from_slice(record.canonical_digest.as_bytes());
     }
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
+    let submissions = federation_submissions(state, &events).await;
+    if submissions.is_empty() {
+        return None;
+    }
     let body = EventsSubmitFederationRequestBody {
         service_binding_ref,
-        events,
-        seals: Vec::new(),
+        events: submissions,
+        // Realm bootstrap prerequisites precede any Seal, so the batch closes
+        // no CBA basis of its own.
+        cba_proof_bundles: Vec::new(),
         signer_key_evidence,
         agent_signer_evidence_bundle,
     };

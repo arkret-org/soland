@@ -279,7 +279,9 @@ async fn persist_account_data_event(
             AppError::internal(format!("account_data Event id invalid: {error}"))
         })?,
         arkret_wire::events::EventKind::ACCOUNT_DATA_SET,
-        realm_id.clone(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
         service_did.clone(),
         actor_seq,
         Hlc::new(state.hlc().now())
@@ -304,7 +306,7 @@ async fn persist_account_data_event(
         event.prev_refs.dedup();
     }
     let verification_method = format!("{}#notary-key", state.service_id());
-    let signer = arkret_signatures::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,
         verification_method.clone(),

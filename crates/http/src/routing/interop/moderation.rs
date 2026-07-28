@@ -12,7 +12,7 @@ use arkret_identifiers::{Did, EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
     FrankingProof, FrankingProofEventTimeAnchor, MODERATION_FRANKING_PROOF_KIND,
 };
-use arkret_wire::EffectiveScope;
+use arkret_wire::ScopeRef;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -57,7 +57,7 @@ pub(super) async fn validate_moderation_report_safety(
     realm_id: &str,
     reporter: &str,
     target_ref: &str,
-    effective_scope: Option<&EffectiveScope>,
+    effective_scope: Option<&ScopeRef>,
     evidence_package: &Value,
     franking_proof: &Value,
     source_service: Option<&str>,
@@ -123,11 +123,11 @@ fn trusted_forwarded_client(req: &Request) -> Option<String> {
 
 fn moderation_effective_scope_value(
     realm_id: &str,
-    effective_scope: Option<&EffectiveScope>,
+    effective_scope: Option<&ScopeRef>,
 ) -> Result<Value, AppError> {
     match effective_scope {
         None => Ok(json!({"kind": "realm", "realm_id": realm_id})),
-        Some(EffectiveScope::Realm {
+        Some(ScopeRef::Realm {
             realm_id: scope_realm,
         }) => {
             if scope_realm.as_str() != realm_id {
@@ -137,7 +137,7 @@ fn moderation_effective_scope_value(
             }
             Ok(json!({"kind": "realm", "realm_id": scope_realm.as_str()}))
         }
-        Some(EffectiveScope::Circle {
+        Some(ScopeRef::Circle {
             realm_id: scope_realm,
             circle_id,
         }) => {
@@ -152,7 +152,7 @@ fn moderation_effective_scope_value(
                 "circle_id": circle_id.as_str(),
             }))
         }
-        // `EffectiveScope` is #[non_exhaustive]; fail closed on any scope
+        // `ScopeRef` is #[non_exhaustive]; fail closed on any scope
         // kind this build does not understand rather than guessing a shape.
         Some(_) => Err(AppError::invalid_param(
             "effective_scope kind is not supported",

@@ -12,7 +12,7 @@ use arkret_models_integration::{
     CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
     ScopeGrant, WidgetEffect,
 };
-use arkret_wire::EffectiveScope;
+use arkret_wire::ScopeRef;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -965,7 +965,7 @@ fn validate_registration_epoch_evidence_for_document(
 
 pub(super) fn approved_scopes_from_approval_request(
     package: &AppletPackage,
-    scope: &EffectiveScope,
+    scope: &ScopeRef,
     approval: &AppletApprovalRequest,
 ) -> Result<Vec<ScopeGrant>, AppError> {
     let approve_actions = approval_actions_for_install(approval);
@@ -983,8 +983,8 @@ pub(super) fn approved_scopes_from_approval_request(
         return Ok(Vec::new());
     }
     let (realm_id, circle_ids) = match scope {
-        EffectiveScope::Realm { realm_id } => (realm_id.clone(), None),
-        EffectiveScope::Circle {
+        ScopeRef::Realm { realm_id } => (realm_id.clone(), None),
+        ScopeRef::Circle {
             realm_id,
             circle_id,
         } => (realm_id.clone(), Some(vec![circle_id.clone()])),
@@ -1014,7 +1014,7 @@ pub(super) fn approval_actions_for_install(approval: &AppletApprovalRequest) -> 
 pub(super) async fn build_install_plan(
     state: &AppState,
     package: &AppletPackage,
-    scope: &EffectiveScope,
+    scope: &ScopeRef,
     approved_scopes: Vec<ScopeGrant>,
 ) -> Result<AppletInstallPlan, AppError> {
     let namespace_conflicts =
@@ -1103,7 +1103,7 @@ pub(super) fn registration_payload_from_package(
         "protocols": package.protocols,
         "namespaces": package.namespaces,
         "receive_events": package.receive_events,
-        "receive_ephemeral": package.receive_ephemeral,
+        "receive_signals": package.receive_signals,
         "rate_limited": package.rate_limited,
         "requested_scopes": package.requested_scopes,
         "registration_epoch": package.registration_epoch,
@@ -1114,14 +1114,12 @@ pub(super) fn registration_payload_from_package(
     }))
 }
 
-pub(super) fn capability_constraints_for_scope(
-    scope: &EffectiveScope,
-) -> Vec<CapabilityConstraint> {
+pub(super) fn capability_constraints_for_scope(scope: &ScopeRef) -> Vec<CapabilityConstraint> {
     let mut params = std::collections::BTreeMap::from([(
         "realm_id".to_owned(),
         Value::String(effective_scope_realm_id(scope)),
     )]);
-    if let EffectiveScope::Circle { circle_id, .. } = scope {
+    if let ScopeRef::Circle { circle_id, .. } = scope {
         params.insert("circle_id".to_owned(), Value::String(circle_id.to_string()));
     }
     vec![CapabilityConstraint {
@@ -1278,11 +1276,9 @@ pub(super) async fn namespace_conflicts_for(
     Ok(conflicts)
 }
 
-pub(super) fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
+pub(super) fn effective_scope_realm_id(scope: &ScopeRef) -> String {
     match scope {
-        EffectiveScope::Realm { realm_id } | EffectiveScope::Circle { realm_id, .. } => {
-            realm_id.to_string()
-        }
+        ScopeRef::Realm { realm_id } | ScopeRef::Circle { realm_id, .. } => realm_id.to_string(),
         _ => unreachable!("unsupported canonical applet effective scope"),
     }
 }
@@ -1299,7 +1295,7 @@ pub(super) fn effective_scope_realm_id(scope: &EffectiveScope) -> String {
 pub(super) async fn require_realm_admin(
     state: &AppState,
     actor: &str,
-    scope: &EffectiveScope,
+    scope: &ScopeRef,
 ) -> Result<(), AppError> {
     let realm_id = effective_scope_realm_id(scope);
     let (owner, members) = realm_owner_and_members(state, &realm_id).await;
@@ -1415,7 +1411,7 @@ mod tests {
     use arkret_models_integration::{
         AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletNamespaceEntry,
     };
-    use arkret_signatures::Ed25519MoveSigner;
+    use arkret_signatures::Ed25519PayloadSigner;
 
     use super::*;
 
@@ -1501,7 +1497,7 @@ mod tests {
             )
             .unwrap();
         package.seal().unwrap();
-        let signer = Ed25519MoveSigner::from_did_key_seed(
+        let signer = Ed25519PayloadSigner::from_did_key_seed(
             signer_seed,
             controller_id,
             verification_method.to_owned(),

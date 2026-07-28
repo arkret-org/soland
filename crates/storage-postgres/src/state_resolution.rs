@@ -2,14 +2,14 @@ use std::collections::BTreeSet;
 use std::future::Future;
 use std::sync::Arc;
 
-use arkret_identifiers::{CellRef, Did, Hash, MoveId, RealmId, SealId};
+use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
-    CellRegistry, CellStore, MoveStore, SealStore, SealedMoveRecord, StoreError, StoreResult,
-    compute_state_root,
+    CellRegistry, CellStore, ControlEventStore, SealStore, SealedControlEventRecord, StoreError,
+    StoreResult, compute_state_root, control_event_digest,
 };
-use arkret_wire::{Bottom, LatticeOp, Move, Seal};
+use arkret_wire::{Bottom, Event, LatticeOp, Seal};
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::PgPool;
 
 pub struct StateResolutionStores {
-    pub move_store: Arc<dyn MoveStore>,
+    pub control_event_store: Arc<dyn ControlEventStore>,
     pub seal_store: Arc<dyn SealStore>,
     pub cell_store: Arc<dyn CellStore>,
     pub cell_registry: Arc<dyn CellRegistry>,
@@ -32,7 +32,7 @@ pub trait EventSealCommitStore: Send + Sync {
         seal: &Seal,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
-        covered: &BTreeSet<MoveId>,
+        covered: &BTreeSet<Hash>,
     ) -> StoreResult<bool>;
 }
 
@@ -42,7 +42,7 @@ pub fn build_state_resolution_stores(
 ) -> StateResolutionStores {
     if let Some(pool) = pool {
         return StateResolutionStores {
-            move_store: Arc::new(PgMoveStore { pool: pool.clone() }),
+            control_event_store: Arc::new(PgControlEventStore { pool: pool.clone() }),
             seal_store: Arc::new(PgSealStore { pool: pool.clone() }),
             cell_store: Arc::new(PgCellStore { pool: pool.clone() }),
             event_seal_committer: Arc::new(PgEventSealCommitStore {
@@ -56,7 +56,7 @@ pub fn build_state_resolution_stores(
     let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
     let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
     StateResolutionStores {
-        move_store: Arc::new(arkret_state::state::MemoryMoveStore::default()),
+        control_event_store: Arc::new(arkret_state::state::MemoryControlEventStore::default()),
         seal_store: seal_store.clone(),
         cell_store: cell_store.clone(),
         event_seal_committer: Arc::new(MemoryEventSealCommitStore {
@@ -69,7 +69,7 @@ pub fn build_state_resolution_stores(
     }
 }
 
-struct PgMoveStore {
+struct PgControlEventStore {
     pool: PgPool,
 }
 
@@ -144,9 +144,9 @@ struct TextRow {
 }
 
 #[derive(QueryableByName)]
-struct SealedMoveRow {
+struct SealedControlEventRow {
     #[diesel(sql_type = Jsonb)]
-    move_json: Value,
+    event_json: Value,
     #[diesel(sql_type = Text)]
     sealed_by: String,
 }
@@ -253,7 +253,7 @@ async fn insert_state_seal(
     .map(|_| ())
 }
 
-fn move_from_value(value: Value) -> StoreResult<Move> {
+fn control_event_from_value(value: Value) -> StoreResult<Event> {
     serde_json::from_value(value).map_err(serde_to_store)
 }
 
@@ -277,7 +277,7 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .and_then(Value::as_str)
         .ok_or_else(|| StoreError::Backend("sealed op missing move_id".to_owned()))
         .and_then(|id| {
-            MoveId::new(id.to_owned()).map_err(|error| StoreError::Backend(error.to_string()))
+            Hash::new(id.to_owned()).map_err(|error| StoreError::Backend(error.to_string()))
         })?;
     let op = value
         .get("op")
@@ -326,7 +326,7 @@ fn effective_state_with_new_ops(
     cells: &dyn CellStore,
     registry: &dyn CellRegistry,
     realm_id: &RealmId,
-    covered: &BTreeSet<MoveId>,
+    covered: &BTreeSet<Hash>,
     new_ops: &[(CellRef, IssuedOp)],
 ) -> StoreResult<std::collections::BTreeMap<CellRef, CellState>> {
     let mut cell_refs = cells
@@ -387,20 +387,25 @@ fn seal_predecessor_refs_json(seal: &Seal) -> Value {
     )
 }
 
-impl MoveStore for PgMoveStore {
-    fn put_pending(&self, m: &Move) -> StoreResult<()> {
+impl ControlEventStore for PgControlEventStore {
+    fn put_pending(&self, event: &Event) -> StoreResult<()> {
         let pool = self.pool.clone();
-        let value = serde_json::to_value(m).map_err(serde_to_store)?;
-        let id = m.id.as_str().to_owned();
-        let realm_id = m.realm_id.as_str().to_owned();
+        let value = serde_json::to_value(event).map_err(serde_to_store)?;
+        // A Control Move has no identity of its own in v1: it is an Event, and
+        // the control log is keyed by its canonical control-event digest.
+        let digest = control_event_digest(event)
+            .map_err(|error| StoreError::Backend(error.to_string()))?
+            .as_str()
+            .to_owned();
+        let realm_id = event.realm_id.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             sql_query(
-                "INSERT INTO state_moves (id, realm_id, move_json) \
+                "INSERT INTO state_control_events (event_digest, realm_id, event_json) \
                  VALUES ($1, $2, $3) \
-                 ON CONFLICT (id) DO NOTHING",
+                 ON CONFLICT (event_digest) DO NOTHING",
             )
-            .bind::<Text, _>(&id)
+            .bind::<Text, _>(&digest)
             .bind::<Text, _>(&realm_id)
             .bind::<Jsonb, _>(&value)
             .execute(&mut *conn)
@@ -410,69 +415,74 @@ impl MoveStore for PgMoveStore {
         })
     }
 
-    fn mark_sealed(&self, id: &MoveId, seal: &SealId) -> StoreResult<()> {
+    fn mark_sealed(&self, event_digest: &Hash, seal: &SealId) -> StoreResult<()> {
         let pool = self.pool.clone();
-        let id = id.as_str().to_owned();
+        let digest = event_digest.as_str().to_owned();
         let seal = seal.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let updated = sql_query(
-                "UPDATE state_moves \
+                "UPDATE state_control_events \
                  SET sealed_by = $2, sealed_at = COALESCE(sealed_at, now()) \
-                 WHERE id = $1",
+                 WHERE event_digest = $1",
             )
-            .bind::<Text, _>(&id)
+            .bind::<Text, _>(&digest)
             .bind::<Text, _>(&seal)
             .execute(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
             if updated == 0 {
-                return Err(StoreError::NotFound(format!("Move {id} not in store")));
+                return Err(StoreError::NotFound(format!(
+                    "control Event {digest} not in store"
+                )));
             }
             Ok(())
         })
     }
 
-    fn get(&self, id: &MoveId) -> StoreResult<Option<Move>> {
+    fn get(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
         let pool = self.pool.clone();
-        let id = id.as_str().to_owned();
+        let digest = event_digest.as_str().to_owned();
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            sql_query("SELECT move_json AS value FROM state_moves WHERE id = $1")
-                .bind::<Text, _>(&id)
-                .get_result::<JsonRow>(&mut *conn)
-                .await
-                .optional()
-                .map_err(diesel_to_store)?
-                .map(|row| move_from_value(row.value))
-                .transpose()
+            sql_query(
+                "SELECT event_json AS value FROM state_control_events WHERE event_digest = $1",
+            )
+            .bind::<Text, _>(&digest)
+            .get_result::<JsonRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?
+            .map(|row| control_event_from_value(row.value))
+            .transpose()
         })
     }
 
     fn list_pending_for_notary(
         &self,
         realm_id: &RealmId,
-        cursor: Option<&MoveId>,
+        cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<Move>> {
+    ) -> StoreResult<Vec<Event>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
-        let cursor = cursor.map(|id| id.as_str().to_owned());
+        let cursor = cursor.map(|digest| digest.as_str().to_owned());
         let limit = limit as i64;
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT move_json AS value \
-                 FROM state_moves \
+                "SELECT event_json AS value \
+                 FROM state_control_events \
                  WHERE realm_id = $1 \
                    AND sealed_by IS NULL \
                    AND ( \
                      $2 IS NULL OR \
-                     (inserted_at, id) > ( \
-                       SELECT inserted_at, id FROM state_moves WHERE id = $2 \
+                     (inserted_at, event_digest) > ( \
+                       SELECT inserted_at, event_digest FROM state_control_events \
+                       WHERE event_digest = $2 \
                      ) \
                    ) \
-                 ORDER BY inserted_at ASC, id ASC \
+                 ORDER BY inserted_at ASC, event_digest ASC \
                  LIMIT $3",
             )
             .bind::<Text, _>(&realm_id)
@@ -482,7 +492,7 @@ impl MoveStore for PgMoveStore {
             .await
             .map_err(diesel_to_store)?;
             rows.into_iter()
-                .map(|row| move_from_value(row.value))
+                .map(|row| control_event_from_value(row.value))
                 .collect()
         })
     }
@@ -490,41 +500,42 @@ impl MoveStore for PgMoveStore {
     fn list_sealed(
         &self,
         realm_id: &RealmId,
-        cursor: Option<&MoveId>,
+        cursor: Option<&Hash>,
         limit: usize,
-    ) -> StoreResult<Vec<SealedMoveRecord>> {
+    ) -> StoreResult<Vec<SealedControlEventRecord>> {
         let pool = self.pool.clone();
         let realm_id = realm_id.as_str().to_owned();
-        let cursor = cursor.map(|id| id.as_str().to_owned());
+        let cursor = cursor.map(|digest| digest.as_str().to_owned());
         let limit = limit as i64;
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT move_json, sealed_by \
-                 FROM state_moves \
+                "SELECT event_json, sealed_by \
+                 FROM state_control_events \
                  WHERE realm_id = $1 \
                    AND sealed_by IS NOT NULL \
                    AND ( \
                      $2 IS NULL OR \
-                     (inserted_at, id) > ( \
-                       SELECT inserted_at, id FROM state_moves WHERE id = $2 \
+                     (inserted_at, event_digest) > ( \
+                       SELECT inserted_at, event_digest FROM state_control_events \
+                       WHERE event_digest = $2 \
                      ) \
                    ) \
-                 ORDER BY inserted_at ASC, id ASC \
+                 ORDER BY inserted_at ASC, event_digest ASC \
                  LIMIT $3",
             )
             .bind::<Text, _>(&realm_id)
             .bind::<Nullable<Text>, _>(cursor.as_deref())
             .bind::<BigInt, _>(limit)
-            .load::<SealedMoveRow>(&mut *conn)
+            .load::<SealedControlEventRow>(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
             rows.into_iter()
                 .map(|row| {
-                    let move_value = move_from_value(row.move_json)?;
+                    let event = control_event_from_value(row.event_json)?;
                     let seal = SealId::new(row.sealed_by)
                         .map_err(|error| StoreError::Backend(error.to_string()))?;
-                    Ok(SealedMoveRecord { move_value, seal })
+                    Ok(SealedControlEventRecord { event, seal })
                 })
                 .collect()
         })
@@ -815,7 +826,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         seal: &Seal,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
-        covered: &BTreeSet<MoveId>,
+        covered: &BTreeSet<Hash>,
     ) -> StoreResult<bool> {
         let pool = self.pool.clone();
         let cell_registry = self.cell_registry.clone();
@@ -964,7 +975,7 @@ impl EventSealCommitStore for MemoryEventSealCommitStore {
         seal: &Seal,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
-        covered: &BTreeSet<MoveId>,
+        covered: &BTreeSet<Hash>,
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
         let actual = self
@@ -1227,13 +1238,13 @@ mod event_seal_commit_tests {
     use arkret_identifiers::Hlc;
     use arkret_state::SealStore;
     use arkret_state::lattice::CellState;
-    use arkret_wire::{LatticeOpType, MoveSignature, NotarySig, SealKind};
+    use arkret_wire::{LatticeOpType, NotarySig, PayloadSignature, SealKind};
     use chrono::Utc;
     use serde_json::json;
 
     use super::{
         BTreeSet, CellRef, CellRegistry, CellStore, EventSealCommitStore, Hash, LatticeOp,
-        MemoryEventSealCommitStore, MoveId, RealmId, Seal, SealId, SealedOp, compute_state_root,
+        MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp, compute_state_root,
         effective_state_with_new_ops,
     };
 
@@ -1243,8 +1254,8 @@ mod event_seal_commit_tests {
         realm: &RealmId,
         marker: char,
         increment: i64,
-    ) -> (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<MoveId>) {
-        let move_id = MoveId::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap();
+    ) -> (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<Hash>) {
+        let move_id = Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap();
         let cell = CellRef::new(
             "ak:cell:ak.component.metric.counter.v1:ak.metric.seal_admission".to_owned(),
         )
@@ -1286,7 +1297,7 @@ mod event_seal_commit_tests {
             covered_event_digests: covered.iter().cloned().collect(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(MoveSignature {
+            notary_signature: NotarySig::Single(PayloadSignature {
                 alg: "EdDSA".to_owned(),
                 verification_method: "did:key:z6MkFixture".to_owned(),
                 payload_digest: placeholder_hash,
@@ -1309,8 +1320,8 @@ mod event_seal_commit_tests {
         let cell =
             CellRef::new("ak:cell:ak.component.member.state.v1:did:web:member.example".to_owned())
                 .unwrap();
-        let join_move = MoveId::new(format!("sha256:{}", "1".repeat(64))).unwrap();
-        let ban_move = MoveId::new(format!("sha256:{}", "f".repeat(64))).unwrap();
+        let join_move = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+        let ban_move = Hash::new(format!("sha256:{}", "f".repeat(64))).unwrap();
         let ops = [
             (join_move.clone(), "leave", "join"),
             (ban_move.clone(), "join", "ban"),
@@ -1359,7 +1370,7 @@ mod event_seal_commit_tests {
         let left = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'a', 1);
         let right = competing_seal(cell_store.as_ref(), registry.as_ref(), &realm, 'b', 2);
         let barrier = Arc::new(Barrier::new(3));
-        let spawn = |candidate: (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<MoveId>)| {
+        let spawn = |candidate: (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<Hash>)| {
             let committer = committer.clone();
             let barrier = barrier.clone();
             std::thread::spawn(move || {

@@ -43,9 +43,7 @@ pub struct PgPersistenceStore {
     events: PgEventStore,
     federation_operations: PgFederationOperationsStore,
     moderation: PgModerationStore,
-    presence: PgPresenceStore,
-    call_signal_relay: PgCallSignalRelayStore,
-    read_receipt_relay: PgReadReceiptRelayStore,
+    signal_relay: PgSignalRelayStore,
     webvh: PgWebvhStore,
     service_identity: PgServiceIdentityStore,
     realm_invites: PgRealmInviteStore,
@@ -57,6 +55,7 @@ pub struct PgPersistenceStore {
     space_container_projections: PgSpaceContainerProjectionStore,
     strand_projections: PgStrandProjectionStore,
     morph_projections: PgMorphProjectionStore,
+    publication_evidence: PgPublicationEvidenceStore,
     projection_events: PgProjectionEventStore,
     applets: PgAppletStore,
     device_messages: PgDeviceMessageStore,
@@ -107,9 +106,7 @@ impl PgPersistenceStore {
             events: PgEventStore { pool: pool.clone() },
             federation_operations: PgFederationOperationsStore { pool: pool.clone() },
             moderation: PgModerationStore { pool: pool.clone() },
-            presence: PgPresenceStore { pool: pool.clone() },
-            call_signal_relay: PgCallSignalRelayStore { pool: pool.clone() },
-            read_receipt_relay: PgReadReceiptRelayStore { pool: pool.clone() },
+            signal_relay: PgSignalRelayStore { pool: pool.clone() },
             webvh: PgWebvhStore { pool: pool.clone() },
             service_identity: PgServiceIdentityStore { pool: pool.clone() },
             realm_invites: PgRealmInviteStore { pool: pool.clone() },
@@ -121,6 +118,7 @@ impl PgPersistenceStore {
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
             strand_projections: PgStrandProjectionStore { pool: pool.clone() },
             morph_projections: PgMorphProjectionStore { pool: pool.clone() },
+            publication_evidence: PgPublicationEvidenceStore { pool: pool.clone() },
             projection_events: PgProjectionEventStore { pool: pool.clone() },
             applets: PgAppletStore { pool: pool.clone() },
             device_messages: PgDeviceMessageStore { pool: pool.clone() },
@@ -332,20 +330,8 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
         &self.push_devices
     }
 
-    fn presence(&self) -> &dyn PresenceStore {
-        &self.presence
-    }
-
-    fn typing(&self) -> &dyn TypingStore {
-        self.fallback.typing()
-    }
-
-    fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
-        &self.call_signal_relay
-    }
-
-    fn read_receipt_relay(&self) -> &dyn ReadReceiptRelayStore {
-        &self.read_receipt_relay
+    fn signal_relay(&self) -> &dyn SignalRelayStore {
+        &self.signal_relay
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
@@ -424,6 +410,10 @@ impl EventProjectionStoreRegistry for PgPersistenceStore {
 
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
         &self.morph_projections
+    }
+
+    fn publication_evidence(&self) -> &dyn PublicationEvidenceStore {
+        &self.publication_evidence
     }
 }
 

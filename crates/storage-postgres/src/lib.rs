@@ -18,8 +18,7 @@ pub(crate) use soland_storage::{
     AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
     AgentRuntimeApprovalWrite, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
     AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
-    BlobRecord, BlobStore, CALL_SIGNAL_RELAY_MAX_PER_REALM, CallSignalRelayRecord,
-    CallSignalRelayStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
+    BlobRecord, BlobStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
     ConsentCellStore, ContactRecord, ContactStore, CursorRevocation, DeviceInventoryRecord,
     DeviceInventoryStore, DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection,
     DeviceMessageBatchRecord, DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
@@ -39,30 +38,30 @@ pub(crate) use soland_storage::{
     OrganizationPolicyStore, OrganizationRecord, OrganizationStore, OutboundPushBridgeCacheRecord,
     PeerEventsPageQuery, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
-    PersistenceResult, PolicyDocumentRecord, PolicyDocumentStore, PresenceRecord, PresenceStore,
-    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
-    PushBridgeCacheStore, PushDeviceStore, READ_RECEIPT_RELAY_MAX_PER_REALM,
-    ReadReceiptRelayRecord, ReadReceiptRelayStore, RealmEventStats, RealmInviteRecord,
-    RealmInviteStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
+    PersistenceResult, PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome,
+    ProjectionEventRecord, ProjectionEventStore, PublicationEvidenceRecord,
+    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmEventStats,
+    RealmInviteRecord, RealmInviteStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
     RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
     RecoveryPolicyRecord, RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore,
     RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore,
-    RetentionTombstoneRecord, RetentionTombstoneStore, SINGLETON_ID, ServiceIdentityStore,
-    ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore,
-    SpaceContainerProjectionRecord, SpaceContainerProjectionStore, StrandProjectionRecord,
-    StrandProjectionStore, SyncCursorRecord, SyncCursorStore, WebvhDocumentRecord,
-    WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore, account_with_primary_localpart_select,
-    applet_registration_select_sql, applet_transaction_replay_select_sql, audit_uuid_index,
-    db_ssk_generation, decode_grant_dots, decode_registration_outcome,
-    decode_session_agent_payload, encode_grant_dots, encode_session_payload,
-    ensure_device_message_id, evaluate_drift, fresh_device_message_ack_token,
-    frontier_exchange_failure_record, frontier_exchange_success_record,
-    identity_anchor_slot_conflicts, mls_effective_scope_parts, operation_uuid_index,
-    optional_audit_uuid_index, optional_record_str, optional_record_timestamp,
-    optional_record_value, partials_to_jsonb, projected_operation_realm_discoverability,
-    projected_operation_realm_summary, projected_operation_realm_title, registration_as_existing,
-    registrations_match, required_record_str, required_record_timestamp,
-    valid_new_service_registration_records, webvh_freshness_on_put,
+    RetentionTombstoneRecord, RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM, SINGLETON_ID,
+    ServiceIdentityStore, ServiceRegistrationCommitOutcome, SessionRecord, SessionStore,
+    SidecarStore, SignalRelayRecord, SignalRelayStore, SpaceContainerProjectionRecord,
+    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord,
+    SyncCursorStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+    account_with_primary_localpart_select, applet_registration_select_sql,
+    applet_transaction_replay_select_sql, audit_uuid_index, db_ssk_generation, decode_grant_dots,
+    decode_registration_outcome, decode_session_agent_payload, encode_grant_dots,
+    encode_session_payload, ensure_device_message_id, evaluate_drift,
+    fresh_device_message_ack_token, frontier_exchange_failure_record,
+    frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_effective_scope_parts,
+    operation_uuid_index, optional_audit_uuid_index, optional_record_str,
+    optional_record_timestamp, optional_record_value, partials_to_jsonb,
+    projected_operation_realm_discoverability, projected_operation_realm_summary,
+    projected_operation_realm_title, registration_as_existing, registrations_match,
+    required_record_str, required_record_timestamp, valid_new_service_registration_records,
+    webvh_freshness_on_put,
 };
 pub(crate) use uuid::Uuid;
 
@@ -95,10 +94,9 @@ mod moderation;
 mod multisig;
 mod notifications;
 mod policy;
-mod presence;
 mod projection;
+mod publication_evidence;
 mod push;
-mod read_receipts;
 mod realm_invites;
 mod recovery;
 mod registry;
@@ -106,6 +104,7 @@ mod service_identity;
 mod sessions;
 mod settings;
 mod sidecars;
+mod signal;
 mod state_resolution;
 mod sync_cursor;
 mod unit_of_work;
@@ -133,10 +132,9 @@ pub use moderation::*;
 pub use multisig::*;
 pub use notifications::*;
 pub use policy::*;
-pub use presence::*;
 pub use projection::*;
+pub use publication_evidence::*;
 pub use push::*;
-pub use read_receipts::*;
 pub use realm_invites::*;
 pub use recovery::*;
 pub use registry::PgPersistenceStore;
@@ -144,6 +142,7 @@ pub use service_identity::*;
 pub use sessions::*;
 pub use settings::*;
 pub use sidecars::*;
+pub use signal::*;
 pub use state_resolution::*;
 pub use sync_cursor::*;
 pub use unit_of_work::*;

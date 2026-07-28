@@ -347,16 +347,16 @@ fn validate_scope_rotate_events(
                 "MLS rotate event realm_id must match the Circle realm_id",
             ));
         }
-        match event.effective_scope.as_ref() {
-            Some(arkret_wire::EffectiveScope::Circle {
+        match &event.scope_ref {
+            arkret_wire::ScopeRef::Circle {
                 realm_id,
                 circle_id,
-            }) if realm_id.as_str() == circle.realm_id
-                && circle_id.as_str() == circle.circle_id => {}
+            } if realm_id.as_str() == circle.realm_id && circle_id.as_str() == circle.circle_id => {
+            }
             _ => {
                 return Err(scope_rotate_failed(
                     "mls_rotate_scope_mismatch",
-                    "MLS rotate event effective_scope must match the Circle scope",
+                    "MLS rotate event scope_ref must match the Circle scope",
                 ));
             }
         }

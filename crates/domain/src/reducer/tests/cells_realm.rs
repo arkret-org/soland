@@ -52,23 +52,37 @@ fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
     const FAMILY: &str = "ak.component.realm.delivery_binding_policy.v1";
 
     let mut state = ProjectionState::new();
-    for (realm_id, binding_mode) in [(REALM_A, "direct"), (REALM_B, "relay")] {
+    for (index, (realm_id, binding_mode)) in [(REALM_A, "direct"), (REALM_B, "relay")]
+        .into_iter()
+        .enumerate()
+    {
+        // The registered contract for this facet is a single `cas_register`
+        // write on the `null`-subject cell whose value is the whole payload,
+        // so the payload here IS the cell value the assertions below read.
+        let payload = serde_json::json!({"binding_mode": binding_mode});
+        let cell_writes = projected_cell_writes(
+            arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            realm_id,
+            &format!("ak:event:01904100-0000-7000-8000-b0000000000{index}"),
+            &payload,
+        );
         let operation = make_operation(
             arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY,
             realm_id,
-            serde_json::json!({
-                "effects": [{
-                    "cell": format!("ak:cell:{FAMILY}:null"),
-                    "op": {
-                        "type": "set",
-                        "value": {"binding_mode": binding_mode}
-                    }
-                }]
-            }),
+            payload,
         );
 
+        assert_eq!(
+            cell_writes.len(),
+            1,
+            "delivery_binding_policy registers exactly one cell write"
+        );
+        assert_eq!(
+            cell_writes[0].cell.as_str(),
+            format!("ak:cell:{FAMILY}:{}", arkret_wire::NULL_SUBJECT)
+        );
         assert!(matches!(
-            state.apply_validated_realm_bootstrap_facet(&operation),
+            state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes),
             ProjectionEffect::RealmBootstrapFacetProjected { .. }
         ));
     }

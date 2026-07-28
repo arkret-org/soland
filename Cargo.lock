@@ -343,6 +343,7 @@ dependencies = [
 name = "arkret-mls"
 version = "0.3.0"
 dependencies = [
+ "aes-gcm",
  "arkret-canonical",
  "arkret-crypto",
  "arkret-identifiers",
@@ -350,7 +351,6 @@ dependencies = [
  "arkret-policy",
  "arkret-signatures",
  "arkret-wire",
- "chacha20poly1305",
  "chrono",
  "ed25519-dalek",
  "hkdf 0.13.0",
@@ -5167,6 +5167,7 @@ dependencies = [
  "arkret-models-identity",
  "arkret-models-integration",
  "arkret-policy",
+ "arkret-schema",
  "arkret-state",
  "arkret-wire",
  "async-trait",

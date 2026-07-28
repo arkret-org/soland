@@ -1507,6 +1507,7 @@ mod tests {
             "previous_epoch": 0,
             "next_epoch": 1,
             "membership_frontier": ["ak:event:01964137-0000-7000-8000-000000000040"],
+            "covered_seal_refs": [format!("ak:seal:sha256:{}", "5".repeat(64))],
             "policy_root": format!("sha256:{}", "1".repeat(64)),
             "capability_root": format!("sha256:{}", "2".repeat(64)),
             "discussion_metadata_digest": format!("sha256:{}", "3".repeat(64)),

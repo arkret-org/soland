@@ -760,6 +760,18 @@ pub(super) async fn agent_key_pair(
     })
 }
 
+/// The canonical `ak.component.agent.key.v1` cell for one `(agent_id, key_id)`
+/// pair, matching the registry's composite `cell_subject` derivation.
+pub(super) fn agent_key_cell_ref(
+    agent_id: &arkret_identifiers::Did,
+    key_id: &str,
+) -> Result<arkret_identifiers::CellRef, AppError> {
+    let subject = arkret_wire::composite_subject(&[agent_id.as_str(), key_id])
+        .map_err(|error| AppError::invalid_param(format!("agent key subject invalid: {error}")))?;
+    arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.agent.key.v1:{subject}"))
+        .map_err(|error| AppError::invalid_param(format!("agent key cell invalid: {error}")))
+}
+
 fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<(), AppError> {
     let payload = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayload,
@@ -769,15 +781,24 @@ fn validate_agent_key_authorize_effects(event: &arkret_wire::Event) -> Result<()
     .map_err(|error| {
         AppError::invalid_param(format!("authorize_event.payload invalid: {error}"))
     })?;
-    let expected = arkret_event_draft::agent_key_authorize_effects(&payload, &event.event_id)
-        .map_err(|error| {
-            AppError::invalid_param(format!(
-                "authorize_event canonical Agent key effects invalid: {error}"
-            ))
-        })?;
-    if event.effects != expected {
+    // v1 carries no producer `effects[]`: the writes are derived from
+    // `kind + payload` by the registered contract (`event-and-patch.md`
+    // §2.4.2). `ak.agent.key.authorize` projects an atomic or_set
+    // remove-observed + add pair on the agent-key cell for
+    // `(payload.agent_id, payload.key_id)` (`key-management.md` §3.6.1), so
+    // the only thing to assert is that the contract derives exactly that pair
+    // for this Event.
+    let derived =
+        arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "authorize_event Agent key projection failed: {error}"
+                ))
+            })?;
+    let expected_cell = agent_key_cell_ref(&payload.agent_id, &payload.key_id)?;
+    if derived.len() != 2 || derived.iter().any(|write| write.cell != expected_cell) {
         return Err(AppError::invalid_param(
-            "authorize_event.effects must exactly match the canonical Agent key authorization effects",
+            "authorize_event must derive the atomic Agent key re-authorization pair on its own key cell",
         ));
     }
     Ok(())

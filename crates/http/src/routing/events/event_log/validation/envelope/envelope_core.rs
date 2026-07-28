@@ -339,8 +339,20 @@ pub(crate) async fn validate_event_envelope_with_context(
         internal_admission,
     )
     .await?;
-    validate_data_event_capability_refs(state, &actor_id, &realm_id, &kind, object)?;
-    validate_cba_effect_planes(object)?;
+    // The capability gate needs the write set, and v1 carries none on the wire:
+    // the receiver projects it from `kind + payload` through the registered
+    // reducer contract (`event-and-patch.md` §2.4.2). Derived here rather than
+    // inside the gate so there is one evaluator, shared with
+    // `enforce_registered_cell_contract` below.
+    let data_event_cells = derived_data_event_cells(envelope, object)?;
+    validate_data_event_capability_refs(
+        state,
+        &actor_id,
+        &realm_id,
+        &kind,
+        object,
+        &data_event_cells,
+    )?;
     validate_control_move_seal_basis(
         object,
         is_realm_bootstrap_followup || is_realm_founding_grant || is_identity_anchor_authorize,
@@ -477,7 +489,26 @@ pub(crate) async fn validate_event_envelope_with_context(
     )
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
-    enforce_registered_cell_contract(envelope, &kind)?;
+    // `event-auth-state-resolution.md` §5 — the two closed anchor units carry no
+    // CBA basis field at all, so their registry plane check runs in the
+    // bootstrap context. Membership of a unit is decided by the batch context
+    // this validator was handed (the closed-whitelist owner is
+    // `arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit`, already
+    // run before the batch reaches here), never guessed from the kind.
+    let cba_context = if is_realm_bootstrap_unit_member(
+        &kind,
+        &realm_id,
+        &actor_id,
+        is_realm_bootstrap_followup,
+        is_realm_founding_grant,
+        is_identity_anchor_authorize,
+        realm_bootstrap_contexts,
+    ) {
+        arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
+    } else {
+        arkret_schema::EventCellContractContext::Standard
+    };
+    enforce_registered_cell_contract(envelope, &kind, cba_context)?;
     enforce_ordered_log_cell_contract(state, envelope, &kind, &realm_id, object)?;
     let device_id =
         event_string_field(object, &["device_id"]).unwrap_or_else(|| session.device_id.clone());
@@ -634,9 +665,74 @@ async fn enforce_device_generation_fence(
 /// construct yet, so tightening those is a producer-side migration (every
 /// client materializes registry effects) that has to land before the server can
 /// fail closed on it.
+/// Whether this envelope is a member of one of the two closed
+/// `seal_basis`-exempt anchor units of `event-auth-state-resolution.md` §5.
+///
+/// The `ak.realm.create` genesis is the unit head; the founding grant, the
+/// whitelisted initial facets and the delegated first `ak.device.authorize` are
+/// its already-classified members. Nothing else may claim the exemption, so the
+/// answer is read from the batch context rather than derived from the kind.
+fn is_realm_bootstrap_unit_member(
+    kind: &str,
+    realm_id: &str,
+    actor_id: &str,
+    is_realm_bootstrap_followup: bool,
+    is_realm_founding_grant: bool,
+    is_identity_anchor_authorize: bool,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+) -> bool {
+    if is_realm_bootstrap_followup || is_realm_founding_grant || is_identity_anchor_authorize {
+        return true;
+    }
+    kind == arkret_wire::events::EventKind::REALM_CREATE
+        && realm_bootstrap_contexts
+            .iter()
+            .any(|context| context.realm_id == realm_id && context.actor_id == actor_id)
+}
+
+/// Project the cells a DataEvent writes, for the capability gate.
+///
+/// v1 has no producer `effects[]` (`event-and-patch.md` §2.2), so the set a
+/// capability has to cover is the receiver's own registry projection of `kind +
+/// payload`. Returns empty for anything that is not a DataEvent; a DataEvent
+/// whose contract will not evaluate fails closed here with the same reason code
+/// [`enforce_registered_cell_contract`] would raise for it later.
+fn derived_data_event_cells(
+    envelope: &Value,
+    object: &serde_json::Map<String, Value>,
+) -> Result<Vec<String>, EventValidationError> {
+    if !object.contains_key("seal_ref") && !object.contains_key("auth_context") {
+        return Ok(Vec::new());
+    }
+    let event =
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("DataEvent is not a valid Event Envelope: {error}"),
+            )
+        })?;
+    let projected = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            error.reason_code(),
+            error.to_string(),
+        )
+    })?;
+    Ok(projected
+        .into_iter()
+        .map(|write| write.cell.as_str().to_owned())
+        .collect())
+}
+
 fn enforce_registered_cell_contract(
     envelope: &Value,
     kind: &str,
+    context: arkret_schema::EventCellContractContext,
 ) -> Result<(), EventValidationError> {
     let event_kind = arkret_wire::events::EventKind::from(kind);
     let Some(descriptor) = event_kind.descriptor() else {
@@ -653,35 +749,58 @@ fn enforce_registered_cell_contract(
                 format!("reducer input is not a valid Event Envelope: {error}"),
             )
         })?;
-    // Probe: re-derive the effects the registry declares for this Event. A
-    // success means the row is fully projected and the contract is enforceable
-    // exactly; a failure means the row declares no derivable contract, which is
-    // the case this gate deliberately leaves alone.
-    let mut probe = event.clone();
-    probe.effects.clear();
-    if arkret_schema::materialize_registered_cell_writes(&mut probe).is_err() {
-        return Ok(());
-    }
-    arkret_schema::validate_registered_cell_writes(&event).map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            error.reason_code(),
-            error.to_string(),
-        )
-    })?;
-    if kind == arkret_wire::events::EventKind::REALM_CREATE {
-        let expected = arkret_bootstrap::realm_create_effects(&event).map_err(|error| {
+    // v1 carries no producer `effects[]`: the receiver derives every write
+    // from `kind + payload` through the registered contract
+    // (`event-and-patch.md` §2.4.2). The admission gate is therefore just
+    // "is the registered contract evaluable for this Event" — a row whose
+    // projection cannot be derived fails the Event closed, and a row that is
+    // not an active reducer input projects nothing and passes.
+    arkret_schema::validate_registered_cell_writes_in_context(&event, context).map_err(
+        |error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "effects_payload_mismatch",
+                error.reason_code(),
+                error.to_string(),
+            )
+        },
+    )?;
+    if kind == arkret_wire::events::EventKind::REALM_CREATE {
+        // The canonical Realm-create genesis write set is likewise recomputed,
+        // never compared against a submitted array. Only the *targets* are
+        // asserted: the lattice ops come from the registered
+        // `effect_projection`, and restating them here would rebuild the
+        // producer-side effect table v1 removed.
+        let derived = arkret_schema::project_registered_cell_writes(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                error.reason_code(),
                 error.to_string(),
             )
         })?;
-        if event.effects != expected {
+        let expected: std::collections::BTreeSet<String> = [
+            arkret_wire::REALM_METADATA_CELL.to_owned(),
+            format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                event.actor_id.as_str()
+            ),
+            arkret_wire::REALM_CREATE_CELL.to_owned(),
+            arkret_wire::REALM_NOTARY_CELL.to_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let actual: std::collections::BTreeSet<String> = derived
+            .iter()
+            .map(|write| write.cell.as_str().to_owned())
+            .collect();
+        if derived.len() != expected.len() || actual != expected {
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
-                "effects_payload_mismatch",
-                "Realm create does not carry the canonical four-effect set",
+                "reducer_projection_failed",
+                "Realm create does not derive the canonical four genesis cells",
             ));
         }
     }
@@ -730,11 +849,16 @@ fn enforce_ordered_log_cell_contract(
     let suite_name = event_digest_suite(state, kind, realm_id, object)?;
     let suite = arkret_canonical::digest_suite(&suite_name)
         .map_err(|_| unsupported_digest_algorithm_error(&suite_name))?;
-    arkret_schema::validate_single_target_append_event_contract(&event, suite).map_err(|error| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            error.reason_code(),
-            error.to_string(),
-        )
-    })
+    // v1 has no producer `effects[]` to compare an append against: the single
+    // registered evaluator either derives the append target and value from
+    // `kind + payload` under this Realm's suite, or the Event fails closed.
+    arkret_schema::project_registered_cell_writes(&event, suite)
+        .map(|_| ())
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                error.reason_code(),
+                error.to_string(),
+            )
+        })
 }

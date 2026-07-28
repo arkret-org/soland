@@ -19,6 +19,11 @@ pub(in crate::routing::events::event_log) fn events_submit_outcome(
             .filter_map(|event_id| EventId::new(event_id).ok())
             .collect(),
         rejected,
+        // Receipts are minted by the publication rail, not by this shape
+        // helper: `offline-publication.md` §2.1 requires a *stored* receipt to
+        // be returned byte-identically on a duplicate, so only the caller that
+        // owns the receipt store may populate this.
+        ingress_receipts: Vec::new(),
         quarantine: quarantine
             .into_iter()
             .filter_map(|event_id| EventId::new(event_id).ok())

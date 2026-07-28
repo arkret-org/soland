@@ -4,19 +4,17 @@ use std::collections::BTreeSet;
 
 use arkret_identifiers::{CellRef, RealmId, SealId};
 use arkret_state::lattice::CellState;
-use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
-use arkret_wire::{Move, MoveSigner, UnsignedMove};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde_json::{Value, json};
+use serde_json::Value;
 use soland_contracts::admin::seal::{
     BottomCandidateHead, BottomEntry, BottomRepairRequestBody, BottomRepairStrategy,
     SubmitControlMoveOutcome,
 };
 use soland_http::error::{AppError, ErrorCode};
 
-use super::{AuthArgs, admin_signer_for, fresh_hlc, pick_admin_seal_basis};
+use super::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
@@ -173,16 +171,21 @@ pub(crate) async fn admin_list_bottom_global(
 }
 
 /// `POST /_soland/admin/realms/{realm_id}/bottom/{cell_id}/repair` —
-/// submit a repair Move.
+/// pre-flight a `⊥` recovery.
 ///
-/// - `HeadInWinner` builds a real Move with one effect: `head_in` op that selects the winning head,
-///   plus a `recovery_capability` `SemanticRef` so the verifier knows this is an authorized repair.
-///   Note: `head_in` is a `LatticeOpType::Set`-shaped op in the SDK (the op semantics are spec-§5.3
-///   lattice "head_in" but the SDK currently exposes the union via `LatticeOpType::Set` with the op
-///   `value` carrying the winner's value and the `tag` carrying the winner's move id). The `head`
-///   request payload provides both.
-/// - `Manual` is **still placeholder** — free-form effects validation + admin-scope enforcement is
-///   non-trivial and lives behind a separate admin signer strand.
+/// `event-auth-state-resolution.md` §9.5 admits exactly one exit from a `bottom=reject` cell's
+/// `⊥`: a Control Move **for that cell** carrying `role=recovery_capability` +
+/// `role=state_witness` refs and accepted through a control-plane Seal. It is explicitly *not* a
+/// new event kind, and in v1 a Control Move's writes are derived from the registered reducer
+/// contract of its `kind` — there is no producer-supplied effects array. soland therefore cannot
+/// author the recovery Move on the operator's behalf from a generic cell id.
+///
+/// - `HeadInWinner` runs every §9.5 precondition the service can check (witness resolves in this
+///   Realm, cell is actually `⊥`, the nominated head is one of the current heads, witness is
+///   strictly pre-conflict) and then reports what still has to be submitted on `POST
+///   /_arkret/self/events`.
+/// - `Manual` is rejected outright: it carries no writes and there is no admin-supplied-effects
+///   recovery form in the protocol.
 #[salvo::oapi::endpoint(
     operation_id = "org.arkret.soland.admin.realms.bottom.repair",
     tags("soland_admin")
@@ -289,178 +292,53 @@ pub(crate) async fn admin_repair_bottom(
                 )
                 .with_status(StatusCode::PRECONDITION_FAILED));
             }
-            // Build the head_in Effect. The `tag` carries the winning
-            // Move id; `value` carries a placeholder (the canonical
-            // resolved value lives on the winner's effect — a fully
-            // wired repair strand would re-fetch and copy that here).
-            let effect = Effect {
-                cell: cell.clone(),
-                op: LatticeOp {
-                    op_type: LatticeOpType::Set,
-                    tag: Some(head.event_id.clone()),
-                    value: Some(json!({
-                        "kind": "head_in_winner",
-                        "winner_event_id": head.event_id,
-                    })),
-                    from: None,
-                    to: None,
-                    reason: Some("admin_repair_bottom:head_in_winner".to_owned()),
-                    issuer_seq: None,
-                },
-            };
-            let recovery_ref = arkret_wire::move_event::SemanticRef {
-                id: recovery_capability_ref.clone(),
-                role: "recovery_capability".to_owned(),
-                critical: true,
-            };
-            let seal_basis = pick_admin_seal_basis(state, &realm)?;
-            let state_witness_ref = arkret_wire::move_event::SemanticRef {
-                id: state_witness_seal.as_str().to_owned(),
-                role: "state_witness".to_owned(),
-                critical: true,
-            };
-            let mut refs = vec![recovery_ref, state_witness_ref];
-            if let Some(inclusion_ref) = state_witness_inclusion_proof_ref
-                .as_ref()
-                .map(String::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-            {
-                refs.push(arkret_wire::move_event::SemanticRef {
-                    id: inclusion_ref.to_owned(),
-                    role: "inclusion_proof".to_owned(),
-                    critical: true,
-                });
-            }
-            // Per-admin signing — Move's `verification_method` is the
-            // operator's `<did>#admin-key` when a per-admin key is
-            // provisioned, else falls back to the service signer.
-            let signer = admin_signer_for(state, &admin_session.actor)?;
-            let unsigned = UnsignedMove::new(
-                signer.signer_did().clone(),
-                realm.clone(),
-                seal_basis,
-                vec![effect],
-                fresh_hlc(state)?,
+            let _ = (&cell, state_witness_inclusion_proof_ref);
+            // Every §9.5 precondition above passed, but soland cannot mint
+            // the recovery Move itself. In v1 a Control Move is an Event
+            // whose writes are derived from the registered reducer contract
+            // of its `kind` (`event-and-patch.md` §2.4.2) — there is no
+            // producer-supplied effects array a service could synthesize, and
+            // §9.5 explicitly does not register a generic recovery kind
+            // (a conflict-recovery Move is not a new event kind). The winning value
+            // therefore has to come from a signed Event of the kind that owns
+            // this cell family, authored by the holder of
+            // `recovery_capability`, submitted on the ordinary Control Move
+            // rail. Report the validated inputs and refuse to forge one.
+            tracing::info!(
+                realm_id = %realm_id,
+                cell_id = %cell_id_str,
+                winner = %head.event_id,
+                %recovery_capability_ref,
+                witness = %state_witness_seal,
+                "admin_repair_bottom: recovery preconditions validated; awaiting an externally \
+                 signed conflict-recovery Control Move"
+            );
+            Err(app_error!(
+                FailedPrecondition,
+                "bottom recovery preconditions validated, but soland cannot author the recovery \
+                 Move: event-auth-state-resolution.md §9.5 requires a Control Move of the event \
+                 kind registered for this cell family, signed by the holder of \
+                 {recovery_capability_ref} and carrying recovery_capability + state_witness refs. \
+                 Submit it on POST /_arkret/self/events"
             )
-            .with_refs(refs);
-            let signed_move = Move::sign(&unsigned, &signer)
-                .map_err(|e| app_error!(InternalError, "Move::sign failed: {e}"))?;
-            let move_id = signed_move.id.as_str().to_owned();
-
-            state
-                .projections()
-                .put_pending_move(&signed_move)
-                .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
-
-            let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);
-            match outcome {
-                Ok(Some(o)) => json_ok(SubmitControlMoveOutcome {
-                    control_move_id: move_id,
-                    accepted: true,
-                    reason: None,
-                    seal_id: Some(o.seal_id.as_str().to_owned()),
-                    status: "accepted".to_owned(),
-                    ..Default::default()
-                }),
-                Ok(None) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {
-                    json_ok(SubmitControlMoveOutcome {
-                        control_move_id: move_id,
-                        accepted: true,
-                        reason: Some(
-                            "Move stashed pending; another node owns the round".to_owned(),
-                        ),
-                        seal_id: None,
-                        status: "pending".to_owned(),
-                        ..Default::default()
-                    })
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        %move_id,
-                        cell_id = %cell_id_str,
-                        "admin_repair_bottom: notary pass failed"
-                    );
-                    json_ok(SubmitControlMoveOutcome {
-                        control_move_id: move_id,
-                        accepted: true,
-                        reason: Some(format!("Move stashed pending; notary pass error: {e}")),
-                        seal_id: None,
-                        status: "pending".to_owned(),
-                        ..Default::default()
-                    })
-                }
-            }
+            .with_status(StatusCode::PRECONDITION_FAILED))
         }
-        BottomRepairStrategy::Manual { effects, .. } => {
-            // Admin-scope check: a manual repair Move MUST only touch the
-            // bottom cell the operator named in the path. Any effect whose
-            // `cell` field references a different cell id is rejected with
-            // `capability_denied` so a compromised admin session can't
-            // wrap a repair envelope around arbitrary lattice writes.
-            for effect in effects {
-                let touched = effect
-                    .get("cell")
-                    .and_then(serde_json::Value::as_str)
-                    .or_else(|| {
-                        effect
-                            .pointer("/cell/cell_ref")
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .or_else(|| {
-                        effect
-                            .pointer("/cell/id")
-                            .and_then(serde_json::Value::as_str)
-                    })
-                    .unwrap_or_default();
-                if touched.is_empty() {
-                    return Err(AppError::new(
-                        ErrorCode::InvalidParam,
-                        "manual repair effects must declare a `cell` (ak:cell:* id)".to_owned(),
-                    )
-                    .with_status(StatusCode::BAD_REQUEST));
-                }
-                if touched != cell_id_str {
-                    return Err(AppError::new(
-                        ErrorCode::CapabilityDenied,
-                        format!(
-                            "manual repair effects must only touch the targeted cell ({cell_id_str}); rejected effect on {touched}"
-                        ),
-                    )
-                    .with_status(StatusCode::FORBIDDEN));
-                }
-            }
-            if effects.is_empty() {
-                return Err(AppError::new(
-                    ErrorCode::InvalidParam,
-                    "manual repair strategy requires at least one effect".to_owned(),
-                )
-                .with_status(StatusCode::BAD_REQUEST));
-            }
-            // After scope-enforcement we still don't have a typed Move
-            // builder for arbitrary lattice effects (head_in_winner uses a
-            // dedicated builder); deliver a deterministic placeholder id so
-            // the audit trail records that the operator's intent was
-            // scoped-validated, even though the signing path lands later
-            // (MAL-15).
-            let canonical_request = serde_json::json!({
-                "realm_id": realm_id,
-                "cell_id": cell_id_str,
-                "strategy": &strategy,
-            });
-            let bytes = serde_json::to_vec(&canonical_request).unwrap_or_default();
-            let placeholder_id = arkret_canonical::sha256_digest(&bytes);
-            json_ok(SubmitControlMoveOutcome {
-                control_move_id: placeholder_id,
-                accepted: false,
-                reason: Some(
-                    "manual repair effects validated against admin scope; signing path lands in MAL-15".to_owned(),
-                ),
-                seal_id: None,
-                status: "scope_validated".to_owned(),
-                ..Default::default()
-            })
+        BottomRepairStrategy::Manual { .. } => {
+            // `event-auth-state-resolution.md` §9.5 gives exactly one way out
+            // of a `bottom=reject` cell's `⊥`: a signed conflict-recovery
+            // Control Move whose `refs[]` carry `role=recovery_capability` and
+            // `role=state_witness`, accepted through a control-plane Seal.
+            // There is no admin-supplied-writes form, so a `manual` request
+            // can only be recorded — never applied. Fail closed and name the
+            // supported strategy.
+            Err(AppError::new(
+                ErrorCode::InvalidParam,
+                "manual bottom repair carries no writes: `⊥` recovery requires a signed \
+                 conflict-recovery Control Move with recovery_capability + state_witness refs \
+                 (event-auth-state-resolution.md §9.5), submitted on POST /_arkret/self/events"
+                    .to_owned(),
+            )
+            .with_status(StatusCode::BAD_REQUEST))
         }
     }
 }

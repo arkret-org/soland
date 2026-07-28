@@ -4,9 +4,11 @@
 //! Surfaces for the current sync/event wire layout:
 //! - `GET  /_arkret/self/account/describe`
 //! - `GET  /_arkret/self/account/subscribe`       — `ak.self.account.stream.subscribe`
-//!   (account-aggregate NDJSON: timeline, presence, typing, to_device).
-//! - `POST /_arkret/self/ephemeral`               — `ak.self.ephemeral.command.send` (broadcast
-//!   ephemeral)
+//!   (account-aggregate NDJSON: timeline, account data, to_device).
+//! - `POST /_arkret/self/signal`                  — `ak.self.signal.command.send` (Signal Extension
+//!   send rail; encrypted-only)
+//! - `GET  /_arkret/self/signal/subscribe`        — `ak.self.signal.stream.subscribe` (Signal
+//!   Extension receive rail; verbatim envelope NDJSON)
 //! - `GET  /_arkret/self/events/subscribe`        — `ak.self.events.stream.subscribe`. Multi-Realm
 //!   / multi-actor stream; frame `kind` field replaces `type`.
 //! - `GET  /_arkret/self/events`                  — `ak.self.events.query.scan` (replaces
@@ -36,7 +38,6 @@ pub(crate) use futures_util::stream::StreamExt;
 pub(crate) use salvo::http::{StatusCode, header};
 pub(crate) use salvo::prelude::*;
 pub(crate) use serde_json::{Value, json};
-pub(crate) use soland_services::delivery::PresenceState as PresenceRecord;
 pub(crate) use soland_services::events::{
     ProjectedEvent as ProjectionEventRecord, RealmMetadata as RealmMetaRecord,
 };
@@ -46,13 +47,12 @@ pub(crate) use soland_services::sync::CursorState as SyncCursorRecord;
 pub(crate) use tokio::sync::broadcast::error::RecvError;
 
 use super::super::identity::device_messages::prune_device_messages_for_limits;
-use super::read_receipts::deliver_read_receipt_envelopes_for_subscriber;
 #[cfg(test)]
 pub(crate) use super::strand::strand_id_from_realm_id;
 use super::{
     TO_DEVICE_PAGE_LIMIT, authenticated_session, device_message_envelopes_after, is_realm_deleted,
     now, projected_event_page, projected_event_page_for_realms_through,
-    projected_event_replay_upper_bound, projection_event_json, prune_expired_typing, query_param,
+    projected_event_replay_upper_bound, projection_event_json, query_param,
     realm_event_visible_to_session, realm_has_member, realm_id_accessible, realm_visible_to,
     render_error, sha256_hex, snapshot_manifest_for_realm, validate_did,
 };
@@ -63,7 +63,6 @@ pub(crate) use crate::state::{
 pub(crate) use crate::wire::{EventsQueryPostRequestBody, SyncRequestBody};
 
 pub(crate) const TIMELINE_POSITION_SUBTICKS: i64 = 1024;
-pub(crate) const PRESENCE_ONLINE_TTL_SECONDS: i64 = 3;
 pub(crate) const HANDLE_CLAIMS_INLINE_MAX_BYTES: usize = 8 * 1024;
 /// Default reconnect guard advertised on subscribe terminal control frames.
 /// Shared by `account_subscribe` (subscribe.rs) and `events_subscribe`
@@ -77,7 +76,7 @@ pub(crate) const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
 mod snapshot;
 pub(crate) use snapshot::*;
 mod cursor;
-mod ephemeral;
+mod signal;
 // `spawn_sync_cursor_ttl_sweeper` is `pub` (boot worker entry re-exported at
 // `crate::routing::spawn_sync_cursor_ttl_sweeper` for `main`); the explicit
 // `pub use` overrides the `pub(crate)` glob above for this one name.
@@ -93,7 +92,8 @@ pub(super) fn protocol_router() -> Router {
         .push(Router::with_path("account/describe").get(subscribe::account_describe))
         .push(Router::with_path("account/subscribe").get(subscribe::account_subscribe))
         .push(Router::with_path("account/cursor/revoke").post(cursor::account_cursor_revoke))
-        .push(Router::with_path("ephemeral").post(ephemeral::submit_ephemeral))
+        .push(Router::with_path("signal").post(signal::submit_signal))
+        .push(Router::with_path("signal/subscribe").get(signal::signal_subscribe))
         .push(Router::with_path("snapshot/head").get(events_query::snapshot_head))
 }
 

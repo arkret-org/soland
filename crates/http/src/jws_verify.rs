@@ -58,8 +58,9 @@ pub struct ResolvedVerificationKey {
 // `routing::federation::move_seal.rs` and `routing::events::event_log.rs`
 // keep working unchanged.
 pub use arkret_identity::jws::{
-    effective_window_for_move, physical_millis_from_hlc, verify_replay_window,
-    verify_replay_window_at, verify_replay_window_for_move, verify_replay_window_for_move_at,
+    effective_window_for_projection, physical_millis_from_hlc, verify_replay_window,
+    verify_replay_window_at, verify_replay_window_for_projection,
+    verify_replay_window_for_projection_at,
 };
 
 /// Shape-only detached-JWS verifier for development mode.

@@ -141,7 +141,6 @@ fn bottom_repair_request_body_round_trips_through_serde() {
     let manual = BottomRepairRequestBody {
         strategy: BottomRepairStrategy::Manual {
             note: Some("schema-error rewrite".to_owned()),
-            effects: vec![json!({"cell": "x", "op": {"type": "set", "value": 1}})],
         },
     };
     let j = serde_json::to_value(&manual).unwrap();

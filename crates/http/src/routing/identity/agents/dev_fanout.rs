@@ -11,7 +11,7 @@ use arkret_models_collaboration::governance::accountability::{
     AccountabilityScopeKind,
 };
 use arkret_models_identity::claim_presentation::AgentSelectorClaim;
-use arkret_wire::{Event, LatticeOpType};
+use arkret_wire::Event;
 use chrono::Utc;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
@@ -451,19 +451,33 @@ pub(super) fn validate_durable_agent_lifecycle(
             "lifecycle_event payload does not match the requested transition",
         ));
     }
+    // v1 carries no producer `effects[]`: the Agent status transition is
+    // derived from `kind + payload` by the registered contract, and `from`
+    // comes from the frozen pre-state (`ProjectedOp::TransitionTo`), not from
+    // the producer. The payload fields that feed the projection were pinned
+    // above, so the remaining check is that the contract derives exactly one
+    // write, on this Agent's status cell, transitioning to `next_status`.
     let expected_cell = format!("ak:cell:ak.component.agent.status.v1:{agent_id}");
-    let effect = event.effects.first().filter(|_| event.effects.len() == 1);
-    if effect.is_none_or(|effect| {
-        effect.cell.as_str() != expected_cell
-            || effect.op.op_type != LatticeOpType::Transition
-            || effect.op.from.as_ref().and_then(Value::as_str) != Some(previous_status)
-            || effect.op.to.as_ref().and_then(Value::as_str) != Some(next_status)
-            || effect.op.reason.as_deref() != reason
-    }) {
+    let derived =
+        arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "lifecycle_event Agent status projection failed: {error}"
+                ))
+            })?;
+    let matches_transition = derived.len() == 1
+        && derived[0].cell.as_str() == expected_cell
+        && matches!(
+            &derived[0].op,
+            arkret_wire::cba::ProjectedOp::TransitionTo { to }
+                if to.as_str() == Some(next_status)
+        );
+    if !matches_transition {
         return Err(AppError::invalid_param(
-            "lifecycle_event must carry the exact Agent status transition effect",
+            "lifecycle_event must derive the exact Agent status transition",
         ));
     }
+    let _ = (previous_status, reason);
     Ok(())
 }
 

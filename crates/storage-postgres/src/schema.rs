@@ -244,21 +244,33 @@ diesel::table! {
 }
 
 diesel::table! {
-    call_signal_relay (id) {
+    publication_evidence (event_digest) {
+        event_digest -> Text,
+        realm_id -> Text,
+        authorization_lease -> Jsonb,
+        ingress_receipt -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    signal_relay (id) {
         id -> Uuid,
         realm_id -> Text,
         position -> Int8,
-        sender_actor -> Text,
-        sender_device -> Text,
-        call_id -> Text,
+        scope_ref -> Jsonb,
+        sender_actor_id -> Text,
+        sender_device_id -> Text,
+        signal_class -> Text,
+        envelope_digest -> Text,
         envelope -> Jsonb,
-        created_at -> Timestamptz,
+        sent_at -> Timestamptz,
         expires_at -> Timestamptz,
     }
 }
 
 diesel::table! {
-    call_signal_relay_position (realm_id) {
+    signal_relay_position (realm_id) {
         realm_id -> Text,
         next_position -> Int8,
         updated_at -> Timestamptz,
@@ -266,7 +278,7 @@ diesel::table! {
 }
 
 diesel::table! {
-    call_signal_relay_watermark (actor_id, device_id, realm_id) {
+    signal_relay_watermark (actor_id, device_id, realm_id) {
         actor_id -> Text,
         device_id -> Text,
         realm_id -> Text,
@@ -795,19 +807,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    presence (id, device_id) {
-        id -> Text,
-        device_id -> Text,
-        status -> Text,
-        status_message -> Nullable<Text>,
-        last_active_at -> Nullable<Text>,
-        envelope -> Jsonb,
-        expires_at -> Nullable<Timestamptz>,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     projection_circle_members (id) {
         id -> Uuid,
         circle_id -> Uuid,
@@ -854,7 +853,6 @@ diesel::table! {
         payload -> Jsonb,
         created_at -> Timestamptz,
         received_at -> Timestamptz,
-        effective_scope -> Nullable<Text>,
     }
 }
 
@@ -958,42 +956,6 @@ diesel::table! {
         platform -> Nullable<Text>,
         app_id -> Nullable<Text>,
         payload -> Jsonb,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    read_receipt_relay (id) {
-        id -> Uuid,
-        realm_id -> Text,
-        position -> Int8,
-        actor_id -> Text,
-        sender_device -> Nullable<Text>,
-        event_id -> Text,
-        read_scope -> Jsonb,
-        target_actor -> Nullable<Text>,
-        visibility -> Text,
-        receipt -> Jsonb,
-        envelope -> Jsonb,
-        created_at -> Timestamptz,
-        expires_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    read_receipt_relay_position (realm_id) {
-        realm_id -> Text,
-        next_position -> Int8,
-        updated_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
-    read_receipt_relay_watermark (actor_id, device_id, realm_id) {
-        actor_id -> Text,
-        device_id -> Text,
-        realm_id -> Text,
-        delivered_through -> Int8,
         updated_at -> Timestamptz,
     }
 }
@@ -1249,10 +1211,10 @@ diesel::table! {
 }
 
 diesel::table! {
-    state_moves (id) {
-        id -> Text,
+    state_control_events (event_digest) {
+        event_digest -> Text,
         realm_id -> Text,
-        move_json -> Jsonb,
+        event_json -> Jsonb,
         sealed_by -> Nullable<Text>,
         inserted_at -> Timestamptz,
         sealed_at -> Nullable<Timestamptz>,
@@ -1360,9 +1322,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     audit_logs,
     backup_series,
     blobs,
-    call_signal_relay,
-    call_signal_relay_position,
-    call_signal_relay_watermark,
     canonical_events,
     consent_cells,
     contacts,
@@ -1399,7 +1358,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     peer_keypackage_claims,
     pending_agent_drafts,
     policy_documents,
-    presence,
     projection_circle_members,
     projection_circles,
     projection_events,
@@ -1409,9 +1367,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     projection_strands,
     push_bridge_cache,
     push_devices,
-    read_receipt_relay,
-    read_receipt_relay_position,
-    read_receipt_relay_watermark,
     realm_invites,
     realm_moderation_policies,
     realm_organizations,
@@ -1425,12 +1380,16 @@ diesel::allow_tables_to_appear_in_same_query!(
     service_identity,
     service_identity_registrations,
     sessions,
+    publication_evidence,
+    signal_relay,
+    signal_relay_position,
+    signal_relay_watermark,
     space_members,
     space_state_events,
     spaces,
     state_cell_cache,
     state_cell_ops,
-    state_moves,
+    state_control_events,
     state_seals,
     sync_cursor_handles,
     sync_cursor_revocations,

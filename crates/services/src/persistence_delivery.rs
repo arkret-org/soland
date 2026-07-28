@@ -8,7 +8,7 @@ use crate::delivery::*;
 struct PersistenceNotificationWriter(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceDelivery(Arc<dyn PersistenceStore>);
 struct PersistenceDeviceMessages(Arc<dyn PersistenceStore>);
-struct PersistenceEphemeralDelivery(Arc<dyn PersistenceStore>);
+struct PersistenceSignalRelay(Arc<dyn PersistenceStore>);
 struct PersistenceBlobs(Arc<dyn PersistenceStore>);
 struct PersistencePushBridgeCache(Arc<dyn PersistenceStore>);
 
@@ -176,138 +176,40 @@ impl crate::delivery::DeviceDeliveryPort for PersistenceDeviceDelivery {
     }
 }
 
-fn application_presence(record: soland_storage::PresenceRecord) -> crate::delivery::PresenceState {
-    crate::delivery::PresenceState {
-        actor: record.actor,
-        device_id: record.device_id,
-        status: record.status,
-        status_message: record.status_message,
-        last_active_at: record.last_active_at,
-        expires_at: record.expires_at,
-        updated_at: record.updated_at,
-        envelope: record.envelope,
-    }
-}
-
-fn persistence_presence(state: crate::delivery::PresenceState) -> soland_storage::PresenceRecord {
-    soland_storage::PresenceRecord {
-        actor: state.actor,
-        device_id: state.device_id,
-        status: state.status,
-        status_message: state.status_message,
-        last_active_at: state.last_active_at,
-        expires_at: state.expires_at,
-        updated_at: state.updated_at,
-        envelope: state.envelope,
-    }
-}
-
-fn application_typing(record: soland_storage::TypingRecord) -> crate::delivery::TypingState {
-    crate::delivery::TypingState {
-        actor: record.actor,
-        realm_id: record.realm_id,
-        scope_id: record.scope_id,
-        position: record.position,
-        expires_at: record.expires_at,
-        envelope: record.envelope,
-    }
-}
-
-fn persistence_typing(state: crate::delivery::TypingState) -> soland_storage::TypingRecord {
-    soland_storage::TypingRecord {
-        actor: state.actor,
-        realm_id: state.realm_id,
-        scope_id: state.scope_id,
-        position: state.position,
-        expires_at: state.expires_at,
-        envelope: state.envelope,
-    }
-}
-
 #[async_trait::async_trait]
-impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
-    async fn store_presence(
+impl crate::delivery::SignalRelayPort for PersistenceSignalRelay {
+    async fn append_signal(
         &self,
-        presence: crate::delivery::PresenceState,
+        record: crate::delivery::SignalRelayState,
     ) -> crate::ServiceResult<()> {
-        self.0
-            .presence()
-            .put(persistence_presence(presence))
-            .await?;
+        self.0.signal_relay().append(record).await?;
         Ok(())
     }
 
-    async fn presence_for_actor(
-        &self,
-        actor_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::delivery::PresenceState>> {
-        Ok(self
-            .0
-            .presence()
-            .list_for_actor(actor_id)
-            .await?
-            .into_iter()
-            .map(application_presence)
-            .collect())
-    }
-
-    async fn delete_presence(&self, actor_id: &str) -> crate::ServiceResult<()> {
-        self.0.presence().delete(actor_id).await?;
-        Ok(())
-    }
-
-    async fn store_typing(&self, typing: crate::delivery::TypingState) -> crate::ServiceResult<()> {
-        self.0.typing().put(persistence_typing(typing)).await?;
-        Ok(())
-    }
-
-    async fn remove_typing(&self, actor_id: &str, realm_id: &str) -> crate::ServiceResult<()> {
-        self.0.typing().remove(actor_id, realm_id).await?;
-        Ok(())
-    }
-
-    async fn typing_for_realm(
+    async fn signals_for_realm(
         &self,
         realm_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::delivery::TypingState>> {
-        Ok(self
-            .0
-            .typing()
-            .list_for_realm(realm_id)
-            .await?
-            .into_iter()
-            .map(application_typing)
-            .collect())
+    ) -> crate::ServiceResult<Vec<crate::delivery::SignalRelayState>> {
+        Ok(self.0.signal_relay().list_for_realm(realm_id).await?)
     }
 
-    async fn prune_expired_typing(&self) -> crate::ServiceResult<usize> {
-        Ok(self.0.typing().prune_expired().await?)
-    }
-
-    async fn store_call_signal(
-        &self,
-        signal: crate::delivery::CallSignalState,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .call_signal_relay()
-            .append(persistence_call_signal(signal))
-            .await?;
-        Ok(())
-    }
-    async fn call_signals_for_realm(
+    async fn signal_digest_seen(
         &self,
         realm_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::delivery::CallSignalState>> {
+        envelope_digest: &str,
+    ) -> crate::ServiceResult<bool> {
         Ok(self
             .0
-            .call_signal_relay()
-            .list_for_realm(realm_id)
-            .await?
-            .into_iter()
-            .map(application_call_signal)
-            .collect())
+            .signal_relay()
+            .contains_digest(realm_id, envelope_digest)
+            .await?)
     }
-    async fn call_signal_watermark(
+
+    async fn prune_expired_signals(&self) -> crate::ServiceResult<usize> {
+        Ok(self.0.signal_relay().prune_expired().await?)
+    }
+
+    async fn signal_watermark(
         &self,
         actor_id: &str,
         device_id: &str,
@@ -315,146 +217,23 @@ impl crate::delivery::EphemeralDeliveryPort for PersistenceEphemeralDelivery {
     ) -> crate::ServiceResult<u64> {
         Ok(self
             .0
-            .call_signal_relay()
+            .signal_relay()
             .delivered_through(actor_id, device_id, realm_id)
             .await?)
     }
-    async fn advance_call_signal_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-        position: u64,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .call_signal_relay()
-            .advance(actor_id, device_id, realm_id, position)
-            .await?;
-        Ok(())
-    }
-    async fn store_read_receipt(
-        &self,
-        receipt: crate::delivery::ReadReceiptState,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .read_receipt_relay()
-            .append(persistence_read_receipt(receipt))
-            .await?;
-        Ok(())
-    }
-    async fn read_receipts_for_realm(
-        &self,
-        realm_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::delivery::ReadReceiptState>> {
-        Ok(self
-            .0
-            .read_receipt_relay()
-            .list_for_realm(realm_id)
-            .await?
-            .into_iter()
-            .map(application_read_receipt)
-            .collect())
-    }
-    async fn read_receipts_for_event(
-        &self,
-        event_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::delivery::ReadReceiptState>> {
-        Ok(self
-            .0
-            .read_receipt_relay()
-            .list_for_event(event_id)
-            .await?
-            .into_iter()
-            .map(application_read_receipt)
-            .collect())
-    }
-    async fn read_receipt_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-    ) -> crate::ServiceResult<u64> {
-        Ok(self
-            .0
-            .read_receipt_relay()
-            .delivered_through(actor_id, device_id, realm_id)
-            .await?)
-    }
-    async fn advance_read_receipt_watermark(
-        &self,
-        actor_id: &str,
-        device_id: &str,
-        realm_id: &str,
-        position: u64,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .read_receipt_relay()
-            .advance(actor_id, device_id, realm_id, position)
-            .await?;
-        Ok(())
-    }
-}
 
-fn application_call_signal(
-    record: soland_storage::CallSignalRelayRecord,
-) -> crate::delivery::CallSignalState {
-    crate::delivery::CallSignalState {
-        realm_id: record.realm_id,
-        sender_actor: record.sender_actor,
-        sender_device: record.sender_device,
-        call_id: record.call_id,
-        expires_at: record.expires_at,
-        envelope: record.envelope,
-        position: record.position,
-    }
-}
-fn persistence_call_signal(
-    record: crate::delivery::CallSignalState,
-) -> soland_storage::CallSignalRelayRecord {
-    soland_storage::CallSignalRelayRecord {
-        realm_id: record.realm_id,
-        sender_actor: record.sender_actor,
-        sender_device: record.sender_device,
-        call_id: record.call_id,
-        expires_at: record.expires_at,
-        envelope: record.envelope,
-        position: record.position,
-    }
-}
-fn application_read_receipt(
-    record: soland_storage::ReadReceiptRelayRecord,
-) -> crate::delivery::ReadReceiptState {
-    crate::delivery::ReadReceiptState {
-        realm_id: record.realm_id,
-        actor_id: record.actor_id,
-        sender_device: record.sender_device,
-        event_id: record.event_id,
-        read_scope: record.read_scope,
-        target_actor: record.target_actor,
-        visibility: record.visibility,
-        receipt: record.receipt,
-        envelope: record.envelope,
-        created_at: record.created_at,
-        expires_at: record.expires_at,
-        position: record.position,
-    }
-}
-fn persistence_read_receipt(
-    record: crate::delivery::ReadReceiptState,
-) -> soland_storage::ReadReceiptRelayRecord {
-    soland_storage::ReadReceiptRelayRecord {
-        realm_id: record.realm_id,
-        actor_id: record.actor_id,
-        sender_device: record.sender_device,
-        event_id: record.event_id,
-        read_scope: record.read_scope,
-        target_actor: record.target_actor,
-        visibility: record.visibility,
-        receipt: record.receipt,
-        envelope: record.envelope,
-        created_at: record.created_at,
-        expires_at: record.expires_at,
-        position: record.position,
+    async fn advance_signal_watermark(
+        &self,
+        actor_id: &str,
+        device_id: &str,
+        realm_id: &str,
+        position: u64,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .signal_relay()
+            .advance(actor_id, device_id, realm_id, position)
+            .await?;
+        Ok(())
     }
 }
 
@@ -816,7 +595,7 @@ pub fn build_persistence_delivery_service(
         notifications: Arc::new(PersistenceNotificationWriter(persistence.clone())),
         device_delivery: Arc::new(PersistenceDeviceDelivery(persistence.clone())),
         device_messages: Arc::new(PersistenceDeviceMessages(persistence.clone())),
-        ephemeral: Arc::new(PersistenceEphemeralDelivery(persistence.clone())),
+        signals: Arc::new(PersistenceSignalRelay(persistence.clone())),
         blobs: Arc::new(PersistenceBlobs(persistence.clone())),
         push_bridge_cache: Arc::new(PersistencePushBridgeCache(persistence)),
         object_storage,

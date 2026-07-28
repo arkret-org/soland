@@ -46,15 +46,15 @@ mod moderation;
 mod multisig;
 mod notifications;
 mod policy;
-mod presence;
 mod projection;
+mod publication_evidence;
 mod push;
-mod read_receipts;
 mod realm_invites;
 mod recovery;
 mod service_identity;
 mod sessions;
 mod sidecars;
+mod signal;
 mod sync_cursor;
 mod unit_of_work;
 mod webvh;
@@ -79,15 +79,15 @@ pub use moderation::*;
 pub use multisig::*;
 pub use notifications::*;
 pub use policy::*;
-pub use presence::*;
 pub use projection::*;
+pub use publication_evidence::*;
 pub use push::*;
-pub use read_receipts::*;
 pub use realm_invites::*;
 pub use recovery::*;
 pub use service_identity::*;
 pub use sessions::*;
 pub use sidecars::*;
+pub use signal::*;
 pub use sync_cursor::*;
 pub use unit_of_work::*;
 pub use webvh::*;
@@ -160,10 +160,7 @@ pub trait DeliveryPolicyStoreRegistry: Send + Sync {
     fn moderation(&self) -> &dyn ModerationStore;
     fn federation_operations(&self) -> &dyn FederationOperationsStore;
     fn push_devices(&self) -> &dyn PushDeviceStore;
-    fn presence(&self) -> &dyn PresenceStore;
-    fn typing(&self) -> &dyn TypingStore;
-    fn call_signal_relay(&self) -> &dyn CallSignalRelayStore;
-    fn read_receipt_relay(&self) -> &dyn ReadReceiptRelayStore;
+    fn signal_relay(&self) -> &dyn SignalRelayStore;
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore;
     fn policy_documents(&self) -> &dyn PolicyDocumentStore;
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore;
@@ -187,6 +184,9 @@ pub trait EventProjectionStoreRegistry: Send + Sync {
     fn space_container_projections(&self) -> &dyn SpaceContainerProjectionStore;
     fn strand_projections(&self) -> &dyn StrandProjectionStore;
     fn morph_projections(&self) -> &dyn MorphProjectionStore;
+    /// Publication evidence (lease + minted ingress receipt) per accepted
+    /// Event digest (`authz/offline-publication.md` §2.1).
+    fn publication_evidence(&self) -> &dyn PublicationEvidenceStore;
 }
 
 /// MLS, agent, and notification persistence registry.

@@ -1,8 +1,7 @@
 //! Notary cell admin endpoints — read + reconfigure.
 
 use arkret_identifiers::{Did, RealmId};
-use arkret_wire::move_event::{Effect, LatticeOp, LatticeOpType};
-use arkret_wire::{Move, MoveSigner, NotaryValue as SdkNotaryValue, UnsignedMove};
+use arkret_wire::{NotaryValue as SdkNotaryValue, PayloadSigner};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
@@ -17,17 +16,6 @@ use crate::state::AppState;
 use crate::{JsonResult, app_error, json_ok};
 
 // ── Helpers ──────────────────────────────────────────────────────────────
-
-/// Wire discriminator string for a [`SdkNotaryValue`] profile (the value the
-/// internal `type` tag serializes to).
-fn notary_kind_str(value: &SdkNotaryValue) -> &'static str {
-    match value {
-        SdkNotaryValue::SingleDid { .. } => "single_did",
-        SdkNotaryValue::Threshold { .. } => "threshold",
-        SdkNotaryValue::OpenSet { .. } => "open_set",
-        SdkNotaryValue::Mixed { .. } => "mixed",
-    }
-}
 
 fn did_from_admin_field(field: &str, value: &str) -> Result<Did, AppError> {
     Did::new(value.to_owned()).map_err(|e| {
@@ -332,26 +320,7 @@ pub(crate) async fn admin_reconfigure_notary(
         .with_status(StatusCode::FORBIDDEN));
     }
 
-    let cell_ref = notary_cell_for(&realm_id)?;
-
-    // Build the cas-register `set` Effect.
-    let effect = Effect {
-        cell: cell_ref.clone(),
-        op: LatticeOp {
-            op_type: LatticeOpType::Set,
-            tag: None,
-            value: Some(new_value),
-            from: None,
-            to: None,
-            reason: Some(format!(
-                "admin_reconfigure_notary:{}",
-                notary_kind_str(&proposed_notary)
-            )),
-            issuer_seq: None,
-        },
-    };
-
-    // Per-admin signing. The Move is signed by the operator DID
+    // Per-admin signing. The Control Move is signed by the operator DID
     // (`admin_signer_for`), giving operator attribution in the audit
     // chain. When the operator has no provisioned key, the helper
     // falls back to the service signer with a sticky-warn — keeps
@@ -359,22 +328,49 @@ pub(crate) async fn admin_reconfigure_notary(
     // per-admin keystores.
     let _ = &service_signer_did;
     let signer = admin_signer_for(state, &operator_did)?;
-    let unsigned = UnsignedMove::new(
-        signer.signer_did().clone(),
+    let signer_did = signer.signer_did().clone();
+    let verification_method = signer.verification_method_id().to_owned();
+
+    // v1 has no producer-supplied effects array: the cas-register write on
+    // `ak:cell:ak.component.notary.v1:null` is derived by the registered
+    // reducer contract of `ak.realm.notary`, whose `effect_projection` is
+    // `set value = payload.notary` (`event-kind-registry.json`). The Control
+    // Move is therefore an ordinary Event carrying `seal_basis`.
+    let frontier = crate::routing::events::event_log::endpoints::load_realm_actor_frontier(
+        state,
         realm.clone(),
-        pick_admin_seal_basis(state, &realm)?,
-        vec![effect],
+        signer_did.clone(),
+    )
+    .await?;
+    let mut event = arkret_wire::Event::new(
+        arkret_wire::events::EventKind::REALM_NOTARY,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm.clone(),
+        },
+        signer_did,
+        frontier.next_actor_seq,
         fresh_hlc(state)?,
-    );
-    let signed_move = Move::sign(&unsigned, &signer)
-        .map_err(|e| app_error!(InternalError, "Move::sign failed: {e}"))?;
-    let move_id = signed_move.id.as_str().to_owned();
+        serde_json::json!({ "notary": new_value }),
+    )
+    .map_err(|e| app_error!(InternalError, "Control Move construction failed: {e}"))?;
+    event.prev_refs = frontier.frontier_event_ids.clone();
+    event.seal_basis = Some(pick_admin_seal_basis(state, &realm)?);
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new(),
+    )
+    .map_err(|e| app_error!(InternalError, "Control Move signing failed: {e}"))?;
+    let move_id = event
+        .event_digest()
+        .map_err(|e| app_error!(InternalError, "event digest failed: {e}"))?;
 
     // Stash pending; if put_pending fails, that's a hard 500.
     state
         .projections()
-        .put_pending_move(&signed_move)
-        .map_err(|e| app_error!(InternalError, "move_store.put_pending failed: {e}"))?;
+        .put_pending_control_event(&event)
+        .map_err(|e| app_error!(InternalError, "control_event_store.put_pending failed: {e}"))?;
 
     // Best-effort: trigger one signing pass on this admin's Space — if
     // we're the round leader, this folds the Move into a fresh Seal

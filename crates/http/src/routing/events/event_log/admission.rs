@@ -21,6 +21,17 @@ pub enum SolandEventsSubmitRequestBody {
     /// Federation form — `service_binding_ref` is REQUIRED and all 6
     /// fields validated.
     Federation(EventsSubmitFederationRequestBody),
+    /// First durable publication of one Event
+    /// (`authz/offline-publication.md` §2.1). The `authorization_lease` is the
+    /// only thing that can make this service mint and store an
+    /// [`arkret_wire::IngressReceipt`] for the Event, which is in turn the only
+    /// evidence that lets the Event be federated later. It is transport
+    /// evidence: it is not an Event field and never enters the Event digest.
+    ///
+    /// Ordered before [`Self::Batch`] and [`Self::Single`] because those two
+    /// are strictly more permissive shapes — `Single(Value)` matches any JSON
+    /// object at all, so it MUST stay last.
+    Initial(arkret_wire::EventInitialSubmission),
     /// Batch form — multiple envelopes, optional `idempotency_key`.
     Batch(SolandEventsSubmitBatchRequestBody),
     /// Single Event Envelope (dominant shape).
@@ -293,7 +304,7 @@ pub fn realm_policy_bundle_check(
                 format!(
                     "e2ee_relaxed.relaxed_window_max_ms={window} exceeds absolute \
                      hard ceiling of {}ms",
-                    arkret_models_collaboration::events_payloads::ephemeral::EPHEMERAL_ABSOLUTE_HARD_CEILING_MS
+                    arkret_models_collaboration::governance::audit::ABSOLUTE_HARD_CEILING_MS
                 ),
             ));
         }

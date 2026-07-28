@@ -29,12 +29,12 @@
 //!   strand, we land a structurally correct placeholder response **and** an inline `FUTURE:` seal
 //!   so sodmin's UI can smoke-test wire shapes without blocking on the multi-signer / DID-resolver
 //!   work.
-//! - `threshold` / `open_set` / `mixed` notary profiles, `Manual` repair (free-form effects), and
-//!   full multi-signer compaction are placeholder-only — these need the admin signer strand +
-//!   per-Realm leader election that lands under `_todos.md` MAL-3 / MAL-11.
+//! - `threshold` / `open_set` / `mixed` notary profiles and full multi-signer compaction are
+//!   placeholder-only — these need the admin signer strand + per-Realm leader election that lands
+//!   under `_todos.md` MAL-3 / MAL-11.
 
-use arkret_identifiers::{Did, Hlc, RealmId, SealId};
-use arkret_signatures::Ed25519MoveSigner;
+use arkret_identifiers::{Did, Hlc, RealmId};
+use arkret_signatures::Ed25519PayloadSigner;
 use soland_http::error::AppError;
 
 use super::AuthArgs;
@@ -58,32 +58,32 @@ pub(super) use notary::{admin_get_notary, admin_reconfigure_notary};
 
 // ── Shared helpers ─────────────────────────────────────────────────────────
 
-/// Build the canonical [`MoveSigner`] for admin-issued Moves.
+/// Build the canonical [`PayloadSigner`] for admin-issued Moves.
 ///
 /// The admin endpoints (`admin_reconfigure_notary`,
 /// `admin_repair_bottom`) and the in-process `NotaryWorker` bind to the
 /// **same** Ed25519 key — held on `AppState::notary_signing_key`. That
 /// key is sourced from `SOLAND_NOTARY_SIGNING_KEY` (production) or
 /// minted ephemerally at boot (dev/test). Wrapping it in an
-/// `Ed25519MoveSigner` here gives the admin path a SDK-canonical signer
+/// `Ed25519PayloadSigner` here gives the admin path a SDK-canonical signer
 /// with no key duplication.
 ///
 /// The verification_method id is `<service_id>#notary-key`, matching
 /// the JWS the NotaryWorker emits — so a single DID-document publication
 /// covers both the worker and the admin endpoints.
-pub(super) fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner, AppError> {
+pub(super) fn service_admin_signer(state: &AppState) -> Result<Ed25519PayloadSigner, AppError> {
     let service_id = state.service_id().as_str();
     let did = Did::new(service_id.to_owned())
         .map_err(|e| app_error!(InternalError, "invalid service DID `{service_id}`: {e}"))?;
     let kid = format!("{service_id}#notary-key");
     // `state.notary_signing_key()` returns `Arc<SigningKey>` (lock-free
-    // `ArcSwap` snapshot). `Ed25519MoveSigner::new` takes a `SigningKey`
+    // `ArcSwap` snapshot). `Ed25519PayloadSigner::new` takes a `SigningKey`
     // by value, so dereference + clone.
     let signing_key = (*state.notary_signing_key()).clone();
-    Ok(Ed25519MoveSigner::new(signing_key, did, kid))
+    Ok(Ed25519PayloadSigner::new(signing_key, did, kid))
 }
 
-/// Build a per-admin [`Ed25519MoveSigner`] bound to the operator DID.
+/// Build a per-admin [`Ed25519PayloadSigner`] bound to the operator DID.
 /// Looks up the operator's signing seed through the governance application;
 /// falls back to [`service_admin_signer`]
 /// when no per-admin key is provisioned (logging a sticky-warn so the
@@ -92,7 +92,7 @@ pub(super) fn service_admin_signer(state: &AppState) -> Result<Ed25519MoveSigner
 pub(super) fn admin_signer_for(
     state: &AppState,
     admin_did_str: &str,
-) -> Result<Ed25519MoveSigner, AppError> {
+) -> Result<Ed25519PayloadSigner, AppError> {
     let admin_did = Did::new(admin_did_str.to_owned())
         .map_err(|e| app_error!(InvalidParam, "invalid admin DID `{admin_did_str}`: {e}"))?;
     match state.governance().admin_signing_key(&admin_did) {
@@ -101,7 +101,7 @@ pub(super) fn admin_signer_for(
             seed.copy_from_slice(&bytes);
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
             let kid = format!("{}#admin-key", admin_did_str);
-            Ok(Ed25519MoveSigner::new(signing_key, admin_did, kid))
+            Ok(Ed25519PayloadSigner::new(signing_key, admin_did, kid))
         }
         Ok(other) => {
             tracing::warn!(
@@ -122,6 +122,26 @@ pub(super) fn admin_signer_for(
     }
 }
 
+/// Build the `seal_basis` for an admin-issued Control Move.
+///
+/// `event-auth-state-resolution.md` §5 rule 2: `leaves[]` MUST reference only
+/// accepted Seals, and when the registered source for minting a basis is
+/// unavailable the producer MUST fail closed and MUST NOT forge a basis. A
+/// Realm with no accepted Seal therefore has no basis to offer, and there is no
+/// synthetic genesis leaf to stand in for one: the zero hash names no Seal any
+/// verifier can resolve, so a Move carrying it fails §5.1 step 2 at every
+/// receiver.
+///
+/// The §5 exemptions do not reach this path either. They are two closed units —
+/// the `ak.realm.create` bootstrap with its whitelisted follow-ups, and the
+/// B-model `ak.device.reanchor` unit — and both carry *no* basis field at all
+/// (`arkret_wire::EventSubmitContext::AnchorUnit`) rather than a fabricated
+/// one. Every admin Move routed through here is outside that whitelist, so §5's
+/// closing sentence applies unchanged: it requires a real `seal_basis`.
+///
+/// The Realm's first Seal is produced by the notary pass over the genesis batch,
+/// so this state is transient; the caller is expected to retry once the Realm
+/// has an accepted Seal.
 pub(super) fn pick_admin_seal_basis(
     state: &AppState,
     realm_id: &RealmId,
@@ -136,18 +156,10 @@ pub(super) fn pick_admin_seal_basis(
             )
         })?;
     if leaves.is_empty() {
-        let empty = std::collections::BTreeSet::new();
-        let control_event_set_root = arkret_state::state::control_event_set_root(&empty)
-            .map_err(|e| app_error!(InternalError, "empty control_event_set_root failed: {e}"))?;
-        return Ok(arkret_wire::SealBasis {
-            leaves: vec![
-                SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
-                    .expect("valid genesis seal id"),
-            ],
-            control_event_set_root,
-            state_root: arkret_identifiers::Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned())
-                .map_err(|e| app_error!(InternalError, "empty state_root invalid: {e}"))?,
-        });
+        return Err(app_error!(
+            FailedPrecondition,
+            "Realm {realm_id} has no accepted Seal yet, so no seal_basis can be built for an admin Control Move"
+        ));
     }
     let view = state
         .projections()

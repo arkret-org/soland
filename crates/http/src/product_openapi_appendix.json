@@ -25897,7 +25897,7 @@
           "expected_operation_id": {
             "type": "string"
           },
-          "expected_origin_service_id_header": {
+          "expected_source_service_id_header": {
             "type": "string"
           },
           "expected_request_id_header": {
@@ -25916,7 +25916,7 @@
           "contract",
           "expected_notify_path",
           "expected_operation_id",
-          "expected_origin_service_id_header",
+          "expected_source_service_id_header",
           "expected_destination_service_id_header",
           "expected_request_id_header",
           "expected_idempotency_key_header"

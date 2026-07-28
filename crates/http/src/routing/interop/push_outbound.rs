@@ -105,8 +105,8 @@ async fn outbound_push_bridge_describe(
         },
         delivery: OutboundPushDeliveryDescriptor {
             operation_id: "ak.edge.push.command.notify".to_owned(),
-            origin_service_id_header: "X-Arkret-Origin-Service-ID".to_owned(),
-            destination_service_id_header: "X-Arkret-Destination-Service-ID".to_owned(),
+            source_service_id_header: "Source-Service-ID".to_owned(),
+            destination_service_id_header: "Destination-Service-ID".to_owned(),
             request_id_header: "X-Arkret-Request-Id".to_owned(),
             idempotency_key_header: "Idempotency-Key".to_owned(),
             payload_mode: format!(
@@ -124,8 +124,8 @@ async fn outbound_push_bridge_describe(
                 "force_refresh": true
             }),
             notify_headers: json!({
-                "X-Arkret-Origin-Service-ID": state.service_id(),
-                "X-Arkret-Destination-Service-ID": "did:web:floria.example",
+                "Source-Service-ID": state.service_id(),
+                "Destination-Service-ID": "did:web:floria.example",
                 "X-Arkret-Request-Id": "req_01js0000000000000000000000",
                 "Idempotency-Key": "notify-01js0000000000000000000000"
             }),
@@ -593,8 +593,8 @@ fn default_outbound_push_resolved_contract() -> OutboundPushResolvedContract {
         contract: "ak.push.bridge.describe".to_owned(),
         expected_notify_path: "/_arkret/edge/push/notify".to_owned(),
         expected_operation_id: "ak.edge.push.command.notify".to_owned(),
-        expected_origin_service_id_header: "X-Arkret-Origin-Service-ID".to_owned(),
-        expected_destination_service_id_header: "X-Arkret-Destination-Service-ID".to_owned(),
+        expected_source_service_id_header: "Source-Service-ID".to_owned(),
+        expected_destination_service_id_header: "Destination-Service-ID".to_owned(),
         expected_request_id_header: "X-Arkret-Request-Id".to_owned(),
         expected_idempotency_key_header: "Idempotency-Key".to_owned(),
         auth_modes: vec!["bearer".to_owned()],
@@ -648,10 +648,10 @@ fn outbound_push_resolved_contract_from_remote(
             .and_then(Value::as_str)
             .unwrap_or(&fallback.expected_operation_id)
             .to_owned(),
-        expected_origin_service_id_header: remote_contract
-            .pointer("/delivery/origin_service_id_header")
+        expected_source_service_id_header: remote_contract
+            .pointer("/delivery/source_service_id_header")
             .and_then(Value::as_str)
-            .unwrap_or(&fallback.expected_origin_service_id_header)
+            .unwrap_or(&fallback.expected_source_service_id_header)
             .to_owned(),
         expected_destination_service_id_header: remote_contract
             .pointer("/delivery/destination_service_id_header")

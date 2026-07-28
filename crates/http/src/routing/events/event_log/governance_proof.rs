@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{CellRef, Hash, MoveId, SealId};
+use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_crypto::{
     MaterializedMlsGovernanceProofBundle, MlsGovernanceBindingPayload,
     MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue, MlsGovernanceProofBundle,
@@ -12,9 +12,9 @@ use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
 use arkret_state::state::{compute_state_root, control_event_set_root};
 #[cfg(test)]
-use arkret_wire::move_event::LatticeOp;
-use arkret_wire::move_event::LatticeOpType;
-use arkret_wire::{CellId, EffectiveScope as GovernanceScope, Event, NotarySig};
+use arkret_wire::cba::LatticeOp;
+use arkret_wire::cba::LatticeOpType;
+use arkret_wire::{CellId, Event, NotarySig, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
@@ -102,7 +102,7 @@ struct MaterializedRealmControl {
     events: Vec<Event>,
     joined: BTreeMap<CellRef, CellState>,
     seal_view: crate::notary::MaterializedEventSealView,
-    covered_event_digests: Vec<MoveId>,
+    covered_event_digests: Vec<Hash>,
 }
 
 async fn backfill_authoritative_event_seals(
@@ -110,7 +110,7 @@ async fn backfill_authoritative_event_seals(
     realm_id: &RealmId,
     joined: &BTreeMap<CellRef, CellState>,
     event_ops: &[(CellRef, IssuedOp)],
-    available_control_digests: &BTreeSet<MoveId>,
+    available_control_digests: &BTreeSet<Hash>,
     control_events: &[Event],
 ) -> Result<bool, AppError> {
     if !state.config().development_mode {
@@ -232,7 +232,7 @@ async fn apply_authoritative_event_seal_path(
     realm_id: &RealmId,
     authority_dids: &[String],
     event_ops: &[(CellRef, IssuedOp)],
-    available_control_digests: &BTreeSet<MoveId>,
+    available_control_digests: &BTreeSet<Hash>,
     control_events: &[Event],
     seals: &[arkret_wire::Seal],
 ) -> Result<(), AppError> {
@@ -444,7 +444,7 @@ async fn apply_authoritative_event_seal_path(
 
 async fn verify_authoritative_event_seal_signature(
     state: &AppState,
-    signature: &arkret_wire::MoveSignature,
+    signature: &arkret_wire::PayloadSignature,
     signer: &str,
     canonical_bytes: &[u8],
 ) -> Result<(), AppError> {
@@ -710,29 +710,32 @@ async fn materialize_realm_control_with_transported_seals(
                 continue;
             }
         }
-        let mut event =
-            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
-                    format!(
-                        "stored Event {} is not a canonical envelope: {error}",
-                        record.event_id
-                    ),
-                )
-            })?;
+        let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!(
+                    "stored Event {} is not a canonical envelope: {error}",
+                    record.event_id
+                ),
+            )
+        })?;
         let requires_invite_membership_validation =
             event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT;
-        if (event.effects.is_empty()
+        // v1 has no producer `effects[]`: whether a stored Event contributes
+        // governance writes is decided by its registered contract, not by an
+        // array on the envelope.
+        let projects_writes = arkret_schema::project_registered_cell_writes(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .map(|writes| !writes.is_empty())
+        .unwrap_or(false);
+        if (!projects_writes
             && !identity_anchor_event_ids.contains(record.event_id.as_str())
             && !requires_invite_membership_validation)
             || event.seal_ref.is_some()
         {
             continue;
-        }
-        if event.effective_scope.is_none() {
-            event.effective_scope = Some(GovernanceScope::Realm {
-                realm_id: realm_id.clone(),
-            });
         }
         let digest = event.event_digest().map_err(|error| {
             AppError::new(
@@ -746,7 +749,7 @@ async fn materialize_realm_control_with_transported_seals(
                 format!("stored Event {} canonical digest mismatch", event.event_id),
             ));
         }
-        let move_id = MoveId::new(digest).map_err(|error| {
+        let move_id = Hash::new(digest).map_err(|error| {
             AppError::new(
                 ErrorCode::StateMismatch,
                 format!(
@@ -804,8 +807,14 @@ async fn materialize_realm_control_with_transported_seals(
         } else {
             None
         };
-        for (cell, issued) in canonical_event_ops(&event, &move_id, invite_accept_from.as_deref())?
-        {
+        for (cell, issued) in canonical_event_ops(
+            state,
+            realm_id,
+            &event,
+            &move_id,
+            &ops_by_cell,
+            invite_accept_from.as_deref(),
+        )? {
             ops_by_cell
                 .entry(cell.clone())
                 .or_default()
@@ -942,26 +951,28 @@ fn materialize_managed_agent_realm_control(
 ) -> Result<MaterializedRealmControl, AppError> {
     let mut events = Vec::with_capacity(records.len());
     for record in records {
-        let mut event =
-            serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
-                AppError::new(
-                    ErrorCode::StateMismatch,
-                    format!(
-                        "stored managed Agent PCR Event {} is not canonical: {error}",
-                        record.event_id
-                    ),
-                )
-            })?;
-        // `effective_scope` is reducer-managed accepted output and therefore
-        // absent from the producer-signed submit envelope. Managed PCR Events
-        // are closed over their own Realm, so materialize the same authoritative
-        // Realm scope that the ordinary Realm proof path stamps above. The field
-        // is excluded from producer canonical bytes and does not alter the
-        // accepted digest or controller signature.
-        if event.effective_scope.is_none() {
-            event.effective_scope = Some(GovernanceScope::Realm {
-                realm_id: realm_id.clone(),
-            });
+        let event = serde_json::from_value::<Event>(record.envelope.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!(
+                    "stored managed Agent PCR Event {} is not canonical: {error}",
+                    record.event_id
+                ),
+            )
+        })?;
+        // `scope_ref` is producer-signed and part of the canonical digest
+        // transcript (`conformance/encoding.md` §6), so nothing may stamp it
+        // here. Managed PCR Events are closed over their own Realm; a stored
+        // Event whose signed scope names another Realm is not proof material
+        // for this one.
+        if event.scope_ref.realm_id() != realm_id {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                format!(
+                    "stored managed Agent PCR Event {} is scoped to another Realm",
+                    record.event_id
+                ),
+            ));
         }
         let digest = event.event_digest().map_err(|error| {
             AppError::new(
@@ -983,13 +994,15 @@ fn materialize_managed_agent_realm_control(
         }
         events.push(event);
     }
-    let material =
-        arkret_bootstrap::materialize_managed_agent_pcr_control(&events).map_err(|error| {
-            AppError::new(
-                ErrorCode::StateMismatch,
-                format!("managed Agent PCR control material is invalid: {error}"),
-            )
-        })?;
+    let material = arkret_bootstrap::materialize_managed_agent_pcr_control(&events, &|event| {
+        state.projections().project_cell_writes(event)
+    })
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::StateMismatch,
+            format!("managed Agent PCR control material is invalid: {error}"),
+        )
+    })?;
     if &material.realm_id != realm_id {
         return Err(AppError::new(
             ErrorCode::StateMismatch,
@@ -1076,13 +1089,23 @@ async fn materialize_governance_proof(
 
     let mut frontier_events = events
         .into_iter()
-        .filter(|event| event.effective_scope.as_ref() == Some(&request.effective_scope))
+        .filter(|event| event.scope_ref == request.effective_scope)
         .filter(|event| {
-            event.effects.iter().any(|effect| {
-                CellId::from_ref(&effect.cell)
-                    .map(|cell| is_mls_membership_frontier_component(cell.component()))
-                    .unwrap_or(false)
+            // The touched cells come from the registered contract, not from a
+            // producer array; only the cell targets matter here, so the
+            // unresolved projection is enough.
+            arkret_schema::project_registered_cell_writes(
+                event,
+                arkret_canonical::DigestSuite::Sha256,
+            )
+            .map(|writes| {
+                writes.iter().any(|write| {
+                    CellId::from_ref(&write.cell)
+                        .map(|cell| is_mls_membership_frontier_component(cell.component()))
+                        .unwrap_or(false)
+                })
             })
+            .unwrap_or(false)
         })
         .collect::<Vec<_>>();
     frontier_events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
@@ -1096,40 +1119,6 @@ async fn materialize_governance_proof(
         .iter()
         .map(|event| event.event_id.clone())
         .collect::<Vec<_>>();
-    let governance_binding = match &request.effective_scope {
-        GovernanceScope::Realm { .. } => MlsGovernanceBindingPayload::realm(
-            request.realm_id.clone(),
-            request.mls_group_id.clone(),
-            request.previous_epoch,
-            request.next_epoch,
-            membership_frontier,
-            policy_root,
-            capability_root,
-            discussion_metadata_digest,
-            request.binding_profile.clone(),
-            request.reducer_profile.clone(),
-        ),
-        GovernanceScope::Circle { circle_id, .. } => MlsGovernanceBindingPayload::circle(
-            request.realm_id.clone(),
-            circle_id.clone(),
-            request.mls_group_id.clone(),
-            request.previous_epoch,
-            request.next_epoch,
-            membership_frontier,
-            policy_root,
-            capability_root,
-            discussion_metadata_digest,
-            request.binding_profile.clone(),
-            request.reducer_profile.clone(),
-        ),
-        _ => {
-            return Err(AppError::new(
-                ErrorCode::ProfileUnsupported,
-                "unsupported MLS governance effective scope",
-            ));
-        }
-    }
-    .map_err(proof_state_error)?;
 
     let anchor_position = seal_view
         .seal_path
@@ -1156,6 +1145,50 @@ async fn materialize_governance_proof(
         }
         prior.insert(seal.id.clone());
     }
+    // `encryption-and-audit.md` §2.5.1/§2.5.2 — the binding attests which
+    // governance Seals the next epoch covers, and §2.5.2 makes coverage a
+    // universal quantification over the scope's governance Seal set. The
+    // bundle proves exactly the ancestry from the requested trusted anchor to
+    // the accepted Seal, so that path — not a producer-chosen subset — is the
+    // set this binding may claim. `prior` already holds it, deduplicated.
+    let covered_seal_refs = prior.into_iter().collect::<Vec<SealId>>();
+
+    let governance_binding = match &request.effective_scope {
+        GovernanceScope::Realm { .. } => MlsGovernanceBindingPayload::realm(
+            request.realm_id.clone(),
+            request.mls_group_id.clone(),
+            request.previous_epoch,
+            request.next_epoch,
+            membership_frontier,
+            covered_seal_refs,
+            policy_root,
+            capability_root,
+            discussion_metadata_digest,
+            request.binding_profile.clone(),
+            request.reducer_profile.clone(),
+        ),
+        GovernanceScope::Circle { circle_id, .. } => MlsGovernanceBindingPayload::circle(
+            request.realm_id.clone(),
+            circle_id.clone(),
+            request.mls_group_id.clone(),
+            request.previous_epoch,
+            request.next_epoch,
+            membership_frontier,
+            covered_seal_refs,
+            policy_root,
+            capability_root,
+            discussion_metadata_digest,
+            request.binding_profile.clone(),
+            request.reducer_profile.clone(),
+        ),
+        _ => {
+            return Err(AppError::new(
+                ErrorCode::ProfileUnsupported,
+                "unsupported MLS governance effective scope",
+            ));
+        }
+    }
+    .map_err(proof_state_error)?;
 
     Ok(MaterializedMlsGovernanceProofBundle {
         bundle_version: arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
@@ -1364,7 +1397,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             authorize.canonical_digest.as_str(),
         ]
         .into_iter()
-        .map(|digest| MoveId::new(digest.to_owned()))
+        .map(|digest| Hash::new(digest.to_owned()))
         .collect::<Result<Vec<_>, _>>()
         .map_err(|error| {
             AppError::new(
@@ -1392,31 +1425,116 @@ pub(crate) async fn first_generation_event_seal_requirement(
 /// `(cell, actor_id, issuer_seq)`, so a store that received issuer-less ops
 /// would have to invent one.
 pub(crate) fn canonical_event_ops(
+    state: &AppState,
+    realm_id: &RealmId,
     event: &Event,
-    move_id: &MoveId,
+    move_id: &Hash,
+    accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
     invite_accept_from: Option<&str>,
 ) -> Result<Vec<(CellRef, IssuedOp)>, AppError> {
-    Ok(
-        canonical_event_sealed_ops(event, move_id, invite_accept_from)?
-            .into_iter()
-            .map(|(cell, op)| {
-                (
-                    cell,
-                    IssuedOp {
-                        issuer: event.actor_id.clone(),
-                        op,
-                    },
+    Ok(canonical_event_sealed_ops(
+        state,
+        realm_id,
+        event,
+        move_id,
+        accumulated,
+        invite_accept_from,
+    )?
+    .into_iter()
+    .map(|(cell, op)| {
+        (
+            cell,
+            IssuedOp {
+                issuer: event.actor_id.clone(),
+                op,
+            },
+        )
+    })
+    .collect())
+}
+
+/// Join the ops accumulated so far into the frozen pre-state the registered
+/// projections read.
+///
+/// `event-and-patch.md` §2.4.2 keeps `transition_to`, `apply_patch`,
+/// `remove_observed` and `reset` unresolved until a receiver supplies the
+/// pre-state, precisely so a producer cannot assert a prior state it never
+/// observed. Replaying the Realm's accepted control history in order is what
+/// makes this the same value every receiver computes. A cell with no
+/// accumulated op is simply absent: the resolver reads an absent cell as the
+/// null pre-state, and a ⊥ cell against that cell family's declared
+/// `bottom_mode`.
+fn frozen_governance_pre_state(
+    state: &AppState,
+    realm_id: &RealmId,
+    accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
+) -> Result<BTreeMap<CellRef, CellState>, AppError> {
+    let mut pre_state = BTreeMap::new();
+    for (cell, ops) in accumulated {
+        let binding = state
+            .projections()
+            .resolve_cell(realm_id, cell)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::ProfileUnsupported,
+                    format!("no lattice registered for governance cell {cell}: {error}"),
                 )
-            })
-            .collect(),
-    )
+            })?;
+        pre_state.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), cell, ops),
+        );
+    }
+    Ok(pre_state)
 }
 
 fn canonical_event_sealed_ops(
+    state: &AppState,
+    realm_id: &RealmId,
     event: &Event,
-    move_id: &MoveId,
+    move_id: &Hash,
+    accumulated: &BTreeMap<CellRef, Vec<IssuedOp>>,
     invite_accept_from: Option<&str>,
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
+    // v1 carries no producer `effects[]`: every write is derived from
+    // `kind + payload` by the registered contract.
+    let projected = arkret_schema::project_registered_cell_writes(
+        event,
+        state.projections().realm_digest_suite(realm_id.as_str()),
+    )
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::StateMismatch,
+            format!(
+                "stored Event {} does not project its registered cell writes: {error}",
+                event.event_id
+            ),
+        )
+    })?;
+
+    let pre_state = frozen_governance_pre_state(state, realm_id, accumulated)?;
+    let mut resolved: Vec<(CellRef, SealedOp)> = Vec::with_capacity(projected.len());
+    for write in &projected {
+        // The pre-state-dependent grammars are resolved by the one shared
+        // implementation; a second copy here would be a second answer to a
+        // rule that has to agree byte-for-byte with `verify_control_move`.
+        let effects = state
+            .projections()
+            .resolve_projected_write(write, realm_id, &pre_state)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::StateMismatch,
+                    format!(
+                        "stored Event {} cannot resolve its registered write on {}: {error:?}",
+                        event.event_id, write.cell
+                    ),
+                )
+            })?;
+        for effect in effects {
+            resolved.push((effect.cell, SealedOp::new(move_id.clone(), effect.op)));
+        }
+    }
+
     if event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT {
         let from = invite_accept_from.ok_or_else(|| {
             AppError::new(
@@ -1429,43 +1547,49 @@ fn canonical_event_sealed_ops(
             event.actor_id
         ))
         .map_err(proof_state_error)?;
-        let member_effects = event
-            .effects
+        let member_ops = resolved
             .iter()
-            .filter(|effect| effect.cell == member_cell)
+            .filter(|(cell, _)| cell == &member_cell)
             .collect::<Vec<_>>();
         let expected_from = serde_json::json!(from);
         let expected_to = serde_json::json!("join");
-        if member_effects.len() != 1
-            || member_effects[0].op.op_type != LatticeOpType::Transition
-            || member_effects[0].op.from.as_ref() != Some(&expected_from)
-            || member_effects[0].op.to.as_ref() != Some(&expected_to)
+        if member_ops.len() != 1
+            || member_ops[0].1.op.op_type != LatticeOpType::Transition
+            || member_ops[0].1.op.from.as_ref() != Some(&expected_from)
+            || member_ops[0].1.op.to.as_ref() != Some(&expected_to)
         {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
-                "invite acceptance member effect does not match prior membership state",
+                "invite acceptance member transition does not match prior membership state",
             ));
         }
     } else if event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE {
-        let expected = arkret_bootstrap::realm_create_effects(event).map_err(proof_state_error)?;
-        if event.effects != expected {
+        // Only the genesis targets are asserted; the lattice ops come from the
+        // registered `effect_projection`.
+        let expected: std::collections::BTreeSet<String> = [
+            arkret_wire::REALM_METADATA_CELL.to_owned(),
+            format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                event.actor_id.as_str()
+            ),
+            arkret_wire::REALM_CREATE_CELL.to_owned(),
+            arkret_wire::REALM_NOTARY_CELL.to_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let actual: std::collections::BTreeSet<String> = resolved
+            .iter()
+            .map(|(cell, _)| cell.as_str().to_owned())
+            .collect();
+        if resolved.len() != expected.len() || actual != expected {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
-                "Realm create proof material does not carry the canonical four-effect set",
+                "Realm create proof material does not derive the canonical four genesis cells",
             ));
         }
     }
 
-    Ok(event
-        .effects
-        .iter()
-        .map(|effect| {
-            (
-                effect.cell.clone(),
-                SealedOp::new(move_id.clone(), effect.op.clone()),
-            )
-        })
-        .collect())
+    Ok(resolved)
 }
 
 fn proof_state_error(error: impl std::fmt::Display) -> AppError {
@@ -1498,12 +1622,21 @@ mod tests {
         );
     }
 
+    fn test_state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        )
+    }
+
     fn managed_agent_pcr_create() -> Event {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
-        let mut event = Event::new(
+        Event::new(
             arkret_wire::events::EventKind::REALM_CREATE,
-            realm_id.clone(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
             actor_id.clone(),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1").unwrap(),
@@ -1516,56 +1649,79 @@ mod tests {
                 }
             }),
         )
-        .unwrap();
-        event.effects = arkret_bootstrap::realm_create_effects(&event).unwrap();
-        event
+        .unwrap()
     }
 
+    /// The v1 wire carries no producer `effects[]`, so the four canonical
+    /// genesis cells of a managed Agent PCR create are whatever the registered
+    /// contract derives — and the create-log target is the wire singleton
+    /// (`realm-and-space.md` §2.8.3), never a per-Realm subject. A per-Realm
+    /// variant would both fork the `state_root` leaf set and turn a per-Realm
+    /// genesis singleton into a deployment-wide shared key.
     #[test]
-    fn governance_materializer_accepts_explicit_managed_agent_create_effects() {
+    fn governance_materializer_derives_the_four_canonical_genesis_cells() {
+        let state = test_state();
         let event = managed_agent_pcr_create();
-        let move_id = MoveId::new(format!("sha256:{}", "11".repeat(32))).unwrap();
-        let ops = canonical_event_ops(&event, &move_id, None).unwrap();
+        let realm_id = event.realm_id.clone();
+        let move_id = Hash::new(format!("sha256:{}", "11".repeat(32))).unwrap();
+        let ops = canonical_event_ops(&state, &realm_id, &event, &move_id, &BTreeMap::new(), None)
+            .unwrap();
+
+        let derived = ops
+            .iter()
+            .map(|(cell, _)| cell.as_str().to_owned())
+            .collect::<BTreeSet<_>>();
+        let expected = [
+            arkret_wire::REALM_METADATA_CELL.to_owned(),
+            format!(
+                "ak:cell:ak.component.member.state.v1:{}",
+                event.actor_id.as_str()
+            ),
+            arkret_wire::REALM_CREATE_CELL.to_owned(),
+            arkret_wire::REALM_NOTARY_CELL.to_owned(),
+        ]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
         assert_eq!(ops.len(), 4);
-        assert!(
-            ops.iter()
-                .any(|(cell, _)| { cell.as_str() == arkret_bootstrap::REALM_CREATE_CELL })
-        );
-        assert!(ops.iter().all(|(cell, _)| {
-            cell.as_str() != format!("ak:cell:ak.component.realm.create.v1:{}", event.realm_id)
-        }));
+        assert_eq!(derived, expected);
+        assert!(!derived.contains(&format!(
+            "ak:cell:ak.component.realm.create.v1:{}",
+            event.realm_id
+        )));
     }
 
+    /// Fail-closed replaces the old "reject the producer's legacy effect"
+    /// premise: a producer can no longer name a cell at all, so the only way
+    /// the materializer can go wrong is by inventing writes for an Event whose
+    /// registered contract will not evaluate. `event-and-patch.md` §2.4.2 makes
+    /// that an outright rejection, not a partial op set.
     #[test]
-    fn governance_materializer_rejects_legacy_managed_agent_create_effect() {
+    fn governance_materializer_rejects_a_realm_create_it_cannot_project() {
+        let state = test_state();
         let mut event = managed_agent_pcr_create();
-        event.effects = vec![arkret_wire::Effect {
-            cell: CellRef::new(format!(
-                "ak:cell:ak.component.realm.create.v1:{}",
-                event.realm_id
-            ))
-            .unwrap(),
-            op: LatticeOp {
-                op_type: LatticeOpType::Set,
-                tag: None,
-                value: Some(event.payload["object"].clone()),
-                from: None,
-                to: None,
-                reason: None,
-                issuer_seq: None,
-            },
-        }];
-        let move_id = MoveId::new(format!("sha256:{}", "22".repeat(32))).unwrap();
-        assert!(canonical_event_ops(&event, &move_id, None).is_err());
+        let realm_id = event.realm_id.clone();
+        event.payload.remove("object");
+        let move_id = Hash::new(format!("sha256:{}", "22".repeat(32))).unwrap();
+        assert!(
+            canonical_event_ops(&state, &realm_id, &event, &move_id, &BTreeMap::new(), None)
+                .is_err()
+        );
     }
 
+    /// `invite_accept`'s membership transition reads its `from` off the frozen
+    /// pre-state, never off the producer: the registered projection is a bare
+    /// `transition_to` that carries no `from` at all
+    /// (`event-and-patch.md` §2.4.2).
     #[test]
-    fn governance_materializer_uses_signed_invite_accept_membership() {
+    fn governance_materializer_uses_the_frozen_invite_accept_membership() {
+        let state = test_state();
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000fade").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
-        let mut event = Event::new(
+        let event = Event::new(
             arkret_wire::events::EventKind::INVITE_ACCEPT,
-            realm_id,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: realm_id.clone(),
+            },
             actor_id.clone(),
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce2").unwrap(),
@@ -1574,32 +1730,73 @@ mod tests {
             }),
         )
         .unwrap();
-        let move_id = MoveId::new(format!("sha256:{}", "33".repeat(32))).unwrap();
+        let member_cell =
+            CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}")).unwrap();
 
+        let projected = arkret_schema::project_registered_cell_writes(
+            &event,
+            arkret_canonical::DigestSuite::Sha256,
+        )
+        .unwrap();
+        // Two registered writes: the invite lifecycle transition (an explicit
+        // pending -> accepted, resolvable without any pre-state) and the
+        // membership transition, whose `from` is deliberately absent.
+        assert_eq!(projected.len(), 2);
+        let member_write = projected
+            .iter()
+            .find(|write| write.cell == member_cell)
+            .expect("invite accept writes the member state cell");
+        assert!(matches!(
+            &member_write.op,
+            arkret_wire::cba::ProjectedOp::TransitionTo { to }
+                if to == &serde_json::json!("join")
+        ));
+
+        let move_id = Hash::new(format!("sha256:{}", "33".repeat(32))).unwrap();
         for prior_state in ["leave", "invite"] {
-            event.effects = vec![arkret_wire::Effect {
-                cell: CellRef::new(format!("ak:cell:ak.component.member.state.v1:{actor_id}"))
-                    .unwrap(),
-                op: LatticeOp {
-                    op_type: LatticeOpType::Transition,
-                    tag: None,
-                    value: None,
-                    from: Some(serde_json::json!(prior_state)),
-                    to: Some(serde_json::json!("join")),
-                    reason: Some("invite_accept".to_owned()),
-                    issuer_seq: None,
-                },
-            }];
-            let ops = canonical_event_ops(&event, &move_id, Some(prior_state)).unwrap();
+            // The member-state fsm starts at its registered `initial_state`
+            // (`leave`), so the frozen pre-state for that case is the cell with
+            // no accumulated op at all; `invite` needs one accepted transition
+            // into it first.
+            let prior_ops = if prior_state == "leave" {
+                Vec::new()
+            } else {
+                vec![IssuedOp {
+                    issuer: actor_id.clone(),
+                    op: SealedOp::new(
+                        move_id.clone(),
+                        LatticeOp {
+                            op_type: LatticeOpType::Transition,
+                            tag: None,
+                            value: None,
+                            from: Some(serde_json::json!("leave")),
+                            to: Some(serde_json::json!(prior_state)),
+                            reason: None,
+                            issuer_seq: None,
+                        },
+                    ),
+                }]
+            };
+            let mut accumulated = BTreeMap::new();
+            accumulated.insert(member_cell.clone(), prior_ops);
+            let ops = canonical_event_ops(
+                &state,
+                &realm_id,
+                &event,
+                &move_id,
+                &accumulated,
+                Some(prior_state),
+            )
+            .unwrap();
 
-            assert_eq!(ops.len(), 1);
-            assert_eq!(
-                ops[0].0.as_str(),
-                format!("ak:cell:ak.component.member.state.v1:{actor_id}")
-            );
-            assert_eq!(ops[0].1.op.op.op_type, LatticeOpType::Transition);
-            assert_eq!(ops[0].1.op.op.from, Some(serde_json::json!(prior_state)));
-            assert_eq!(ops[0].1.op.op.to, Some(serde_json::json!("join")));
+            assert_eq!(ops.len(), 2);
+            let (_, member_op) = ops
+                .iter()
+                .find(|(cell, _)| cell == &member_cell)
+                .expect("invite accept seals the member state cell");
+            assert_eq!(member_op.op.op.op_type, LatticeOpType::Transition);
+            assert_eq!(member_op.op.op.from, Some(serde_json::json!(prior_state)));
+            assert_eq!(member_op.op.op.to, Some(serde_json::json!("join")));
         }
     }
 }

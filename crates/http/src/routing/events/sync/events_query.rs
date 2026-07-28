@@ -377,7 +377,9 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         "realm_id": realm_id,
                                     })
                                 }
-                                EventNotificationKind::Ephemeral { .. } => {
+                                // A Signal is not a durable Event: this stream
+                                // must never surface one.
+                                EventNotificationKind::Signal { .. } => {
                                     continue;
                                 }
                                 EventNotificationKind::Account { .. } => continue,
@@ -1157,6 +1159,11 @@ fn projection_only_event_from_row(state: &AppState, row: &Value) -> Option<arkre
         "event_id": event_id,
         "kind": kind,
         "realm_id": realm_id,
+        // `scope_ref` is a required, producer-signed envelope field. A
+        // projection-only tombstone has no signed envelope to copy it from, so
+        // it is restated from the row's Realm — the same scope the projection
+        // row itself was filtered by.
+        "scope_ref": {"kind": "realm", "realm_id": realm_id},
         "actor_id": actor_id,
         "actor_seq": 0,
         "created_at": arkret_canonical::format_timestamp_canonical(created_at),
@@ -1304,6 +1311,7 @@ mod tests {
                 "event_id": TEST_MESSAGE_EVENT,
                 "kind": arkret_wire::events::EventKind::MESSAGE_CREATE,
                 "realm_id": TEST_REALM,
+                "scope_ref": {"kind": "realm", "realm_id": TEST_REALM},
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 1,
                 "created_at": created_at,
@@ -1323,6 +1331,7 @@ mod tests {
                 "event_id": TEST_REVISE_EVENT,
                 "kind": arkret_wire::events::EventKind::MESSAGE_REVISE,
                 "realm_id": TEST_REALM,
+                "scope_ref": {"kind": "realm", "realm_id": TEST_REALM},
                 "actor_id": TEST_ACTOR,
                 "actor_seq": 2,
                 "created_at": revised_at,

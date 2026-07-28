@@ -1641,13 +1641,11 @@ async fn prepare_reserved_direct_materialization(
         arkret_wire::events::EventKind::REALM_CREATE,
         realm_payload,
     )?;
-    realm_event.effects = arkret_bootstrap::realm_create_effects(&realm_event)
-        .map_err(|error| AppError::internal(format!("direct Realm effects invalid: {error}")))?;
-    realm_event.preconditions = vec![arkret_wire::move_event::Precondition {
+    realm_event.preconditions = vec![arkret_wire::cba::Precondition {
         cell: arkret_identifiers::CellRef::new(arkret_wire::REALM_CREATE_CELL.to_owned())
             .map_err(|error| AppError::internal(format!("direct Realm cell invalid: {error}")))?,
-        predicate: arkret_wire::move_event::Predicate {
-            op: arkret_wire::move_event::PredicateOp::HeadEq,
+        predicate: arkret_wire::cba::Predicate {
+            op: arkret_wire::cba::PredicateOp::HeadEq,
             value: Some(Value::Null),
             values: None,
             predicate_id: None,
@@ -1909,8 +1907,15 @@ pub(super) fn unsigned_direct_materialization_event(
         .map_err(|error| AppError::internal(format!("direct Event actor invalid: {error}")))?;
     let hlc = arkret_identifiers::Hlc::new(state.hlc().now())
         .map_err(|error| AppError::internal(format!("direct Event HLC invalid: {error}")))?;
-    let mut event = arkret_wire::Event::new(kind, realm_id, actor_id, 0, hlc, payload)
-        .map_err(|error| AppError::internal(format!("direct Event draft invalid: {error}")))?;
+    let mut event = arkret_wire::Event::new(
+        kind,
+        arkret_wire::ScopeRef::Realm { realm_id },
+        actor_id,
+        0,
+        hlc,
+        payload,
+    )
+    .map_err(|error| AppError::internal(format!("direct Event draft invalid: {error}")))?;
     event.event_id = arkret_identifiers::EventId::new(event_id.to_owned())
         .map_err(|error| AppError::internal(format!("direct Event id invalid: {error}")))?;
     Ok(event)
@@ -1932,7 +1937,7 @@ fn unsigned_direct_binding_event(
         .map_err(|error| AppError::internal(format!("direct binding HLC invalid: {error}")))?;
     let mut event = arkret_wire::Event::new(
         arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND,
-        realm_id,
+        arkret_wire::ScopeRef::Realm { realm_id },
         actor_id,
         0,
         hlc,
@@ -1960,16 +1965,14 @@ pub(super) fn attach_create_cell_contract(
     include_precondition: bool,
 ) -> Result<(), AppError> {
     let cell = direct_cell_ref(cell_family, subject)?;
-    let value = event
-        .payload
-        .get("object")
-        .cloned()
-        .ok_or_else(|| AppError::internal("direct create payload object missing"))?;
+    if !event.payload.contains_key("object") {
+        return Err(AppError::internal("direct create payload object missing"));
+    }
     event.preconditions = if include_precondition {
-        vec![arkret_wire::move_event::Precondition {
+        vec![arkret_wire::cba::Precondition {
             cell: cell.clone(),
-            predicate: arkret_wire::move_event::Predicate {
-                op: arkret_wire::move_event::PredicateOp::HeadEq,
+            predicate: arkret_wire::cba::Predicate {
+                op: arkret_wire::cba::PredicateOp::HeadEq,
                 value: Some(Value::Null),
                 values: None,
                 predicate_id: None,
@@ -1978,18 +1981,10 @@ pub(super) fn attach_create_cell_contract(
     } else {
         Vec::new()
     };
-    event.effects = vec![arkret_wire::Effect {
-        cell,
-        op: arkret_wire::LatticeOp {
-            op_type: arkret_wire::LatticeOpType::Set,
-            tag: None,
-            value: Some(value),
-            from: None,
-            to: None,
-            reason: None,
-            issuer_seq: None,
-        },
-    }];
+    // v1 carries no producer `effects[]`: the `set` on this cell is derived
+    // from `kind + payload` by the registered contract (`event-and-patch.md`
+    // §2.4.2). Only the CBA precondition is producer-declared.
+    let _ = cell;
     Ok(())
 }
 
@@ -1998,27 +1993,17 @@ fn attach_member_join_cell_contract(
     participant: &str,
 ) -> Result<(), AppError> {
     let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
-    event.preconditions = vec![arkret_wire::move_event::Precondition {
+    event.preconditions = vec![arkret_wire::cba::Precondition {
         cell: cell.clone(),
-        predicate: arkret_wire::move_event::Predicate {
-            op: arkret_wire::move_event::PredicateOp::HeadEq,
+        predicate: arkret_wire::cba::Predicate {
+            op: arkret_wire::cba::PredicateOp::HeadEq,
             value: Some(Value::Null),
             values: None,
             predicate_id: None,
         },
     }];
-    event.effects = vec![arkret_wire::Effect {
-        cell,
-        op: arkret_wire::LatticeOp {
-            op_type: arkret_wire::LatticeOpType::Transition,
-            tag: None,
-            value: None,
-            from: Some(Value::String("leave".to_owned())),
-            to: Some(Value::String("join".to_owned())),
-            reason: Some("direct_conversation_bootstrap".to_owned()),
-            issuer_seq: None,
-        },
-    }];
+    // The membership transition is derived by the registered contract, and its
+    // `from` comes from the frozen pre-state — a producer may not assert it.
     Ok(())
 }
 
@@ -2027,27 +2012,17 @@ fn attach_member_rebind_cell_contract(
     participant: &str,
 ) -> Result<(), AppError> {
     let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
-    event.preconditions = vec![arkret_wire::move_event::Precondition {
+    event.preconditions = vec![arkret_wire::cba::Precondition {
         cell: cell.clone(),
-        predicate: arkret_wire::move_event::Predicate {
-            op: arkret_wire::move_event::PredicateOp::HeadEq,
+        predicate: arkret_wire::cba::Predicate {
+            op: arkret_wire::cba::PredicateOp::HeadEq,
             value: Some(Value::String("join".to_owned())),
             values: None,
             predicate_id: None,
         },
     }];
-    event.effects = vec![arkret_wire::Effect {
-        cell,
-        op: arkret_wire::LatticeOp {
-            op_type: arkret_wire::LatticeOpType::Transition,
-            tag: None,
-            value: None,
-            from: Some(Value::String("join".to_owned())),
-            to: Some(Value::String("join".to_owned())),
-            reason: Some("direct_conversation_bootstrap".to_owned()),
-            issuer_seq: None,
-        },
-    }];
+    // The membership transition is derived by the registered contract, and its
+    // `from` comes from the frozen pre-state — a producer may not assert it.
     Ok(())
 }
 

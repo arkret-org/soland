@@ -366,8 +366,12 @@ mod tests {
         .unwrap();
         let authorize_event = arkret_wire::Event::new(
             "ak.agent.key.authorize",
-            arkret_identifiers::RealmId::new("ak:realm:01999999-0000-7000-8000-00000000feed")
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_identifiers::RealmId::new(
+                    "ak:realm:01999999-0000-7000-8000-00000000feed",
+                )
                 .unwrap(),
+            },
             arkret_identifiers::Did::new("did:web:agent.example").unwrap(),
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),

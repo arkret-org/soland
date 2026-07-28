@@ -27,8 +27,8 @@ use tokio::sync::broadcast;
 ///   - `ResyncRequired` — server detected per-subscriber drift; client MUST drop local cache and
 ///     re-subscribe with `from=null`
 ///   - `Unauthorized` — subscriber's session token revoked / expired mid-stream; client MUST close
-///   - `Ephemeral` — short-TTL account-sync relay wakeup; events.subscribe ignores it
-///     + re-auth
+///   - `Signal` — a Signal Extension envelope was admitted onto the live relay; only
+///     `signal/subscribe` acts on it, `events.subscribe` ignores it
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EventNotification {
     pub realm_id: String,
@@ -69,8 +69,13 @@ pub enum EventNotificationKind {
     },
     /// Session token invalidated mid-stream — client MUST close.
     Unauthorized { reason: String },
-    /// Short-TTL account sync wakeup for relayed ephemeral state.
-    Ephemeral { kind: String },
+    /// A Signal was admitted onto the live relay (`sync/signal.md` §4). It
+    /// carries only the server-visible `signal_class`: the envelope itself is
+    /// read back from the relay by the subscriber, and no durable event
+    /// stream may reuse this wakeup.
+    Signal {
+        signal_class: arkret_wire::SignalClass,
+    },
     /// Durable account-private projection changed. The IDs are server-derived
     /// account context, never caller-supplied wire data.
     Account {
@@ -171,10 +176,10 @@ impl EventNotification {
         }
     }
 
-    pub fn ephemeral(realm_id: String, kind: impl Into<String>) -> Self {
+    pub fn signal(realm_id: String, signal_class: arkret_wire::SignalClass) -> Self {
         Self {
             realm_id,
-            kind: EventNotificationKind::Ephemeral { kind: kind.into() },
+            kind: EventNotificationKind::Signal { signal_class },
         }
     }
 }

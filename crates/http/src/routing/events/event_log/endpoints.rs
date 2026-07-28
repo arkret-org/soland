@@ -81,7 +81,7 @@ async fn submit_event_seal(
     };
     json_ok(EventSealSubmitOutcome {
         seal_id: effect.seal,
-        accepted_event_digests: effect.accepted_move_ids,
+        accepted_event_digests: effect.accepted_event_digests,
         post_state_root: effect.post_state_root,
     })
 }
@@ -288,6 +288,12 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
 
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::Initial(submission) => {
+            match submit_initial_event_submission(state, &session, submission).await {
+                Ok(response) => res.render(Json(response.outcome)),
+                Err(error) => render_submit_one_error(res, error),
+            }
+        }
         SolandEventsSubmitRequestBody::Batch(batch) => {
             submit_event_batch(state, &session, batch.events, res).await;
         }
@@ -319,6 +325,12 @@ async fn submit_event_dispatch(
 ) -> (StatusCode, Value) {
     match submit {
         SolandEventsSubmitRequestBody::Federation(_) => unreachable!("handled before auth"),
+        SolandEventsSubmitRequestBody::Initial(submission) => {
+            match submit_initial_event_submission(state, session, submission).await {
+                Ok(response) => (StatusCode::OK, submit_outcome_value(&response.outcome)),
+                Err(error) => submit_one_error_value(error),
+            }
+        }
         SolandEventsSubmitRequestBody::Batch(batch) => {
             match submit_event_batch_outcome(state, session, batch.events).await {
                 Ok(outcome) => (StatusCode::OK, submit_outcome_value(&outcome)),
@@ -485,7 +497,7 @@ async fn get_event(
     if !event_visible_to_session(state, &record, &session).await {
         return Err(AppError::not_found("event not found"));
     }
-    event_view_for_state(state, &record, &session).await
+    event_view_for_state(state, &record).await
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.events.query.resolve", tags("events"))]
@@ -758,7 +770,7 @@ async fn events_frontier(
     })
 }
 
-pub(super) async fn load_realm_actor_frontier(
+pub(crate) async fn load_realm_actor_frontier(
     state: &AppState,
     realm_id: RealmId,
     actor_id: Did,

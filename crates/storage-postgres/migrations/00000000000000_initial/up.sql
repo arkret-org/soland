@@ -236,79 +236,60 @@ CREATE TABLE public.blobs (
     CONSTRAINT blobs_visibility_check CHECK ((visibility = ANY (ARRAY['public'::text, 'realm_bound'::text, 'actor_private'::text, 'device_bound'::text])))
 );
 
--- Realm-broadcast relay for `ak.call.signal` ephemeral envelopes
--- (`webrtc-signaling.md` §5). One row per relayed signed envelope, retained
--- until `expires_at`; receivers pick it up from the subscribe Realm
--- `ephemeral.events` container and verify the carried `proof`. `position`
--- is a monotonic per-Realm deliver-once cursor sourced from
--- `call_signal_relay_position`.
-CREATE TABLE public.call_signal_relay (
+-- Live relay for admitted `SignalEnvelope`s (`sync/signal.md` §4). One row per
+-- admitted envelope, retained only until `expires_at`. Presence, typing, call
+-- signalling and read receipts are all Signals in v1 and share this one table:
+-- the exact payload type and target live inside `encrypted_payload`, and §1
+-- forbids a service from requiring or inferring a finer classification, so
+-- there is deliberately no `signal_kind`, target, sequence or plaintext column.
+-- `position` is a monotonic per-Realm deliver-once cursor sourced from
+-- Publication evidence per accepted Event canonical digest
+-- (`authz/offline-publication.md` 2.1). The client-supplied AuthorizationLease
+-- and the IngressReceipt this service signs at ingress are transport evidence
+-- ABOUT an Event, not part of it: they never enter the Event digest, so they
+-- live here rather than as columns on `canonical_events`. `event_digest` is the
+-- primary key so the first receipt for a digest is the one that stands and an
+-- idempotent retry cannot re-stamp `received_at`.
+CREATE TABLE public.publication_evidence (
+    event_digest text NOT NULL,
+    realm_id text NOT NULL,
+    authorization_lease jsonb NOT NULL,
+    ingress_receipt jsonb NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+-- `signal_relay_position`.
+CREATE TABLE public.signal_relay (
     id uuid NOT NULL,
     realm_id text NOT NULL,
     position bigint NOT NULL,
-    sender_actor text NOT NULL,
-    sender_device text NOT NULL,
-    call_id text NOT NULL,
+    scope_ref jsonb NOT NULL,
+    sender_actor_id text NOT NULL,
+    sender_device_id text NOT NULL,
+    signal_class text NOT NULL,
+    envelope_digest text NOT NULL,
     envelope jsonb NOT NULL,
-    created_at timestamp with time zone DEFAULT now() NOT NULL,
-    expires_at timestamp with time zone NOT NULL
+    sent_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    CONSTRAINT signal_relay_class_check CHECK ((signal_class = ANY (ARRAY['setup'::text, 'moderation'::text, 'session'::text])))
 );
 
--- Per-Realm monotonic position counter for `call_signal_relay`. Held in a
--- dedicated table (not `MAX(position)` of live rows) so positions keep
--- increasing even after the relay log is pruned, and a deliver-once watermark
--- can never be re-crossed by a recycled position.
-CREATE TABLE public.call_signal_relay_position (
+-- Per-Realm monotonic position counter for `signal_relay`. Held in a dedicated
+-- table (not `MAX(position)` of live rows) so positions keep increasing even
+-- after the relay log is pruned, and a deliver-once watermark can never be
+-- re-crossed by a recycled position.
+CREATE TABLE public.signal_relay_position (
     realm_id text NOT NULL,
     next_position bigint DEFAULT 0 NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
--- Per-subscriber-device deliver-once watermark for `call_signal_relay`
--- (`webrtc-signaling.md` §5). Records the highest per-Realm `position` already
--- delivered to a `(actor, device, realm)` triple so an incremental
--- re-subscribe inside the TTL window does not re-emit a signal the device
--- already saw, while a full sync still recovers all non-expired pending
--- signals. Durable so a restart / replica failover preserves the cursor.
-CREATE TABLE public.call_signal_relay_watermark (
-    actor_id text NOT NULL,
-    device_id text NOT NULL,
-    realm_id text NOT NULL,
-    delivered_through bigint DEFAULT 0 NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
--- Realm-scoped relay for `ak.receipt.read` ephemeral receipt objects. The
--- normalized `receipt` follows `ak.schema.read_receipt.v1`; relay metadata
--- (`position`, `visibility`, `target_actor`, `expires_at`) gates short-TTL
--- fanout through account sync and is not durable Event history.
-CREATE TABLE public.read_receipt_relay (
-    id uuid NOT NULL,
-    realm_id text NOT NULL,
-    position bigint NOT NULL,
-    actor_id text NOT NULL,
-    sender_device text,
-    event_id text NOT NULL,
-    read_scope jsonb NOT NULL,
-    target_actor text,
-    visibility text NOT NULL,
-    receipt jsonb NOT NULL,
-    envelope jsonb NOT NULL,
-    created_at timestamp with time zone NOT NULL,
-    expires_at timestamp with time zone NOT NULL
-);
-
--- Per-Realm monotonic position counter for `read_receipt_relay`. Kept
--- separate from live rows so pruned positions are never recycled across a
--- deliver-once watermark.
-CREATE TABLE public.read_receipt_relay_position (
-    realm_id text NOT NULL,
-    next_position bigint DEFAULT 0 NOT NULL,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
--- Per-subscriber-device deliver-once watermark for read receipt relay rows.
-CREATE TABLE public.read_receipt_relay_watermark (
+-- Per-subscriber-device deliver-once watermark for `signal_relay`. Records the
+-- highest per-Realm `position` already delivered to a `(actor, device, realm)`
+-- triple so an incremental re-subscribe inside the TTL window does not re-emit
+-- a Signal the device already saw, while a full resubscribe still recovers all
+-- non-expired live Signals.
+CREATE TABLE public.signal_relay_watermark (
     actor_id text NOT NULL,
     device_id text NOT NULL,
     realm_id text NOT NULL,
@@ -344,10 +325,13 @@ CREATE TABLE public.event_batch_receipts (
 CREATE INDEX event_batch_receipts_event_ids_idx
     ON public.event_batch_receipts USING gin (event_ids);
 
-CREATE TABLE public.state_moves (
-    id text NOT NULL,
+-- Pending + sealed control-plane Events. v1 has no standalone Move object: a
+-- Control Move is an Event carrying `seal_basis`, so the log is keyed by the
+-- canonical control-event digest rather than by a Move id.
+CREATE TABLE public.state_control_events (
+    event_digest text NOT NULL,
     realm_id text NOT NULL,
-    move_json jsonb NOT NULL,
+    event_json jsonb NOT NULL,
     sealed_by text,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     sealed_at timestamp with time zone
@@ -966,17 +950,6 @@ CREATE TABLE public.policy_documents (
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );
 
-CREATE TABLE public.presence (
-    id text NOT NULL,
-    device_id text NOT NULL,
-    status text NOT NULL,
-    status_message text,
-    last_active_at text,
-    envelope jsonb NOT NULL,
-    expires_at timestamp with time zone,
-    updated_at timestamp with time zone DEFAULT now() NOT NULL
-);
-
 CREATE TABLE public.projection_circle_members (
     id uuid NOT NULL,
     circle_id uuid NOT NULL,
@@ -1025,7 +998,6 @@ CREATE TABLE public.projection_events (
     payload jsonb NOT NULL,
     created_at timestamp with time zone NOT NULL,
     received_at timestamp with time zone NOT NULL DEFAULT now(),
-    effective_scope text,
     CONSTRAINT projection_events_event_id_key UNIQUE (event_id)
 );
 
@@ -1415,35 +1387,26 @@ ALTER TABLE ONLY public.backup_series
 ALTER TABLE ONLY public.blobs
     ADD CONSTRAINT blobs_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.call_signal_relay
-    ADD CONSTRAINT call_signal_relay_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.publication_evidence
+    ADD CONSTRAINT publication_evidence_pkey PRIMARY KEY (event_digest);
 
-ALTER TABLE ONLY public.call_signal_relay
-    ADD CONSTRAINT call_signal_relay_realm_position_key UNIQUE (realm_id, position);
+ALTER TABLE ONLY public.signal_relay
+    ADD CONSTRAINT signal_relay_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.call_signal_relay_position
-    ADD CONSTRAINT call_signal_relay_position_pkey PRIMARY KEY (realm_id);
+ALTER TABLE ONLY public.signal_relay
+    ADD CONSTRAINT signal_relay_realm_position_key UNIQUE (realm_id, position);
 
-ALTER TABLE ONLY public.call_signal_relay_watermark
-    ADD CONSTRAINT call_signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
+ALTER TABLE ONLY public.signal_relay_position
+    ADD CONSTRAINT signal_relay_position_pkey PRIMARY KEY (realm_id);
 
-ALTER TABLE ONLY public.read_receipt_relay
-    ADD CONSTRAINT read_receipt_relay_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.read_receipt_relay
-    ADD CONSTRAINT read_receipt_relay_realm_position_key UNIQUE (realm_id, position);
-
-ALTER TABLE ONLY public.read_receipt_relay_position
-    ADD CONSTRAINT read_receipt_relay_position_pkey PRIMARY KEY (realm_id);
-
-ALTER TABLE ONLY public.read_receipt_relay_watermark
-    ADD CONSTRAINT read_receipt_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
+ALTER TABLE ONLY public.signal_relay_watermark
+    ADD CONSTRAINT signal_relay_watermark_pkey PRIMARY KEY (actor_id, device_id, realm_id);
 
 ALTER TABLE ONLY public.canonical_events
     ADD CONSTRAINT canonical_events_pkey PRIMARY KEY (id);
 
-ALTER TABLE ONLY public.state_moves
-    ADD CONSTRAINT state_moves_pkey PRIMARY KEY (id);
+ALTER TABLE ONLY public.state_control_events
+    ADD CONSTRAINT state_control_events_pkey PRIMARY KEY (event_digest);
 
 ALTER TABLE ONLY public.state_seals
     ADD CONSTRAINT state_seals_pkey PRIMARY KEY (id);
@@ -1572,9 +1535,6 @@ ALTER TABLE ONLY public.pending_agent_drafts
 
 ALTER TABLE ONLY public.policy_documents
     ADD CONSTRAINT policy_documents_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.presence
-    ADD CONSTRAINT presence_pkey PRIMARY KEY (id, device_id);
 
 ALTER TABLE ONLY public.projection_circle_members
     ADD CONSTRAINT projection_circle_members_pkey PRIMARY KEY (id);
@@ -1717,15 +1677,13 @@ CREATE INDEX blobs_sha256_idx ON public.blobs USING btree (sha256);
 
 CREATE INDEX blobs_space_created_idx ON public.blobs USING btree (realm_id, created_at);
 
-CREATE INDEX call_signal_relay_realm_position_idx ON public.call_signal_relay USING btree (realm_id, position);
+CREATE INDEX publication_evidence_realm_idx ON public.publication_evidence USING btree (realm_id);
 
-CREATE INDEX call_signal_relay_expires_idx ON public.call_signal_relay USING btree (expires_at);
+CREATE INDEX signal_relay_realm_position_idx ON public.signal_relay USING btree (realm_id, position);
 
-CREATE INDEX read_receipt_relay_realm_position_idx ON public.read_receipt_relay USING btree (realm_id, position);
+CREATE INDEX signal_relay_expires_idx ON public.signal_relay USING btree (expires_at);
 
-CREATE INDEX read_receipt_relay_event_idx ON public.read_receipt_relay USING btree (event_id);
-
-CREATE INDEX read_receipt_relay_expires_idx ON public.read_receipt_relay USING btree (expires_at);
+CREATE INDEX signal_relay_realm_digest_idx ON public.signal_relay USING btree (realm_id, envelope_digest);
 
 CREATE INDEX canonical_events_actor_idx ON public.canonical_events USING btree (actor_id, actor_seq DESC);
 
@@ -1745,9 +1703,9 @@ CREATE INDEX canonical_events_space_idx ON public.canonical_events USING btree (
 
 CREATE INDEX canonical_events_space_received_idx ON public.canonical_events USING btree (realm_id, received_at, id);
 
-CREATE INDEX state_moves_pending_idx ON public.state_moves USING btree (realm_id, inserted_at, id) WHERE (sealed_by IS NULL);
+CREATE INDEX state_control_events_pending_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest) WHERE (sealed_by IS NULL);
 
-CREATE INDEX state_moves_sealed_idx ON public.state_moves USING btree (realm_id, inserted_at, id) WHERE (sealed_by IS NOT NULL);
+CREATE INDEX state_control_events_sealed_idx ON public.state_control_events USING btree (realm_id, inserted_at, event_digest) WHERE (sealed_by IS NOT NULL);
 
 CREATE INDEX state_seals_realm_idx ON public.state_seals USING btree (realm_id, inserted_at, id);
 
@@ -1853,7 +1811,6 @@ CREATE INDEX projection_circles_state_idx ON public.projection_circles USING btr
 
 CREATE INDEX projection_events_created_at_idx ON public.projection_events USING btree (created_at);
 
-CREATE INDEX projection_events_effective_scope_idx ON public.projection_events USING btree (effective_scope);
 
 CREATE INDEX projection_events_received_at_idx ON public.projection_events USING btree (received_at);
 

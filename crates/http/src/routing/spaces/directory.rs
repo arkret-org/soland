@@ -56,9 +56,9 @@ use arkret_models_identity::{
 use arkret_server::{
     CursorAuthority, CursorAuthorityError, CursorBindingContext, CursorBindingRecord,
 };
-use arkret_signatures::Ed25519MoveSigner;
+use arkret_signatures::Ed25519PayloadSigner;
 use arkret_wire::{
-    AGENT_SELECTOR_CLAIM_SCHEMA, AddressLinkKind, Audience, JoinRule, MoveSigner, PayloadProof,
+    AGENT_SELECTOR_CLAIM_SCHEMA, AddressLinkKind, Audience, JoinRule, PayloadProof, PayloadSigner,
     RealmRef, TargetDescriptor, parse_address, proof_kind, target_digest,
 };
 use base64::Engine;

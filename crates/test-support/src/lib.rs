@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{CellRef, Did, MoveId, SealId};
+use arkret_identifiers::{CellRef, Did, Hash, SealId};
 use arkret_identity::service_identity::{
     LocalServiceIdentity, ServiceIdentityKeyRef, ServiceIdentityState,
 };
@@ -13,8 +13,8 @@ use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegis
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
-    CellRegistry, CellStore, MemoryCellStore, MemoryMoveStore, MemorySealStore, MoveStore,
-    SealStore, StoreError, StoreResult, compute_state_root,
+    CellRegistry, CellStore, ControlEventStore, MemoryCellStore, MemoryControlEventStore,
+    MemorySealStore, SealStore, StoreError, StoreResult, compute_state_root,
 };
 use arkret_wire::{Seal, ServiceKind};
 use async_trait::async_trait;
@@ -79,7 +79,8 @@ pub fn app_state_with_identity(
     resolved_signing_seed: [u8; 32],
 ) -> AppState {
     let cell_registry = ProjectionService::sdk_cell_registry();
-    let move_store: Arc<dyn MoveStore> = Arc::new(MemoryMoveStore::default());
+    let control_event_store: Arc<dyn ControlEventStore> =
+        Arc::new(MemoryControlEventStore::default());
     let seal_store = Arc::new(MemorySealStore::default());
     let cell_store = Arc::new(MemoryCellStore::default());
     let event_seal_committer = Arc::new(MemoryEventSealCommitter {
@@ -94,7 +95,7 @@ pub fn app_state_with_identity(
         .service_id
         .to_string();
     let projections = ProjectionService::new(
-        move_store,
+        control_event_store,
         seal_store.clone(),
         cell_store,
         cell_registry,
@@ -355,7 +356,7 @@ impl EventSealCommitPort for MemoryEventSealCommitter {
         seal: &Seal,
         expected_store_frontier: &[SealId],
         new_ops: &[(CellRef, IssuedOp)],
-        covered: &BTreeSet<MoveId>,
+        covered: &BTreeSet<Hash>,
     ) -> StoreResult<bool> {
         let _guard = self.lock.lock();
         let actual = self
@@ -408,7 +409,7 @@ fn effective_state_with_new_ops(
     cells: &dyn CellStore,
     registry: &dyn CellRegistry,
     realm_id: &arkret_identifiers::RealmId,
-    covered: &BTreeSet<MoveId>,
+    covered: &BTreeSet<Hash>,
     new_ops: &[(CellRef, IssuedOp)],
 ) -> StoreResult<BTreeMap<CellRef, CellState>> {
     let mut cell_refs = cells
@@ -435,7 +436,8 @@ fn effective_state_with_new_ops(
             continue;
         }
         // Match production CellStore semantics: persisted operations and
-        // `new_ops` are both causal. MoveId is a content hash, not an ordering
+        // `new_ops` are both causal. The Control Move id is a content hash,
+        // not an ordering
         // key for FSM transitions.
         let binding = registry.resolve(realm_id, &cell)?;
         joined.insert(

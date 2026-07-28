@@ -45,25 +45,6 @@ pub fn demo_organization(realms: &[&RealmDirectoryEntry], service_id: &str) -> V
     })
 }
 
-/// Project the live presence store value for `actor` into the directory
-/// preview shape. Uses the shared multi-device aggregation
-/// (profiles-presence.md §3.3): unexpired device rows merge by priority
-/// and a fully-lapsed actor projects as `offline`. Absent records
-/// project as `offline`.
-pub(super) async fn directory_presence_for_actor(state: &AppState, did: &str) -> Value {
-    let records = state
-        .deliveries()
-        .presence_for_actor(did)
-        .await
-        .unwrap_or_default();
-    let (status, updated_at) =
-        match crate::routing::events::sync::aggregate_presence_records(&records, now()) {
-            Some(aggregated) => (aggregated.status, aggregated.updated_at),
-            None => ("offline".to_owned(), now()),
-        };
-    json!({ "status": status, "updated_at": updated_at })
-}
-
 pub async fn demo_actors(state: &AppState) -> Vec<Value> {
     let mut actors = vec![json!({
         "did": "did:web:alice.example",
@@ -71,7 +52,6 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         "display_name": "Alice Example",
         "organization_id": "ak:org:demo",
         "avatar_blob_ref": null,
-        "presence": {"status": "online", "updated_at": now()},
     })];
 
     let accounts = state.identities().accounts().await.unwrap_or_default();
@@ -88,7 +68,6 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
         if matches!(account_state.as_str(), "deactivated" | "erasure_pending") {
             continue;
         }
-        let presence = directory_presence_for_actor(state, &account.did).await;
         actors.push(json!({
             "did": account.did,
             "handle": account.handle(),
@@ -98,7 +77,6 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "bio": account.bio,
             "organization_id": "ak:org:demo",
             "avatar_blob_ref": account.avatar_blob_ref,
-            "presence": presence,
         }));
     }
 
@@ -132,7 +110,6 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             .values()
             .find_map(|device| device["display_name"].as_str())
             .unwrap_or(did);
-        let presence = directory_presence_for_actor(state, did).await;
         actors.push(json!({
             "did": did,
             "handle": handle_for_did(did),
@@ -141,7 +118,6 @@ pub async fn demo_actors(state: &AppState) -> Vec<Value> {
             "account_state": account_state,
             "organization_id": "ak:org:demo",
             "avatar_blob_ref": null,
-            "presence": presence,
         }));
     }
     actors

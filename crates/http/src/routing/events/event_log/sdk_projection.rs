@@ -1,5 +1,19 @@
 use super::*;
 
+/// The registry projection evaluator for a bootstrap unit.
+///
+/// A genesis unit has no accepted Realm yet, so there is no
+/// `ak.component.realm.digest_suite.v1` cell to read and the protocol baseline
+/// suite is the only defined one (`conformance/encoding.md` §4). Post-genesis
+/// callers MUST use `ProjectionService::project_cell_writes`, which reads the
+/// Realm's effective suite.
+pub(in crate::routing) fn genesis_cell_write_projector(
+    event: &arkret_wire::Event,
+) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, String> {
+    arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| error.to_string())
+}
+
 pub(in crate::routing) fn event_semantic_refs(
     object: &serde_json::Map<String, Value>,
     max_len: usize,
@@ -620,9 +634,8 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
 pub(crate) async fn event_view_for_state(
     state: &AppState,
     record: &CanonicalEventRecord,
-    session: &SessionRecord,
 ) -> JsonResult<EventView> {
-    let mut receipts = state
+    let receipts = state
         .event_queries()
         .canonical_batch_receipts_for_event(&record.event_id)
         .await
@@ -633,12 +646,6 @@ pub(crate) async fn event_view_for_state(
         .map_err(|error| {
             AppError::internal(format!("Event Batch Receipt encode failed: {error}"))
         })?;
-    receipts.extend(
-        crate::routing::events::read_receipts::visible_read_receipts_for_event(
-            state, record, session,
-        )
-        .await,
-    );
     json_ok(EventView {
         event: sdk_event_for_state(state, record)?,
         visibility: Some(event_visibility_metadata(state, record)),
@@ -746,21 +753,14 @@ fn sdk_event_from_record(
         created_at,
         hlc: Some(hlc),
         prev_refs: event_id_list(object.get("prev_refs"))?,
-        effective_scope: sdk_effective_scope(record, &realm_id),
+        scope_ref: sdk_scope_ref(record, &realm_id),
         refs: event_refs(object.get("refs")),
         causal_refs: hash_list(object.get("causal_refs"))?,
         preconditions: json_array_field(object, "preconditions"),
-        effects: json_array_field(object, "effects"),
         seal_ref: object
             .get("seal_ref")
             .and_then(Value::as_str)
             .and_then(|value| arkret_identifiers::SealId::new(value.to_owned()).ok()),
-        conflict_keys_digest: object
-            .get("conflict_keys_digest")
-            .and_then(Value::as_str)
-            .map(|value| Hash::new(value.to_owned()))
-            .transpose()
-            .map_err(|error| AppError::internal(format!("stored conflict keys digest: {error}")))?,
         auth_context: object
             .get("auth_context")
             .cloned()
@@ -892,31 +892,37 @@ where
         .unwrap_or_default()
 }
 
-fn sdk_effective_scope(
-    record: &CanonicalEventRecord,
-    realm_id: &RealmId,
-) -> Option<arkret_wire::EffectiveScope> {
+/// The Event's signed security scope.
+///
+/// `scope_ref` is a required, producer-signed member of the v1 envelope, so the
+/// stored bytes carry it. The payload-derived fallback exists only for rows
+/// stored before it became mandatory and resolves to the Realm-default scope,
+/// which is the narrowest safe answer: reading a Circle scope back out of a
+/// payload would be recomputing a signed field rather than reading it.
+fn sdk_scope_ref(record: &CanonicalEventRecord, realm_id: &RealmId) -> arkret_wire::ScopeRef {
     if let Some(scope) = record
         .envelope
-        .get("effective_scope")
+        .get("scope_ref")
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
     {
-        return Some(scope);
+        return scope;
     }
     match effective_scope_for_envelope(&record.envelope).as_deref() {
         Some(scope) if scope.starts_with("ak:circle:") => {
-            arkret_identifiers::CircleId::new(scope.to_owned())
-                .ok()
-                .map(|circle_id| arkret_wire::EffectiveScope::Circle {
+            match arkret_identifiers::CircleId::new(scope.to_owned()) {
+                Ok(circle_id) => arkret_wire::ScopeRef::Circle {
                     realm_id: realm_id.clone(),
                     circle_id,
-                })
+                },
+                Err(_) => arkret_wire::ScopeRef::Realm {
+                    realm_id: realm_id.clone(),
+                },
+            }
         }
-        Some(scope) if scope.starts_with("realm:") => Some(arkret_wire::EffectiveScope::Realm {
+        _ => arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
-        }),
-        _ => None,
+        },
     }
 }
 

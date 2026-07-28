@@ -69,6 +69,7 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::read_receipts::ReadCursorPosition as ReadCursorPositionWire;
 use arkret_state::lattice::CellState;
 use arkret_wire::ReadCursorScope as ReadScopeWire;
+use arkret_wire::cba::ProjectedCellWrite;
 use serde_json::Value;
 
 use crate::hlc::ServerHlc;
@@ -87,7 +88,6 @@ fn projection_context_stripped_payload(payload: &Value) -> Value {
             "seal_ref",
             "seal_basis",
             "preconditions",
-            "effects",
             "accepted_event_id",
         ] {
             object.remove(field);

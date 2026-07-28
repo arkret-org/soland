@@ -36,11 +36,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
 
 use anyhow::Result;
-use arkret_identifiers::{CellRef, Hash, Hlc, MoveId, RealmId, SealId};
+use arkret_identifiers::{CellRef, Hash, Hlc, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{StoreError, compute_state_root, control_event_set_root};
-use arkret_wire::{Move, MoveSignature, NotarySig, Seal};
+use arkret_wire::{Event, NotarySig, PayloadSignature, Seal};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey;
@@ -54,9 +54,21 @@ use crate::state::AppState;
 #[derive(Clone, Debug)]
 pub struct NotaryOutcome {
     pub seal_id: SealId,
-    pub accepted_move_ids: Vec<MoveId>,
-    pub rejected_moves: Vec<(MoveId, String)>,
+    /// Canonical `event_digest`s of the Control Moves this Seal accepted.
+    pub accepted_event_digests: Vec<Hash>,
+    pub rejected_events: Vec<(Hash, String)>,
     pub post_state_root: Hash,
+}
+
+/// One Control Move that passed `verify_control_move`, together with the
+/// receiver-derived writes that verification resolved. v1 carries no producer
+/// `effects[]`, so these resolved effects are the only legitimate source of
+/// cell writes when predicting the post-Seal `state_root`.
+#[derive(Clone, Debug)]
+struct AcceptedControlMove {
+    event_digest: Hash,
+    actor_id: arkret_identifiers::Did,
+    effects: Vec<arkret_wire::cba::ProjectionEffect>,
 }
 
 #[derive(Clone, Debug)]
@@ -117,13 +129,25 @@ impl NotaryWorker {
             return Err(NotaryError::NotAuthorized(realm_id.to_string()));
         }
 
-        // Step 2: list pending Moves (oldest first).
-        let pending =
-            state
-                .projections()
-                .pending_moves_for_notary(realm_id, None, max_control_moves)?;
-        if pending.is_empty() {
+        // Step 2: list pending Control Moves (oldest first). Control-plane
+        // Events are keyed by their canonical `event_digest`, so pair each one
+        // with its digest before ordering (§6.3.2).
+        let pending_events = state.projections().pending_control_events_for_notary(
+            realm_id,
+            None,
+            max_control_moves,
+        )?;
+        if pending_events.is_empty() {
             return Ok(None);
+        }
+        let mut pending: Vec<(Hash, Event)> = Vec::with_capacity(pending_events.len());
+        for event in pending_events {
+            let digest = event
+                .event_digest()
+                .map_err(|e| NotaryError::Construction(format!("event digest: {e}")))?;
+            let digest = Hash::new(digest)
+                .map_err(|e| NotaryError::Construction(format!("event digest: {e}")))?;
+            pending.push((digest, event));
         }
 
         // Step 3: current Seal leaves for predecessor refs.
@@ -140,7 +164,7 @@ impl NotaryWorker {
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
 
         // Recompute pre_state map (effective_seal_view returns state_root
-        // but we need the per-cell map for verify_move).
+        // but we need the per-cell map for verify_control_move).
         let pre_state = self.read_effective_state(state, realm_id, &view.predecessor_refs)?;
 
         // Step 5: deterministic order + pre-flight verify. The signature
@@ -148,27 +172,48 @@ impl NotaryWorker {
         // Ed25519 vs dev shape-only) — notary must use the same one as
         // peer-event admission, otherwise pending Moves that passed admission
         // could still be rejected at seal time.
-        // Replay-window check (`Move.hlc`) is also enforced per Move so
-        // long-pending Moves whose hlc has aged out get dropped instead
-        // of resurrected into a fresh Seal.
+        // The replay-window check is also enforced per Move so long-pending
+        // Moves whose hlc has aged out get dropped instead of resurrected into
+        // a fresh Seal. The window is per touched cell family, and v1 has no
+        // producer effects array, so the writes come from the registry
+        // projection.
         let verifier = select_jws_verifier(state);
         let replay_default = state.config().jws_replay_window_seconds;
         let replay_overrides = &state.config().jws_replay_window_per_family;
         let ordered = arkret_state::state::deterministic_order(pending);
-        let mut accepted: Vec<Move> = Vec::with_capacity(ordered.len());
-        let mut rejected: Vec<(MoveId, String)> = Vec::new();
-        for m in ordered {
-            if let Err(reject) = crate::jws_verify::verify_replay_window_for_move(
-                &m,
+        let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
+        let mut rejected: Vec<(Hash, String)> = Vec::new();
+        for (digest, event) in ordered {
+            let Some(hlc) = event.hlc.clone() else {
+                rejected.push((digest, "Control Move carries no hlc".to_owned()));
+                continue;
+            };
+            let writes = match state.projections().project_cell_writes(&event) {
+                Ok(writes) => writes,
+                Err(reason) => {
+                    rejected.push((digest, format!("reducer_projection_failed: {reason}")));
+                    continue;
+                }
+            };
+            if let Err(reject) = crate::jws_verify::verify_replay_window_for_projection(
+                &hlc,
+                &writes,
                 replay_default,
                 replay_overrides,
             ) {
-                rejected.push((m.id.clone(), format!("replay_window: {reject}")));
+                rejected.push((digest, format!("replay_window: {reject}")));
                 continue;
             }
-            match state.projections().verify_move(&m, &pre_state, verifier) {
-                Ok(()) => accepted.push(m),
-                Err(reject) => rejected.push((m.id.clone(), reject.to_string())),
+            match state
+                .projections()
+                .verify_control_move(&event, realm_id, &pre_state, verifier)
+            {
+                Ok(effects) => accepted.push(AcceptedControlMove {
+                    event_digest: digest,
+                    actor_id: event.actor_id.clone(),
+                    effects,
+                }),
+                Err(reject) => rejected.push((digest, reject.to_string())),
             }
         }
         if accepted.is_empty() {
@@ -186,10 +231,13 @@ impl NotaryWorker {
         // canonical_bytes_for_id. Cumulative coverage is derived from
         // predecessor_refs plus delta; it is not carried as a required
         // wire field.
-        let mut delta: Vec<MoveId> = accepted.iter().map(|m| m.id.clone()).collect();
+        let mut delta: Vec<Hash> = accepted
+            .iter()
+            .map(|entry| entry.event_digest.clone())
+            .collect();
         delta.sort_by(|a, b| a.as_str().cmp(b.as_str()));
         delta.dedup_by(|a, b| a.as_str() == b.as_str());
-        let mut covered: BTreeSet<MoveId> = view.covered_event_digests.iter().cloned().collect();
+        let mut covered: BTreeSet<Hash> = view.covered_event_digests.iter().cloned().collect();
         covered.extend(delta.iter().cloned());
         let control_event_set_root = control_event_set_root(&covered)
             .map_err(|e| NotaryError::Construction(format!("control_event_set_root: {e}")))?;
@@ -292,8 +340,8 @@ impl NotaryWorker {
 
         Ok(Some(NotaryOutcome {
             seal_id: effect.seal,
-            accepted_move_ids: effect.accepted_move_ids,
-            rejected_moves: rejected.into_iter().chain(effect.rejected_moves).collect(),
+            accepted_event_digests: effect.accepted_event_digests,
+            rejected_events: rejected.into_iter().chain(effect.rejected_events).collect(),
             post_state_root: effect.post_state_root,
         }))
     }
@@ -509,12 +557,12 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         realm_id: &RealmId,
-        covered_event_digests: &[MoveId],
-        accepted: &[Move],
+        covered_event_digests: &[Hash],
+        accepted: &[AcceptedControlMove],
     ) -> Result<Hash, NotaryError> {
         // Build per-cell list of (current ops ++ new ops).
         let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
-        let covered: BTreeSet<MoveId> = covered_event_digests.iter().cloned().collect();
+        let covered: BTreeSet<Hash> = covered_event_digests.iter().cloned().collect();
         // Seed with all currently-known cells.
         for cell in state.projections().realm_cells(realm_id)? {
             let ops: Vec<IssuedOp> = state
@@ -527,12 +575,14 @@ impl NotaryWorker {
                 ops_by_cell.insert(cell, ops);
             }
         }
-        // Layer on the new accepted Moves' effects.
-        for m in accepted {
-            for effect in &m.effects {
+        // Layer on the newly accepted Control Moves' receiver-derived writes.
+        // These are the resolved effects `verify_control_move` returned, not a
+        // producer-supplied array — v1 has none.
+        for entry in accepted {
+            for effect in &entry.effects {
                 let aop = IssuedOp {
-                    issuer: m.issuer.clone(),
-                    op: SealedOp::new(m.id.clone(), effect.op.clone()),
+                    issuer: entry.actor_id.clone(),
+                    op: SealedOp::new(entry.event_digest.clone(), effect.op.clone()),
                 };
                 ops_by_cell
                     .entry(effect.cell.clone())
@@ -590,7 +640,7 @@ impl NotaryWorker {
         &self,
         state: &AppState,
         canonical_bytes: &[u8],
-    ) -> Result<MoveSignature, NotaryError> {
+    ) -> Result<PayloadSignature, NotaryError> {
         // payload_digest = sha256(canonical_bytes), prefix-encoded via the
         // shared SDK digest helper.
         let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))
@@ -605,7 +655,7 @@ impl NotaryWorker {
         let jws = arkret_signatures::jws::sign_jws_ed25519(canonical_bytes, signing_key.as_ref())
             .map_err(|e| NotaryError::Construction(format!("sign_jws_ed25519: {e}")))?;
 
-        Ok(MoveSignature {
+        Ok(PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: format!("{}#notary-key", self.service_id),
             payload_digest,
@@ -706,18 +756,18 @@ fn notary_cell_ref(_realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::I
     CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
 }
 
-fn zero_notary_sig_placeholder() -> Result<MoveSignature, NotaryError> {
+fn zero_notary_sig_placeholder() -> Result<PayloadSignature, NotaryError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
         .map_err(|e| NotaryError::Construction(format!("zero payload hash: {e}")))?;
     // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
     // JWS shape is `header..signature`, with the SDK-canonical EdDSA
     // header so the placeholder is at least well-typed for the
-    // `MoveSignature` field. `verify_jws_ed25519` would reject the
+    // `PayloadSignature` field. `verify_jws_ed25519` would reject the
     // all-zero signature as a sentinel — that's intended; this value
     // must not survive past the overwrite at the end of step 7.
     let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
     let zero_sig_b64 = URL_SAFE_NO_PAD.encode([0u8; 64]);
-    Ok(MoveSignature {
+    Ok(PayloadSignature {
         alg: "EdDSA".to_owned(),
         verification_method: String::new(),
         payload_digest,
@@ -744,7 +794,7 @@ fn warn_once_about_ephemeral_notary_key() {
 
 /// Helper exposed for `AppState::notary_signing_key` so the
 /// admin endpoints (`admin_reconfigure_notary`, `admin_repair_bottom`)
-/// can build a `Ed25519MoveSigner` keyed off the same SigningKey the
+/// can build a `Ed25519PayloadSigner` keyed off the same SigningKey the
 /// NotaryWorker uses, keeping all signing paths consistent.
 pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
     SigningKey::from_bytes(seed)
@@ -838,7 +888,7 @@ pub struct FirstGenerationEventSealRequirement {
     pub reanchor_digest: Hash,
     pub predecessor_refs: Vec<SealId>,
     pub accepted_frontier_refs: Vec<SealId>,
-    pub required_delta: Vec<MoveId>,
+    pub required_delta: Vec<Hash>,
     pub principal_id: String,
     pub replacement_device_id: String,
     pub replacement_device_public_key: String,
@@ -847,7 +897,7 @@ pub struct FirstGenerationEventSealRequirement {
 pub fn ensure_materialized_event_seal(
     state: &AppState,
     realm_id: &RealmId,
-    covered_event_digests: &[MoveId],
+    covered_event_digests: &[Hash],
     state_root: &Hash,
     completeness_root: &Hash,
     event_ops: &[(CellRef, IssuedOp)],
@@ -1036,8 +1086,8 @@ pub fn ensure_materialized_event_seal(
 
 pub(crate) fn validate_first_generation_event_seal(
     leaves: &[SealId],
-    current: &BTreeSet<MoveId>,
-    target: &BTreeSet<MoveId>,
+    current: &BTreeSet<Hash>,
+    target: &BTreeSet<Hash>,
     requirement: &FirstGenerationEventSealRequirement,
 ) -> Result<bool, NotaryError> {
     let required = requirement
@@ -1199,7 +1249,7 @@ mod tests {
         );
         let realm_id = RealmId::new("ak:realm:019f9c00-0000-7000-8000-000000000001").unwrap();
         let notary_cell = notary_cell_ref(&realm_id).unwrap();
-        let move_id = MoveId::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+        let move_id = Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
         let local_notary = serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
             arkret_identifiers::Did::new(state.service_id().clone()).unwrap(),
         ))
@@ -1210,8 +1260,8 @@ mod tests {
                 issuer: arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
                 op: SealedOp::new(
                     move_id.clone(),
-                    arkret_wire::move_event::LatticeOp {
-                        op_type: arkret_wire::move_event::LatticeOpType::Set,
+                    arkret_wire::cba::LatticeOp {
+                        op_type: arkret_wire::cba::LatticeOpType::Set,
                         tag: None,
                         value: Some(local_notary),
                         from: None,
@@ -1239,8 +1289,8 @@ mod tests {
                 issuer: arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap(),
                 op: SealedOp::new(
                     move_id,
-                    arkret_wire::move_event::LatticeOp {
-                        op_type: arkret_wire::move_event::LatticeOpType::Set,
+                    arkret_wire::cba::LatticeOp {
+                        op_type: arkret_wire::cba::LatticeOpType::Set,
                         tag: None,
                         value: Some(remote_notary),
                         from: None,
@@ -1286,8 +1336,8 @@ mod tests {
             accepted_frontier_refs: predecessor_refs.clone(),
             predecessor_refs,
             required_delta: vec![
-                MoveId::new(reanchor.as_str().to_owned()).unwrap(),
-                MoveId::new(replacement.as_str().to_owned()).unwrap(),
+                Hash::new(reanchor.as_str().to_owned()).unwrap(),
+                Hash::new(replacement.as_str().to_owned()).unwrap(),
             ],
             principal_id: "did:webvh:z6mkfixture:alice.example".to_owned(),
             replacement_device_id: "ak:device:recovery".to_owned(),

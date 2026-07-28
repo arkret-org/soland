@@ -1,15 +1,9 @@
-use arkret_wire::events::{CbaEffectPlane, cba_cell_family_plane};
-
 use super::*;
 
 pub(super) fn validate_control_move_seal_basis(
     object: &serde_json::Map<String, Value>,
     allow_realm_bootstrap_followup_without_basis: bool,
 ) -> Result<(), EventValidationError> {
-    let has_effects = object
-        .get("effects")
-        .and_then(Value::as_array)
-        .is_some_and(|effects| !effects.is_empty());
     if object.get("kind").and_then(Value::as_str)
         == Some(arkret_wire::events::EventKind::REALM_CREATE)
     {
@@ -38,7 +32,19 @@ pub(super) fn validate_control_move_seal_basis(
         }
         return Ok(());
     }
-    if !has_effects {
+    // This used to short-circuit on an empty producer `effects[]`, which v1
+    // never carries — so every conformant Control Move skipped the seal_basis
+    // requirement entirely. The gate is the registry's own reducer_input flag:
+    // a kind the reducer consumes must be a DataEvent or carry seal_basis
+    // (`event-auth-state-resolution.md` §5), and a kind it does not consume has
+    // no basis obligation.
+    let is_reducer_input = object
+        .get("kind")
+        .and_then(Value::as_str)
+        .map(arkret_wire::events::EventKind::from)
+        .and_then(|kind| kind.descriptor())
+        .is_some_and(|descriptor| descriptor.reducer_input);
+    if !is_reducer_input {
         return Ok(());
     }
     if allow_realm_bootstrap_followup_without_basis
@@ -60,7 +66,7 @@ pub(super) fn validate_control_move_seal_basis(
             event_validation_error(
                 StatusCode::FORBIDDEN,
                 "schema_violation",
-                "Control Move with effects requires seal_basis.leaves",
+                "Control Move requires seal_basis.leaves",
             )
         })?;
     if leaves.is_empty() {
@@ -71,89 +77,6 @@ pub(super) fn validate_control_move_seal_basis(
         ));
     }
     Ok(())
-}
-
-pub(super) fn validate_cba_effect_planes(
-    object: &serde_json::Map<String, Value>,
-) -> Result<(), EventValidationError> {
-    let Some(effects) = object.get("effects").and_then(Value::as_array) else {
-        return Ok(());
-    };
-    if effects.is_empty() {
-        return Ok(());
-    }
-    let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
-    let is_control_move = object.contains_key("seal_basis");
-    if !is_data_event && !is_control_move {
-        return Ok(());
-    }
-    for effect in effects {
-        let family = cba_effect_cell_family(effect)?;
-        let plane = cba_cell_family_plane(family).ok_or_else(|| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("effects[].cell references unknown cell family {family}"),
-            )
-        })?;
-        match plane {
-            CbaEffectPlane::Control if is_data_event => {
-                return Err(event_validation_error(
-                    StatusCode::BAD_REQUEST,
-                    "plane_cross_write",
-                    "DataEvent effects[] must not write control-plane cell",
-                ));
-            }
-            CbaEffectPlane::Data if is_control_move => {
-                return Err(event_validation_error(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_plane",
-                    "Control Move effects[] must not write data-plane cell",
-                ));
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
-pub(super) fn cba_effect_cell_family(effect: &Value) -> Result<&str, EventValidationError> {
-    let cell = effect.get("cell").and_then(Value::as_str).ok_or_else(|| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "effects[] entries require cell",
-        )
-    })?;
-    if arkret_identifiers::CellRef::new(cell.to_owned()).is_err() {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "effects[].cell must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
-        ));
-    }
-    let Some(rest) = cell.strip_prefix("ak:cell:") else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "effects[].cell must use the ak:cell: typed prefix",
-        ));
-    };
-    let Some((family, subject)) = rest.split_once(':') else {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "effects[].cell must include a cell family and subject",
-        ));
-    };
-    if family.trim().is_empty() || subject.trim().is_empty() {
-        return Err(event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "effects[].cell must include a non-empty cell family and subject",
-        ));
-    }
-    Ok(family)
 }
 
 pub(super) fn is_realm_bootstrap_followup_kind(kind: &str) -> bool {

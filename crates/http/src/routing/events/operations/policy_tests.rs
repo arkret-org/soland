@@ -799,7 +799,9 @@ async fn register_native_agent_membership_context(
     });
     let authorize_event = arkret_wire::Event::new(
         arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
-        realm_id.clone(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
         arkret_identifiers::Did::new(agent.to_owned()).unwrap(),
         1,
         arkret_identifiers::Hlc::new("019041000000-0001-000007d2").unwrap(),

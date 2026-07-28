@@ -2,41 +2,39 @@
 
 use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
-    AgentParticipationStore, AgentStore, AppletStore, AuditStore, BlobStore, CallSignalRelayStore,
-    ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
+    AgentParticipationStore, AgentStore, AppletStore, AuditStore, BlobStore, ConsentCellStore,
+    ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
     DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingStore,
     DirectConversationBindingStore, EventStore, FederationFrontierExchangeStore,
     FederationOperationsStore, FederationOutboxStore, HandleReleaseStore, IdempotencyStore,
     InviteLocatorStore, InviteReceivePolicyStore, KeyBackupStore, MemoryAccountDataStore,
     MemoryAccountLifecycleStore, MemoryAccountLocalpartStore, MemoryAccountStore,
     MemoryAgentParticipationStore, MemoryAgentStore, MemoryAppletStore, MemoryAuditStore,
-    MemoryBlobStore, MemoryCallSignalRelayStore, MemoryConsentCellStore, MemoryContactStore,
-    MemoryDeviceInventoryStore, MemoryDeviceKeyStore, MemoryDeviceMessageStore,
-    MemoryDevicePairingStore, MemoryDirectConversationBindingStore, MemoryEventStore,
-    MemoryFederationFrontierExchangeStore, MemoryFederationOperationsStore,
-    MemoryFederationOutboxStore, MemoryHandleReleaseStore, MemoryIdempotencyStore,
-    MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore, MemoryJoinApplicationStore,
-    MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore, MemoryMlsKeyPackageStore,
-    MemoryMlsWelcomeStore, MemoryModerationStore, MemoryMorphProjectionStore,
-    MemoryMultisigPendingStore, MemoryNotificationStore, MemoryOneTimeKeyStore,
-    MemoryOrganizationPolicyStore, MemoryOrganizationStore, MemoryPolicyDocumentStore,
-    MemoryPresenceStore, MemoryProjectionEventStore, MemoryPushBridgeCacheStore,
-    MemoryPushDeviceStore, MemoryReadReceiptRelayStore, MemoryRealmInviteStore,
+    MemoryBlobStore, MemoryConsentCellStore, MemoryContactStore, MemoryDeviceInventoryStore,
+    MemoryDeviceKeyStore, MemoryDeviceMessageStore, MemoryDevicePairingStore,
+    MemoryDirectConversationBindingStore, MemoryEventStore, MemoryFederationFrontierExchangeStore,
+    MemoryFederationOperationsStore, MemoryFederationOutboxStore, MemoryHandleReleaseStore,
+    MemoryIdempotencyStore, MemoryInviteLocatorStore, MemoryInviteReceivePolicyStore,
+    MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore,
+    MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
+    MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
+    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationStore,
+    MemoryPolicyDocumentStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
+    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
     MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
     MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore,
     MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore,
+    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
-    MemoryTypingStore, MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore,
-    MlsWelcomeStore, ModerationStore, MorphProjectionStore, MultisigPendingStore,
-    NotificationStore, OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore,
-    PersistenceStore, PolicyDocumentStore, PresenceStore, ProjectionEventStore,
-    PushBridgeCacheStore, PushDeviceStore, ReadReceiptRelayStore, RealmInviteStore,
-    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
-    RealmOrganizationStore, RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore,
-    RetentionPolicyStore, RetentionTombstoneStore, ServiceIdentityStore, SessionStore,
-    SidecarStore, SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore,
-    TypingStore, WebvhStore,
+    MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore,
+    ModerationStore, MorphProjectionStore, MultisigPendingStore, NotificationStore,
+    OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore, PersistenceStore,
+    PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
+    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
+    RecoveryReceiptStore, RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore,
+    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
+    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::{Arc, FaultInjector};
@@ -75,10 +73,7 @@ pub struct SolandMemoryPersistenceStore {
     moderation: MemoryModerationStore,
     federation_operations: MemoryFederationOperationsStore,
     push_devices: MemoryPushDeviceStore,
-    presence: MemoryPresenceStore,
-    typing: MemoryTypingStore,
-    call_signal_relay: MemoryCallSignalRelayStore,
-    read_receipt_relay: MemoryReadReceiptRelayStore,
+    signal_relay: MemorySignalRelayStore,
     push_bridge_cache: MemoryPushBridgeCacheStore,
     policy_documents: MemoryPolicyDocumentStore,
     recovery_policies: MemoryRecoveryPolicyStore,
@@ -98,6 +93,7 @@ pub struct SolandMemoryPersistenceStore {
     space_container_projections: MemorySpaceContainerProjectionStore,
     strand_projections: MemoryStrandProjectionStore,
     morph_projections: MemoryMorphProjectionStore,
+    publication_evidence: MemoryPublicationEvidenceStore,
     // G3.S1: MLS lifecycle stores.
     mls_key_packages: MemoryMlsKeyPackageStore,
     mls_welcomes: MemoryMlsWelcomeStore,
@@ -151,10 +147,7 @@ impl SolandMemoryPersistenceStore {
             moderation: MemoryModerationStore::new(),
             federation_operations: MemoryFederationOperationsStore::new(),
             push_devices: MemoryPushDeviceStore::new(),
-            presence: MemoryPresenceStore::new(),
-            typing: MemoryTypingStore::new(),
-            call_signal_relay: MemoryCallSignalRelayStore::new(),
-            read_receipt_relay: MemoryReadReceiptRelayStore::new(),
+            signal_relay: MemorySignalRelayStore::new(),
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
@@ -183,6 +176,7 @@ impl SolandMemoryPersistenceStore {
             space_container_projections: MemorySpaceContainerProjectionStore::new(),
             strand_projections: MemoryStrandProjectionStore::new(),
             morph_projections: MemoryMorphProjectionStore::new(),
+            publication_evidence: MemoryPublicationEvidenceStore::new(),
             // G3.S1: MLS lifecycle stores.
             mls_key_packages: MemoryMlsKeyPackageStore::new(),
             mls_welcomes: MemoryMlsWelcomeStore::new(),
@@ -420,20 +414,8 @@ impl soland_storage::DeliveryPolicyStoreRegistry for SolandMemoryPersistenceStor
         &self.push_devices
     }
 
-    fn presence(&self) -> &dyn PresenceStore {
-        &self.presence
-    }
-
-    fn typing(&self) -> &dyn TypingStore {
-        &self.typing
-    }
-
-    fn call_signal_relay(&self) -> &dyn CallSignalRelayStore {
-        &self.call_signal_relay
-    }
-
-    fn read_receipt_relay(&self) -> &dyn ReadReceiptRelayStore {
-        &self.read_receipt_relay
+    fn signal_relay(&self) -> &dyn SignalRelayStore {
+        &self.signal_relay
     }
 
     fn push_bridge_cache(&self) -> &dyn PushBridgeCacheStore {
@@ -512,6 +494,10 @@ impl soland_storage::EventProjectionStoreRegistry for SolandMemoryPersistenceSto
 
     fn morph_projections(&self) -> &dyn MorphProjectionStore {
         &self.morph_projections
+    }
+
+    fn publication_evidence(&self) -> &dyn PublicationEvidenceStore {
+        &self.publication_evidence
     }
 }
 

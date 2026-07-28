@@ -1,11 +1,14 @@
-use soland_services::delivery::TypingState;
-
 use super::*;
 
 fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Event {
     arkret_wire::Event::new(
         arkret_wire::events::EventKind::MESSAGE_CREATE,
-        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001").unwrap(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-a11ce0000001",
+            )
+            .unwrap(),
+        },
         arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap(),
         actor_seq,
         arkret_identifiers::Hlc::new(hlc).unwrap(),
@@ -87,7 +90,6 @@ fn stream_cursor_handle_binding(
         realms_positions,
         account_realms_positions,
         device_list_positions,
-        &BTreeMap::new(),
         to_device_position,
         0,
     )
@@ -273,226 +275,214 @@ fn timeline_position_disambiguates_same_second_events() {
     assert!(welcome_message > realm_create);
 }
 
-fn test_presence_envelope(
-    actor: &str,
-    device: &str,
-    status: &str,
+// ── Signal rail (`sync/signal.md`) ─────────────────────────────────────
+//
+// v1 has no presence or typing projection to test. `signal.md` section 1 makes
+// `signal_class` the only server-visible classification and puts the presence /
+// typing / receipt payload inside the Signal ciphertext, so the server cannot
+// aggregate device statuses or re-emit a "presence delta" — it has nothing to
+// aggregate. What replaced those projections is the relay delivery contract: a
+// per-subscriber-device watermark (deliver-once), the class TTL (section 2)
+// after which a record is no longer delivered, and the rule that a device never
+// receives its own Signal back. The tests below restate the old presence and
+// typing coverage against exactly those rules.
+
+fn signal_envelope(
+    realm_id: &str,
+    sender_actor: &str,
+    sender_device: &str,
     sent_at: DateTime<Utc>,
-) -> arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope {
-    let envelope_device = if arkret_identifiers::DeviceId::new(device.to_owned()).is_ok() {
-        device
-    } else {
-        "ak:device:01904100-0000-7000-8000-000000000001"
+    ttl_seconds: i64,
+) -> arkret_wire::SignalEnvelope {
+    let realm = arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap();
+    let mut envelope = arkret_wire::SignalEnvelope {
+        realm_id: realm.clone(),
+        scope_ref: arkret_wire::ScopeRef::Realm { realm_id: realm },
+        sender_actor_id: arkret_identifiers::Did::new(sender_actor.to_owned()).unwrap(),
+        sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
+        seal_ref: arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64)))
+            .unwrap(),
+        signal_class: arkret_wire::SignalClass::Session,
+        sent_at,
+        expires_at: sent_at + ChronoDuration::seconds(ttl_seconds),
+        encrypted_payload: arkret_wire::SignalEncryptedPayload {
+            scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
+            key_ref: arkret_wire::SignalKeyRef {
+                algorithm: "MLS-EXPORTER-AEAD".to_owned(),
+                group_state_ref: "ak:event:01904100-0000-7000-8000-cccccccccccc".to_owned(),
+            },
+            purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
+            aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
+            epoch: 7,
+            nonce: "AAAAAAAAAAAAAAAA".to_owned(),
+            ciphertext: "Q2lwaGVydGV4dFBsYWNlaG9sZGVy".to_owned(),
+            aad_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+        },
+        proof: arkret_wire::SignalProof {
+            kind: "detached_jws".to_owned(),
+            verification_method: format!("{sender_actor}#device-key"),
+            alg: "EdDSA".to_owned(),
+            envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            created_at: sent_at,
+            domain: None,
+            audience: None,
+            jws: "a..b".to_owned(),
+        },
     };
-    // Event Envelope timestamps must be canonical millisecond wire form
-    // (`YYYY-MM-DDTHH:MM:SS.sssZ`); serializing a `DateTime<Utc>` directly
-    // emits sub-millisecond precision the SDK deserializer rejects.
-    let sent_at_wire = arkret_canonical::format_timestamp_canonical(sent_at);
-    let expires_at_wire =
-        arkret_canonical::format_timestamp_canonical(sent_at + ChronoDuration::seconds(60));
-    serde_json::from_value(serde_json::json!({
-        "kind": "ak.presence",
-        "realm_id": "ak:realm:01964137-0000-7000-8000-000000000001",
-        "actor_id": actor,
-        "device_id": envelope_device,
-        "sent_at": sent_at_wire,
-        "expires_at": expires_at_wire,
-        "payload": {"state": status},
-        "proof": {
-            "kind": "detached_jws",
-            "alg": "EdDSA",
-            "verification_method": format!("{actor}#{envelope_device}"),
-            "event_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-            "created_at": sent_at_wire,
-            "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
-        }
-    }))
-    .unwrap()
+    envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
+    envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
+    envelope
 }
 
-fn presence_record(device: &str, status: &str, updated_at: DateTime<Utc>) -> PresenceRecord {
-    PresenceRecord {
-        actor: "did:web:alice.example".to_owned(),
-        device_id: device.to_owned(),
-        status: status.to_owned(),
-        status_message: None,
-        last_active_at: None,
-        expires_at: Some(updated_at + ChronoDuration::seconds(60)),
-        updated_at,
-        envelope: test_presence_envelope("did:web:alice.example", device, status, updated_at),
+fn signal_record(
+    envelope: arkret_wire::SignalEnvelope,
+    position: u64,
+) -> soland_services::delivery::SignalRelayState {
+    soland_services::delivery::SignalRelayState {
+        realm_id: envelope.realm_id.as_str().to_owned(),
+        scope_ref: envelope.scope_ref.clone(),
+        sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+        sender_device_id: envelope.sender_device_id.as_str().to_owned(),
+        signal_class: envelope.signal_class,
+        envelope_digest: envelope.envelope_digest().unwrap().as_str().to_owned(),
+        sent_at: envelope.sent_at,
+        expires_at: envelope.expires_at,
+        envelope,
+        position,
     }
 }
 
+/// Restates `presence_aggregation_all_expired_projects_offline`: the rail TTL is
+/// the whole lifetime rule now. A `session`-class Signal — the class that
+/// carries presence — is capped at 30 seconds (`signal.md` section 2), so there
+/// is no long-lived server-side presence state that could need an
+/// "all expired means offline" projection in the first place.
 #[test]
-fn presence_aggregation_prefers_dnd_then_online_then_idle() {
-    let now = now();
-    let records = vec![
-        presence_record("ak:device:a", "idle", now - ChronoDuration::seconds(1)),
-        presence_record("ak:device:b", "online", now),
-    ];
-    let aggregated = aggregate_presence_records(&records, now).expect("aggregate");
-    assert_eq!(aggregated.status, "online");
-
-    let records = vec![
-        presence_record("ak:device:a", "online", now),
-        presence_record("ak:device:b", "dnd", now - ChronoDuration::seconds(1)),
-    ];
-    let aggregated = aggregate_presence_records(&records, now).expect("aggregate");
-    assert_eq!(aggregated.status, "dnd");
-}
-
-#[test]
-fn presence_aggregation_all_expired_projects_offline() {
-    let now = now();
-    let mut record = presence_record("ak:device:a", "idle", now - ChronoDuration::seconds(120));
-    record.expires_at = Some(now - ChronoDuration::seconds(30));
-    let aggregated = aggregate_presence_records(&[record], now).expect("aggregate");
-    assert_eq!(aggregated.status, "offline");
-    assert_eq!(aggregate_presence_records(&[], now).map(|a| a.status), None);
-}
-
-#[tokio::test]
-async fn incremental_sync_includes_presence_only_for_presence_delta() {
-    let state = test_state();
-    let session = roster_session(&state, ROSTER_ACTOR);
-    state.realm_directory().upsert(roster_realm(false, true));
-    state
-        .deliveries()
-        .store_presence(PresenceRecord {
-            actor: ROSTER_ACTOR.to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
-            status: "dnd".to_owned(),
-            status_message: Some("In a meeting".to_owned()),
-            last_active_at: None,
-            expires_at: Some(now() + ChronoDuration::seconds(60)),
-            updated_at: now(),
-            envelope: test_presence_envelope(
-                ROSTER_ACTOR,
-                "ak:device:01904100-0000-7000-8000-a11ce0000001",
-                "dnd",
-                now(),
-            ),
-        })
-        .await
-        .expect("presence stored");
-    let presence_at = now();
-    put_canonical_event_received_at(
-        &state,
-        "ak:event:01904100-0000-7000-8000-0000000000f1",
-        1,
-        arkret_wire::events::EventKind::PRESENCE,
-        json!({"status": "dnd"}),
-        presence_at,
-        presence_at,
-    )
-    .await;
-
-    let body = roster_body(state.service_id());
-    let initial =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
-    assert!(
-        initial
-            .presence
-            .as_ref()
-            .is_some_and(|container| !container.events.is_empty()),
-        "full sync carries visible presence: {:?}",
-        initial.presence
-    );
-
-    let filter_value = sync_filter_value(body.filter.as_ref());
-    let initial_cursor = parse_and_validate_sync_cursor(
-        initial.cursor.as_deref().unwrap(),
-        &state,
-        Some(&session),
-        filter_value.as_ref(),
-        chrono::Utc::now().timestamp_millis(),
-    )
-    .await
-    .expect("initial cursor parses");
-    let mut incremental_body = body.clone();
-    incremental_body.after = initial.cursor.clone();
-
-    let quiet_incremental = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &initial_cursor,
-        false,
-    )
-    .await;
-    assert!(
-        quiet_incremental
-            .presence
-            .as_ref()
-            .is_none_or(|container| container.events.is_empty())
-    );
-
-    let presence_incremental = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &initial_cursor,
-        true,
-    )
-    .await;
-    assert!(
-        presence_incremental
-            .presence
-            .as_ref()
-            .is_some_and(|container| !container.events.is_empty()),
-        "presence-triggered incremental sync carries current presence: {:?}",
-        presence_incremental.presence
-    );
-}
-
-#[tokio::test]
-async fn typing_state_is_emitted_once_per_cursor_revision() {
-    let state = test_state();
-    let session = roster_session(&state, ROSTER_ACTOR);
-    state.realm_directory().upsert(roster_realm(false, true));
-    let updated_at = now();
-    let mut envelope = test_presence_envelope(
+fn session_class_signal_ttl_is_capped_at_the_rail_ceiling() {
+    let sent_at = now();
+    signal_envelope(
+        ROSTER_REALM,
         ROSTER_ACTOR,
         "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "online",
-        updated_at,
+        sent_at,
+        30,
+    )
+    .validate_structural()
+    .expect("a 30s session Signal sits exactly on the class ceiling");
+    assert!(
+        signal_envelope(
+            ROSTER_REALM,
+            ROSTER_ACTOR,
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            sent_at,
+            31,
+        )
+        .validate_structural()
+        .is_err(),
+        "a session Signal past the 30s ceiling must fail closed"
     );
-    envelope.kind = "ak.typing".to_owned();
-    envelope.realm_id = arkret_identifiers::RealmId::new(ROSTER_REALM.to_owned()).unwrap();
-    envelope.payload = BTreeMap::from([
-        ("typing".to_owned(), json!(true)),
-        (
-            "strand_id".to_owned(),
-            json!(crate::routing::events::strand::strand_id_from_realm_id(
-                ROSTER_REALM
-            )),
-        ),
-    ]);
+}
+
+/// Restates `presence_aggregation_prefers_dnd_then_online_then_idle`: two
+/// devices of the same principal no longer collapse into one aggregated status.
+/// The server keeps each device Signal separate, and the only cross-device rule
+/// left is that a sending device is excluded from its own fanout, so two
+/// devices produce two independent relay records.
+#[tokio::test]
+async fn signals_from_two_devices_of_one_principal_stay_independent() {
+    let state = test_state();
+    let sent_at = now();
+    for (device, position) in [
+        ("ak:device:01904100-0000-7000-8000-a11ce0000001", 1),
+        ("ak:device:01904100-0000-7000-8000-a11ce0000002", 2),
+    ] {
+        state
+            .deliveries()
+            .append_signal(signal_record(
+                signal_envelope(ROSTER_REALM, ROSTER_ACTOR, device, sent_at, 30),
+                position,
+            ))
+            .await
+            .expect("signal relayed");
+    }
+
+    let records = state
+        .deliveries()
+        .signals_for_realm(ROSTER_REALM)
+        .await
+        .expect("relay readable");
+    let devices = records
+        .iter()
+        .map(|record| record.sender_device_id.clone())
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        devices.len(),
+        2,
+        "each sending device keeps its own relay record: {devices:?}"
+    );
+}
+
+/// Restates `typing_state_is_emitted_once_per_cursor_revision` and
+/// `incremental_sync_includes_presence_only_for_presence_delta`: deliver-once is
+/// now a per-subscriber-device watermark over the monotonic relay `position`,
+/// not a per-cursor-revision re-emit of a live projection row. A resumed
+/// subscriber at the highest delivered position sees nothing new.
+#[tokio::test]
+async fn signal_delivery_is_once_per_subscriber_device_watermark() {
+    let state = test_state();
+    let subscriber = "did:web:bob.example";
+    let subscriber_device = "ak:device:01904100-0000-7000-8000-b0b0b0000001";
+    let sent_at = now();
     state
         .deliveries()
-        .store_typing(TypingState {
-            actor: ROSTER_ACTOR.to_owned(),
-            realm_id: ROSTER_REALM.to_owned(),
-            scope_id: None,
-            position: 0,
-            expires_at: updated_at + ChronoDuration::seconds(60),
-            envelope,
-        })
+        .append_signal(signal_record(
+            signal_envelope(
+                ROSTER_REALM,
+                ROSTER_ACTOR,
+                "ak:device:01904100-0000-7000-8000-a11ce0000001",
+                sent_at,
+                30,
+            ),
+            1,
+        ))
         .await
-        .expect("typing stored");
+        .expect("signal relayed");
 
-    let (first, first_position) =
-        typing_envelopes_for_subscriber(&state, ROSTER_REALM, Some(&session), 0).await;
-    assert_eq!(first.len(), 1, "fresh typing revision must be delivered");
-    assert!(first_position > 0);
-
-    let (replayed, replayed_position) =
-        typing_envelopes_for_subscriber(&state, ROSTER_REALM, Some(&session), first_position).await;
-    assert!(
-        replayed.is_empty(),
-        "the same live typing row must not make every resumed subscribe non-empty"
+    assert_eq!(
+        state
+            .deliveries()
+            .signal_watermark(subscriber, subscriber_device, ROSTER_REALM)
+            .await
+            .expect("watermark readable"),
+        0,
+        "a device that has never subscribed starts behind every record"
     );
-    assert_eq!(replayed_position, first_position);
+    state
+        .deliveries()
+        .advance_signal_watermark(subscriber, subscriber_device, ROSTER_REALM, 1)
+        .await
+        .expect("watermark advanced");
+
+    let watermark = state
+        .deliveries()
+        .signal_watermark(subscriber, subscriber_device, ROSTER_REALM)
+        .await
+        .expect("watermark readable");
+    assert_eq!(watermark, 1);
+    let undelivered = state
+        .deliveries()
+        .signals_for_realm(ROSTER_REALM)
+        .await
+        .expect("relay readable")
+        .into_iter()
+        .filter(|record| record.position > watermark)
+        .count();
+    assert_eq!(
+        undelivered, 0,
+        "a resumed subscriber at the highest delivered position sees nothing new"
+    );
 }
 
 fn test_config() -> crate::config::AppConfig {
@@ -882,8 +872,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     .await;
 
     let body = roster_body(state.service_id());
-    let snapshot =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let snapshot = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     let timeline_events = &snapshot.realms.as_ref().unwrap().entries[ROSTER_REALM]
         .timeline
         .as_ref()
@@ -1335,8 +1324,7 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
     }
 
     let body = roster_body(state.service_id());
-    let initial =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     assert_eq!(
         serde_json::to_value(&initial.device_lists).unwrap(),
         json!({"changed": [ROSTER_ACTOR, ROSTER_CALLER], "left": []})
@@ -1375,14 +1363,8 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
 
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
-    let after_revocation = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &initial_cursor,
-        false,
-    )
-    .await;
+    let after_revocation =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     assert_eq!(
         serde_json::to_value(&after_revocation.device_lists).unwrap(),
         json!({"changed": [ROSTER_ACTOR], "left": []}),
@@ -1405,7 +1387,6 @@ async fn sync_snapshot_emits_device_list_baseline_changes_and_left_principals() 
         Some(&session),
         &incremental_body,
         &after_revocation_cursor,
-        false,
     )
     .await;
     assert_eq!(
@@ -1487,8 +1468,7 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .await;
 
     let body = roster_body(state.service_id());
-    let initial =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     let initial_value = serde_json::to_value(&initial).unwrap();
     let initial_events = initial_value["realms"][ROSTER_REALM]["state"]["events"]
         .as_array()
@@ -1543,14 +1523,8 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
 
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
-    let incremental = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &initial_cursor,
-        false,
-    )
-    .await;
+    let incremental =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     let incremental_value = serde_json::to_value(&incremental).unwrap();
     let incremental_events = incremental_value["realms"][ROSTER_REALM]["state"]["events"]
         .as_array()
@@ -1608,8 +1582,7 @@ async fn membership_only_projection_advances_incremental_roster() {
         .expect("realm meta stored");
 
     let body = roster_body(state.service_id());
-    let initial =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
         initial.cursor.as_deref().unwrap(),
@@ -1642,14 +1615,8 @@ async fn membership_only_projection_advances_incremental_roster() {
 
     let mut incremental_body = body;
     incremental_body.after = initial.cursor;
-    let incremental = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &initial_cursor,
-        false,
-    )
-    .await;
+    let incremental =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     let value = serde_json::to_value(&incremental).unwrap();
     let members = value["realms"][ROSTER_REALM]["members"]
         .as_array()
@@ -1739,8 +1706,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     .await;
 
     let body = roster_body(state.service_id());
-    let initial =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let initial = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     let filter_value = sync_filter_value(body.filter.as_ref());
     let initial_cursor = parse_and_validate_sync_cursor(
         initial.cursor.as_deref().unwrap(),
@@ -1787,14 +1753,8 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
 
     let mut incremental_body = body.clone();
     incremental_body.after = initial.cursor.clone();
-    let incremental = build_sync_snapshot(
-        &state,
-        Some(&session),
-        &incremental_body,
-        &initial_cursor,
-        false,
-    )
-    .await;
+    let incremental =
+        build_sync_snapshot(&state, Some(&session), &incremental_body, &initial_cursor).await;
     let incremental_value = serde_json::to_value(&incremental).unwrap();
     let state_events = incremental_value["realms"][ROSTER_REALM]["state"]["events"]
         .as_array()
@@ -1931,8 +1891,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     .await;
 
     let body = roster_body(state.service_id());
-    let snapshot =
-        build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default(), false).await;
+    let snapshot = build_sync_snapshot(&state, Some(&session), &body, &SyncCursor::default()).await;
     let snapshot_value = serde_json::to_value(&snapshot).unwrap();
     let timeline_events = snapshot_value["realms"][ROSTER_REALM]["timeline"]["events"]
         .as_array()

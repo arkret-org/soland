@@ -95,12 +95,12 @@ pub(super) fn signed_agent_selector_claim(
             "agent selector claim canonicalization failed: {err}"
         ))
     })?;
-    let signer = Ed25519MoveSigner::new(
+    let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
         issuer.clone(),
         format!("{service_id}#directory-agent-selector-claim"),
     );
-    let signature = MoveSigner::sign_payload(&signer, &canonical_bytes)
+    let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;
     let proof = PayloadProof {
         kind: "detached_jws".to_owned(),

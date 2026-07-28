@@ -10,6 +10,7 @@ use arkret_models_collaboration::governance::invite_addressing::PrincipalLocator
 use arkret_wire::EventBatchReceipt;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+pub use soland_storage::PublicationEvidenceRecord;
 use soland_storage::RealmEventStats;
 
 use crate::ServiceResult;
@@ -622,12 +623,34 @@ pub trait ProjectionWritePort: Send + Sync {
     ) -> ServiceResult<()>;
 }
 
+/// Publication evidence per accepted Event canonical digest
+/// (`authz/offline-publication.md` §2.1).
+#[async_trait::async_trait]
+pub trait PublicationEvidencePort: Send + Sync {
+    /// Store the evidence for a digest not seen before and return whatever is
+    /// stored afterwards. A digest that is already present wins, so the
+    /// original `received_at` survives an idempotent retry verbatim.
+    async fn store_publication_evidence(
+        &self,
+        record: PublicationEvidenceRecord,
+    ) -> ServiceResult<PublicationEvidenceRecord>;
+    async fn publication_evidence(
+        &self,
+        event_digest: &str,
+    ) -> ServiceResult<Option<PublicationEvidenceRecord>>;
+    async fn publication_evidence_for_digests(
+        &self,
+        event_digests: &[String],
+    ) -> ServiceResult<Vec<PublicationEvidenceRecord>>;
+}
+
 #[derive(Clone)]
 pub struct EventQueryService {
     events: Arc<dyn EventReadPort>,
     messages: Arc<dyn MessagePort>,
     applets: Arc<dyn AppletPort>,
     projections: Arc<dyn ProjectionWritePort>,
+    publication_evidence: Arc<dyn PublicationEvidencePort>,
 }
 
 fn active_agent_accountability(
@@ -853,13 +876,44 @@ impl EventQueryService {
         messages: Arc<dyn MessagePort>,
         applets: Arc<dyn AppletPort>,
         projections: Arc<dyn ProjectionWritePort>,
+        publication_evidence: Arc<dyn PublicationEvidencePort>,
     ) -> Self {
         Self {
             events,
             messages,
             applets,
             projections,
+            publication_evidence,
         }
+    }
+
+    /// Persist the lease + freshly minted receipt for `event_digest`, or return
+    /// the evidence already stored for it.
+    pub async fn store_publication_evidence(
+        &self,
+        record: PublicationEvidenceRecord,
+    ) -> ServiceResult<PublicationEvidenceRecord> {
+        self.publication_evidence
+            .store_publication_evidence(record)
+            .await
+    }
+
+    pub async fn publication_evidence(
+        &self,
+        event_digest: &str,
+    ) -> ServiceResult<Option<PublicationEvidenceRecord>> {
+        self.publication_evidence
+            .publication_evidence(event_digest)
+            .await
+    }
+
+    pub async fn publication_evidence_for_digests(
+        &self,
+        event_digests: &[String],
+    ) -> ServiceResult<Vec<PublicationEvidenceRecord>> {
+        self.publication_evidence
+            .publication_evidence_for_digests(event_digests)
+            .await
     }
 
     pub async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>> {

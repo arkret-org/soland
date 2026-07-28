@@ -36,6 +36,9 @@ pub struct PendingReplayEntry {
     pub reason: String,
     pub operation_id: String,
     pub operation: Operation,
+    /// Registry-derived cell writes of the queued Event, captured at queue time
+    /// so the deferred replay reduces the exact same projection.
+    pub cell_writes: Vec<arkret_wire::cba::ProjectedCellWrite>,
     pub queued_at: chrono::DateTime<chrono::Utc>,
 }
 

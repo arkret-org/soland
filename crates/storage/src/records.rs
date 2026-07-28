@@ -506,82 +506,40 @@ pub struct FederationFrontierExchangeRecord {
     pub updated_at: i64,
 }
 
-/// Per-device presence broadcast admitted from `ak.presence`
-/// (profiles-presence.md §3.3). One actor may have several device rows;
-/// the projection aggregates them (`dnd > online > idle`, all expired →
-/// `offline`) before anything reaches an observer.
+/// One admitted `SignalEnvelope` held for its TTL so subscribed devices in the
+/// same scope can pick it up (`sync/signal.md` §4).
+///
+/// Every server-visible member here is copied from the envelope's own immutable
+/// header, which is bound into the AEAD AAD. There is deliberately no
+/// `signal_kind`, target, sequence or payload column: the exact payload type
+/// and target live inside `encrypted_payload` and `signal.md` §1 forbids a
+/// service from requiring or inferring a finer classification. Presence,
+/// typing, call signalling and read receipts are all just Signals now, so they
+/// share this one relay instead of four plaintext tables.
 #[derive(Clone, Debug)]
-pub struct PresenceRecord {
-    pub actor: String,
-    /// Broadcasting device (proof-bound `device_id` of the envelope).
-    pub device_id: String,
-    /// Closed v1 wire state (`online` / `idle` / `dnd` / `offline`),
-    /// validated at admission via `PresenceStatus::parse_wire`.
-    pub status: String,
-    /// Transient status-message override, validated at admission
-    /// (≤256 code points, NFC, no control chars).
-    pub status_message: Option<String>,
-    /// Sender-supplied `last_active_at` wire value (bucket interval),
-    /// validated fail-closed at admission and passed through verbatim.
-    pub last_active_at: Option<String>,
-    /// Envelope TTL; expired rows only contribute the stale-offline
-    /// fallback to aggregation.
-    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-    /// Original proof-bearing broadcast envelope delivered to subscribers.
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-}
-
-#[derive(Clone, Debug)]
-pub struct TypingRecord {
-    pub actor: String,
+pub struct SignalRelayRecord {
     pub realm_id: String,
-    pub scope_id: Option<String>,
-    /// Strictly monotonic per-Realm revision assigned by `TypingStore::put`.
-    /// Producer code leaves this at `0`; storage replaces it before the row
-    /// becomes visible. TTL timestamps are lifecycle data, not ordering data.
-    pub position: i64,
+    /// Signed security scope of the envelope. A Circle-scoped Signal is
+    /// delivered only to that Circle's eligible devices.
+    pub scope_ref: arkret_wire::ScopeRef,
+    pub sender_actor_id: String,
+    pub sender_device_id: String,
+    /// The only server-visible product classification (`setup` / `moderation`
+    /// / `session`).
+    pub signal_class: arkret_wire::SignalClass,
+    /// Digest of the complete admitted envelope. Used for short-lived replay
+    /// suppression only; it is not a durable receipt.
+    pub envelope_digest: String,
+    pub sent_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
-    /// Original proof-bearing broadcast envelope delivered to subscribers.
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-}
-
-/// Relayed `ak.call.signal` envelope for realm-broadcast ephemeral delivery
-/// (`webrtc-signaling.md` §5). The full signed envelope is stored verbatim so
-/// the receiver can verify `proof` over the canonical bytes.
-#[derive(Clone, Debug)]
-pub struct CallSignalRelayRecord {
-    pub realm_id: String,
-    pub sender_actor: String,
-    pub sender_device: String,
-    pub call_id: String,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-    /// Monotonic per-Realm position assigned by `CallSignalRelayStore::append`.
+    /// The verbatim admitted envelope handed to subscribers, so a receiver
+    /// verifies `proof` over the exact canonical bytes the sender signed.
+    pub envelope: arkret_wire::SignalEnvelope,
+    /// Monotonic per-Realm position assigned by `SignalRelayStore::append`.
     /// Drives per-subscriber-device deliver-once: a subscriber's watermark
     /// records the highest `position` already delivered to that device, so an
     /// incremental re-subscribe inside the TTL window does not re-emit the same
     /// envelope. Producers leave this `0`; `append` overwrites it.
-    pub position: u64,
-}
-
-/// Relayed `ak.receipt.read` payload for short-TTL read receipt delivery.
-/// The normalized `receipt` value is the wire object emitted to subscribers;
-/// relay metadata drives visibility and deliver-once behavior.
-#[derive(Clone, Debug)]
-pub struct ReadReceiptRelayRecord {
-    pub realm_id: String,
-    pub actor_id: String,
-    pub sender_device: Option<String>,
-    pub event_id: String,
-    pub read_scope: serde_json::Value,
-    pub target_actor: Option<String>,
-    pub visibility: String,
-    pub receipt: serde_json::Value,
-    pub envelope: arkret_models_collaboration::events_payloads::ephemeral::EphemeralEnvelope,
-    pub created_at: chrono::DateTime<chrono::Utc>,
-    pub expires_at: chrono::DateTime<chrono::Utc>,
-    /// Monotonic per-Realm position assigned by `ReadReceiptRelayStore::append`.
     pub position: u64,
 }
 

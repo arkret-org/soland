@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use arkret_identifiers::{Did, Hash, Hlc, MoveId, RealmId, SealId};
+use arkret_identifiers::{Did, Hash, Hlc, RealmId, SealId};
 use arkret_wire::{PartialSignature, Seal, ThresholdAggregator, WireError};
 use base64::Engine as _;
 use chrono::Utc;
@@ -293,9 +293,9 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
         .into_iter()
         .map(|s| SealId::new(s).map_err(|e| format!("invalid SealId: {e}")))
         .collect::<Result<_, _>>()?;
-    let delta: Vec<MoveId> = delta
+    let delta: Vec<Hash> = delta
         .into_iter()
-        .map(|s| MoveId::new(s).map_err(|e| format!("invalid MoveId: {e}")))
+        .map(|s| Hash::new(s).map_err(|e| format!("invalid Hash: {e}")))
         .collect::<Result<_, _>>()?;
     let state_root = Hash::new(state_root).map_err(|e| format!("invalid state_root hash: {e}"))?;
     let hlc = Hlc::new(hlc_str).map_err(|e| format!("invalid hlc: {e}"))?;

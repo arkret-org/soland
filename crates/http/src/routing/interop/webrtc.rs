@@ -959,7 +959,31 @@ async fn call_state_from_event_log(
         let Some(operation) = call_state_operation_from_record(record)? else {
             continue;
         };
-        operations.push(operation);
+        // Cold projection re-derives each Event's writes from the registered
+        // reducer contract; the stored envelope carries no producer
+        // `effects[]` to replay (`event-and-patch.md` §2.4.2).
+        let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "stored call-state Event {} is not a canonical Event: {error}",
+                    record.event_id
+                ))
+            },
+        )?;
+        let cell_writes = state
+            .projections()
+            .project_cell_writes(&event)
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "stored call-state Event {} does not project its registered cell writes: \
+                     {error}",
+                    record.event_id
+                ))
+            })?;
+        operations.push(soland_services::projection::ProjectedOperation {
+            operation,
+            cell_writes,
+        });
     }
     Ok(state
         .projections()

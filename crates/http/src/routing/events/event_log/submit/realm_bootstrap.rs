@@ -163,12 +163,50 @@ pub(super) async fn submit_realm_bootstrap_batch(
     validate_operation_semantics(state, &operations).map_err(|message| {
         SubmitOneError::new(StatusCode::BAD_REQUEST, "schema_violation", message)
     })?;
+    // The genesis unit carries no producer `effects[]` either: each staged
+    // Operation is paired with the writes its own signed Event derives from
+    // the registered contract (`event-and-patch.md` §2.4.2), in wire order so
+    // the two cannot drift apart by index.
+    let projected_operations = operations
+        .iter()
+        .cloned()
+        .zip(envelopes.iter())
+        .map(|(operation, envelope)| {
+            let event = serde_json::from_value::<arkret_wire::Event>(envelope.clone()).map_err(
+                |error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!("Realm bootstrap Event is not a canonical Event: {error}"),
+                    )
+                },
+            )?;
+            // The Realm does not exist yet, so there is no
+            // `ak.component.realm.digest_suite.v1` cell to read: genesis
+            // projects under the protocol baseline suite.
+            let cell_writes = genesis_cell_write_projector(&event).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "reducer_projection_failed",
+                    format!(
+                        "Realm bootstrap Event {} does not project its registered cell writes: \
+                         {error}",
+                        event.event_id
+                    ),
+                )
+            })?;
+            Ok(soland_services::projection::ProjectedOperation {
+                operation,
+                cell_writes,
+            })
+        })
+        .collect::<Result<Vec<_>, SubmitOneError>>()?;
     // Run the reducer against an application-owned clone in wire order. This
     // is the genesis authority boundary: create establishes the staged Realm,
     // then only the exact founding grant and closed facets can be applied.
     let staged_projection = state
         .projections()
-        .stage_realm_bootstrap(&operations)
+        .stage_realm_bootstrap(&projected_operations)
         .map_err(|error| {
             let operation = &operations[error.operation_index];
             let code = if !error.ignored

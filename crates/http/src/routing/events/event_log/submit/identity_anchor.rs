@@ -391,15 +391,18 @@ fn validate_self_principal_pcr_bootstrap_context(
                 format!("self-principal PCR authorize is not a canonical Event: {error}"),
             )
         })?;
-    arkret_bootstrap::validate_self_principal_bootstrap_unit(&create, &authorize).map_err(
-        |error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                format!("self-principal PCR bootstrap unit violates the closed profile: {error}"),
-            )
-        },
-    )?;
+    arkret_bootstrap::validate_self_principal_bootstrap_unit(
+        &create,
+        &authorize,
+        &genesis_cell_write_projector,
+    )
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            format!("self-principal PCR bootstrap unit violates the closed profile: {error}"),
+        )
+    })?;
     Ok(RealmBootstrapBatchContext {
         realm_id: create.realm_id.to_string(),
         actor_id: create.actor_id.to_string(),
@@ -1465,6 +1468,7 @@ mod tests {
                 created_at,
                 hlc: arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
             },
+            &genesis_cell_write_projector,
         )
         .unwrap();
         attach_bootstrap_fixture_proof(
@@ -1513,7 +1517,7 @@ mod tests {
         };
         let mut authorize = arkret_wire::Event::new(
             arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
-            realm_id,
+            arkret_wire::ScopeRef::Realm { realm_id },
             principal,
             1,
             arkret_identifiers::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),
@@ -1582,8 +1586,12 @@ mod tests {
         let actor = arkret_identifiers::Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
         let mut event = arkret_wire::Event::new(
             envelope["kind"].as_str().unwrap(),
-            arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000010")
+            arkret_wire::ScopeRef::Realm {
+                realm_id: arkret_identifiers::RealmId::new(
+                    "ak:realm:01904100-0000-7000-8000-000000000010",
+                )
                 .unwrap(),
+            },
             actor.clone(),
             actor_seq,
             arkret_identifiers::Hlc::new("01970e589d21-0005-a13f9c2e").unwrap(),

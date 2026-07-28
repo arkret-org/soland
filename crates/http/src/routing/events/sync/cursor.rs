@@ -19,13 +19,6 @@ pub struct SyncCursor {
     pub account_positions: BTreeMap<String, i64>,
     /// Device-list aggregate frontier per tracked principal.
     pub device_list_positions: BTreeMap<String, i64>,
-    /// Latest observed typing-state revision per Realm. Typing rows are
-    /// stateful ephemera: they remain valid until their TTL expires, so the
-    /// account cursor must remember which revision a device has already seen.
-    /// Without this vector, one active `ak.typing` row makes every resumed
-    /// subscribe look non-empty and creates a tight reconnect loop for the
-    /// entire TTL window.
-    pub typing_positions: BTreeMap<String, i64>,
     pub to_device_position: i64,
     /// Account-private notification projection high-water position.
     pub notification_position: i64,
@@ -82,7 +75,6 @@ pub async fn sync_token_for_client_sync(
         realms_positions,
         account_realms_positions,
         device_list_positions,
-        BTreeMap::new(),
         to_device_position,
         0,
     )
@@ -96,7 +88,6 @@ pub async fn sync_token_for_client_sync_frontiers(
     realms_positions: BTreeMap<String, i64>,
     account_realms_positions: BTreeMap<String, i64>,
     device_list_positions: BTreeMap<String, i64>,
-    typing_positions: BTreeMap<String, i64>,
     to_device_position: i64,
     notification_position: i64,
 ) -> String {
@@ -108,7 +99,6 @@ pub async fn sync_token_for_client_sync_frontiers(
         "realms": realms_positions,
         "account_realms": account_realms_positions,
         "device_lists": device_list_positions,
-        "typing": typing_positions,
         "devices": device_positions,
         "to_device": to_device_position,
         "notifications": notification_position
@@ -125,7 +115,6 @@ pub async fn sync_token_for_client_sync_frontiers(
         &realms_positions,
         &account_realms_positions,
         &device_list_positions,
-        &typing_positions,
         to_device_position,
         notification_position,
     );
@@ -272,7 +261,6 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
     realms_positions: &BTreeMap<String, i64>,
     account_realms_positions: &BTreeMap<String, i64>,
     device_list_positions: &BTreeMap<String, i64>,
-    typing_positions: &BTreeMap<String, i64>,
     to_device_position: i64,
     notification_position: i64,
 ) -> Vec<u8> {
@@ -285,7 +273,6 @@ pub(crate) fn stream_cursor_handle_binding_with_notification_position(
         "realms": realms_positions,
         "account_realms": account_realms_positions,
         "device_lists": device_list_positions,
-        "typing": typing_positions,
         "to_device": to_device_position,
         "notifications": notification_position,
     });
@@ -579,10 +566,6 @@ pub async fn parse_and_validate_sync_cursor(
         Some("cursor handle is missing positions.account_realms"),
     )?;
     let device_list_positions = cursor_position_map(positions_value, "device_lists", None)?;
-    // Optional for cursors minted before the typing revision vector existed.
-    // Treating the missing map as empty causes one bounded replay of current
-    // typing state, after which the newly minted cursor suppresses repeats.
-    let typing_positions = cursor_position_map(positions_value, "typing", None)?;
     let to_device_position = positions_value
         .get("to_device")
         .and_then(|position| position.as_i64())
@@ -596,7 +579,6 @@ pub async fn parse_and_validate_sync_cursor(
         positions,
         account_positions,
         device_list_positions,
-        typing_positions,
         to_device_position,
         notification_position,
         issued_at_ms,
