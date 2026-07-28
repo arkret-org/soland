@@ -249,6 +249,20 @@ pub struct ChaosOperationOutcome {
     consistent: bool,
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct RealmBasisRequest {
+    realm_id: String,
+    subject: String,
+    data_plane_actions: Vec<String>,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct RealmBasisOutcome {
+    seal_id: String,
+    control_event_set_root: String,
+    state_root: String,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct CanonicalEventDiagnostic {
     event_id: String,
@@ -312,6 +326,63 @@ pub async fn encode(body: JsonBody<EncodeVectorRequest>) -> JsonResult<Canonical
     json_ok(CanonicalJsonDigestOutcome {
         canonical_json: canonical,
         digest,
+    })
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.realm_basis",
+    tags("conformance")
+)]
+#[tracing::instrument(skip_all, fields(op = "org.arkret.soland.conformance.realm_basis"))]
+pub async fn realm_basis(
+    depot: &mut Depot,
+    body: JsonBody<RealmBasisRequest>,
+) -> JsonResult<RealmBasisOutcome> {
+    super::ensure_enabled()?;
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let mut body = body.into_inner();
+    arkret_identifiers::RealmId::new(body.realm_id.clone())
+        .map_err(|_| AppError::invalid_param("realm_id must be a canonical Realm id"))?;
+    arkret_identifiers::Did::new(body.subject.clone())
+        .map_err(|_| AppError::invalid_param("subject must be a canonical DID"))?;
+    if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
+        return Err(AppError::invalid_param(
+            "data_plane_actions must contain between 1 and 32 actions",
+        ));
+    }
+    body.data_plane_actions.sort();
+    body.data_plane_actions.dedup();
+    for action in &body.data_plane_actions {
+        let descriptor = arkret_schema::capability_action(action).ok_or_else(|| {
+            AppError::invalid_param(format!("unregistered data-plane action {action}"))
+        })?;
+        if descriptor.event_mapping_kind == "non_event_surface" {
+            return Err(AppError::invalid_param(format!(
+                "data-plane fixture action {action} is not an Event action"
+            )));
+        }
+    }
+
+    let basis = soland_services::conformance_basis::build_conformance_realm_basis(
+        &body.realm_id,
+        &body.subject,
+        &body.data_plane_actions,
+    )
+    .map_err(|error| AppError::internal(format!("build conformance Realm basis: {error}")))?;
+    state
+        .projections()
+        .conformance_put_seal(&basis.seal)
+        .map_err(|error| AppError::internal(format!("store conformance Realm Seal: {error}")))?;
+    state
+        .projections()
+        .conformance_append_sealed_effects(&basis.seal.realm_id, &basis.seal.id, &basis.ops)
+        .map_err(|error| {
+            AppError::internal(format!("store conformance sealed basis state: {error}"))
+        })?;
+    json_ok(RealmBasisOutcome {
+        seal_id: basis.seal.id.to_string(),
+        control_event_set_root: basis.seal.control_event_set_root.to_string(),
+        state_root: basis.seal.state_root.to_string(),
     })
 }
 

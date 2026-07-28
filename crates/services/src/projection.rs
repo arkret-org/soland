@@ -719,10 +719,26 @@ impl ProjectionService {
         )
     }
 
+    #[doc(hidden)]
+    pub fn conformance_put_seal(&self, seal: &Seal) -> StoreResult<()> {
+        self.seal_store().put(seal)
+    }
+
+    #[doc(hidden)]
+    pub fn conformance_append_sealed_effects(
+        &self,
+        realm_id: &RealmId,
+        seal_id: &SealId,
+        new_ops: &[(CellRef, IssuedOp)],
+    ) -> StoreResult<()> {
+        self.cell_store()
+            .append_sealed_effects(realm_id, seal_id, new_ops)
+    }
+
     #[cfg(feature = "test-support")]
     #[doc(hidden)]
     pub fn test_put_seal(&self, seal: &Seal) -> StoreResult<()> {
-        self.seal_store().put(seal)
+        self.conformance_put_seal(seal)
     }
 
     #[cfg(feature = "test-support")]
@@ -733,8 +749,7 @@ impl ProjectionService {
         seal_id: &SealId,
         new_ops: &[(CellRef, IssuedOp)],
     ) -> StoreResult<()> {
-        self.cell_store()
-            .append_sealed_effects(realm_id, seal_id, new_ops)
+        self.conformance_append_sealed_effects(realm_id, seal_id, new_ops)
     }
 
     #[must_use]

@@ -1,0 +1,245 @@
+//! Development-conformance governance basis fixtures.
+//!
+//! This module builds a real Seal and the sealed cell operations it covers.
+//! It is used only by the development-only conformance injection surface and
+//! integration-test support. Production protocol admission never calls it.
+
+use std::collections::BTreeMap;
+
+use arkret_identifiers::{CellRef, Did, Hash, Hlc, RealmId};
+use arkret_state::lattice::ordered_log::IssuedOp;
+use arkret_state::state::compute_state_root;
+use arkret_wire::Seal;
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
+use crate::projection::ProjectionService;
+
+const FIXTURE_NOTARY_SEED: [u8; 32] = [0x53; 32];
+const FIXTURE_NOTARY_DID: &str = "did:web:alice.example";
+const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#fixture-notary";
+const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
+
+/// A synthetic but cryptographically valid accepted governance basis.
+#[derive(Clone)]
+pub struct ConformanceRealmBasis {
+    pub seal: Seal,
+    pub ops: Vec<(CellRef, IssuedOp)>,
+}
+
+/// Build a sealed founding and content-grant basis for one conformance actor.
+///
+/// The explicit content grant is fixture material, not a protocol bootstrap
+/// rule. It exists because the current v1 specification has no legal path from
+/// the closed founding grant to the first data-plane capability.
+pub fn build_conformance_realm_basis(
+    realm_id: &str,
+    subject: &str,
+    data_plane_actions: &[String],
+) -> Result<ConformanceRealmBasis, String> {
+    let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
+    let issuer = Did::new(subject.to_owned()).map_err(|error| error.to_string())?;
+    let founding_move = fixture_move_id(realm_id, subject, data_plane_actions, "founding-grant")?;
+    let content_move = fixture_move_id(realm_id, subject, data_plane_actions, "content-grant")?;
+    let covered_move = fixture_move_id(realm_id, subject, data_plane_actions, "mls-commit")?;
+
+    let founding_grant_id =
+        fixture_grant_id(realm_id, subject, data_plane_actions, "founding-grant");
+    let content_grant_id = fixture_grant_id(realm_id, subject, data_plane_actions, "content-grant");
+    let founding_actions = [
+        "ak.capability.grant".to_owned(),
+        "ak.capability.revoke".to_owned(),
+        "ak.realm.admin".to_owned(),
+        "ak.realm_key.share".to_owned(),
+    ];
+    let mut ops = vec![
+        (
+            capability_grant_cell(&founding_grant_id)?,
+            issued_op(
+                &issuer,
+                &founding_move,
+                or_set_add(
+                    founding_move.as_str(),
+                    grant_body(
+                        &founding_grant_id,
+                        realm_id,
+                        subject,
+                        &founding_actions,
+                        true,
+                    )?,
+                ),
+            ),
+        ),
+        (
+            capability_grant_cell(&content_grant_id)?,
+            issued_op(
+                &issuer,
+                &content_move,
+                or_set_add(
+                    content_move.as_str(),
+                    grant_body(
+                        &content_grant_id,
+                        realm_id,
+                        subject,
+                        data_plane_actions,
+                        false,
+                    )?,
+                ),
+            ),
+        ),
+    ];
+
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+        FIXTURE_NOTARY_SEED,
+        Did::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
+        FIXTURE_NOTARY_VERIFICATION_METHOD,
+    );
+    let mut delta = vec![
+        founding_move.clone(),
+        content_move.clone(),
+        covered_move.clone(),
+    ];
+    delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    let seal = Seal::sign_single(
+        realm.clone(),
+        Vec::new(),
+        delta,
+        sealed_state_root(&realm, &ops)?,
+        Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
+        &signer,
+    )
+    .map_err(|error| error.to_string())?;
+
+    ops.push((
+        arkret_state::mls_move::covered_seals_cell_id(realm_id)
+            .map_err(|error| error.to_string())?,
+        issued_op(
+            &issuer,
+            &covered_move,
+            or_set_add(covered_move.as_str(), Value::String(seal.id.to_string())),
+        ),
+    ));
+
+    Ok(ConformanceRealmBasis { seal, ops })
+}
+
+fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {
+    let registry = ProjectionService::sdk_cell_registry();
+    let mut grouped: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
+    for (cell, op) in ops {
+        grouped.entry(cell.clone()).or_default().push(op.clone());
+    }
+    let mut post_state = BTreeMap::new();
+    for (cell, cell_ops) in grouped {
+        let binding = registry
+            .resolve(realm, &cell)
+            .map_err(|error| error.to_string())?;
+        post_state.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
+        );
+    }
+    compute_state_root(&post_state).map_err(|error| error.to_string())
+}
+
+fn capability_grant_cell(grant_id: &str) -> Result<CellRef, String> {
+    CellRef::new(format!(
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+    ))
+    .map_err(|error| error.to_string())
+}
+
+fn fixture_move_id(
+    realm_id: &str,
+    subject: &str,
+    actions: &[String],
+    slot: &str,
+) -> Result<Hash, String> {
+    Hash::new(format!(
+        "sha256:{}",
+        fixture_basis_digest_hex(realm_id, subject, actions, slot)
+    ))
+    .map_err(|error| error.to_string())
+}
+
+fn fixture_grant_id(realm_id: &str, subject: &str, actions: &[String], slot: &str) -> String {
+    let hex = fixture_basis_digest_hex(realm_id, subject, actions, slot);
+    format!(
+        "ak:grant:{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+fn fixture_basis_digest_hex(
+    realm_id: &str,
+    subject: &str,
+    actions: &[String],
+    slot: &str,
+) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:conformance:realm-basis:");
+    hasher.update(slot.as_bytes());
+    hasher.update(b"\x00");
+    hasher.update(realm_id.as_bytes());
+    hasher.update(b"\x00");
+    hasher.update(subject.as_bytes());
+    for action in actions {
+        hasher.update(b"\x00");
+        hasher.update(action.as_bytes());
+    }
+    hex::encode(hasher.finalize())
+}
+
+fn or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
+    arkret_wire::LatticeOp {
+        op_type: arkret_wire::LatticeOpType::Add,
+        tag: Some(tag.to_owned()),
+        value: Some(value),
+        from: None,
+        to: None,
+        reason: None,
+        issuer_seq: None,
+    }
+}
+
+fn issued_op(issuer: &Did, move_id: &Hash, op: arkret_wire::LatticeOp) -> IssuedOp {
+    IssuedOp {
+        issuer: issuer.clone(),
+        op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
+    }
+}
+
+fn grant_body(
+    grant_id: &str,
+    realm_id: &str,
+    subject: &str,
+    actions: &[String],
+    aggregate_admin: bool,
+) -> Result<Value, String> {
+    let mut body = serde_json::json!({
+        "grant_id": grant_id,
+        "schema": "ak.schema.capability_grant.v1",
+        "realm_id": realm_id,
+        "issuer": subject,
+        "subject": subject,
+        "actions": actions,
+        "resources": [{
+            "kind": "realm",
+            "realm_id": realm_id,
+            "match_scope": "realm_wide"
+        }],
+        "issued_at": "2026-01-01T00:00:00.000Z"
+    });
+    if aggregate_admin {
+        body["capability_action_registry_digest"] = Value::String(
+            arkret_policy::current_capability_action_registry_digest()
+                .map_err(|error| error.to_string())?
+                .to_string(),
+        );
+    }
+    Ok(body)
+}

@@ -1,6 +1,8 @@
 #![forbid(unsafe_code)]
 
 pub mod authorization;
+#[doc(hidden)]
+pub mod conformance_basis;
 pub mod delivery;
 pub mod events;
 pub mod federation;
