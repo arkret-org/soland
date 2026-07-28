@@ -155,14 +155,14 @@ impl OrganizationRegistrationStore for PgOrganizationRegistrationStore {
         let mut conn = pg_conn(&self.pool).await?;
         let inserted = sql_query(
             "INSERT INTO organization_registration_challenges \
-             (challenge_id, organization_id, record, created_at, expires_at) \
+             (challenge_id, organization_id, record, expires_at, created_at) \
              VALUES ($1, $2, $3, $4, $5) ON CONFLICT (challenge_id) DO NOTHING",
         )
         .bind::<Text, _>(&record.challenge.challenge_id)
         .bind::<Text, _>(record.challenge.organization_id.as_str())
         .bind::<Jsonb, _>(&value)
-        .bind::<Timestamptz, _>(record.challenge.created_at)
         .bind::<Timestamptz, _>(record.challenge.expires_at)
+        .bind::<Timestamptz, _>(record.challenge.created_at)
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;

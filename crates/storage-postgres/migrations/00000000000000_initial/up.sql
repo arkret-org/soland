@@ -108,6 +108,7 @@ CREATE TABLE public.agent_principals (
     authorized_event_ref text,
     authorized_verification_method text,
     authorized_public_key_digest text,
+    authorized_signing_key_binding jsonb,
     state_changed_at timestamp with time zone,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
@@ -577,6 +578,34 @@ CREATE TABLE public.invite_locators (
     consumed_at timestamp with time zone
 );
 
+CREATE TABLE public.join_applications (
+    realm_id text NOT NULL,
+    application_ref text NOT NULL,
+    record jsonb NOT NULL,
+    updated_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (realm_id, application_ref)
+);
+
+CREATE INDEX join_applications_realm_updated_idx
+    ON public.join_applications (realm_id, updated_at, application_ref);
+
+CREATE TABLE public.join_application_idempotency (
+    principal_id text NOT NULL,
+    idempotency_key text NOT NULL,
+    request_hash text NOT NULL,
+    response_body jsonb NOT NULL,
+    realm_id text NOT NULL,
+    application_ref text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    PRIMARY KEY (principal_id, idempotency_key),
+    FOREIGN KEY (realm_id, application_ref)
+        REFERENCES public.join_applications (realm_id, application_ref)
+        ON DELETE CASCADE
+);
+
+CREATE INDEX join_application_idempotency_expiry_idx
+    ON public.join_application_idempotency (expires_at);
+
 -- Deployment-wide dynamic operational settings (rate limits, admin
 -- allowlist, federation peers, feature toggles). One row PER setting key:
 -- `value` is the JSON for that key only. This is an OVERLAY — env/boot config
@@ -728,6 +757,76 @@ CREATE TABLE public.organizations (
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL
 );
+
+CREATE TABLE public.organization_registration_challenges (
+    challenge_id text PRIMARY KEY,
+    organization_id text NOT NULL,
+    record jsonb NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    consumed_request_digest text,
+    consumed_outcome_id text,
+    consumed_at timestamp with time zone,
+    CONSTRAINT organization_registration_challenge_consumption_complete CHECK (
+        (consumed_request_digest IS NULL
+            AND consumed_outcome_id IS NULL
+            AND consumed_at IS NULL)
+        OR
+        (consumed_request_digest IS NOT NULL
+            AND consumed_outcome_id IS NOT NULL
+            AND consumed_at IS NOT NULL)
+    )
+);
+
+CREATE INDEX organization_registration_challenges_organization_idx
+    ON public.organization_registration_challenges (organization_id, created_at DESC);
+
+CREATE TABLE public.organization_registration_outcomes (
+    outcome_id text PRIMARY KEY,
+    organization_id text NOT NULL,
+    registration_generation bigint NOT NULL CHECK (registration_generation > 0),
+    outcome jsonb NOT NULL,
+    committed_at timestamp with time zone NOT NULL
+);
+
+CREATE INDEX organization_registration_outcomes_generation_idx
+    ON public.organization_registration_outcomes (
+        organization_id,
+        registration_generation,
+        committed_at
+    );
+
+ALTER TABLE public.organization_registration_challenges
+    ADD CONSTRAINT organization_registration_challenge_consumed_outcome_fk
+    FOREIGN KEY (consumed_outcome_id)
+    REFERENCES public.organization_registration_outcomes(outcome_id);
+
+CREATE FUNCTION public.reject_organization_registration_outcome_mutation()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+    RAISE EXCEPTION 'organization registration outcomes are immutable'
+        USING ERRCODE = '55000';
+END;
+$$;
+
+CREATE TRIGGER organization_registration_outcomes_immutable_update
+BEFORE UPDATE OR DELETE ON public.organization_registration_outcomes
+FOR EACH ROW
+EXECUTE FUNCTION public.reject_organization_registration_outcome_mutation();
+
+CREATE TABLE public.organization_registration_states (
+    organization_id text PRIMARY KEY,
+    current_generation bigint NOT NULL CHECK (current_generation > 0),
+    current_outcome_id text NOT NULL
+        REFERENCES public.organization_registration_outcomes(outcome_id),
+    state jsonb NOT NULL,
+    updated_at timestamp with time zone NOT NULL
+);
+
+CREATE INDEX organization_registration_states_generation_idx
+    ON public.organization_registration_states (organization_id, current_generation);
 
 CREATE TABLE public.organization_policies (
     organization_id text NOT NULL,

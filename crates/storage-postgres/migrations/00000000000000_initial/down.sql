@@ -1,5 +1,6 @@
 -- Squashed initial migration. This drops all tables. Only use in development.
 DROP FUNCTION IF EXISTS project_agent_runtime_approval_notification() CASCADE;
+DROP FUNCTION IF EXISTS reject_organization_registration_outcome_mutation() CASCADE;
 DROP TABLE IF EXISTS server_settings CASCADE;
 DROP TABLE IF EXISTS account_datas CASCADE;
 DROP TABLE IF EXISTS account_localparts CASCADE;
@@ -46,6 +47,8 @@ DROP TABLE IF EXISTS federation_outbox CASCADE;
 DROP TABLE IF EXISTS federation_outbox_dead_letter CASCADE;
 DROP TABLE IF EXISTS invite_receive_policies CASCADE;
 DROP TABLE IF EXISTS invite_locators CASCADE;
+DROP TABLE IF EXISTS join_application_idempotency CASCADE;
+DROP TABLE IF EXISTS join_applications CASCADE;
 DROP TABLE IF EXISTS key_backups CASCADE;
 DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
@@ -54,6 +57,9 @@ DROP TABLE IF EXISTS mls_welcomes CASCADE;
 DROP TABLE IF EXISTS moderation_actions CASCADE;
 DROP TABLE IF EXISTS moderation_reports CASCADE;
 DROP TABLE IF EXISTS organizations CASCADE;
+DROP TABLE IF EXISTS organization_registration_states CASCADE;
+DROP TABLE IF EXISTS organization_registration_challenges CASCADE;
+DROP TABLE IF EXISTS organization_registration_outcomes CASCADE;
 DROP TABLE IF EXISTS organization_policies CASCADE;
 DROP TABLE IF EXISTS realm_organizations CASCADE;
 DROP TABLE IF EXISTS realm_owning_organizations CASCADE;
