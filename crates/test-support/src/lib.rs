@@ -453,20 +453,28 @@ fn effective_state_with_new_ops(
     cell_refs.extend(new_ops.iter().map(|(cell, _)| cell.clone()));
     let mut joined = BTreeMap::new();
     for cell in cell_refs {
-        let mut ops = cells
-            .sealed_ops_for_cell(realm_id, &cell)?
+        let mut batches = cells
+            .sealed_op_batches_for_cell(realm_id, &cell)?
             .into_iter()
-            .filter(|issued| covered.contains(&issued.op.move_id))
+            .filter_map(|(_, ops)| {
+                let ops = ops
+                    .into_iter()
+                    .filter(|issued| covered.contains(&issued.op.move_id))
+                    .collect::<Vec<_>>();
+                (!ops.is_empty()).then_some(ops)
+            })
             .collect::<Vec<_>>();
-        ops.extend(
-            new_ops
-                .iter()
-                .filter(|(candidate, issued)| {
-                    candidate == &cell && covered.contains(&issued.op.move_id)
-                })
-                .map(|(_, operation)| operation.clone()),
-        );
-        if ops.is_empty() {
+        let new_batch = new_ops
+            .iter()
+            .filter(|(candidate, issued)| {
+                candidate == &cell && covered.contains(&issued.op.move_id)
+            })
+            .map(|(_, operation)| operation.clone())
+            .collect::<Vec<_>>();
+        if !new_batch.is_empty() {
+            batches.push(new_batch);
+        }
+        if batches.is_empty() {
             continue;
         }
         // Match production CellStore semantics: persisted operations and
@@ -476,7 +484,7 @@ fn effective_state_with_new_ops(
         let binding = registry.resolve(realm_id, &cell)?;
         joined.insert(
             cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches),
         );
     }
     Ok(joined)

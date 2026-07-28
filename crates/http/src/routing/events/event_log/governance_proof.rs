@@ -334,24 +334,10 @@ async fn apply_authoritative_event_seal_path(
                 .or_default()
                 .push(op.clone());
         }
-        let mut target_state = BTreeMap::new();
-        for (cell, ops) in ops_by_cell {
-            let binding = state
-                .projections()
-                .resolve_cell(realm_id, &cell)
-                .map_err(|error| {
-                    proof_state_error(format!(
-                        "resolve authoritative Event Seal cell {cell}: {error}"
-                    ))
-                })?;
-            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
-            if matches!(resolved, CellState::Bottom(_)) {
-                return Err(proof_state_error(format!(
-                    "authoritative Event Seal cell {cell} resolves to Bottom"
-                )));
-            }
-            target_state.insert(cell, resolved);
-        }
+        let target_state = join_control_state_batches(state, realm_id, &ops_by_cell, &target)
+            .map_err(|error| {
+                proof_state_error(format!("resolve authoritative Event Seal state: {error}"))
+            })?;
         let expected_state_root = compute_state_root(&target_state).map_err(proof_state_error)?;
         if seal.state_root != expected_state_root {
             return Err(proof_state_error(format!(
@@ -854,26 +840,7 @@ async fn materialize_realm_control_with_transported_seals(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
-    let mut joined = BTreeMap::new();
-    for (cell, ops) in ops_by_cell {
-        let binding = state
-            .projections()
-            .resolve_cell(realm_id, &cell)
-            .map_err(|error| {
-                AppError::new(
-                    ErrorCode::ProfileUnsupported,
-                    format!("no lattice registered for governance cell {cell}: {error}"),
-                )
-            })?;
-        let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
-        if matches!(resolved, CellState::Bottom(_)) {
-            return Err(AppError::new(
-                ErrorCode::StateMismatch,
-                format!("governance cell {cell} is in Bottom state"),
-            ));
-        }
-        joined.insert(cell, resolved);
-    }
+    let joined = join_control_state_batches(state, realm_id, &ops_by_cell, &covered)?;
     let state_root = compute_state_root(&joined).map_err(|error| {
         AppError::new(
             ErrorCode::StateMismatch,
@@ -1417,6 +1384,73 @@ pub(crate) async fn first_generation_event_seal_requirement(
         });
     }
     Ok(requirement)
+}
+
+fn join_control_state_batches(
+    state: &AppState,
+    realm_id: &RealmId,
+    ops_by_cell: &BTreeMap<CellRef, Vec<IssuedOp>>,
+    covered: &BTreeSet<Hash>,
+) -> Result<BTreeMap<CellRef, CellState>, AppError> {
+    let mut joined = BTreeMap::new();
+    for (cell, projected_ops) in ops_by_cell {
+        let persisted = state
+            .projections()
+            .sealed_op_batches_for_cell(realm_id, cell)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::FrontierUnavailable,
+                    format!("read governance cell {cell} Seal batches: {error}"),
+                )
+            })?;
+        let mut persisted_digests = BTreeSet::new();
+        let mut batches = persisted
+            .into_iter()
+            .filter_map(|(_, ops)| {
+                let ops = ops
+                    .into_iter()
+                    .filter(|issued| covered.contains(&issued.op.move_id))
+                    .inspect(|issued| {
+                        persisted_digests.insert(issued.op.move_id.clone());
+                    })
+                    .collect::<Vec<_>>();
+                (!ops.is_empty()).then_some(ops)
+            })
+            .collect::<Vec<_>>();
+        let candidate_batch = projected_ops
+            .iter()
+            .filter(|issued| {
+                covered.contains(&issued.op.move_id)
+                    && !persisted_digests.contains(&issued.op.move_id)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if !candidate_batch.is_empty() {
+            batches.push(candidate_batch);
+        }
+        if batches.is_empty() {
+            continue;
+        }
+        let binding = state
+            .projections()
+            .resolve_cell(realm_id, cell)
+            .map_err(|error| {
+                AppError::new(
+                    ErrorCode::ProfileUnsupported,
+                    format!("no lattice registered for governance cell {cell}: {error}"),
+                )
+            })?;
+        let resolved =
+            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), cell, &batches);
+        if matches!(resolved, CellState::Bottom(_)) {
+            return Err(AppError::new(
+                ErrorCode::StateMismatch,
+                format!("governance cell {cell} is in Bottom state"),
+            ));
+        }
+        joined.insert(cell.clone(), resolved);
+    }
+    Ok(joined)
 }
 
 /// Canonical sealed effects for one Event, each tagged with the Event's actor.

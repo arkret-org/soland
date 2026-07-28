@@ -573,6 +573,14 @@ impl ProjectionService {
         self.cell_store().sealed_ops_for_cell(realm_id, cell)
     }
 
+    pub fn sealed_op_batches_for_cell(
+        &self,
+        realm_id: &RealmId,
+        cell: &CellRef,
+    ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
+        self.cell_store().sealed_op_batches_for_cell(realm_id, cell)
+    }
+
     pub fn resolve_cell(
         &self,
         realm_id: &RealmId,

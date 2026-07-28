@@ -560,44 +560,55 @@ impl NotaryWorker {
         covered_event_digests: &[Hash],
         accepted: &[AcceptedControlMove],
     ) -> Result<Hash, NotaryError> {
-        // Build per-cell list of (current ops ++ new ops).
-        let mut ops_by_cell: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
+        // Build per-cell Seal batches plus the candidate batch.
+        let mut batches_by_cell: BTreeMap<CellRef, Vec<Vec<IssuedOp>>> = BTreeMap::new();
         let covered: BTreeSet<Hash> = covered_event_digests.iter().cloned().collect();
         // Seed with all currently-known cells.
         for cell in state.projections().realm_cells(realm_id)? {
-            let ops: Vec<IssuedOp> = state
+            let batches = state
                 .projections()
-                .sealed_ops_for_cell(realm_id, &cell)?
+                .sealed_op_batches_for_cell(realm_id, &cell)?
                 .into_iter()
-                .filter(|issued| covered.contains(&issued.op.move_id))
-                .collect();
-            if !ops.is_empty() {
-                ops_by_cell.insert(cell, ops);
+                .filter_map(|(_, ops)| {
+                    let ops = ops
+                        .into_iter()
+                        .filter(|issued| covered.contains(&issued.op.move_id))
+                        .collect::<Vec<_>>();
+                    (!ops.is_empty()).then_some(ops)
+                })
+                .collect::<Vec<_>>();
+            if !batches.is_empty() {
+                batches_by_cell.insert(cell, batches);
             }
         }
         // Layer on the newly accepted Control Moves' receiver-derived writes.
         // These are the resolved effects `verify_control_move` returned, not a
         // producer-supplied array — v1 has none.
+        let mut candidate_ops: BTreeMap<CellRef, Vec<IssuedOp>> = BTreeMap::new();
         for entry in accepted {
             for effect in &entry.effects {
                 let aop = IssuedOp {
                     issuer: entry.actor_id.clone(),
                     op: SealedOp::new(entry.event_digest.clone(), effect.op.clone()),
                 };
-                ops_by_cell
+                candidate_ops
                     .entry(effect.cell.clone())
                     .or_default()
                     .push(aop);
             }
         }
+        for (cell, ops) in candidate_ops {
+            batches_by_cell.entry(cell).or_default().push(ops);
+        }
         // Run lattice.join per cell to get predicted CellState.
         let mut post_state: BTreeMap<CellRef, CellState> = BTreeMap::new();
-        for (cell, ops) in ops_by_cell {
+        for (cell, batches) in batches_by_cell {
             let binding = state
                 .projections()
                 .resolve_cell(realm_id, &cell)
                 .map_err(|e| NotaryError::Store(format!("predict cell resolve: {e}")))?;
-            let resolved = arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops);
+            let resolved =
+                arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches);
             post_state.insert(cell, resolved);
         }
         // canonical Merkle state_root.

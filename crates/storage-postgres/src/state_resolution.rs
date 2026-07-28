@@ -164,9 +164,19 @@ struct CellOpRow {
 }
 
 #[derive(QueryableByName)]
+struct SealedCellOpRow {
+    #[diesel(sql_type = Text)]
+    seal_id: String,
+    #[diesel(sql_type = Jsonb)]
+    op_json: Value,
+}
+
+#[derive(QueryableByName)]
 struct EventCellOpRow {
     #[diesel(sql_type = Text)]
     cell_id: String,
+    #[diesel(sql_type = Text)]
+    seal_id: String,
     #[diesel(sql_type = Jsonb)]
     op_json: Value,
 }
@@ -336,20 +346,28 @@ fn effective_state_with_new_ops(
     cell_refs.extend(new_ops.iter().map(|(cell, _)| cell.clone()));
     let mut joined = std::collections::BTreeMap::new();
     for cell in cell_refs {
-        let mut ops = cells
-            .sealed_ops_for_cell(realm_id, &cell)?
+        let mut batches = cells
+            .sealed_op_batches_for_cell(realm_id, &cell)?
             .into_iter()
-            .filter(|issued| covered.contains(&issued.op.move_id))
+            .filter_map(|(_, ops)| {
+                let ops = ops
+                    .into_iter()
+                    .filter(|issued| covered.contains(&issued.op.move_id))
+                    .collect::<Vec<_>>();
+                (!ops.is_empty()).then_some(ops)
+            })
             .collect::<Vec<_>>();
-        ops.extend(
-            new_ops
-                .iter()
-                .filter(|(candidate, issued)| {
-                    candidate == &cell && covered.contains(&issued.op.move_id)
-                })
-                .map(|(_, op)| op.clone()),
-        );
-        if ops.is_empty() {
+        let new_batch = new_ops
+            .iter()
+            .filter(|(candidate, issued)| {
+                candidate == &cell && covered.contains(&issued.op.move_id)
+            })
+            .map(|(_, op)| op.clone())
+            .collect::<Vec<_>>();
+        if !new_batch.is_empty() {
+            batches.push(new_batch);
+        }
+        if batches.is_empty() {
             continue;
         }
         // CellStore returns accepted operations in Seal insertion order and
@@ -359,7 +377,7 @@ fn effective_state_with_new_ops(
         let binding = registry.resolve(realm_id, &cell)?;
         joined.insert(
             cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
+            arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), &cell, &batches),
         );
     }
     Ok(joined)
@@ -914,7 +932,7 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         .await?;
                 }
                 let rows = sql_query(
-                    "SELECT cell_id, op_json \
+                    "SELECT cell_id, seal_id, op_json \
                      FROM state_cell_ops \
                      WHERE realm_id = $1 \
                      ORDER BY cell_id ASC, seq ASC",
@@ -922,7 +940,8 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                 .bind::<Text, _>(&realm_id)
                 .load::<EventCellOpRow>(&mut *conn)
                 .await?;
-                let mut ops_by_cell = std::collections::BTreeMap::<CellRef, Vec<IssuedOp>>::new();
+                let mut batches_by_cell =
+                    std::collections::BTreeMap::<CellRef, Vec<(String, Vec<IssuedOp>)>>::new();
                 for row in rows {
                     let issued = sealed_op_from_value(row.op_json)?;
                     if !covered.contains(issued.op.move_id.as_str()) {
@@ -930,19 +949,33 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                     }
                     let cell = CellRef::new(row.cell_id)
                         .map_err(|error| StoreError::Backend(error.to_string()))?;
-                    ops_by_cell.entry(cell).or_default().push(issued);
+                    let batches = batches_by_cell.entry(cell).or_default();
+                    if let Some((batch_seal, ops)) = batches.last_mut()
+                        && batch_seal == &row.seal_id
+                    {
+                        ops.push(issued);
+                    } else {
+                        batches.push((row.seal_id, vec![issued]));
+                    }
                 }
                 let realm = RealmId::new(realm_id.clone())
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
                 let mut joined = std::collections::BTreeMap::new();
                 // No pre-sort: joins are commutative and ordering by the typed
                 // `move_id` string would imply a tie-break `encoding.md` 4.2 forbids.
-                for (cell, ops) in ops_by_cell {
+                for (cell, batches) in batches_by_cell {
                     let binding = cell_registry.resolve(&realm, &cell)?;
                     joined.insert(
-            cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &ops),
-        );
+                        cell.clone(),
+                        arkret_state::join_cell_seal_batches(
+                            binding.lattice.as_ref(),
+                            &cell,
+                            &batches
+                                .into_iter()
+                                .map(|(_, ops)| ops)
+                                .collect::<Vec<_>>(),
+                        ),
+                    );
                 }
                 let recomputed = compute_state_root(&joined)
                     .map_err(|error| StoreError::Backend(error.to_string()))?;
@@ -1072,6 +1105,44 @@ impl CellStore for PgCellStore {
             rows.into_iter()
                 .map(|row| sealed_op_from_value(row.op_json))
                 .collect()
+        })
+    }
+
+    fn sealed_op_batches_for_cell(
+        &self,
+        realm_id: &RealmId,
+        cell: &CellRef,
+    ) -> StoreResult<Vec<(SealId, Vec<IssuedOp>)>> {
+        let pool = self.pool.clone();
+        let realm_id = realm_id.as_str().to_owned();
+        let cell = cell.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let rows = sql_query(
+                "SELECT seal_id, op_json \
+                 FROM state_cell_ops \
+                 WHERE realm_id = $1 AND cell_id = $2 \
+                 ORDER BY seq ASC",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&cell)
+            .load::<SealedCellOpRow>(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?;
+            let mut batches: Vec<(SealId, Vec<IssuedOp>)> = Vec::new();
+            for row in rows {
+                let seal = SealId::new(row.seal_id)
+                    .map_err(|error| StoreError::Backend(error.to_string()))?;
+                let op = sealed_op_from_value(row.op_json)?;
+                if let Some((batch_seal, ops)) = batches.last_mut()
+                    && batch_seal == &seal
+                {
+                    ops.push(op);
+                } else {
+                    batches.push((seal, vec![op]));
+                }
+            }
+            Ok(batches)
         })
     }
 
