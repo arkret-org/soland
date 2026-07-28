@@ -76,7 +76,7 @@ pub(crate) const CURSOR_MAX_TTL_SECONDS: i64 = 3600;
 mod snapshot;
 pub(crate) use snapshot::*;
 mod cursor;
-mod signal;
+pub(crate) mod signal;
 // `spawn_sync_cursor_ttl_sweeper` is `pub` (boot worker entry re-exported at
 // `crate::routing::spawn_sync_cursor_ttl_sweeper` for `main`); the explicit
 // `pub use` overrides the `pub(crate)` glob above for this one name.

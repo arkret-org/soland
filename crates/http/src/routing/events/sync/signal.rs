@@ -1,8 +1,11 @@
 //! Signal Extension rail (`zh/sync/signal.md`).
 //!
-//! Two surfaces and nothing else:
+//! Two local client surfaces:
 //! - `POST /_arkret/self/signal`           — `ak.self.signal.command.send`
 //! - `GET  /_arkret/self/signal/subscribe` — `ak.self.signal.stream.subscribe`
+//!
+//! Cross-service recipients are reached through the separate authenticated
+//! single-hop `POST /_arkret/peer/signal` federation binding.
 //!
 //! A Signal is not a durable Event: admitting one mints no Event id, advances
 //! no `actor_seq`, enters no Seal coverage and produces no reducer state. The
@@ -13,8 +16,10 @@
 //! There is no plaintext branch (§3). A legacy plaintext ephemeral envelope is
 //! rejected with `signal_plaintext_forbidden` rather than being interpreted.
 
+use std::collections::BTreeSet;
+
 use arkret_models_collaboration::http_bodies::SignalSubmitOutcome;
-use arkret_wire::{SignalClass, SignalEnvelope};
+use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest};
 use futures_util::stream::StreamExt;
 use salvo::prelude::*;
 use serde_json::Value;
@@ -113,6 +118,7 @@ pub(super) async fn submit_signal(
             realm_id.as_str().to_owned(),
             envelope.signal_class,
         ));
+        relay_signal_to_remote_services(state, &envelope);
     }
 
     soland_http::result::json_ok(SignalSubmitOutcome {
@@ -123,6 +129,72 @@ pub(super) async fn submit_signal(
         dispatched_recipient_count,
         server_received_at: Some(chrono::Utc::now()),
     })
+}
+
+/// Fan one admitted local Signal out to each eligible remote recipient service.
+///
+/// The protocol deliberately gives this path no durable outbox, retry, or
+/// acknowledgement semantics. Each destination is attempted once in a
+/// detached task; failure is diagnostic-only and never changes the sender's
+/// opaque accepted outcome.
+fn relay_signal_to_remote_services(state: &AppState, envelope: &SignalEnvelope) {
+    for destination_service_id in remote_recipient_services(state, envelope) {
+        let Some(peer_url) = crate::routing::federation::federation::peer_url_for_service_id(
+            state,
+            &destination_service_id,
+        ) else {
+            tracing::debug!(
+                %destination_service_id,
+                realm = %envelope.realm_id,
+                "Signal recipient service has no configured peer target"
+            );
+            continue;
+        };
+        let state = state.clone();
+        let request = SignalRelayRequest {
+            realm_id: envelope.realm_id.clone(),
+            signals: vec![envelope.clone()],
+        };
+        tokio::spawn(async move {
+            if let Err(error) = crate::routing::federation::outbox::relay_signal_once(
+                &state,
+                &peer_url,
+                &destination_service_id,
+                &request,
+            )
+            .await
+            {
+                tracing::debug!(
+                    %error,
+                    %destination_service_id,
+                    realm = %request.realm_id,
+                    "single-attempt Signal peer relay failed"
+                );
+            }
+        });
+    }
+}
+
+fn remote_recipient_services(state: &AppState, envelope: &SignalEnvelope) -> BTreeSet<String> {
+    let local_service_id = state.service_id().as_str();
+    let projection = state.projections().snapshot();
+    projection
+        .members
+        .values()
+        .filter(|membership| {
+            membership.realm_id == envelope.realm_id.as_str()
+                && membership.state == "join"
+                && membership.member != envelope.sender_actor_id.as_str()
+                && membership
+                    .recipient_service_id
+                    .as_deref()
+                    .is_some_and(|service_id| service_id != local_service_id)
+                && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
+                    projection.circle_scope_visible_to_actor(circle_id.as_str(), &membership.member)
+                })
+        })
+        .filter_map(|membership| membership.recipient_service_id.clone())
+        .collect()
 }
 
 /// Reject a legacy plaintext ephemeral input before it can be mistaken for a
@@ -329,6 +401,124 @@ async fn verify_signal_device_proof(
         );
         signal_proof_invalid("signal device proof verification failed")
     })
+}
+
+/// Admit one item from an authenticated single-hop peer relay.
+///
+/// Every item-level failure is returned only to the caller for audit logging;
+/// the HTTP handler deliberately converts it to the same opaque accepted
+/// outcome. Request authentication and request-shape failures are handled
+/// before this function is entered.
+pub(in crate::routing::events) async fn accept_peer_signal(
+    state: &AppState,
+    source_service_id: &str,
+    envelope: &SignalEnvelope,
+) -> Result<(), AppError> {
+    envelope.validate_structural().map_err(structural_error)?;
+    if !mls_ciphersuite_is_active(&envelope.encrypted_payload.aead_profile) {
+        return Err(signal_invalid("signal aead_profile is not active"));
+    }
+
+    let projection = state.projections().snapshot();
+    let membership_key = (
+        envelope.realm_id.as_str().to_owned(),
+        envelope.sender_actor_id.as_str().to_owned(),
+    );
+    let sender = projection
+        .members
+        .get(&membership_key)
+        .filter(|membership| membership.state == "join")
+        .ok_or_else(|| signal_invalid("signal sender is not a current member"))?;
+    if sender.recipient_service_id.as_deref() != Some(source_service_id) {
+        return Err(signal_invalid(
+            "source service is not the sender current delivery binding",
+        ));
+    }
+
+    let seal = state
+        .projections()
+        .seal_by_id(&envelope.seal_ref)
+        .map_err(|_| signal_rail_unavailable("resolve the signal seal basis"))?
+        .ok_or_else(|| signal_invalid("signal seal_ref does not resolve"))?;
+    if seal.realm_id != envelope.realm_id {
+        return Err(signal_invalid(
+            "signal seal_ref belongs to a different Realm",
+        ));
+    }
+    if let Some(circle_id) = envelope.scope_ref.circle_id()
+        && (!projection
+            .circle_membership(circle_id.as_str(), envelope.sender_actor_id.as_str())
+            .is_some_and(|membership| membership.state == "join")
+            || !projection.circle_scope_visible_to_actor(
+                circle_id.as_str(),
+                envelope.sender_actor_id.as_str(),
+            ))
+    {
+        return Err(signal_invalid(
+            "signal sender is not eligible for the Circle scope",
+        ));
+    }
+    if envelope.signal_class == SignalClass::Moderation
+        && !crate::routing::interop::webrtc::actor_has_call_capability(
+            state,
+            envelope.realm_id.as_str(),
+            envelope.sender_actor_id.as_str(),
+            arkret_wire::CapabilityActionId::MODERATION_DECISION,
+        )
+        .await
+    {
+        return Err(signal_invalid("signal sender lacks the moderation action"));
+    }
+    verify_signal_device_proof(state, envelope).await?;
+
+    let local_service_id = state.service_id().as_str();
+    let has_local_recipient = projection.members.values().any(|membership| {
+        membership.realm_id == envelope.realm_id.as_str()
+            && membership.state == "join"
+            && membership.member != envelope.sender_actor_id.as_str()
+            && membership.recipient_service_id.as_deref() == Some(local_service_id)
+            && envelope.scope_ref.circle_id().is_none_or(|circle_id| {
+                projection.circle_scope_visible_to_actor(circle_id.as_str(), &membership.member)
+            })
+    });
+    if !has_local_recipient {
+        return Ok(());
+    }
+
+    let envelope_digest = envelope
+        .envelope_digest()
+        .map_err(|error| signal_invalid(format!("signal envelope digest: {error}")))?
+        .as_str()
+        .to_owned();
+    if state
+        .deliveries()
+        .signal_digest_seen(envelope.realm_id.as_str(), &envelope_digest)
+        .await
+        .map_err(|_| signal_rail_unavailable("check signal replay suppression"))?
+    {
+        return Ok(());
+    }
+    state
+        .deliveries()
+        .append_signal(soland_services::delivery::SignalRelayState {
+            realm_id: envelope.realm_id.as_str().to_owned(),
+            scope_ref: envelope.scope_ref.clone(),
+            sender_actor_id: envelope.sender_actor_id.as_str().to_owned(),
+            sender_device_id: envelope.sender_device_id.as_str().to_owned(),
+            signal_class: envelope.signal_class,
+            envelope_digest,
+            sent_at: envelope.sent_at,
+            expires_at: envelope.expires_at,
+            envelope: envelope.clone(),
+            position: 0,
+        })
+        .await
+        .map_err(|_| signal_rail_unavailable("append peer signal to the live relay"))?;
+    let _ = state.publish_event_notification(EventNotification::signal(
+        envelope.realm_id.as_str().to_owned(),
+        envelope.signal_class,
+    ));
+    Ok(())
 }
 
 /// How many Realm members other than the sender could observe this Signal.

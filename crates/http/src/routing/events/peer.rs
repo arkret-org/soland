@@ -8,6 +8,7 @@ use arkret_models_collaboration::event_sync::{
 use arkret_models_collaboration::http_bodies::{
     EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
 };
+use arkret_wire::{SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -63,6 +64,62 @@ pub(super) fn router() -> Router {
         .push(Router::with_path("events/resolve").post(peer_events_resolve))
         .push(Router::with_path("events/frontier").get(peer_events_frontier))
         .push(Router::with_path("snapshot/head").get(peer_snapshot_head))
+        .push(Router::with_path("signal").post(peer_signal_relay))
+}
+
+#[salvo::oapi::endpoint(operation_id = "ak.peer.signal.command.relay", tags("events"))]
+#[tracing::instrument(skip_all, fields(op = "ak.peer.signal.command.relay"))]
+async fn peer_signal_relay(depot: &mut Depot, req: &mut Request) -> JsonResult<SignalRelayOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    if req.headers().contains_key("idempotency-key") {
+        return Err(schema_violation(
+            "ak.peer.signal.command.relay forbids Idempotency-Key",
+        ));
+    }
+    validate_peer_request(state, req, true).await?;
+    validate_signal_signature_window(req)?;
+    let request = parse_json_body::<SignalRelayRequest>(
+        req,
+        "invalid ak.peer.signal.command.relay request body",
+    )
+    .await?;
+    request
+        .validate()
+        .map_err(|error| schema_violation(error.to_string()))?;
+    let source_service_id = source_service_id_from_request(req)?;
+    for envelope in request.signals {
+        if let Err(error) =
+            super::sync::signal::accept_peer_signal(state, &source_service_id, &envelope).await
+        {
+            tracing::debug!(
+                %error,
+                realm_id = %request.realm_id,
+                "peer signal item silently dropped"
+            );
+        }
+    }
+    json_ok(SignalRelayOutcome::ACCEPTED)
+}
+
+fn validate_signal_signature_window(req: &Request) -> Result<(), AppError> {
+    let params = soland_http::http_signature::signature_params(
+        req,
+        "signature-input",
+        || schema_violation("missing Signature-Input"),
+        || schema_violation("Signature-Input must contain sig1 parameters"),
+    )?;
+    let created = soland_http::http_signature::signature_param_value(&params, "created")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| schema_violation("Signal relay Signature-Input requires created"))?;
+    let expires = soland_http::http_signature::signature_param_value(&params, "expires")
+        .and_then(|value| value.parse::<i64>().ok())
+        .ok_or_else(|| schema_violation("Signal relay Signature-Input requires expires"))?;
+    if expires < created || expires - created > 5 {
+        return Err(AppError::capability_denied(
+            "Signal relay signature validity window must be at most 5 seconds",
+        ));
+    }
+    Ok(())
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.describe", tags("events"))]
@@ -83,8 +140,12 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
             "ak.peer.events.query.resolve".to_owned(),
             "ak.peer.events.query.frontier".to_owned(),
             "ak.peer.invites.command.submit".to_owned(),
+            "ak.peer.signal.command.relay".to_owned(),
         ],
-        supported_profiles: vec!["ak.profile.federation_minimal.v1".to_owned()],
+        supported_profiles: vec![
+            "ak.profile.federation_minimal.v1".to_owned(),
+            "ak.profile.signal_peer_relay.v1".to_owned(),
+        ],
         supported_bindings: vec![
             "http-message-signature".to_owned(),
             "source-service-id".to_owned(),

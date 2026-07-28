@@ -18,7 +18,7 @@ use crate::error::AppError;
 
 const CANONICAL_JSON_CONTENT_TYPE: &str = "application/json";
 
-fn is_canonical_json_request(req: &Request) -> bool {
+pub(crate) fn is_canonical_json_request(req: &Request) -> bool {
     req.headers()
         .get("content-type")
         .and_then(|value| value.to_str().ok())

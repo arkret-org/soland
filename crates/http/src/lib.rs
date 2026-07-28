@@ -5,6 +5,7 @@
 extern crate self as soland_http;
 
 pub mod authz;
+pub mod canonical_body;
 pub mod compactor;
 pub mod config;
 pub mod content_encoding;

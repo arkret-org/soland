@@ -169,10 +169,21 @@ pub async fn enqueue_outbound(
 
 pub(crate) fn rfc9421_sign(
     state: &AppState,
+    headers: reqwest::header::HeaderMap,
+    method: &str,
+    target_url: &str,
+    body: &[u8],
+) -> reqwest::header::HeaderMap {
+    rfc9421_sign_with_window(state, headers, method, target_url, body, 300)
+}
+
+fn rfc9421_sign_with_window(
+    state: &AppState,
     mut headers: reqwest::header::HeaderMap,
     method: &str,
     target_url: &str,
     body: &[u8],
+    validity_seconds: i64,
 ) -> reqwest::header::HeaderMap {
     let request_canonical_digest = arkret_canonical::sha256_digest(body);
     insert_header_if_valid(
@@ -182,7 +193,7 @@ pub(crate) fn rfc9421_sign(
     );
 
     let created = now_unix_secs();
-    let expires = created + 300;
+    let expires = created + validity_seconds;
     let keyid = super::federation_service_signature_key_id(state.service_id());
     let mut covered = vec![
         "\"@method\"",
@@ -237,6 +248,66 @@ pub(crate) fn rfc9421_sign(
     insert_header_if_valid(&mut headers, "signature-input", &signature_input);
     insert_header_if_valid(&mut headers, "signature", &signature_header);
     headers
+}
+
+/// Send one Signal peer relay request without a durable outbox or retry.
+pub(crate) async fn relay_signal_once(
+    state: &AppState,
+    peer_url: &str,
+    peer_did: &str,
+    request: &arkret_wire::SignalRelayRequest,
+) -> Result<(), String> {
+    request.validate().map_err(|error| error.to_string())?;
+    let body =
+        arkret_canonical::canonical_json_bytes(request).map_err(|error| error.to_string())?;
+    let target = format!("{}/_arkret/peer/signal", peer_url.trim_end_matches('/'));
+    let (parsed_url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+        &target,
+        "Signal peer relay",
+        state.config().development_mode,
+        Duration::from_secs(5),
+    )?;
+    let mut headers = reqwest::header::HeaderMap::new();
+    headers.insert(
+        reqwest::header::CONTENT_TYPE,
+        reqwest::header::HeaderValue::from_static("application/json"),
+    );
+    insert_header_if_valid(
+        &mut headers,
+        "content-digest",
+        &content_digest_header_value(&body),
+    );
+    insert_header_if_valid(&mut headers, "source-service-id", state.service_id());
+    insert_header_if_valid(&mut headers, "destination-service-id", peer_did);
+    insert_header_if_valid(
+        &mut headers,
+        "source-trust-domain",
+        &state.config().trust_domain,
+    );
+    insert_header_if_valid(
+        &mut headers,
+        "destination-trust-domain",
+        &trust_domain_from_service_id(peer_did),
+    );
+    let headers = rfc9421_sign_with_window(state, headers, "POST", &target, &body, 5);
+    let response = client
+        .post(parsed_url)
+        .headers(headers)
+        .body(body)
+        .send()
+        .await
+        .map_err(|error| error.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Signal peer relay returned HTTP {}",
+            response.status()
+        ));
+    }
+    let outcome = response
+        .json::<arkret_wire::SignalRelayOutcome>()
+        .await
+        .map_err(|error| error.to_string())?;
+    outcome.validate().map_err(|error| error.to_string())
 }
 
 fn authority_from_target_url(target_url: &str) -> String {
