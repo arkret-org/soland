@@ -1,6 +1,11 @@
 //! Integration tests — `push_keys` domain: keys upload/query/claim,
 //! device-authorize projection, and revocation directory behaviour.
 
+use arkret_models_integration::models_push::{
+    PushDeviceRoute, PushNotificationEnvelope, PushNotifyGatewayStatus, PushNotifyOutcome,
+    PushNotifyReasonCode, PushNotifyRequestBody, PushTimingProfileHint,
+};
+
 use super::helpers::*;
 use crate::common::*;
 
@@ -580,23 +585,101 @@ async fn auth_keys_device_messages_and_blobs_work() {
     let plaintext_push_body: Value = plaintext_push.take_json().await.unwrap();
     assert_eq!(plaintext_push_body["error"]["code"], "schema_violation");
 
-    let notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "push_target_id": push_target_id,
-                "wakeup_kind": "message",
-                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
-            }
-        }))
+    // `push-notifications.md` §5.2 and
+    // `push-operations.schema.json#/$defs/push_notify_outcome`: the response is
+    // the closed `{push_target_id, outcomes}` pair — `additionalProperties:
+    // false`, so the `rejected[]` array this assertion used to read cannot
+    // exist. Per-device acceptance moved into `outcomes[].gateway_status` with
+    // a registry `reason_code`, and the invariant worth asserting is the
+    // conservation rule: every requested `device_id` appears in `outcomes[]`
+    // exactly once, and no unrequested one appears.
+    let registered_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let unregistered_device = "ak:device:01904100-0000-7000-8000-71551c000004";
+    let notify: PushNotifyOutcome = TestClient::post("http://server/_arkret/edge/push/notify")
+        .json(&push_notify_request(
+            push_target_id,
+            &[registered_device, unregistered_device],
+        ))
         .send(&app_from_state(state))
         .await
         .take_json()
         .await
         .unwrap();
-    let rejected = notify["rejected"]
-        .as_array()
-        .unwrap_or_else(|| panic!("notify body: {notify}"));
-    assert_eq!(rejected.len(), 1, "notify body: {notify}");
+
+    assert_eq!(
+        notify.push_target_id, push_target_id,
+        "the outcome MUST echo notification.push_target_id"
+    );
+    let outcome_device_ids = notify
+        .outcomes
+        .iter()
+        .map(|outcome| outcome.device_id.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        outcome_device_ids,
+        vec![registered_device, unregistered_device],
+        "outcomes[] is conserved against notification.devices[]: one entry per \
+         requested device, none repeated, none unrequested"
+    );
+
+    let registered_outcome = &notify.outcomes[0];
+    assert_eq!(
+        registered_outcome.gateway_status,
+        PushNotifyGatewayStatus::Accepted
+    );
+    assert!(
+        registered_outcome.reason_code.is_none() && registered_outcome.retry_after_ms.is_none(),
+        "an accepted outcome MUST NOT carry rejection fields: {registered_outcome:?}"
+    );
+
+    let unregistered_outcome = &notify.outcomes[1];
+    assert_eq!(
+        unregistered_outcome.gateway_status,
+        PushNotifyGatewayStatus::Rejected
+    );
+    assert_eq!(
+        unregistered_outcome.reason_code,
+        Some(PushNotifyReasonCode::PushTokenUnknown),
+        "an unknown device route is a terminal per-device rejection"
+    );
+    assert!(
+        unregistered_outcome.retry_after_ms.is_none(),
+        "push_token_unknown is terminal, so it carries no caller backoff"
+    );
+    for outcome in &notify.outcomes {
+        outcome
+            .validate()
+            .expect("outcome satisfies the closed DTO");
+    }
+}
+
+/// A closed `ak.edge.push.command.notify` body built from the SDK types.
+///
+/// `blind_notification` requires `timing_profile_hint`; a device route is
+/// identified by `device_id` alone, and the request carries no provider payload.
+fn push_notify_request(push_target_id: &str, devices: &[&str]) -> PushNotifyRequestBody {
+    PushNotifyRequestBody {
+        notification: PushNotificationEnvelope {
+            push_target_id: Some(push_target_id.to_owned()),
+            wakeup_kind: Some("message".to_owned()),
+            timing_profile_hint: Some(PushTimingProfileHint::Default),
+            devices: devices
+                .iter()
+                .map(|device_id| PushDeviceRoute {
+                    device_id: arkret_identifiers::DeviceId::new((*device_id).to_owned()).unwrap(),
+                    push_key: None,
+                    app_id: None,
+                    platform: None,
+                    target_route_token: None,
+                    visible_notification_opt_in: false,
+                })
+                .collect(),
+            ..PushNotificationEnvelope::default()
+        },
+        event_kind: None,
+        reason_code: None,
+        audit_envelope: None,
+    }
 }
 
 /// Device-identity Phase 1 — a peer (member B) resolves member A's authoritative

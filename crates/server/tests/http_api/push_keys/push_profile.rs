@@ -430,7 +430,8 @@ async fn push_profile_and_moderation_contracts_work() {
                     "actions": ["dont_notify"],
                     "conditions": {
                         "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-                        "wakeup_kind": "message"
+                        "wakeup_kind": "message",
+                        "timing_profile_hint": "default"
                     }
                 }]
             },
@@ -455,6 +456,7 @@ async fn push_profile_and_moderation_contracts_work() {
                 "notification": {
                     "push_target_id": push_target,
                     "wakeup_kind": "message",
+                    "timing_profile_hint": "default",
                     "devices": [{"device_id": ALICE_DEVICE}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
                 }
             }))
@@ -1292,6 +1294,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
                 "notification": {
                     "push_target_id": push_target.clone(),
                     "wakeup_kind": "message",
+                    "timing_profile_hint": "default",
                     "devices": [{"device_id": device_id}]
                 }
             }))
@@ -1345,6 +1348,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
                 "notification": {
                     "push_target_id": push_target.clone(),
                     "wakeup_kind": "message",
+                    "timing_profile_hint": "default",
                     "devices": [{"device_id": device_id}]
                 }
             }))
@@ -1380,6 +1384,7 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
                 "notification": {
                     "push_target_id": push_target.clone(),
                     "wakeup_kind": "message",
+                    "timing_profile_hint": "default",
                     "devices": [{"device_id": device_id}]
                 }
             }))

@@ -372,6 +372,14 @@ pub(super) async fn push_notify(
 ) -> JsonResult<PushNotifyOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
+    // The SDK owns the closed-shape rules for this body (push-notifications.md
+    // and push-operations.schema.json): the notification must satisfy one of
+    // the blind / visible oneOf branches, both of which require
+    // timing_profile_hint. Without this call a body satisfying neither branch
+    // was accepted, because the field is Option on the wire type and nothing
+    // here checked it.
+    arkret_models_integration::models_push::validate_push_notify_contract_shape(&body)
+        .map_err(AppError::invalid_param)?;
     let push_target_id = body
         .notification
         .push_target_id
