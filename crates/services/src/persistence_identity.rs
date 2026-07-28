@@ -1665,6 +1665,28 @@ fn persistence_security_transaction(
     }
 }
 
+fn application_security_transaction_step_outcome(
+    record: soland_storage::SecurityTransactionStepOutcomeRecord,
+) -> crate::identity::SecurityTransactionStepOutcomeState {
+    crate::identity::SecurityTransactionStepOutcomeState {
+        transaction_id: record.transaction_id,
+        step: record.step,
+        canonical_request: record.canonical_request,
+        response: record.response,
+    }
+}
+
+fn persistence_security_transaction_step_outcome(
+    outcome: crate::identity::SecurityTransactionStepOutcomeState,
+) -> soland_storage::SecurityTransactionStepOutcomeRecord {
+    soland_storage::SecurityTransactionStepOutcomeRecord {
+        transaction_id: outcome.transaction_id,
+        step: outcome.step,
+        canonical_request: outcome.canonical_request,
+        response: outcome.response,
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransactions {
     async fn create(
@@ -1700,6 +1722,35 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .update(persistence_security_transaction(transaction))
             .await?;
         Ok(())
+    }
+
+    async fn step_outcome(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionStepOutcomeState>> {
+        Ok(self
+            .0
+            .security_transactions()
+            .step_outcome(transaction_id, step)
+            .await?
+            .map(application_security_transaction_step_outcome))
+    }
+
+    async fn accept_step(
+        &self,
+        transaction: crate::identity::SecurityTransactionState,
+        outcome: crate::identity::SecurityTransactionStepOutcomeState,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionStepOutcomeState> {
+        Ok(application_security_transaction_step_outcome(
+            self.0
+                .security_transactions()
+                .accept_step(
+                    persistence_security_transaction(transaction),
+                    persistence_security_transaction_step_outcome(outcome),
+                )
+                .await?,
+        ))
     }
 }
 

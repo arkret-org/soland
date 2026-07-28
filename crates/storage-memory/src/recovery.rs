@@ -1,8 +1,8 @@
 use super::{
     Arc, BTreeMap, BTreeSet, Mutex, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
     RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore, RecoverySessionRecord,
-    RecoverySessionStore, SecurityTransactionRecord, SecurityTransactionStore, async_trait,
-    recovery_active_policy_locked,
+    RecoverySessionStore, SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
+    SecurityTransactionStore, async_trait, recovery_active_policy_locked,
 };
 #[derive(Default)]
 pub(crate) struct MemoryRecoveryPolicyStore {
@@ -186,6 +186,7 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
 pub(crate) struct MemorySecurityTransactionStore {
     sessions: Arc<Mutex<BTreeMap<String, RecoverySessionRecord>>>,
     by_id: Mutex<BTreeMap<String, SecurityTransactionRecord>>,
+    step_outcomes: Mutex<BTreeMap<(String, String), SecurityTransactionStepOutcomeRecord>>,
 }
 
 impl MemorySecurityTransactionStore {
@@ -193,8 +194,17 @@ impl MemorySecurityTransactionStore {
         Self {
             sessions,
             by_id: Mutex::new(BTreeMap::new()),
+            step_outcomes: Mutex::new(BTreeMap::new()),
         }
     }
+}
+
+fn security_transaction_step_key(step: arkret_wire::SecurityTransactionStep) -> String {
+    serde_json::to_value(step)
+        .expect("security transaction step serializes")
+        .as_str()
+        .expect("security transaction step is a string")
+        .to_owned()
 }
 
 #[async_trait]
@@ -270,5 +280,207 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         super::validate_security_transaction_update(existing, &record)?;
         by_id.insert(transaction_id.to_owned(), record);
         Ok(())
+    }
+
+    async fn step_outcome(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> PersistenceResult<Option<SecurityTransactionStepOutcomeRecord>> {
+        Ok(self
+            .step_outcomes
+            .lock()
+            .get(&(
+                transaction_id.to_owned(),
+                security_transaction_step_key(step),
+            ))
+            .cloned())
+    }
+
+    async fn accept_step(
+        &self,
+        record: SecurityTransactionRecord,
+        outcome: SecurityTransactionStepOutcomeRecord,
+    ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord> {
+        let transaction_id = record.resource.transaction_id.as_str();
+        if outcome.transaction_id != transaction_id {
+            return Err(PersistenceError::SchemaViolation(
+                "security transaction step outcome belongs to a different transaction".to_owned(),
+            ));
+        }
+        let key = (
+            transaction_id.to_owned(),
+            security_transaction_step_key(outcome.step),
+        );
+        let mut by_id = self.by_id.lock();
+        let mut outcomes = self.step_outcomes.lock();
+        if let Some(existing) = outcomes.get(&key) {
+            if existing.canonical_request == outcome.canonical_request {
+                return Ok(existing.clone());
+            }
+            return Err(PersistenceError::Conflict(format!(
+                "security transaction step {:?} already has different canonical request bytes",
+                outcome.step
+            )));
+        }
+        let existing = by_id.get(transaction_id).ok_or_else(|| {
+            PersistenceError::NotFound(format!("transaction_id `{transaction_id}` not found"))
+        })?;
+        super::validate_security_transaction_update(existing, &record)?;
+        if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
+            || record.resource.accepted_steps.last().map(|step| step.step) != Some(outcome.step)
+        {
+            return Err(PersistenceError::SchemaViolation(
+                "accepted step outcome must match the single appended transaction step".to_owned(),
+            ));
+        }
+        by_id.insert(transaction_id.to_owned(), record);
+        outcomes.insert(key, outcome.clone());
+        Ok(outcome)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_wire::{
+        AcceptedStep, CanonicalEncoding, CanonicalPublicMaterial, Did, EventId, Hash,
+        PreparedEventUnit, SecurityRotationBinding, SecurityRotationPlan,
+        SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
+        SecurityTransactionKind, SecurityTransactionState, SecurityTransactionStep, TransactionId,
+    };
+    use chrono::{Duration, Utc};
+    use serde_json::json;
+
+    use super::*;
+
+    fn hash(byte: char) -> Hash {
+        Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
+    }
+
+    fn canonical_material(value: serde_json::Value) -> CanonicalPublicMaterial {
+        let bytes = arkret_canonical::canonical_json_bytes(&value).unwrap();
+        CanonicalPublicMaterial {
+            canonical_encoding: CanonicalEncoding::CanonicalJson,
+            value,
+            canonical_bytes_base64url: arkret_canonical::base64url_encode(&bytes),
+            digest: Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap(),
+        }
+    }
+
+    fn event_unit(service_id: &Did, marker: &str) -> PreparedEventUnit {
+        let request = json!({"events": [], "marker": marker});
+        let bytes = arkret_canonical::canonical_json_bytes(&request).unwrap();
+        PreparedEventUnit {
+            operation_id: "ak.self.events.command.submit".to_owned(),
+            destination_service_id: service_id.clone(),
+            audience: service_id.clone(),
+            request_schema: "https://arkret.org/v1/schemas/service-operation-dtos.schema.json#/$defs/EventsSubmitBatchRequestBody".to_owned(),
+            request,
+            canonical_request_base64url: arkret_canonical::base64url_encode(&bytes),
+            request_digest: Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap(),
+        }
+    }
+
+    fn initial_rotation() -> SecurityTransactionRecord {
+        let service_id = Did::new("did:web:principal.example").unwrap();
+        let plan = SecurityRotationPlan {
+            revoke_unit: event_unit(&service_id, "revoke"),
+            new_secret_commitment: hash('1'),
+            encrypted_backup_material: canonical_material(json!({"ciphertext": "public"})),
+            active_series_unit: event_unit(&service_id, "activate"),
+            erase_confirmation_digest: hash('2'),
+            local_commit_digest: hash('3'),
+        };
+        let prepared_plan_digest = {
+            let prepared =
+                arkret_wire::SecurityTransactionPreparedPlan::SecurityRotation(plan.clone());
+            let bytes = arkret_canonical::canonical_json_bytes(&prepared).unwrap();
+            Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap()
+        };
+        let request = SecurityTransactionCreateRequest::SecurityRotation(
+            SecurityRotationTransactionCreateRequest {
+                transaction_id: TransactionId::new(
+                    "ak:transaction:019a7360-0000-7000-8000-000000000101",
+                )
+                .unwrap(),
+                kind: SecurityTransactionKind::SecurityRotation,
+                principal_id: Did::new("did:web:alice.example").unwrap(),
+                expires_at: Utc::now() + Duration::hours(1),
+                binding: SecurityRotationBinding {
+                    revoke_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000102")
+                        .unwrap(),
+                    new_secret_commitment: hash('1'),
+                    series_id: arkret_wire::BackupSeriesId::new(
+                        "ak:backup_series:019a7360-0000-7000-8000-000000000103",
+                    )
+                    .unwrap(),
+                    backup_id: arkret_wire::BackupId::new(
+                        "ak:backup:019a7360-0000-7000-8000-000000000104",
+                    )
+                    .unwrap(),
+                    active_series_event_id: EventId::new(
+                        "ak:event:019a7360-0000-7000-8000-000000000105",
+                    )
+                    .unwrap(),
+                    erase_confirmation_digest: hash('2'),
+                    local_commit_digest: hash('3'),
+                },
+                prepared_plan: plan,
+                prepared_plan_digest,
+            },
+        );
+        let (resource, canonical_request) = request
+            .into_initial_resource(service_id, Utc::now())
+            .unwrap();
+        SecurityTransactionRecord {
+            canonical_request,
+            resource,
+        }
+    }
+
+    #[tokio::test]
+    async fn accepted_step_persists_first_response_and_replays_identical_request() {
+        let sessions = Arc::new(Mutex::new(BTreeMap::new()));
+        let store = MemorySecurityTransactionStore::new(sessions);
+        let initial = initial_rotation();
+        store.create(initial.clone()).await.unwrap();
+
+        let mut advanced = initial;
+        advanced.resource.accepted_steps.push(AcceptedStep {
+            step: SecurityTransactionStep::Revoke,
+            prepared_material_digest: hash('4'),
+            acceptor_id: "did:web:principal.example".to_owned(),
+            output_ref: "ak:event:019a7360-0000-7000-8000-000000000102".to_owned(),
+            output_digest: hash('5'),
+            accepted_at: Utc::now(),
+        });
+        advanced.resource.state = SecurityTransactionState::Running;
+        advanced.resource.next_required_step = Some(SecurityTransactionStep::UploadNewMaterial);
+        advanced.resource.validate_structural().unwrap();
+        let outcome = SecurityTransactionStepOutcomeRecord {
+            transaction_id: advanced.resource.transaction_id.as_str().to_owned(),
+            step: SecurityTransactionStep::Revoke,
+            canonical_request: b"fixed-request".to_vec(),
+            response: json!({"first": true}),
+        };
+        let first = store
+            .accept_step(advanced.clone(), outcome.clone())
+            .await
+            .unwrap();
+        assert_eq!(first.response, json!({"first": true}));
+
+        let mut replay = outcome;
+        replay.response = json!({"first": false});
+        let stored = store.accept_step(advanced, replay).await.unwrap();
+        assert_eq!(stored.response, json!({"first": true}));
+
+        let mut conflict = stored;
+        conflict.canonical_request = b"different-request".to_vec();
+        assert!(
+            store
+                .accept_step(initial_rotation(), conflict)
+                .await
+                .is_err()
+        );
     }
 }

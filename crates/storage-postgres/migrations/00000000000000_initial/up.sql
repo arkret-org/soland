@@ -1207,6 +1207,15 @@ CREATE TABLE public.security_transactions (
     CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'awaiting_device_attestation'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
 );
 
+CREATE TABLE public.security_transaction_step_outcomes (
+    transaction_id uuid NOT NULL,
+    step text NOT NULL,
+    canonical_request bytea NOT NULL,
+    response jsonb NOT NULL,
+    CONSTRAINT security_transaction_step_outcomes_pkey PRIMARY KEY (transaction_id, step),
+    CONSTRAINT security_transaction_step_outcomes_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.security_transactions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE public.sessions (
     id text NOT NULL,
     actor_id text NOT NULL,

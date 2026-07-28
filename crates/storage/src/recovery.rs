@@ -1,6 +1,7 @@
 use super::{
     BTreeMap, PersistenceError, PersistenceResult, RecoveryPolicyRecord, RecoveryReceiptRecord,
-    RecoverySessionRecord, SecurityTransactionRecord, async_trait,
+    RecoverySessionRecord, SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
+    async_trait,
 };
 /// Durable recovery policy store. Implementations enforce policy_id
 /// uniqueness, `(principal_id, version)` uniqueness, and the per-principal
@@ -69,6 +70,19 @@ pub trait SecurityTransactionStore: Send + Sync {
         transaction_id: &str,
     ) -> PersistenceResult<Option<SecurityTransactionRecord>>;
     async fn update(&self, record: SecurityTransactionRecord) -> PersistenceResult<()>;
+    async fn step_outcome(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> PersistenceResult<Option<SecurityTransactionStepOutcomeRecord>>;
+    /// Atomically appends exactly one accepted step, persists its first
+    /// response, and advances the authoritative resource. A byte-identical
+    /// replay returns the stored outcome; different bytes conflict.
+    async fn accept_step(
+        &self,
+        record: SecurityTransactionRecord,
+        outcome: SecurityTransactionStepOutcomeRecord,
+    ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord>;
 }
 
 #[doc(hidden)]

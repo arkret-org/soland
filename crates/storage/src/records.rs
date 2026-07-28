@@ -182,6 +182,19 @@ pub struct SecurityTransactionRecord {
     pub resource: arkret_wire::SecurityTransaction,
 }
 
+/// First durable response for one accepted security-transaction step.
+///
+/// This is deliberately separate from the public transaction resource:
+/// `accepted_steps` exposes only stable refs/digests, while response-loss
+/// replay needs the exact canonical request and first response bytes/value.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SecurityTransactionStepOutcomeRecord {
+    pub transaction_id: String,
+    pub step: arkret_wire::SecurityTransactionStep,
+    pub canonical_request: Vec<u8>,
+    pub response: Value,
+}
+
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by

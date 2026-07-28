@@ -50,7 +50,6 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "message create",
             kind: arkret_wire::events::EventKind::MESSAGE_CREATE,
             payload: json!({
-                "message_id": "ak:message:01904100-0000-7000-8000-79a90338768b",
                 "strand_id": "ak:strand:01904100-0000-7000-8000-6c663fa0205f",
                 "track_name": "discussion",
                 "content": {"kind": "ak.content.text", "body": "hello"}

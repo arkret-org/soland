@@ -266,7 +266,6 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         assert_eq!(member.state, "join");
     }
 
-    let message_id = crate::ids::generate("message");
     let encrypted_content: arkret_models_crypto::encrypted_envelope::EncryptedEnvelope = serde_json::from_value(json!({
         "scheme": "mls_rfc9420",
         "version": "1.0",
@@ -293,7 +292,6 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
             "discussion",
             encrypted_content,
         )
-        .with_message_id(message_id.clone())
         .to_value()
         .unwrap();
     let mut message_op = arkret_event_draft::Operation::create(

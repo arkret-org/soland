@@ -14,14 +14,16 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{DeviceId, Did, Hash, PolicyId, RealmId, RecoverySessionId};
+use arkret_identifiers::{Did, Hash, PolicyId, RealmId, RecoverySessionId};
 use arkret_models_crypto::{
     DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
     RecoveryPolicySummary, RecoverySessionCreateRequestBody, RecoverySessionProofSubmitOutcome,
     RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState,
 };
-use arkret_wire::{EventBatchReceiptScope, NonEmptyString};
+use arkret_wire::{
+    NonEmptyString, SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -35,7 +37,8 @@ use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
     RecoveryPolicyState as RecoveryPolicyRecord, RecoveryReceiptState as RecoveryReceiptRecord,
-    SessionIdentityState as SessionRecord, principal_control_realm_for_did,
+    SecurityTransactionState as SecurityTransactionRecord, SessionIdentityState as SessionRecord,
+    principal_control_realm_for_did,
 };
 
 use super::{AuthArgs, append_audit_log};
@@ -47,6 +50,8 @@ mod policy_endpoints;
 use policy_endpoints::*;
 mod session_endpoints;
 use session_endpoints::*;
+mod security_transaction_endpoints;
+use security_transaction_endpoints::*;
 mod signatures;
 use signatures::*;
 mod validation;
@@ -89,6 +94,18 @@ pub(super) fn protocol_router() -> Router {
         .push(
             Router::with_path("recovery-sessions/{recovery_session_id}/proofs")
                 .post(recovery_session_proof_submit),
+        )
+}
+
+/// Spec-canonical authenticated transaction coordinator surface mounted under
+/// `/_arkret/self`.
+pub(super) fn self_protocol_router() -> Router {
+    Router::new()
+        .push(Router::with_path("recovery-authority-tickets").post(recovery_authority_ticket_issue))
+        .push(Router::with_path("security-transactions").post(security_transaction_create))
+        .push(
+            Router::with_path("security-transactions/{transaction_id}")
+                .get(security_transaction_get),
         )
 }
 

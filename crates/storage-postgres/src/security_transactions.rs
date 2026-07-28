@@ -1,13 +1,13 @@
 use arkret_wire::{
     Did, Hash, SecurityTransaction, SecurityTransactionBinding, SecurityTransactionKind,
-    SecurityTransactionState, TransactionId,
+    SecurityTransactionState, SecurityTransactionStep, TransactionId,
 };
 
 use super::{
     AsyncConnection, AsyncPgConnection, Binary, Jsonb, Nullable, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    SecurityTransactionRecord, SecurityTransactionStore, SqlUuid, Text, Timestamptz, Uuid, Value,
-    async_trait, ids, pg_conn, sql_query,
+    SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
+    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
 };
 
 pub struct PgSecurityTransactionStore {
@@ -46,6 +46,31 @@ struct SecurityTransactionRow {
     terminal_result: Option<Value>,
     #[diesel(sql_type = Binary)]
     canonical_request: Vec<u8>,
+}
+
+#[derive(QueryableByName)]
+struct SecurityTransactionStepOutcomeRow {
+    #[diesel(sql_type = SqlUuid)]
+    transaction_id: Uuid,
+    #[diesel(sql_type = Text)]
+    step: String,
+    #[diesel(sql_type = Binary)]
+    canonical_request: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    response: Value,
+}
+
+impl TryFrom<SecurityTransactionStepOutcomeRow> for SecurityTransactionStepOutcomeRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: SecurityTransactionStepOutcomeRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            transaction_id: ids::format_typed_uuid("transaction", &row.transaction_id),
+            step: parse_stored("step outcome step", Value::String(row.step))?,
+            canonical_request: row.canonical_request,
+            response: row.response,
+        })
+    }
 }
 
 impl TryFrom<SecurityTransactionRow> for SecurityTransactionRecord {
@@ -180,6 +205,76 @@ async fn insert_one(
             .map_err(|error| PersistenceError::Internal(error.to_string()))?,
     )
     .bind::<Binary, _>(&record.canonical_request)
+    .execute(conn)
+    .await
+    .map(|_| ())
+    .map_err(PersistenceError::database)
+}
+
+async fn load_step_outcome(
+    conn: &mut AsyncPgConnection,
+    transaction_id: &str,
+    step: SecurityTransactionStep,
+) -> PersistenceResult<Option<SecurityTransactionStepOutcomeRecord>> {
+    let transaction_uuid =
+        ids::parse_typed_uuid(transaction_id, "transaction").ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!(
+                "malformed transaction_id `{transaction_id}`"
+            ))
+        })?;
+    sql_query(
+        "SELECT transaction_id, step, canonical_request, response \
+         FROM security_transaction_step_outcomes WHERE transaction_id = $1 AND step = $2",
+    )
+    .bind::<SqlUuid, _>(transaction_uuid)
+    .bind::<Text, _>(enum_text(step)?)
+    .get_result::<SecurityTransactionStepOutcomeRow>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(SecurityTransactionStepOutcomeRecord::try_from)
+    .transpose()
+}
+
+async fn update_mutable_fields(
+    conn: &mut AsyncPgConnection,
+    record: &SecurityTransactionRecord,
+) -> PersistenceResult<()> {
+    sql_query(
+        "UPDATE security_transactions SET state = $2, accepted_steps = $3, \
+         next_required_step = $4, terminal_result = $5 WHERE id = $1",
+    )
+    .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+        record.resource.transaction_id.as_str(),
+    ))
+    .bind::<Text, _>(match record.resource.state {
+        SecurityTransactionState::Pending => "pending",
+        SecurityTransactionState::Running => "running",
+        SecurityTransactionState::AwaitingDeviceAttestation => "awaiting_device_attestation",
+        SecurityTransactionState::Completed => "completed",
+        SecurityTransactionState::Aborted => "aborted",
+        SecurityTransactionState::Expired => "expired",
+    })
+    .bind::<Jsonb, _>(
+        serde_json::to_value(&record.resource.accepted_steps)
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
+    .bind::<Nullable<Text>, _>(
+        record
+            .resource
+            .next_required_step
+            .map(enum_text)
+            .transpose()?,
+    )
+    .bind::<Nullable<Jsonb>, _>(
+        record
+            .resource
+            .terminal_result
+            .as_ref()
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+    )
     .execute(conn)
     .await
     .map(|_| ())
@@ -325,51 +420,79 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                     ))
                 })?;
             super::validate_security_transaction_update(&existing, &record)?;
-            sql_query(
-                "UPDATE security_transactions SET state = $2, accepted_steps = $3, \
-                 next_required_step = $4, terminal_result = $5 WHERE id = $1",
-            )
-            .bind::<SqlUuid, _>(
-                ids::parse_typed_uuid(&transaction_id, "transaction").ok_or_else(|| {
-                    PersistenceError::SchemaViolation(format!(
-                        "malformed transaction_id `{transaction_id}`"
+            update_mutable_fields(conn, &record).await?;
+            Ok(())
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn step_outcome(
+        &self,
+        transaction_id: &str,
+        step: SecurityTransactionStep,
+    ) -> PersistenceResult<Option<SecurityTransactionStepOutcomeRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        load_step_outcome(&mut conn, transaction_id, step).await
+    }
+
+    async fn accept_step(
+        &self,
+        record: SecurityTransactionRecord,
+        outcome: SecurityTransactionStepOutcomeRecord,
+    ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord> {
+        record
+            .resource
+            .validate_structural()
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+        let transaction_id = record.resource.transaction_id.as_str().to_owned();
+        if outcome.transaction_id != transaction_id {
+            return Err(PersistenceError::SchemaViolation(
+                "security transaction step outcome belongs to a different transaction".to_owned(),
+            ));
+        }
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let existing = load_one(conn, &transaction_id, true)
+                .await?
+                .ok_or_else(|| {
+                    PersistenceError::NotFound(format!(
+                        "transaction_id `{transaction_id}` not found"
                     ))
-                })?,
-            )
-            .bind::<Text, _>(match record.resource.state {
-                SecurityTransactionState::Pending => "pending",
-                SecurityTransactionState::Running => "running",
-                SecurityTransactionState::AwaitingDeviceAttestation => {
-                    "awaiting_device_attestation"
+                })?;
+            if let Some(stored) = load_step_outcome(conn, &transaction_id, outcome.step).await? {
+                if stored.canonical_request == outcome.canonical_request {
+                    return Ok(stored);
                 }
-                SecurityTransactionState::Completed => "completed",
-                SecurityTransactionState::Aborted => "aborted",
-                SecurityTransactionState::Expired => "expired",
-            })
-            .bind::<Jsonb, _>(
-                serde_json::to_value(&record.resource.accepted_steps)
-                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
+                return Err(PersistenceError::Conflict(format!(
+                    "security transaction step {:?} already has different canonical request bytes",
+                    outcome.step
+                ))
+                .into());
+            }
+            super::validate_security_transaction_update(&existing, &record)?;
+            if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
+                || record.resource.accepted_steps.last().map(|step| step.step) != Some(outcome.step)
+            {
+                return Err(PersistenceError::SchemaViolation(
+                    "accepted step outcome must match the single appended transaction step"
+                        .to_owned(),
+                )
+                .into());
+            }
+            sql_query(
+                "INSERT INTO security_transaction_step_outcomes \
+                 (transaction_id, step, canonical_request, response) VALUES ($1, $2, $3, $4)",
             )
-            .bind::<Nullable<Text>, _>(
-                record
-                    .resource
-                    .next_required_step
-                    .map(enum_text)
-                    .transpose()?,
-            )
-            .bind::<Nullable<Jsonb>, _>(
-                record
-                    .resource
-                    .terminal_result
-                    .as_ref()
-                    .map(serde_json::to_value)
-                    .transpose()
-                    .map_err(|error| PersistenceError::Internal(error.to_string()))?,
-            )
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<Text, _>(enum_text(outcome.step)?)
+            .bind::<Binary, _>(&outcome.canonical_request)
+            .bind::<Jsonb, _>(&outcome.response)
             .execute(conn)
             .await
             .map_err(PersistenceError::database)?;
-            Ok(())
+            update_mutable_fields(conn, &record).await?;
+            Ok(outcome)
         })
         .await
         .map_err(PgTransactionError::into_persistence)

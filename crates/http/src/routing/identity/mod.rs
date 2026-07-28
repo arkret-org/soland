@@ -86,6 +86,7 @@ pub fn protocol_router() -> Router {
                 .push(consent::router())
                 .push(keys::router())
                 .push(key_backup::protocol_router())
+                .push(recovery::self_protocol_router())
                 .push(device_messages::protocol_router())
                 .push(agents::protocol_router()),
         )
