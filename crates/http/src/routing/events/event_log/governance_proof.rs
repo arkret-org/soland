@@ -428,7 +428,7 @@ async fn apply_authoritative_event_seal_path(
     Ok(())
 }
 
-async fn verify_authoritative_event_seal_signature(
+pub(crate) async fn verify_authoritative_event_seal_signature(
     state: &AppState,
     signature: &arkret_wire::PayloadSignature,
     signer: &str,

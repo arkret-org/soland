@@ -217,6 +217,14 @@ async fn run() -> anyhow::Result<()> {
         "background worker configured"
     );
 
+    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    tracing::info!(
+        worker = "control_seal_coordinator",
+        enabled = true,
+        service_id = %state.service_id(),
+        "background worker configured"
+    );
+
     // TTL backstop for the durable sync-cursor handle table (forward-progress
     // pruning on cursor presentation handles the steady state; this clears
     // rows whose client never returned).

@@ -225,6 +225,23 @@ pub(super) async fn submit_realm_bootstrap_batch(
         })?;
 
     let received_at = now();
+    let bootstrap_realm_id = RealmId::new(unit.realm_id.clone()).map_err(|error| {
+        SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+    })?;
+    let proposal_receipts = crate::control_proposal::mint_control_proposal_receipts(
+        state,
+        &bootstrap_realm_id,
+        &typed_events,
+        received_at,
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quorum_unreachable",
+            format!("Realm bootstrap proposal receipts unavailable: {error}"),
+        )
+    })?;
     let records = validated
         .iter()
         .zip(envelopes.iter().cloned())
@@ -232,7 +249,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .collect::<Vec<_>>();
     state
         .event_queries()
-        .store_realm_bootstrap_batch(records)
+        .store_realm_bootstrap_batch(records, proposal_receipts.clone())
         .await
         .map_err(|error| {
             if error.is_realm_already_exists() {
@@ -251,6 +268,19 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 )
             }
         })?;
+    for (event, receipt) in typed_events.iter().zip(&proposal_receipts) {
+        state
+            .projections()
+            .put_pending_control_event_with_receipt(event, receipt)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted Realm bootstrap pending index unavailable: {error}"),
+                )
+            })?;
+    }
+    state.wake_control_seal_coordinator();
 
     let founding_grant_id = state
         .projections()
@@ -309,14 +339,16 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .iter()
         .map(|event| event.event_id.clone())
         .collect::<Vec<_>>();
-    Ok(events_submit_outcome(
+    let mut outcome = events_submit_outcome(
         EventsSubmitStatus::Accepted,
         ids,
         Vec::new(),
         Vec::new(),
         Vec::new(),
         Some(super::super::super::sync::sync_token_for_state(state).await),
-    ))
+    );
+    outcome.control_proposal_receipts = proposal_receipts;
+    Ok(outcome)
 }
 
 fn validate_actor_chain(events: &[ValidatedEventEnvelope]) -> Result<(), SubmitOneError> {

@@ -182,6 +182,38 @@ pub(super) async fn submit_identity_anchor_batch(
     };
     let mut reanchor_conflict = !conflict_evidence.is_empty();
     let received_at = now();
+    let typed_control_events = envelopes
+        .iter()
+        .cloned()
+        .map(serde_json::from_value::<arkret_wire::Event>)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("accepted identity anchor is not canonical Event wire: {error}"),
+            )
+        })?;
+    let proposal_receipts = if reanchor_conflict {
+        Vec::new()
+    } else {
+        crate::control_proposal::mint_control_proposal_receipts(
+            state,
+            &RealmId::new(first.realm_id.clone()).map_err(|error| {
+                SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+            })?,
+            &typed_control_events,
+            received_at,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quorum_unreachable",
+                format!("identity anchor proposal receipts unavailable: {error}"),
+            )
+        })?
+    };
     let records = vec![
         canonical_record(&first, envelopes[0].clone(), received_at),
         canonical_record(&second, envelopes[1].clone(), received_at),
@@ -261,6 +293,7 @@ pub(super) async fn submit_identity_anchor_batch(
         .event_queries()
         .store_identity_anchor_batch(
             records.clone(),
+            proposal_receipts.clone(),
             receipt,
             device_projection,
             frontier_cas,
@@ -303,6 +336,19 @@ pub(super) async fn submit_identity_anchor_batch(
     }
 
     if !reanchor_conflict {
+        for (event, receipt) in typed_control_events.iter().zip(&proposal_receipts) {
+            state
+                .projections()
+                .put_pending_control_event_with_receipt(event, receipt)
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted identity anchor pending index unavailable: {error}"),
+                    )
+                })?;
+        }
+        state.wake_control_seal_coordinator();
         for (parsed, envelope) in [(&first, &envelopes[0]), (&second, &envelopes[1])] {
             if let Some(operation) = projection_operation_from_event(parsed, envelope) {
                 crate::routing::events::projection::project_accepted_operations_from_device(
@@ -361,14 +407,16 @@ pub(super) async fn submit_identity_anchor_batch(
             Some(super::super::super::sync::sync_token_for_state(state).await),
         ))
     } else {
-        Ok(events_submit_outcome(
+        let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Accepted,
             vec![first.event_id, second.event_id],
             Vec::new(),
             Vec::new(),
             Vec::new(),
             Some(super::super::super::sync::sync_token_for_state(state).await),
-        ))
+        );
+        outcome.control_proposal_receipts = proposal_receipts;
+        Ok(outcome)
     }
 }
 
@@ -455,14 +503,37 @@ pub(super) async fn identical_historical_retry(
         if ids.iter().any(|id| EventId::new(id.clone()).is_err()) {
             return Err(unit_error("stored identity anchor Event id is invalid"));
         }
-        return Ok(Some(events_submit_outcome(
+        let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Duplicate,
             ids.clone(),
             ids,
             Vec::new(),
             Vec::new(),
             Some(super::super::super::sync::sync_token_for_state(state).await),
-        )));
+        );
+        for record in existing.iter().flatten() {
+            let digest = Hash::new(record.canonical_digest.clone()).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("stored anchor Event digest is invalid: {error}"),
+                )
+            })?;
+            if let Some(receipt) = state
+                .projections()
+                .control_proposal_receipt(&digest)
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("stored Control Proposal receipt unavailable: {error}"),
+                    )
+                })?
+            {
+                outcome.control_proposal_receipts.push(receipt);
+            }
+        }
+        return Ok(Some(outcome));
     }
     Err(SubmitOneError::new(
         StatusCode::CONFLICT,

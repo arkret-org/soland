@@ -13,6 +13,7 @@ use crate::{
 #[derive(Clone, Debug)]
 pub struct EventCommitRequest {
     pub event: CanonicalEventRecord,
+    pub control_proposal_receipt: Option<arkret_wire::ControlProposalReceipt>,
     pub projections: Vec<ProjectionEventRecord>,
     pub idempotency: Option<IdempotencyRecord>,
     pub outbox: Vec<FederationOutboxRecord>,

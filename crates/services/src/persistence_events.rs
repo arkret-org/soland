@@ -87,6 +87,7 @@ fn persistence_event_commit_request(
 ) -> soland_storage::EventCommitRequest {
     soland_storage::EventCommitRequest {
         event: persistence_canonical_event(command.event),
+        control_proposal_receipt: command.control_proposal_receipt,
         projections: command
             .projections
             .into_iter()
@@ -140,6 +141,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
     ) -> crate::ServiceResult<()> {
         self.0
             .events()
@@ -148,6 +150,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .into_iter()
                     .map(persistence_canonical_event)
                     .collect(),
+                proposal_receipts,
             )
             .await?;
         Ok(())
@@ -155,6 +158,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         receipt: Option<arkret_wire::EventBatchReceipt>,
         device: Option<crate::events::IdentityAnchorDeviceState>,
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
@@ -168,6 +172,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .into_iter()
                     .map(persistence_canonical_event)
                     .collect(),
+                proposal_receipts,
                 receipt,
                 device.map(|state| soland_storage::DeviceInventoryRecord {
                     actor: state.actor,

@@ -210,6 +210,7 @@ async fn prepare_ghost_event(
             envelope,
             received_at,
         },
+        control_proposal_receipt: None,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {

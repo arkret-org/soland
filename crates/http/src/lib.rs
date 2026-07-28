@@ -9,6 +9,8 @@ pub mod canonical_body;
 pub mod compactor;
 pub mod config;
 pub mod content_encoding;
+mod control_proposal;
+pub mod control_seal_coordinator;
 pub mod cursor;
 pub mod error;
 pub mod gc;

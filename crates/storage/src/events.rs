@@ -28,12 +28,14 @@ pub trait EventStore: Send + Sync {
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
     ) -> PersistenceResult<()>;
     /// Commit the closed identity-anchor unit, its signed receipt (for
     /// re-anchor), and the replacement device projection as one durable unit.
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,

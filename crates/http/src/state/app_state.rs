@@ -148,6 +148,9 @@ pub struct AppState {
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
     /// replica receive the same live frames.
     event_broadcast: EventBroadcast,
+    /// Lossy process-local acceleration signal. Durable pending rows remain
+    /// the reconciliation source of truth after missed wakeups or restarts.
+    control_seal_wakeup: Arc<tokio::sync::Notify>,
     /// Server-enforced reconnect windows advertised by subscribe control
     /// frames. This prevents a faulty or overloaded client from immediately
     /// re-opening the same subscribe scope after `dropped` /
@@ -826,6 +829,7 @@ impl AppState {
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             federation_peer_verifying_keys: Arc::new(ArcSwap::from_pointee(BTreeMap::new())),
             event_broadcast,
+            control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),
             notary_signing_key,
             notary_signing_key_origin,
             // G4.T3 — load verified-profile descriptors at startup. The env
@@ -1397,6 +1401,14 @@ impl AppState {
         notification: EventNotification,
     ) -> Result<usize, tokio::sync::broadcast::error::SendError<EventNotification>> {
         self.event_broadcast.send(notification)
+    }
+
+    pub(crate) fn wake_control_seal_coordinator(&self) {
+        self.control_seal_wakeup.notify_one();
+    }
+
+    pub(crate) async fn control_seal_wakeup_notified(&self) {
+        self.control_seal_wakeup.notified().await;
     }
 
     #[cfg(any(test, feature = "test-support"))]

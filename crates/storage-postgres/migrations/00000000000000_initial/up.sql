@@ -332,6 +332,9 @@ CREATE TABLE public.state_control_events (
     event_digest text NOT NULL,
     realm_id text NOT NULL,
     event_json jsonb NOT NULL,
+    proposal_receipt jsonb,
+    proposal_decisions jsonb DEFAULT '[]'::jsonb NOT NULL,
+    decision_overdue boolean DEFAULT false NOT NULL,
     sealed_by text,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL,
     sealed_at timestamp with time zone
@@ -344,6 +347,14 @@ CREATE TABLE public.state_seals (
     predecessor_refs jsonb DEFAULT '[]'::jsonb NOT NULL,
     is_genesis boolean DEFAULT false NOT NULL,
     inserted_at timestamp with time zone DEFAULT now() NOT NULL
+);
+
+CREATE TABLE public.state_seal_signing_leases (
+    realm_id text NOT NULL,
+    signer_slot text NOT NULL,
+    holder text NOT NULL,
+    lease_until_ms bigint NOT NULL,
+    fence bigint NOT NULL
 );
 
 CREATE TABLE public.state_cell_ops (
@@ -1442,6 +1453,9 @@ ALTER TABLE ONLY public.state_control_events
 
 ALTER TABLE ONLY public.state_seals
     ADD CONSTRAINT state_seals_pkey PRIMARY KEY (id);
+
+ALTER TABLE ONLY public.state_seal_signing_leases
+    ADD CONSTRAINT state_seal_signing_leases_pkey PRIMARY KEY (realm_id, signer_slot);
 
 ALTER TABLE ONLY public.state_cell_ops
     ADD CONSTRAINT state_cell_ops_pkey PRIMARY KEY (seq);

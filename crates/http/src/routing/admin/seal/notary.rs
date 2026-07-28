@@ -366,11 +366,54 @@ pub(crate) async fn admin_reconfigure_notary(
         .event_digest()
         .map_err(|e| app_error!(InternalError, "event digest failed: {e}"))?;
 
-    // Stash pending; if put_pending fails, that's a hard 500.
+    let authority_set_ref = crate::notary::NotaryWorker::for_service(state.service_id().clone())
+        .authority_set_ref_for_events(state, &realm, std::slice::from_ref(&event))
+        .map_err(|error| {
+            app_error!(
+                ServiceUnavailable,
+                "Control Proposal authority is unavailable: {error}"
+            )
+        })?
+        .ok_or_else(|| {
+            app_error!(
+                ServiceUnavailable,
+                "this service cannot issue the current authority set's proposal receipt"
+            )
+        })?;
+    let policy = crate::control_proposal::control_proposal_policy(
+        state,
+        &realm,
+        std::slice::from_ref(&event),
+    )
+    .await
+    .map_err(|error| {
+        app_error!(
+            ServiceUnavailable,
+            "Control Proposal policy is unavailable: {error}"
+        )
+    })?;
+    let proposal_digest = arkret_identifiers::Hash::new(move_id.clone())
+        .map_err(|error| app_error!(InternalError, "event digest is invalid: {error}"))?;
+    let receipt = crate::control_proposal::mint_control_proposal_receipt(
+        state,
+        realm.clone(),
+        proposal_digest,
+        authority_set_ref,
+        chrono::Utc::now(),
+        policy,
+    )
+    .map_err(|error| {
+        app_error!(
+            InternalError,
+            "Control Proposal receipt signing failed: {error}"
+        )
+    })?;
+
     state
         .projections()
-        .put_pending_control_event(&event)
+        .put_pending_control_event_with_receipt(&event, &receipt)
         .map_err(|e| app_error!(InternalError, "control_event_store.put_pending failed: {e}"))?;
+    state.wake_control_seal_coordinator();
 
     // Best-effort: trigger one signing pass on this admin's Space — if
     // we're the round leader, this folds the Move into a fresh Seal

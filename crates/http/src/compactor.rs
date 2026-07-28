@@ -251,7 +251,7 @@ fn evaluate_candidate(
             continue;
         }
         if let Ok(Some(succ_seal)) = projections.seal_by_id(&next_id) {
-            if succ_seal.kind.is_compaction() {
+            if succ_seal.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
             if let Ok(next_succs) = projections.seal_successors(realm_id, &next_id) {

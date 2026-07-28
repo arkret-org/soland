@@ -3,16 +3,20 @@ use std::sync::Arc;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
+use arkret_models_collaboration::event_sync::{
+    ControlGovernanceHealth, ControlGovernanceHealthStatus, ControlProposalDecisionState,
+    ControlProposalFaultReason, PendingControlProposal, RetainedControlProposalFault,
+};
 use arkret_state::lattice::CellState;
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::state::{
-    CellLatticeBinding, ControlEventStore, ControlMoveReject, SealEffect, SealLeafUnionProof,
-    SealReject, SealStore, SealedControlEventRecord, StoreResult,
+    CellLatticeBinding, ControlEventStore, ControlMoveReject, PendingControlEventRecord,
+    SealEffect, SealLeafUnionProof, SealReject, SealStore, SealedControlEventRecord, StoreResult,
 };
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
-use arkret_wire::Seal;
 use arkret_wire::cba::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
+use arkret_wire::{ControlProposalDecision, ControlProposalReceipt, Seal};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -497,16 +501,202 @@ impl ProjectionService {
         self.event_seal_committer.as_ref()
     }
 
-    /// Stash a Control Move — an [`Event`] carrying `seal_basis` — that passed
-    /// local format / proof pre-check (`event-auth-state-resolution.md` §5).
-    pub fn put_pending_control_event(&self, event: &Event) -> StoreResult<()> {
-        self.control_event_store().put_pending(event)
+    pub fn put_pending_control_event_with_receipt(
+        &self,
+        event: &Event,
+        receipt: &ControlProposalReceipt,
+    ) -> StoreResult<()> {
+        self.control_event_store()
+            .put_pending_with_receipt(event, Some(receipt))
     }
 
     /// Control-plane Events are keyed by their canonical `event_digest`, not by
     /// `event_id`: an equivocated id must stay distinguishable (§6.3.2).
     pub fn control_event_by_digest(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
         self.control_event_store().get(event_digest)
+    }
+
+    pub fn control_proposal_receipt(
+        &self,
+        event_digest: &Hash,
+    ) -> StoreResult<Option<ControlProposalReceipt>> {
+        self.control_event_store().proposal_receipt(event_digest)
+    }
+
+    pub fn control_event(&self, event_digest: &Hash) -> StoreResult<Option<Event>> {
+        self.control_event_store().get(event_digest)
+    }
+
+    pub fn record_control_proposal_decision(
+        &self,
+        event_digest: &Hash,
+        decision: &ControlProposalDecision,
+    ) -> StoreResult<()> {
+        self.control_event_store()
+            .record_proposal_decision(event_digest, decision)
+    }
+
+    pub fn pending_control_records(
+        &self,
+        realm_id: &RealmId,
+        limit: usize,
+    ) -> StoreResult<Vec<PendingControlEventRecord>> {
+        self.control_event_store()
+            .list_pending_records(realm_id, limit)
+    }
+
+    pub fn control_governance_health(
+        &self,
+        realm_id: &RealmId,
+        observed_at: DateTime<Utc>,
+    ) -> StoreResult<ControlGovernanceHealth> {
+        let records = self.pending_control_records(
+            realm_id,
+            ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
+        )?;
+        if records.len() > ControlGovernanceHealth::MAX_PENDING_PROPOSALS {
+            return Err(arkret_state::state::StoreError::Conflict(
+                "control governance pending proposal view exceeds 128 entries".to_owned(),
+            ));
+        }
+        let mut pending_proposals = Vec::with_capacity(records.len());
+        for record in records {
+            let digest = arkret_state::state::control_event_digest(&record.event)?;
+            let receipt = record.proposal_receipt.ok_or_else(|| {
+                arkret_state::state::StoreError::Conflict(format!(
+                    "pending Control Move {digest} is missing its proposal receipt"
+                ))
+            })?;
+            let current_due_at = record
+                .decisions
+                .last()
+                .map(ControlProposalDecision::decision_due_at)
+                .unwrap_or(receipt.decision_due_at);
+            let overdue = observed_at >= current_due_at;
+            pending_proposals.push(PendingControlProposal {
+                proposal_digest: digest,
+                absolute_due_at: receipt.absolute_due_at,
+                defer_count: u8::try_from(record.decisions.len()).map_err(|_| {
+                    arkret_state::state::StoreError::Conflict(
+                        "control proposal decision count overflow".to_owned(),
+                    )
+                })?,
+                decision_state: if overdue {
+                    ControlProposalDecisionState::Overdue
+                } else if record.decisions.is_empty() {
+                    ControlProposalDecisionState::Pending
+                } else {
+                    ControlProposalDecisionState::Deferred
+                },
+                fault_reason: overdue
+                    .then_some(ControlProposalFaultReason::ControlProposalDecisionOverdue),
+                current_decision_due_at: current_due_at,
+                receipt,
+                decisions: record.decisions,
+            });
+        }
+        pending_proposals.sort_by(|left, right| {
+            (left.absolute_due_at, left.proposal_digest.as_str())
+                .cmp(&(right.absolute_due_at, right.proposal_digest.as_str()))
+        });
+        let sealed = self.retained_control_proposal_faults(
+            realm_id,
+            ControlGovernanceHealth::MAX_PENDING_PROPOSALS + 1,
+        )?;
+        let mut retained_faults = Vec::new();
+        for record in sealed {
+            let Some(receipt) = record.proposal_receipt else {
+                return Err(arkret_state::state::StoreError::Conflict(format!(
+                    "sealed Control Move {} is missing its proposal receipt",
+                    arkret_state::state::control_event_digest(&record.event)?
+                )));
+            };
+            if record
+                .decisions
+                .iter()
+                .any(ControlProposalDecision::is_reject)
+            {
+                return Err(arkret_state::state::StoreError::Conflict(
+                    "signed-rejected Control Move was also sealed".to_owned(),
+                ));
+            }
+            let seal = self.seal_by_id(&record.seal)?.ok_or_else(|| {
+                arkret_state::state::StoreError::Conflict(format!(
+                    "sealed Control Move references missing Seal {}",
+                    record.seal
+                ))
+            })?;
+            let mut previous_due_at = receipt.decision_due_at;
+            let mut missed_deadline = false;
+            for decision in &record.decisions {
+                missed_deadline |= !decision.satisfied_current_deadline(previous_due_at);
+                previous_due_at = decision.decision_due_at();
+            }
+            missed_deadline |= seal.sealed_at > previous_due_at;
+            if missed_deadline {
+                retained_faults.push(RetainedControlProposalFault {
+                    proposal_digest: receipt.proposal_digest.clone(),
+                    receipt,
+                    decisions: record.decisions,
+                    accepted_seal_id: seal.id,
+                    accepted_at: seal.sealed_at,
+                    fault_reason: ControlProposalFaultReason::ControlProposalDecisionOverdue,
+                });
+            }
+        }
+        if retained_faults.len() > ControlGovernanceHealth::MAX_PENDING_PROPOSALS {
+            return Err(arkret_state::state::StoreError::Conflict(
+                "control governance retained fault view exceeds 128 entries".to_owned(),
+            ));
+        }
+        retained_faults.sort_by(|left, right| {
+            (left.accepted_at, left.proposal_digest.as_str())
+                .cmp(&(right.accepted_at, right.proposal_digest.as_str()))
+        });
+        let health = ControlGovernanceHealth {
+            status: if !retained_faults.is_empty()
+                || pending_proposals
+                    .iter()
+                    .any(|pending| pending.decision_state == ControlProposalDecisionState::Overdue)
+            {
+                ControlGovernanceHealthStatus::Degraded
+            } else {
+                ControlGovernanceHealthStatus::Healthy
+            },
+            pending_proposals,
+            retained_faults,
+        };
+        health
+            .validate(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
+            .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
+        Ok(health)
+    }
+
+    pub fn pending_control_realms(&self, limit: usize) -> StoreResult<Vec<RealmId>> {
+        self.control_event_store().list_pending_realms(limit)
+    }
+
+    pub fn try_claim_control_signing_lease(
+        &self,
+        realm_id: &RealmId,
+        signer_slot: &str,
+        holder: &str,
+        now_ms: i64,
+        until_ms: i64,
+    ) -> StoreResult<Option<u64>> {
+        self.seal_store()
+            .try_claim_signing_lease(realm_id, signer_slot, holder, now_ms, until_ms)
+    }
+
+    pub fn release_control_signing_lease(
+        &self,
+        realm_id: &RealmId,
+        signer_slot: &str,
+        holder: &str,
+        fence: u64,
+    ) -> StoreResult<bool> {
+        self.seal_store()
+            .release_signing_lease(realm_id, signer_slot, holder, fence)
     }
 
     pub fn pending_control_events_for_notary(
@@ -527,6 +717,15 @@ impl ProjectionService {
     ) -> StoreResult<Vec<SealedControlEventRecord>> {
         self.control_event_store()
             .list_sealed(realm_id, cursor, limit)
+    }
+
+    pub fn retained_control_proposal_faults(
+        &self,
+        realm_id: &RealmId,
+        limit: usize,
+    ) -> StoreResult<Vec<SealedControlEventRecord>> {
+        self.control_event_store()
+            .list_retained_faults(realm_id, limit)
     }
 
     pub fn seal_by_id(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
@@ -673,6 +872,15 @@ impl ProjectionService {
             self.realm_digest_suite(event.realm_id.as_str()),
         )
         .map_err(|error| error.to_string())
+    }
+
+    pub fn resolve_projected_cell_write(
+        &self,
+        write: &ProjectedCellWrite,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject> {
+        arkret_state::resolve_projected_write(write, realm_id, pre_state, self.cell_registry())
     }
 
     /// Run `event-auth-state-resolution.md` §5.1 steps 1-5 over one Control

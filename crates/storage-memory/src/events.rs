@@ -107,6 +107,7 @@ impl EventStore for MemoryEventStore {
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
+        _proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
     ) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         let mut staged = data.clone();
@@ -118,6 +119,7 @@ impl EventStore for MemoryEventStore {
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
+        _proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         _frontier_cas: Option<IdentityAnchorFrontierCas>,
@@ -329,10 +331,13 @@ mod tests {
 
         let first_id = "ak:event:019f9000-0000-7000-8000-000000000001";
         let error = store
-            .put_realm_bootstrap_batch_atomic(vec![
-                record(first_id, b"first"),
-                record(conflict_id, b"different"),
-            ])
+            .put_realm_bootstrap_batch_atomic(
+                vec![
+                    record(first_id, b"first"),
+                    record(conflict_id, b"different"),
+                ],
+                Vec::new(),
+            )
             .await
             .unwrap_err();
         assert!(matches!(

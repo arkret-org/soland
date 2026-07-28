@@ -26,6 +26,7 @@ DROP TABLE IF EXISTS canonical_events CASCADE;
 DROP TABLE IF EXISTS event_batch_receipts CASCADE;
 DROP TABLE IF EXISTS state_control_events CASCADE;
 DROP TABLE IF EXISTS state_seals CASCADE;
+DROP TABLE IF EXISTS state_seal_signing_leases CASCADE;
 DROP TABLE IF EXISTS state_cell_ops CASCADE;
 DROP TABLE IF EXISTS state_cell_cache CASCADE;
 DROP TABLE IF EXISTS consent_cells CASCADE;

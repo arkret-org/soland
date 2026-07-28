@@ -614,6 +614,14 @@ async fn events_frontier(
                 seal.id.clone(),
                 seal.control_event_set_root.clone(),
                 seal.state_root.clone(),
+                state
+                    .projections()
+                    .control_governance_health(&seal.realm_id, chrono::Utc::now())
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "control governance health unavailable: {error}"
+                        ))
+                    })?,
                 Some(seal.hlc.clone()),
             );
             return soland_http::result::json_ok(EventsFrontierAccountClientState {
@@ -662,10 +670,18 @@ async fn events_frontier(
             };
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
-                realm_id,
+                realm_id.clone(),
                 seal.id,
                 seal.control_event_set_root,
                 seal.state_root,
+                state
+                    .projections()
+                    .control_governance_health(&realm_id, chrono::Utc::now())
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "control governance health unavailable: {error}"
+                        ))
+                    })?,
                 Some(seal.hlc),
             )),
             receipts: Vec::new(),

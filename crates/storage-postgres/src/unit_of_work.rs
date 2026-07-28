@@ -104,6 +104,84 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             .await
             .map_err(PersistenceError::database)?;
 
+            let typed_event = serde_json::from_value::<arkret_wire::Event>(
+                request.event.envelope.clone(),
+            )
+            .map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: accepted Event envelope is not canonical wire: {error}"
+                ))
+            })?;
+            if typed_event.seal_basis.is_some() {
+                let event_digest = typed_event.event_digest().map_err(|error| {
+                    PersistenceError::Conflict(format!(
+                        "schema_violation: accepted Control Move digest failed: {error}"
+                    ))
+                })?;
+                if event_digest != request.event.canonical_digest {
+                    return Err(PersistenceError::Conflict(
+                        "schema_violation: canonical digest differs from Control Move digest"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+                let proposal_receipt = request
+                    .control_proposal_receipt
+                    .as_ref()
+                    .map(|receipt| {
+                        if receipt.proposal_digest.as_str() != event_digest
+                            || receipt.realm_id != typed_event.realm_id
+                        {
+                            return Err(PersistenceError::Conflict(
+                                "schema_violation: proposal receipt does not bind Control Move"
+                                    .to_owned(),
+                            ));
+                        }
+                        serde_json::to_value(receipt).map_err(|error| {
+                            PersistenceError::Internal(format!(
+                                "proposal receipt encoding failed: {error}"
+                            ))
+                        })
+                    })
+                    .transpose()?
+                    .ok_or_else(|| {
+                        PersistenceError::Conflict(
+                            "schema_violation: accepted Control Move is missing proposal receipt"
+                                .to_owned(),
+                        )
+                    })?;
+                sql_query(
+                    "INSERT INTO state_control_events \
+                     (event_digest, realm_id, event_json, proposal_receipt) \
+                     VALUES ($1, $2, $3, $4) \
+                     ON CONFLICT (event_digest) DO UPDATE SET \
+                       proposal_receipt = COALESCE( \
+                         state_control_events.proposal_receipt, EXCLUDED.proposal_receipt \
+                       ) \
+                     WHERE state_control_events.realm_id = EXCLUDED.realm_id \
+                       AND state_control_events.event_json = EXCLUDED.event_json \
+                       AND (state_control_events.proposal_receipt IS NULL \
+                         OR state_control_events.proposal_receipt = EXCLUDED.proposal_receipt)",
+                )
+                .bind::<Text, _>(&event_digest)
+                .bind::<Text, _>(typed_event.realm_id.as_str())
+                .bind::<Jsonb, _>(&request.event.envelope)
+                .bind::<Jsonb, _>(&proposal_receipt)
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)
+                .and_then(|affected| {
+                    if affected == 0 {
+                        Err(PersistenceError::Conflict(
+                            "duplicate_conflict: pending Control Move has different canonical bytes or receipt"
+                                .to_owned(),
+                        ))
+                    } else {
+                        Ok(())
+                    }
+                })?;
+            }
+
             for projection in request.projections {
                 let event_id = ids::typed_uuid_part_or_schema_violation(&projection.event_id)?;
                 let realm_id = ids::typed_uuid_part_or_schema_violation(&projection.realm_id)?;

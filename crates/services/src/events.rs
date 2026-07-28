@@ -475,6 +475,7 @@ pub struct FederationDelivery {
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
     pub event: AcceptedEvent,
+    pub control_proposal_receipt: Option<arkret_wire::ControlProposalReceipt>,
     pub projections: Vec<ProjectedEvent>,
     pub idempotency: Option<IdempotentResponse>,
     pub deliveries: Vec<FederationDelivery>,
@@ -541,10 +542,12 @@ pub trait EventReadPort: Send + Sync {
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
     ) -> ServiceResult<()>;
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
@@ -802,19 +805,30 @@ impl EventQueryService {
     pub async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
     ) -> ServiceResult<()> {
-        self.events.store_realm_bootstrap_batch(records).await
+        self.events
+            .store_realm_bootstrap_batch(records, proposal_receipts)
+            .await
     }
     pub async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         receipt: Option<EventBatchReceipt>,
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
-            .store_identity_anchor_batch(records, receipt, device, frontier_cas, reanchor_slot)
+            .store_identity_anchor_batch(
+                records,
+                proposal_receipts,
+                receipt,
+                device,
+                frontier_cas,
+                reanchor_slot,
+            )
             .await
     }
     pub async fn canonical_event(
@@ -1697,6 +1711,7 @@ mod tests {
                     envelope: serde_json::json!({}),
                     received_at: now,
                 },
+                control_proposal_receipt: None,
                 projections: vec![ProjectedEvent {
                     event_id,
                     realm_id,

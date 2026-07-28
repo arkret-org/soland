@@ -378,7 +378,7 @@ pub(super) async fn submit_event_value_with_context(
                     format!("post-submit frontier unavailable: {error}"),
                 )
             })?;
-            return Ok(with_ingress_receipt(
+            let mut response = with_ingress_receipt(
                 event_submit_response(
                     state,
                     EventsSubmitStatus::Duplicate,
@@ -387,7 +387,35 @@ pub(super) async fn submit_event_value_with_context(
                 )
                 .await,
                 ingress_receipt.as_ref(),
-            ));
+            );
+            if envelope.get("seal_basis").is_some() {
+                let digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("stored Control Move digest is invalid: {error}"),
+                    )
+                })?;
+                let receipt = state
+                    .projections()
+                    .control_proposal_receipt(&digest)
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!("stored Control Proposal receipt unavailable: {error}"),
+                        )
+                    })?
+                    .ok_or_else(|| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            "accepted Control Move is missing its proposal receipt",
+                        )
+                    })?;
+                response.outcome.control_proposal_receipts.push(receipt);
+            }
+            return Ok(response);
         }
         append_audit_log(
             state,
@@ -1195,6 +1223,75 @@ pub(super) async fn submit_event_value_with_context(
     }
 
     let envelope_for_bootstrap = envelope.clone();
+    let control_event_for_proposal =
+        serde_json::from_value::<arkret_wire::Event>(envelope_for_bootstrap.clone())
+            .ok()
+            .filter(|event| event.seal_basis.is_some());
+    let control_proposal_receipt = if let Some(event) = control_event_for_proposal.as_ref() {
+        let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("validated Control Move Realm id is invalid: {error}"),
+            )
+        })?;
+        let authority_set_ref =
+            crate::notary::NotaryWorker::for_service(state.service_id().clone())
+                .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        format!("Control Proposal authority is unavailable: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        "this service cannot issue the current authority set's proposal receipt",
+                    )
+                })?;
+        let proposal_digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("validated Control Move digest is invalid: {error}"),
+            )
+        })?;
+        let policy = crate::control_proposal::control_proposal_policy(
+            state,
+            &realm_id,
+            std::slice::from_ref(event),
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quorum_unreachable",
+                format!("Control Proposal policy is unavailable: {error}"),
+            )
+        })?;
+        Some(
+            crate::control_proposal::mint_control_proposal_receipt(
+                state,
+                realm_id,
+                proposal_digest,
+                authority_set_ref,
+                received_at,
+                policy,
+            )
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("Control Proposal receipt signing failed: {error}"),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let projected_event = projection_operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
@@ -1261,7 +1358,7 @@ pub(super) async fn submit_event_value_with_context(
             format!("post-submit frontier unavailable: {error}"),
         )
     })?;
-    let accepted_response = with_ingress_receipt(
+    let mut accepted_response = with_ingress_receipt(
         event_submit_response(
             state,
             EventsSubmitStatus::Accepted,
@@ -1271,6 +1368,12 @@ pub(super) async fn submit_event_value_with_context(
         .await,
         ingress_receipt.as_ref(),
     );
+    if let Some(receipt) = control_proposal_receipt.as_ref() {
+        accepted_response
+            .outcome
+            .control_proposal_receipts
+            .push(receipt.clone());
+    }
     let command = soland_services::events::CommitAcceptedEventCommand {
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id.clone(),
@@ -1284,6 +1387,7 @@ pub(super) async fn submit_event_value_with_context(
             envelope,
             received_at,
         },
+        control_proposal_receipt: control_proposal_receipt.clone(),
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {
@@ -1414,7 +1518,7 @@ pub(super) async fn submit_event_value_with_context(
                             format!("actor frontier unavailable: {frontier_error}"),
                         )
                     })?;
-                    return Ok(with_ingress_receipt(
+                    let mut response = with_ingress_receipt(
                         event_submit_response(
                             state,
                             EventsSubmitStatus::Duplicate,
@@ -1423,7 +1527,36 @@ pub(super) async fn submit_event_value_with_context(
                         )
                         .await,
                         ingress_receipt.as_ref(),
-                    ));
+                    );
+                    if control_event_for_proposal.is_some() {
+                        let digest =
+                            Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
+                                SubmitOneError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "internal_error",
+                                    format!("stored Control Move digest is invalid: {error}"),
+                                )
+                            })?;
+                        let receipt = state
+                            .projections()
+                            .control_proposal_receipt(&digest)
+                            .map_err(|error| {
+                                SubmitOneError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "internal_error",
+                                    format!("stored Control Proposal receipt unavailable: {error}"),
+                                )
+                            })?
+                            .ok_or_else(|| {
+                                SubmitOneError::new(
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    "internal_error",
+                                    "accepted Control Move is missing its proposal receipt",
+                                )
+                            })?;
+                        response.outcome.control_proposal_receipts.push(receipt);
+                    }
+                    return Ok(response);
                 }
                 return Err(SubmitOneError::new(
                     StatusCode::CONFLICT,
@@ -1438,6 +1571,24 @@ pub(super) async fn submit_event_value_with_context(
             "internal_error",
             "events store unavailable",
         ));
+    }
+    if let Some(control_event) = control_event_for_proposal.as_ref() {
+        state
+            .projections()
+            .put_pending_control_event_with_receipt(
+                control_event,
+                control_proposal_receipt
+                    .as_ref()
+                    .expect("Control Move receipt was minted before commit"),
+            )
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted Control Move pending index unavailable: {error}"),
+                )
+            })?;
+        state.wake_control_seal_coordinator();
     }
     if let Some(operation) = projection_operation {
         crate::routing::events::projection::project_accepted_operations_from_device(

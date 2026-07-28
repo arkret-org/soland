@@ -10,7 +10,7 @@ use soland_contracts::admin::seal::{
 };
 use soland_http::error::{AppError, ErrorCode};
 
-use super::{AuthArgs, admin_signer_for, fresh_hlc};
+use super::AuthArgs;
 use crate::state::AppState;
 use crate::{JsonResult, json_ok};
 
@@ -71,8 +71,7 @@ pub(crate) async fn admin_get_seal_dag(
         }
         latest_state_root = Some(seal.state_root.as_str().to_owned());
         // `is_compaction` reads the explicit
-        // `Seal.kind == SealKind::Compaction` field directly.
-        let is_compaction = seal.kind.is_compaction();
+        let is_compaction = seal.is_compaction();
         leaves.push(SealLeaf {
             seal_id: seal.id.as_str().to_owned(),
             state_root: Some(seal.state_root.as_str().to_owned()),
@@ -185,31 +184,19 @@ pub(crate) async fn admin_compact_seal_dag(
             )
         })?;
 
-    // Step 2: sign + apply the compaction Seal with the operator's
-    // per-admin key so the Seal's `verification_method` carries
-    // operator attribution (falls back to the service signer when no
-    // per-admin key is provisioned).
-    // `control_event_set_root` is cumulative, so it must come from the
-    // view (predecessor coverage ∪ delta) rather than from this Seal's
-    // empty delta — `apply_seal` recomputes it the same way and rejects
-    // a delta-only root as `ControlEventSetRootMismatch`.
-    let signer = admin_signer_for(state, &admin_session.actor)?;
-    let compaction = arkret_wire::Seal::sign_single_kind_with_control_root(
-        realm.clone(),
-        view.predecessor_refs.clone(),
-        Vec::new(),
-        view.control_event_set_root.clone(),
-        view.state_root.clone(),
-        fresh_hlc(state)?,
-        arkret_wire::SealKind::Compaction,
-        &signer,
-    )
-    .map_err(|e| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("sign compaction seal: {e}"),
-        )
-    })?;
+    let compaction = crate::notary::NotaryWorker::for_service(state.service_id().clone())
+        .sign_compaction_seal(state, &realm, &view)
+        .map_err(|error| match error {
+            crate::notary::NotaryError::NotAuthorized(_) => AppError::new(
+                ErrorCode::CapabilityDenied,
+                "current Realm notary authority is unavailable for compaction".to_owned(),
+            )
+            .with_status(StatusCode::FORBIDDEN),
+            other => AppError::new(
+                ErrorCode::InternalError,
+                format!("sign compaction seal: {other}"),
+            ),
+        })?;
 
     let verifier = crate::routing::federation::move_seal::select_jws_verifier(state);
     let effect = state
@@ -337,7 +324,7 @@ pub(crate) async fn admin_prune_seal_dag(
             continue;
         }
         if let Ok(Some(succ_seal)) = state.projections().seal_by_id(&next_id) {
-            if succ_seal.kind.is_compaction() {
+            if succ_seal.is_compaction() {
                 compaction_witnesses = compaction_witnesses.saturating_add(1);
             }
             if let Ok(next_succs) = state.projections().seal_successors(&realm, &next_id) {
@@ -379,7 +366,7 @@ pub(crate) async fn admin_prune_seal_dag(
         arkret_state::PruneEligibility::ForkPoint { .. } => "fork_point",
         arkret_state::PruneEligibility::CompactionItself => "compaction_itself",
     };
-    let kind_wire = if candidate.kind.is_compaction() {
+    let kind_wire = if candidate.is_compaction() {
         "compaction"
     } else {
         "normal"

@@ -9,18 +9,13 @@
 //!
 //! # v1 scope
 //!
-//! - **All four notary profiles supported**:
+//! - **Profile-aware signing**:
 //!   - `single_did` — straightforward DID match against `service_id`.
-//!   - `threshold(k, members[])` — simple deterministic leader election: among the `members` set,
-//!     the lex-smallest DID that *includes* this node's `service_id` is the candidate to sign
-//!     first; if `service_id` IS that candidate, sign; otherwise this pass is a no-op (another
-//!     soland instance owns the round). The signature itself is single-DID — `k`-of-`n` aggregation
-//!     lives on the multi-signer coordinator.
+//!   - `threshold(k, members[])` — fail closed in this worker. A canonical candidate must pass
+//!     through the threshold coordinator and collect the profile's real quorum.
 //!   - `open_set(members[])` — any member may sign; if `service_id ∈ members` this node signs.
-//!   - `mixed(primary, recovery_members[])` — primary signs by default; recovery members may sign
-//!     only after the leaf-Seal set has gone stale beyond `revocation_freshness_window_ms` (default
-//!     60_000ms when unset). Among recovery members the lex-smallest reachable DID owns the round
-//!     (same election as threshold).
+//!   - `mixed(primary, recovery_members[])` — primary signs directly. Recovery signing fails closed
+//!     here because it requires the same real multi-signer coordination as threshold.
 //! - **Real Ed25519** signing on both verify *and* sign sides. The signing side delegates the
 //!   detached-JWS construction to `arkret_signatures::jws::sign_jws_ed25519` (symmetric counterpart
 //!   of `verify_jws_ed25519` — the SDK's verify path round-trips against the JWS this worker
@@ -28,9 +23,8 @@
 //!   `SOLAND_NOTARY_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
 //!   `routing/move_seal.rs`) still accepts both real and shape-only JWSes for local fixtures.
-//! - **Manual / on-demand only**. Trigger via the admin endpoint `POST /_soland/admin/seals/sign`.
-//!   A periodic ticker / push-loop is left to future production work (needs lease coordination +
-//!   shutdown handling under tokio).
+//! The production control-seal coordinator invokes this worker behind a durable, fenced,
+//! profile-aware signing lease. The admin endpoint remains an operator diagnostic surface.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::OnceLock;
@@ -40,7 +34,9 @@ use arkret_identifiers::{CellRef, Hash, Hlc, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{StoreError, compute_state_root, control_event_set_root};
-use arkret_wire::{Event, NotarySig, PayloadSignature, Seal};
+use arkret_wire::{
+    ControlProposalDecision, ControlProposalRejectReason, Event, NotarySig, PayloadSignature, Seal,
+};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::SigningKey;
@@ -110,6 +106,174 @@ impl NotaryWorker {
         }
     }
 
+    /// Resolve the lease slot for this node's next signing pass.
+    ///
+    /// Single-chain profiles serialize the Realm under one slot. Open-set
+    /// profiles isolate each authorized signer so protocol-legal concurrent
+    /// leaves remain possible. Profiles this worker cannot truthfully sign
+    /// return `None` instead of degrading a quorum signature to one service
+    /// signature.
+    pub fn signing_lease_slot(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        max_control_moves: usize,
+    ) -> Result<Option<String>, NotaryError> {
+        let pending = state.projections().pending_control_events_for_notary(
+            realm_id,
+            None,
+            max_control_moves,
+        )?;
+        if pending.is_empty() {
+            return Ok(None);
+        }
+        let leaves = state.projections().realm_seal_leaves(realm_id)?;
+        let notary_cell = notary_cell_ref(realm_id)
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        let ops = if leaves.is_empty() {
+            let mut event_ops = Vec::new();
+            for event in &pending {
+                let digest = Hash::new(
+                    event
+                        .event_digest()
+                        .map_err(|error| NotaryError::Construction(error.to_string()))?,
+                )
+                .map_err(|error| NotaryError::Construction(error.to_string()))?;
+                for effect in state
+                    .projections()
+                    .project_cell_writes(event)
+                    .map_err(|error| NotaryError::Construction(error.to_string()))?
+                {
+                    for resolved in state
+                        .projections()
+                        .resolve_projected_cell_write(&effect, realm_id, &BTreeMap::new())
+                        .map_err(|error| NotaryError::Construction(error.to_string()))?
+                    {
+                        if resolved.cell == notary_cell {
+                            event_ops.push(IssuedOp {
+                                issuer: event.actor_id.clone(),
+                                op: SealedOp::new(digest.clone(), resolved.op),
+                            });
+                        }
+                    }
+                }
+            }
+            event_ops
+        } else {
+            state
+                .projections()
+                .sealed_ops_for_cell(realm_id, &notary_cell)?
+        };
+        let Some((profile, envelope)) =
+            self.resolve_notary_profile(state, realm_id, &notary_cell, &ops)?
+        else {
+            return Ok(None);
+        };
+        match profile {
+            arkret_wire::notary::NotaryValue::SingleDid { did, .. }
+                if did.as_str() == self.service_id =>
+            {
+                Ok(Some("single_chain".to_owned()))
+            }
+            arkret_wire::notary::NotaryValue::OpenSet { members }
+                if members
+                    .iter()
+                    .any(|member| member.as_str() == self.service_id) =>
+            {
+                Ok(Some(self.service_id.clone()))
+            }
+            arkret_wire::notary::NotaryValue::Mixed { did, .. }
+                if did.as_str() == self.service_id =>
+            {
+                Ok(Some("single_chain".to_owned()))
+            }
+            arkret_wire::notary::NotaryValue::Mixed {
+                recovery_members, ..
+            } if recovery_members
+                .iter()
+                .any(|member| member.as_str() == self.service_id)
+                && envelope
+                    .get("revocation_freshness_window_ms")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|window| {
+                        self.frontier_is_stale(state, realm_id, window)
+                            .unwrap_or(false)
+                    }) =>
+            {
+                Ok(None)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    pub fn authority_set_ref_for_events(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        events: &[Event],
+    ) -> Result<Option<Hash>, NotaryError> {
+        let notary_cell = notary_cell_ref(realm_id)
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        let sealed = state
+            .projections()
+            .sealed_ops_for_cell(realm_id, &notary_cell)?;
+        let ops = if sealed.is_empty() {
+            let mut projected = Vec::new();
+            for event in events {
+                let digest = Hash::new(
+                    event
+                        .event_digest()
+                        .map_err(|error| NotaryError::Construction(error.to_string()))?,
+                )
+                .map_err(|error| NotaryError::Construction(error.to_string()))?;
+                for effect in state
+                    .projections()
+                    .project_cell_writes(event)
+                    .map_err(|error| NotaryError::Construction(error.to_string()))?
+                {
+                    for resolved in state
+                        .projections()
+                        .resolve_projected_cell_write(&effect, realm_id, &BTreeMap::new())
+                        .map_err(|error| NotaryError::Construction(error.to_string()))?
+                    {
+                        if resolved.cell == notary_cell {
+                            projected.push(IssuedOp {
+                                issuer: event.actor_id.clone(),
+                                op: SealedOp::new(digest.clone(), resolved.op),
+                            });
+                        }
+                    }
+                }
+            }
+            projected
+        } else {
+            sealed
+        };
+        let Some((profile, envelope)) =
+            self.resolve_notary_profile(state, realm_id, &notary_cell, &ops)?
+        else {
+            return Ok(None);
+        };
+        let locally_signable = match &profile {
+            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
+                did.as_str() == self.service_id
+            }
+            arkret_wire::notary::NotaryValue::OpenSet { members } => members
+                .iter()
+                .any(|member| member.as_str() == self.service_id),
+            arkret_wire::notary::NotaryValue::Mixed { did, .. } => did.as_str() == self.service_id,
+            arkret_wire::notary::NotaryValue::Threshold { .. } => false,
+        };
+        if !locally_signable {
+            return Ok(None);
+        }
+        let digest = arkret_canonical::canonical_sha256(&notary_profile_wire(&envelope))
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        Hash::new(digest)
+            .map(Some)
+            .map_err(|error| NotaryError::Construction(error.to_string()))
+    }
+
     /// Run one signing pass for the given Realm. Returns:
     ///
     /// - `Ok(Some(outcome))` when a Seal was published
@@ -122,14 +286,7 @@ impl NotaryWorker {
         realm_id: &RealmId,
         max_control_moves: usize,
     ) -> Result<Option<NotaryOutcome>, NotaryError> {
-        // Step 1: authorization. v1 single-DID mode — accept if notary
-        // cell is unset (genesis Realm) OR set to our service DID. Anything
-        // else is "not our turn to sign".
-        if !self.is_authorized_for(state, realm_id)? {
-            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
-        }
-
-        // Step 2: list pending Control Moves (oldest first). Control-plane
+        // Step 1: list pending Control Moves (oldest first). Control-plane
         // Events are keyed by their canonical `event_digest`, so pair each one
         // with its digest before ordering (§6.3.2).
         let pending_events = state.projections().pending_control_events_for_notary(
@@ -150,11 +307,44 @@ impl NotaryWorker {
             pending.push((digest, event));
         }
 
-        // Step 3: current Seal leaves for predecessor refs.
-        // The v1 Genesis Seal is an empty-delta DAG root. If this is the
-        // first signed batch for the Realm, materialize that root before
-        // sealing any Move so the successor never uses predecessor_refs=[].
-        let leaves = self.materialize_genesis_if_empty(state, realm_id)?;
+        // Step 2: resolve the current Seal leaves. No synthetic empty root is
+        // permitted: when this set is empty the accepted bootstrap unit in
+        // `pending` becomes the delta of the first real Seal.
+        let leaves = state.projections().realm_seal_leaves(realm_id)?;
+
+        // Step 3: authorization. Existing Realms use the accepted notary
+        // cell. Genesis derives authority from the pending bootstrap Events'
+        // projected notary write; an unset local cell never grants this
+        // service implicit signing authority.
+        if leaves.is_empty() {
+            let mut event_ops = Vec::new();
+            for (digest, event) in &pending {
+                for effect in state
+                    .projections()
+                    .project_cell_writes(event)
+                    .map_err(|error| NotaryError::Construction(error.to_string()))?
+                {
+                    for resolved in state
+                        .projections()
+                        .resolve_projected_cell_write(&effect, realm_id, &BTreeMap::new())
+                        .map_err(|error| NotaryError::Construction(error.to_string()))?
+                    {
+                        event_ops.push((
+                            resolved.cell,
+                            IssuedOp {
+                                issuer: event.actor_id.clone(),
+                                op: SealedOp::new(digest.clone(), resolved.op),
+                            },
+                        ));
+                    }
+                }
+            }
+            if !self.is_authorized_for_event_state(state, realm_id, &event_ops)? {
+                return Err(NotaryError::NotAuthorized(realm_id.to_string()));
+            }
+        } else if !self.is_authorized_for(state, realm_id)? {
+            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
+        }
 
         // Step 4: pre-state under the current view. For genesis this is
         // empty.
@@ -184,6 +374,26 @@ impl NotaryWorker {
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(Hash, String)> = Vec::new();
         for (digest, event) in ordered {
+            let receipt = state
+                .projections()
+                .control_proposal_receipt(&digest)?
+                .ok_or_else(|| {
+                    NotaryError::Store(format!(
+                        "locally signed Control Move {digest} has no immutable proposal receipt"
+                    ))
+                })?;
+            if receipt.proposal_digest != digest || receipt.realm_id != *realm_id {
+                return Err(NotaryError::Store(format!(
+                    "proposal receipt for Control Move {digest} has inconsistent binding"
+                )));
+            }
+            receipt
+                .validate_structural(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
+                .map_err(|error| {
+                    NotaryError::Store(format!(
+                        "proposal receipt for Control Move {digest} is invalid: {error}"
+                    ))
+                })?;
             let Some(hlc) = event.hlc.clone() else {
                 rejected.push((digest, "Control Move carries no hlc".to_owned()));
                 continue;
@@ -216,6 +426,7 @@ impl NotaryWorker {
                 Err(reject) => rejected.push((digest, reject.to_string())),
             }
         }
+        self.record_signed_rejections(state, realm_id, &rejected)?;
         if accepted.is_empty() {
             // Everyone rejected — nothing to seal, but record diagnostics.
             return Ok(None);
@@ -241,6 +452,7 @@ impl NotaryWorker {
         covered.extend(delta.iter().cloned());
         let control_event_set_root = control_event_set_root(&covered)
             .map_err(|e| NotaryError::Construction(format!("control_event_set_root: {e}")))?;
+        let completeness_root = self.completeness_root_for_covered(state, &covered)?;
         let predecessor_refs = view.predecessor_refs.clone();
         let notary_seq = self.next_notary_seq(state, &predecessor_refs)?;
         let hlc = Hlc::new(state.hlc().now())
@@ -264,7 +476,7 @@ impl NotaryWorker {
             delta,
             control_event_set_root: control_event_set_root.clone(),
             state_root: predicted_state_root.clone(),
-            completeness_root: control_event_set_root,
+            completeness_root,
             notary_seq,
             data_view_root: None,
             data_event_set_root: None,
@@ -296,6 +508,7 @@ impl NotaryWorker {
             .projections()
             .apply_seal(&seal, verifier)
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
+        self.record_signed_rejections(state, realm_id, &effect.rejected_events)?;
 
         // Refresh ProjectionState::cells
         // from the now-updated CellStore so cell-keyed reads see the new
@@ -346,6 +559,158 @@ impl NotaryWorker {
         }))
     }
 
+    pub fn sign_compaction_seal(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        view: &arkret_state::state::EffectiveSealView,
+    ) -> Result<Seal, NotaryError> {
+        if view.predecessor_refs.is_empty() {
+            return Err(NotaryError::Construction(
+                "compaction requires at least one accepted predecessor".to_owned(),
+            ));
+        }
+        if !self.is_authorized_for(state, realm_id)? {
+            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
+        }
+        let sealed_at = chrono::Utc::now();
+        let covered = view
+            .covered_event_digests
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        let completeness_root = self.completeness_root_for_covered(state, &covered)?;
+        let mut seal = Seal {
+            id: SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
+                .expect("zero Seal id is well-formed"),
+            realm_id: realm_id.clone(),
+            predecessor_refs: view.predecessor_refs.clone(),
+            delta: Vec::new(),
+            control_event_set_root: view.control_event_set_root.clone(),
+            state_root: view.state_root.clone(),
+            completeness_root,
+            notary_seq: self.next_notary_seq(state, &view.predecessor_refs)?,
+            data_view_root: None,
+            data_event_set_root: None,
+            availability_root: None,
+            coverage_scope: None,
+            covered_event_digests: view.covered_event_digests.clone(),
+            previous_state_root: None,
+            previous_digest_algorithm: None,
+            notary_signature: NotarySig::Single(zero_notary_sig_placeholder()?),
+            sealed_at,
+            hlc: Hlc::new(state.hlc().now())
+                .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
+            kind: arkret_wire::SealKind::Compaction,
+        };
+        seal.validate_structural()
+            .map_err(|error| NotaryError::Construction(format!("compaction Seal: {error}")))?;
+        let canonical_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+            NotaryError::Construction(format!("compaction Seal bytes: {error}"))
+        })?;
+        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
+            .map_err(|error| NotaryError::Construction(format!("compaction Seal id: {error}")))?;
+        seal.notary_signature = NotarySig::Single(self.signature_for(state, &canonical_bytes)?);
+        Ok(seal)
+    }
+
+    fn completeness_root_for_covered(
+        &self,
+        state: &AppState,
+        covered: &BTreeSet<Hash>,
+    ) -> Result<Hash, NotaryError> {
+        let events = covered
+            .iter()
+            .map(|digest| {
+                state.projections().control_event(digest)?.ok_or_else(|| {
+                    NotaryError::Construction(format!(
+                        "cannot compute completeness_root without Control Move {digest}"
+                    ))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        arkret_state::control_event_completeness_root(&events, covered)
+            .map_err(|error| NotaryError::Construction(format!("completeness_root: {error}")))
+    }
+
+    pub fn notary_value_for_seal(
+        &self,
+        state: &AppState,
+        seal: &Seal,
+    ) -> Result<arkret_wire::notary::NotaryValue, NotaryError> {
+        let notary_cell = notary_cell_ref(&seal.realm_id)
+            .map_err(|error| NotaryError::Construction(error.to_string()))?;
+        if seal.predecessor_refs.is_empty() {
+            let mut event_ops = Vec::new();
+            for digest in &seal.delta {
+                let event = state.projections().control_event(digest)?.ok_or_else(|| {
+                    NotaryError::Construction(format!(
+                        "genesis Seal is missing Control Move {digest}"
+                    ))
+                })?;
+                for write in state
+                    .projections()
+                    .project_cell_writes(&event)
+                    .map_err(|error| NotaryError::Construction(error.to_string()))?
+                {
+                    for resolved in state
+                        .projections()
+                        .resolve_projected_cell_write(&write, &seal.realm_id, &BTreeMap::new())
+                        .map_err(|error| NotaryError::Construction(error.to_string()))?
+                    {
+                        event_ops.push((
+                            resolved.cell,
+                            IssuedOp {
+                                issuer: event.actor_id.clone(),
+                                op: SealedOp::new(digest.clone(), resolved.op),
+                            },
+                        ));
+                    }
+                }
+            }
+            let notary_ops = event_ops
+                .into_iter()
+                .filter(|(cell, _)| cell == &notary_cell)
+                .map(|(_, operation)| operation)
+                .collect::<Vec<_>>();
+            return self
+                .resolve_notary_profile(state, &seal.realm_id, &notary_cell, &notary_ops)?
+                .map(|(notary, _)| notary)
+                .ok_or_else(|| {
+                    NotaryError::NotAuthorized(
+                        "genesis Seal delta does not establish a usable notary".to_owned(),
+                    )
+                });
+        }
+
+        let state_at_predecessors =
+            self.read_effective_state(state, &seal.realm_id, &seal.predecessor_refs)?;
+        let CellState::Value(value) = state_at_predecessors.get(&notary_cell).ok_or_else(|| {
+            NotaryError::NotAuthorized(
+                "Seal predecessor state has no authoritative notary cell".to_owned(),
+            )
+        })?
+        else {
+            return Err(NotaryError::NotAuthorized(
+                "Seal predecessor notary cell is in Bottom".to_owned(),
+            ));
+        };
+        if value
+            .get("paused")
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
+        {
+            return Err(NotaryError::NotAuthorized(
+                "Seal predecessor notary authority is paused".to_owned(),
+            ));
+        }
+        serde_json::from_value(notary_profile_wire(value)).map_err(|error| {
+            NotaryError::Construction(format!(
+                "Seal predecessor notary profile is invalid: {error}"
+            ))
+        })
+    }
+
     /// R21 authorization check: read the notary cell value via the SDK
     /// effective-state read (this is the cell that holds `NotaryValue`)
     /// and decide whether this node is the leader for *this* signing pass.
@@ -354,16 +719,15 @@ impl NotaryWorker {
     ///
     /// Profile dispatch:
     ///
-    /// - **Genesis** (no notary cell yet) — implicit `service_id` is the notary.
+    /// - **Genesis** is authorized separately from the pending bootstrap anchor's projected notary
+    ///   cell; an unset cell is never authority.
     /// - **Bottom** on the notary cell — Realm-wide pause; not authorized.
     /// - **single_did** — DID match against `service_id`.
-    /// - **threshold(k, members)** — leader election: among `members`, the lex-smallest DID is the
-    ///   round leader; if it matches `service_id`, this node signs.
+    /// - **threshold(k, members)** — fail closed; the threshold coordinator owns quorum signing.
     /// - **open_set(members)** — every listed member may sign; concurrent leaves converge through
     ///   the joined control view. otherwise no-op.
-    /// - **mixed(primary, recovery_members, revocation_freshness_window_ms?)** — primary signs by
-    ///   default. If the latest leaf is older than `revocation_freshness_window_ms` (default
-    ///   60_000ms), the recovery set takes over with the same lex-smallest leader election.
+    /// - **mixed(primary, recovery_members, ...)** — primary signs directly; recovery fails closed
+    ///   until a real multi-signer candidate is available.
     fn is_authorized_for(&self, state: &AppState, realm_id: &RealmId) -> Result<bool, NotaryError> {
         let notary_cell = match notary_cell_ref(realm_id) {
             Ok(c) => c,
@@ -373,9 +737,7 @@ impl NotaryWorker {
             .projections()
             .sealed_ops_for_cell(realm_id, &notary_cell)?;
         if ops.is_empty() {
-            // Genesis Realm — no notary cell yet. Implicit "service_id is
-            // notary" applies until the first Move sets the cell.
-            return Ok(true);
+            return Ok(false);
         }
         self.is_authorized_for_notary_ops(state, realm_id, &notary_cell, &ops)
     }
@@ -411,9 +773,7 @@ impl NotaryWorker {
             .map(|(_, op)| op.clone())
             .collect::<Vec<_>>();
         if accepted.is_empty() {
-            // Legacy Move materialization has no canonical Event state to
-            // consult and retains the implicit local-genesis rule.
-            return Ok(true);
+            return Ok(false);
         }
         self.is_authorized_for_notary_ops(state, realm_id, &notary_cell, &accepted)
     }
@@ -425,7 +785,35 @@ impl NotaryWorker {
         notary_cell: &CellRef,
         ops: &[IssuedOp],
     ) -> Result<bool, NotaryError> {
-        // Resolve via cell registry to get the lattice, then join.
+        let Some((notary_value, _)) =
+            self.resolve_notary_profile(state, realm_id, notary_cell, ops)?
+        else {
+            return Ok(false);
+        };
+        match notary_value {
+            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
+                Ok(did.as_str() == self.service_id)
+            }
+            arkret_wire::notary::NotaryValue::Threshold { .. } => Ok(false),
+            arkret_wire::notary::NotaryValue::OpenSet { members } => Ok(members
+                .iter()
+                .any(|member| member.as_str() == self.service_id)),
+            arkret_wire::notary::NotaryValue::Mixed { did, .. } => {
+                Ok(did.as_str() == self.service_id)
+            }
+        }
+    }
+
+    fn resolve_notary_profile(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        notary_cell: &CellRef,
+        ops: &[IssuedOp],
+    ) -> Result<Option<(arkret_wire::notary::NotaryValue, serde_json::Value)>, NotaryError> {
+        if ops.is_empty() {
+            return Ok(None);
+        }
         let binding = state
             .projections()
             .resolve_cell(realm_id, notary_cell)
@@ -434,7 +822,7 @@ impl NotaryWorker {
         let CellState::Value(value) = resolved else {
             // Bottom on notary cell = Realm-wide pause; the notary is
             // not authorized to advance until recovery.
-            return Ok(false);
+            return Ok(None);
         };
         // Optional `paused` short-circuit — sodmin can flip the cell value
         // to a paused form to halt the worker without changing the profile.
@@ -443,7 +831,7 @@ impl NotaryWorker {
             .and_then(|p| p.as_bool())
             .unwrap_or(false)
         {
-            return Ok(false);
+            return Ok(None);
         }
         // The cell value MUST be the SDK-authoritative `NotaryValue` wire
         // shape (internal tag `type`, fields `did|threshold|members|
@@ -456,55 +844,66 @@ impl NotaryWorker {
         let Ok(notary_value) =
             serde_json::from_value::<arkret_wire::notary::NotaryValue>(notary_profile_wire(&value))
         else {
-            return Ok(false);
+            return Ok(None);
         };
-        match notary_value {
-            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-                Ok(did.as_str() == self.service_id)
-            }
-            arkret_wire::notary::NotaryValue::Threshold { members, .. } => {
-                Ok(self.is_round_leader(&members))
-            }
-            arkret_wire::notary::NotaryValue::OpenSet { members } => Ok(members
-                .iter()
-                .any(|member| member.as_str() == self.service_id)),
-            arkret_wire::notary::NotaryValue::Mixed {
-                did: primary,
-                recovery_members,
-            } => {
-                // `revocation_freshness_window_ms` is an envelope field
-                // riding alongside the profile in the cell value object.
-                let staleness_ms = value
-                    .get("revocation_freshness_window_ms")
-                    .and_then(|n| n.as_u64())
-                    .unwrap_or(60_000);
-                if primary.as_str() == self.service_id {
-                    return Ok(true);
-                }
-                // Recovery members take over only if the latest leaf is
-                // older than `staleness_ms` AND this node is the lex-smallest
-                // recovery member.
-                if recovery_members
-                    .iter()
-                    .any(|d| d.as_str() == self.service_id)
-                    && self.frontier_is_stale(state, realm_id, staleness_ms)?
-                {
-                    Ok(self.is_round_leader(&recovery_members))
-                } else {
-                    Ok(false)
-                }
-            }
-        }
+        Ok(Some((notary_value, value)))
     }
 
-    /// Lex-smallest-DID leader election: this node is the leader when its
-    /// `service_id` is the smallest entry in `members`. Empty list → no
-    /// leader (returns false).
-    fn is_round_leader<S: AsRef<str>>(&self, members: &[S]) -> bool {
-        let Some(leader) = members.iter().map(|m| m.as_ref()).min() else {
-            return false;
-        };
-        leader == self.service_id
+    fn record_signed_rejections(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        rejected: &[(Hash, String)],
+    ) -> Result<(), NotaryError> {
+        if rejected.is_empty() {
+            return Ok(());
+        }
+        let records = state
+            .projections()
+            .pending_control_records(realm_id, 4096)?;
+        let by_digest = records
+            .into_iter()
+            .filter_map(|record| {
+                let digest = record
+                    .event
+                    .event_digest()
+                    .ok()
+                    .and_then(|digest| Hash::new(digest).ok())?;
+                Some((digest, record))
+            })
+            .collect::<BTreeMap<_, _>>();
+        for (digest, raw_reason) in rejected {
+            let Some(record) = by_digest.get(digest) else {
+                return Err(NotaryError::Store(format!(
+                    "rejected Control Move {digest} has no pending record"
+                )));
+            };
+            let Some(receipt) = record.proposal_receipt.as_ref() else {
+                return Err(NotaryError::Store(format!(
+                    "rejected Control Move {digest} has no proposal receipt"
+                )));
+            };
+            if record
+                .decisions
+                .iter()
+                .any(ControlProposalDecision::is_reject)
+            {
+                continue;
+            }
+            let reason_code = closed_reject_reason(raw_reason);
+            let decision = crate::control_proposal::sign_control_proposal_reject(
+                state,
+                receipt,
+                &record.decisions,
+                reason_code,
+                chrono::Utc::now(),
+            )
+            .map_err(NotaryError::Construction)?;
+            state
+                .projections()
+                .record_control_proposal_decision(digest, &decision)?;
+        }
+        Ok(())
     }
 
     /// Mixed-profile recovery gate: did the latest leaf go stale beyond
@@ -627,7 +1026,11 @@ impl NotaryWorker {
                 max_seq = max_seq.max(seal.notary_seq);
             }
         }
-        Ok(max_seq.saturating_add(1))
+        Ok(if predecessor_refs.is_empty() {
+            0
+        } else {
+            max_seq.saturating_add(1)
+        })
     }
 
     /// Build a **real** Ed25519 signature over the canonical
@@ -674,73 +1077,23 @@ impl NotaryWorker {
             jws,
         })
     }
+}
 
-    fn build_genesis_seal(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-    ) -> Result<Seal, NotaryError> {
-        let zero_seal_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
-            .expect("zero SealId is well-formed");
-        let zero_sig = zero_notary_sig_placeholder()?;
-        let empty_covered = BTreeSet::new();
-        let control_event_set_root = control_event_set_root(&empty_covered)
-            .map_err(|e| NotaryError::Construction(format!("control_event_set_root: {e}")))?;
-        let mut seal = Seal {
-            id: zero_seal_id,
-            realm_id: realm_id.clone(),
-            predecessor_refs: Vec::new(),
-            delta: Vec::new(),
-            control_event_set_root: control_event_set_root.clone(),
-            state_root: Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned())
-                .map_err(|e| NotaryError::Construction(format!("empty state_root: {e}")))?,
-            completeness_root: control_event_set_root,
-            notary_seq: 0,
-            data_view_root: None,
-            data_event_set_root: None,
-            availability_root: None,
-            coverage_scope: None,
-            covered_event_digests: Vec::new(),
-            previous_state_root: None,
-            previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(zero_sig),
-            sealed_at: chrono::Utc::now(),
-            hlc: Hlc::new(state.hlc().now())
-                .map_err(|e| NotaryError::Construction(format!("invalid HLC: {e}")))?,
-            kind: arkret_wire::SealKind::Normal,
-        };
-        let canonical_bytes = seal
-            .canonical_bytes_for_id()
-            .map_err(|e| NotaryError::Construction(format!("canonical bytes: {e}")))?;
-        seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
-            .map_err(|e| NotaryError::Construction(format!("derive id: {e}")))?;
-        seal.notary_signature = NotarySig::Single(self.signature_for(state, &canonical_bytes)?);
-        Ok(seal)
-    }
-
-    fn materialize_genesis_if_empty(
-        &self,
-        state: &AppState,
-        realm_id: &RealmId,
-    ) -> Result<Vec<SealId>, NotaryError> {
-        let leaves = state.projections().realm_seal_leaves(realm_id)?;
-        if !leaves.is_empty() {
-            return Ok(leaves);
-        }
-
-        if let Some(genesis_id) = state.projections().genesis_seal_id(realm_id)?
-            && state.projections().seal_by_id(&genesis_id)?.is_some()
-        {
-            return Ok(vec![genesis_id]);
-        }
-
-        let genesis = self.build_genesis_seal(state, realm_id)?;
-        let effect = state
-            .projections()
-            .apply_seal(&genesis, select_jws_verifier(state))
-            .map_err(|reject| NotaryError::ApplySeal(format!("genesis: {reject}")))?;
-
-        Ok(vec![effect.seal])
+fn closed_reject_reason(reason: &str) -> ControlProposalRejectReason {
+    let reason = reason.to_ascii_lowercase();
+    if reason.contains("cas_conflict") || reason.contains("precondition") {
+        ControlProposalRejectReason::CasConflict
+    } else if reason.contains("capability")
+        || reason.contains("authorization")
+        || reason.contains("not authorized")
+    {
+        ControlProposalRejectReason::CapabilityDenied
+    } else if reason.contains("policy") {
+        ControlProposalRejectReason::PolicyDenied
+    } else if reason.contains("superseded") {
+        ControlProposalRejectReason::Superseded
+    } else {
+        ControlProposalRejectReason::SchemaViolation
     }
 }
 
@@ -811,39 +1164,7 @@ pub fn signing_key_from_seed(seed: &[u8; 32]) -> SigningKey {
     SigningKey::from_bytes(seed)
 }
 
-/// Process-wide guard for first-Seal materialization. Genesis Seal canonical
-/// bytes include `sealed_at` / `hlc`, so two racing minters would produce two
-/// distinct `predecessor_refs=[]` roots — a permanent fork. All paths that may
-/// create a Realm's first Seal (notary signing pass, frontier seal-head read)
-/// serialize through this lock and re-check the leaf set inside it.
-static GENESIS_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
 static EVENT_SEAL_MATERIALIZE_LOCK: Mutex<()> = Mutex::new(());
-
-/// Return the Realm's current Seal leaves, materializing the empty Genesis
-/// Seal first when none exists yet.
-fn materialize_genesis_if_empty(
-    worker: &NotaryWorker,
-    state: &AppState,
-    realm_id: &RealmId,
-) -> Result<Vec<SealId>, NotaryError> {
-    let _guard = GENESIS_MATERIALIZE_LOCK.lock();
-    let leaves = state.projections().realm_seal_leaves(realm_id)?;
-    if !leaves.is_empty() {
-        return Ok(leaves);
-    }
-    let genesis = worker.build_genesis_seal(state, realm_id)?;
-    let verifier = select_jws_verifier(state);
-    let effect = state
-        .projections()
-        .apply_seal(&genesis, verifier)
-        .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
-    tracing::info!(
-        realm_id = %realm_id,
-        seal_id = %effect.seal,
-        "materialized empty Genesis Seal"
-    );
-    Ok(vec![genesis.id])
-}
 
 /// Current accepted Seal head for a Realm — the server side of the
 /// registered account-client seal-view sourcing (`ak.self.events.query.frontier`
@@ -882,16 +1203,12 @@ pub fn ensure_realm_seal_head(
     Ok(head)
 }
 
-/// Materialize accepted Control Event envelopes into a signed compaction Seal.
+/// Resolve canonical Control Event material against an already accepted Seal.
 ///
-/// The legacy MoveStore rail and the canonical Event Envelope rail share the
-/// same digest-shaped Seal accumulator but are separate ingress surfaces. This
-/// helper closes the canonical Event side: the caller replays accepted Event
-/// effects, supplies the complete digest set and joined state root, and this
-/// function advances the local Seal DAG while writing the corresponding
-/// SealedOps to CellStore. Existing coverage must be a subset of the supplied
-/// complete set; otherwise mixing an unrelated legacy Move rail would make the
-/// claimed proof incomplete and the operation fails closed.
+/// Ordinary Control Move finality is owned exclusively by the durable
+/// control-seal coordinator. Read and proof paths may validate and reuse an
+/// existing head, but they must not mint an on-demand Seal or use compaction as
+/// a substitute for the proposal decision path.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FirstGenerationEventSealRequirement {
     pub payload:
@@ -920,15 +1237,6 @@ pub fn ensure_materialized_event_seal(
     let mut leaves = state.projections().realm_seal_leaves(realm_id)?;
     if let Some(requirement) = generation_fence {
         leaves = requirement.accepted_frontier_refs.clone();
-    }
-    if !device_generation_seal_required
-        && leaves.is_empty()
-        && generation_fence.is_none_or(|requirement| !requirement.predecessor_refs.is_empty())
-    {
-        if !worker.is_authorized_for_event_state(state, realm_id, event_ops)? {
-            return Err(NotaryError::NotAuthorized(realm_id.to_string()));
-        }
-        leaves = materialize_genesis_if_empty(&worker, state, realm_id)?;
     }
     leaves.sort();
 
@@ -966,12 +1274,11 @@ pub fn ensure_materialized_event_seal(
             "existing Seal coverage is not a subset of canonical Event coverage".to_owned(),
         ));
     }
-    let first_generation_delta_required = generation_fence
+    generation_fence
         .map(|requirement| {
             validate_first_generation_event_seal(&leaves, &current, &target, requirement)
         })
-        .transpose()?
-        .unwrap_or(false);
+        .transpose()?;
     if current == target && leaves.len() == 1 {
         let Some(head) = predecessor_seals.iter().max_by(|left, right| {
             (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
@@ -1002,97 +1309,10 @@ pub fn ensure_materialized_event_seal(
     if !worker.is_authorized_for_event_state(state, realm_id, event_ops)? {
         return Err(NotaryError::NotAuthorized(realm_id.to_string()));
     }
-
-    let delta = target.difference(&current).cloned().collect::<Vec<_>>();
-    if first_generation_delta_required && let Some(requirement) = generation_fence {
-        let required = requirement
-            .required_delta
-            .iter()
-            .cloned()
-            .collect::<BTreeSet<_>>();
-        if !required.is_subset(&delta.iter().cloned().collect::<BTreeSet<_>>()) {
-            return Err(NotaryError::Construction(
-                "first new-generation Seal delta omits the re-anchor unit".to_owned(),
-            ));
-        }
-    }
-    let control_root = control_event_set_root(&target)
-        .map_err(|error| NotaryError::Construction(format!("Event coverage root: {error}")))?;
-    let zero_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
-        .expect("zero Seal id is well-formed");
-    let mut seal = Seal {
-        id: zero_id,
-        realm_id: realm_id.clone(),
-        predecessor_refs: leaves,
-        delta,
-        control_event_set_root: control_root.clone(),
-        state_root: state_root.clone(),
-        completeness_root: completeness_root.clone(),
-        notary_seq: predecessor_seals
-            .iter()
-            .map(|seal| seal.notary_seq)
-            .max()
-            .map_or(0, |sequence| sequence.saturating_add(1)),
-        data_view_root: None,
-        data_event_set_root: None,
-        availability_root: None,
-        coverage_scope: None,
-        covered_event_digests: target.iter().cloned().collect(),
-        previous_state_root: None,
-        previous_digest_algorithm: None,
-        notary_signature: NotarySig::Single(zero_notary_sig_placeholder()?),
-        sealed_at: chrono::Utc::now(),
-        hlc: Hlc::new(state.hlc().now())
-            .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
-        kind: arkret_wire::SealKind::Compaction,
-    };
-    if first_generation_delta_required
-        && let Some(requirement) = generation_fence
-        && requirement.payload.pre_fence_basis.is_none()
-    {
-        arkret_models_collaboration::events_payloads::device_identity::validate_device_reanchor_recovery_first_seal(
-            &requirement.payload,
-            &seal.predecessor_refs,
-            &seal.delta,
-            &requirement.reanchor_digest,
-        )
-        .map_err(|error| {
-            NotaryError::Construction(format!("recovery-first Event Seal: {error}"))
-        })?;
-    }
-    seal.validate_structural()
-        .map_err(|error| NotaryError::Construction(format!("Event Seal structure: {error}")))?;
-    let canonical_bytes = seal
-        .canonical_bytes_for_id()
-        .map_err(|error| NotaryError::Construction(format!("Event Seal bytes: {error}")))?;
-    seal.id = Seal::id_from_canonical_bytes(&canonical_bytes)
-        .map_err(|error| NotaryError::Construction(format!("Event Seal id: {error}")))?;
-    seal.notary_signature = NotarySig::Single(worker.signature_for(state, &canonical_bytes)?);
-    let view = materialized_event_seal_view(state, seal.clone())?;
-
-    let delta_set = seal.delta.iter().cloned().collect::<BTreeSet<_>>();
-    let new_ops = event_ops
-        .iter()
-        .filter(|(_, issued)| delta_set.contains(&issued.op.move_id))
-        .cloned()
-        .collect::<Vec<_>>();
-    match state.projections().commit_event_seal_if_frontier(
-        &seal,
-        &seal.predecessor_refs,
-        &new_ops,
-        &target,
-    ) {
-        Ok(true) => {}
-        Ok(false) => {
-            return Err(NotaryError::Construction(
-                "Event Seal frontier changed during materialization".to_owned(),
-            ));
-        }
-        Err(error) => {
-            return Err(error.into());
-        }
-    }
-    Ok(view)
+    Err(NotaryError::Construction(
+        "accepted Control Events are still awaiting the durable control-seal coordinator"
+            .to_owned(),
+    ))
 }
 
 pub(crate) fn validate_first_generation_event_seal(
@@ -1222,34 +1442,6 @@ mod tests {
             }
             other => panic!("expected Threshold, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn is_round_leader_picks_lex_smallest_did() {
-        let worker = NotaryWorker::for_service("did:ak:b");
-        assert!(!worker.is_round_leader(&[
-            "did:ak:a".to_owned(),
-            "did:ak:b".to_owned(),
-            "did:ak:c".to_owned(),
-        ]));
-        let worker = NotaryWorker::for_service("did:ak:a");
-        assert!(worker.is_round_leader(&[
-            "did:ak:a".to_owned(),
-            "did:ak:b".to_owned(),
-            "did:ak:c".to_owned(),
-        ]));
-    }
-
-    #[test]
-    fn is_round_leader_rejects_when_not_a_member() {
-        let worker = NotaryWorker::for_service("did:ak:other");
-        assert!(!worker.is_round_leader(&["did:ak:a".to_owned(), "did:ak:b".to_owned(),]));
-    }
-
-    #[test]
-    fn is_round_leader_returns_false_for_empty_member_set() {
-        let worker = NotaryWorker::for_service("did:ak:a");
-        assert!(!worker.is_round_leader::<String>(&[]));
     }
 
     #[test]

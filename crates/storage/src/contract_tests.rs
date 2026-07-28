@@ -84,6 +84,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             envelope: serde_json::json!({"event_id": event_id}),
             received_at: now,
         },
+        control_proposal_receipt: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
             realm_id: realm_id.clone(),
@@ -173,6 +174,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
             envelope: serde_json::json!({"event_id": rollback_event_id}),
             received_at: now,
         },
+        control_proposal_receipt: None,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),
             realm_id: "not-a-typed-realm-id".to_owned(),

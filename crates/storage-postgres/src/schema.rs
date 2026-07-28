@@ -1245,6 +1245,9 @@ diesel::table! {
         event_digest -> Text,
         realm_id -> Text,
         event_json -> Jsonb,
+        proposal_receipt -> Nullable<Jsonb>,
+        proposal_decisions -> Jsonb,
+        decision_overdue -> Bool,
         sealed_by -> Nullable<Text>,
         inserted_at -> Timestamptz,
         sealed_at -> Nullable<Timestamptz>,
@@ -1259,6 +1262,16 @@ diesel::table! {
         predecessor_refs -> Jsonb,
         is_genesis -> Bool,
         inserted_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    state_seal_signing_leases (realm_id, signer_slot) {
+        realm_id -> Text,
+        signer_slot -> Text,
+        holder -> Text,
+        lease_until_ms -> Int8,
+        fence -> Int8,
     }
 }
 
@@ -1422,6 +1435,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     state_cell_cache,
     state_cell_ops,
     state_control_events,
+    state_seal_signing_leases,
     state_seals,
     sync_cursor_handles,
     sync_cursor_revocations,

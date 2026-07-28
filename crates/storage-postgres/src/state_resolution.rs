@@ -6,11 +6,13 @@ use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{
-    CellRegistry, CellStore, ControlEventStore, SealStore, SealedControlEventRecord, StoreError,
-    StoreResult, compute_state_root, control_event_digest,
+    CellRegistry, CellStore, ControlEventStore, PendingControlEventRecord, SealStore,
+    SealedControlEventRecord, StoreError, StoreResult, compute_state_root, control_event_digest,
 };
-use arkret_wire::{Bottom, Event, LatticeOp, Seal};
-use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text};
+use arkret_wire::{
+    Bottom, ControlProposalDecision, ControlProposalReceipt, Event, LatticeOp, Seal,
+};
+use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
 use diesel_async::pooled_connection::deadpool::Object;
 use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
@@ -149,6 +151,38 @@ struct SealedControlEventRow {
     event_json: Value,
     #[diesel(sql_type = Text)]
     sealed_by: String,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    proposal_receipt: Option<Value>,
+    #[diesel(sql_type = Jsonb)]
+    proposal_decisions: Value,
+    #[diesel(sql_type = Bool)]
+    decision_overdue: bool,
+}
+
+#[derive(QueryableByName)]
+struct PendingControlEventRow {
+    #[diesel(sql_type = Jsonb)]
+    event_json: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    proposal_receipt: Option<Value>,
+    #[diesel(sql_type = Jsonb)]
+    proposal_decisions: Value,
+}
+
+#[derive(QueryableByName)]
+struct ControlProposalStateRow {
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    proposal_receipt: Option<Value>,
+    #[diesel(sql_type = Jsonb)]
+    proposal_decisions: Value,
+    #[diesel(sql_type = Nullable<Text>)]
+    sealed_by: Option<String>,
+}
+
+#[derive(QueryableByName)]
+struct OptionalJsonRow {
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    value: Option<Value>,
 }
 
 #[derive(QueryableByName)]
@@ -406,7 +440,11 @@ fn seal_predecessor_refs_json(seal: &Seal) -> Value {
 }
 
 impl ControlEventStore for PgControlEventStore {
-    fn put_pending(&self, event: &Event) -> StoreResult<()> {
+    fn put_pending_with_receipt(
+        &self,
+        event: &Event,
+        proposal_receipt: Option<&ControlProposalReceipt>,
+    ) -> StoreResult<()> {
         let pool = self.pool.clone();
         let value = serde_json::to_value(event).map_err(serde_to_store)?;
         // A Control Move has no identity of its own in v1: it is an Event, and
@@ -416,45 +454,120 @@ impl ControlEventStore for PgControlEventStore {
             .as_str()
             .to_owned();
         let realm_id = event.realm_id.as_str().to_owned();
+        if let Some(receipt) = proposal_receipt
+            && (receipt.proposal_digest.as_str() != digest || receipt.realm_id != event.realm_id)
+        {
+            return Err(StoreError::Conflict(
+                "proposal receipt does not bind the pending Control Move".to_owned(),
+            ));
+        }
+        if let Some(receipt) = proposal_receipt {
+            receipt
+                .validate_structural(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
+                .map_err(|error| StoreError::Conflict(error.to_string()))?;
+        }
+        let proposal_receipt = proposal_receipt
+            .map(serde_json::to_value)
+            .transpose()
+            .map_err(serde_to_store)?;
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
-            sql_query(
-                "INSERT INTO state_control_events (event_digest, realm_id, event_json) \
-                 VALUES ($1, $2, $3) \
-                 ON CONFLICT (event_digest) DO NOTHING",
+            let affected = sql_query(
+                "INSERT INTO state_control_events \
+                 (event_digest, realm_id, event_json, proposal_receipt) \
+                 VALUES ($1, $2, $3, $4) \
+                 ON CONFLICT (event_digest) DO UPDATE SET \
+                   proposal_receipt = COALESCE( \
+                     state_control_events.proposal_receipt, EXCLUDED.proposal_receipt \
+                   ) \
+                 WHERE state_control_events.realm_id = EXCLUDED.realm_id \
+                   AND state_control_events.event_json = EXCLUDED.event_json \
+                   AND (state_control_events.proposal_receipt IS NULL \
+                     OR EXCLUDED.proposal_receipt IS NULL \
+                     OR state_control_events.proposal_receipt = EXCLUDED.proposal_receipt)",
             )
             .bind::<Text, _>(&digest)
             .bind::<Text, _>(&realm_id)
             .bind::<Jsonb, _>(&value)
-            .execute(&mut *conn)
-            .await
-            .map(|_| ())
-            .map_err(diesel_to_store)
-        })
-    }
-
-    fn mark_sealed(&self, event_digest: &Hash, seal: &SealId) -> StoreResult<()> {
-        let pool = self.pool.clone();
-        let digest = event_digest.as_str().to_owned();
-        let seal = seal.as_str().to_owned();
-        run_blocking(async move {
-            let mut conn = pg_conn(&pool).await?;
-            let updated = sql_query(
-                "UPDATE state_control_events \
-                 SET sealed_by = $2, sealed_at = COALESCE(sealed_at, now()) \
-                 WHERE event_digest = $1",
-            )
-            .bind::<Text, _>(&digest)
-            .bind::<Text, _>(&seal)
+            .bind::<Nullable<Jsonb>, _>(proposal_receipt.as_ref())
             .execute(&mut *conn)
             .await
             .map_err(diesel_to_store)?;
-            if updated == 0 {
-                return Err(StoreError::NotFound(format!(
-                    "control Event {digest} not in store"
-                )));
+            if affected == 0 {
+                return Err(StoreError::Conflict(
+                    "pending Control Move already has different canonical bytes or receipt"
+                        .to_owned(),
+                ));
             }
             Ok(())
+        })
+    }
+
+    fn mark_sealed(&self, event_digest: &Hash, seal: &Seal) -> StoreResult<()> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        let seal_id = seal.id.as_str().to_owned();
+        let sealed_at = seal.sealed_at;
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                let row = sql_query(
+                    "SELECT proposal_receipt, proposal_decisions, sealed_by \
+                     FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
+                )
+                .bind::<Text, _>(&digest)
+                .get_result::<ControlProposalStateRow>(conn)
+                .await
+                .optional()
+                .map_err(diesel_to_store)?
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!("control Event {digest} not in store"))
+                })?;
+                if let Some(stored_seal) = row.sealed_by {
+                    if stored_seal == seal_id {
+                        return Ok(());
+                    }
+                    return Err(StoreError::Conflict(format!(
+                        "control Event {digest} is already sealed by {stored_seal}"
+                    ))
+                    .into());
+                }
+                let decisions =
+                    serde_json::from_value::<Vec<ControlProposalDecision>>(row.proposal_decisions)
+                        .map_err(serde_to_store)?;
+                if decisions.iter().any(ControlProposalDecision::is_reject) {
+                    return Err(StoreError::Conflict(format!(
+                        "signed-rejected control Event {digest} cannot be sealed"
+                    ))
+                    .into());
+                }
+                let mut overdue = false;
+                if let Some(receipt) = row.proposal_receipt {
+                    let receipt = serde_json::from_value::<ControlProposalReceipt>(receipt)
+                        .map_err(serde_to_store)?;
+                    let mut previous_due_at = receipt.decision_due_at;
+                    for decision in &decisions {
+                        overdue |= !decision.satisfied_current_deadline(previous_due_at);
+                        previous_due_at = decision.decision_due_at();
+                    }
+                    overdue |= sealed_at > previous_due_at;
+                }
+                sql_query(
+                    "UPDATE state_control_events \
+                     SET sealed_by = $2, sealed_at = COALESCE(sealed_at, $4), \
+                         decision_overdue = decision_overdue OR $3 \
+                     WHERE event_digest = $1",
+                )
+                .bind::<Text, _>(&digest)
+                .bind::<Text, _>(&seal_id)
+                .bind::<Bool, _>(overdue)
+                .bind::<Timestamptz, _>(sealed_at)
+                .execute(conn)
+                .await?;
+                Ok(())
+            })
+            .await
+            .map_err(EventSealCommitError::into_store)
         })
     }
 
@@ -476,6 +589,167 @@ impl ControlEventStore for PgControlEventStore {
         })
     }
 
+    fn proposal_receipt(&self, event_digest: &Hash) -> StoreResult<Option<ControlProposalReceipt>> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let row = sql_query(
+                "SELECT proposal_receipt AS value \
+                 FROM state_control_events WHERE event_digest = $1",
+            )
+            .bind::<Text, _>(&digest)
+            .get_result::<OptionalJsonRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?;
+            row.and_then(|row| row.value)
+                .map(|value| serde_json::from_value(value).map_err(serde_to_store))
+                .transpose()
+        })
+    }
+
+    fn record_proposal_decision(
+        &self,
+        event_digest: &Hash,
+        decision: &ControlProposalDecision,
+    ) -> StoreResult<()> {
+        let pool = self.pool.clone();
+        let digest = event_digest.as_str().to_owned();
+        let decision = decision.clone();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
+                let row = sql_query(
+                    "SELECT proposal_receipt, proposal_decisions, sealed_by \
+                     FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
+                )
+                .bind::<Text, _>(&digest)
+                .get_result::<ControlProposalStateRow>(conn)
+                .await
+                .optional()
+                .map_err(diesel_to_store)?
+                .ok_or_else(|| {
+                    StoreError::NotFound(format!("control Event {digest} not in store"))
+                })?;
+                if row.sealed_by.is_some() {
+                    return Err(StoreError::Conflict(format!(
+                        "sealed control Event {digest} cannot receive another proposal decision"
+                    ))
+                    .into());
+                }
+                let receipt = row
+                    .proposal_receipt
+                    .ok_or_else(|| {
+                        StoreError::Conflict(format!(
+                            "control Event {digest} has no proposal receipt"
+                        ))
+                    })
+                    .and_then(|value| {
+                        serde_json::from_value::<ControlProposalReceipt>(value)
+                            .map_err(serde_to_store)
+                    })?;
+                let mut decisions =
+                    serde_json::from_value::<Vec<ControlProposalDecision>>(row.proposal_decisions)
+                        .map_err(serde_to_store)?;
+                if decisions.contains(&decision) {
+                    return Ok(());
+                }
+                if decisions.iter().any(ControlProposalDecision::is_reject) {
+                    return Err(StoreError::Conflict(format!(
+                        "control Event {digest} already has a terminal signed rejection"
+                    ))
+                    .into());
+                }
+                decision
+                    .validate_chain(
+                        &receipt,
+                        &decisions,
+                        arkret_wire::ControlProposalDecisionPolicy::protocol_maximum(),
+                    )
+                    .map_err(|error| StoreError::Conflict(error.to_string()))?;
+                decisions.push(decision);
+                let decisions = serde_json::to_value(decisions).map_err(serde_to_store)?;
+                sql_query(
+                    "UPDATE state_control_events SET proposal_decisions = $2 \
+                     WHERE event_digest = $1",
+                )
+                .bind::<Text, _>(&digest)
+                .bind::<Jsonb, _>(&decisions)
+                .execute(conn)
+                .await?;
+                Ok(())
+            })
+            .await
+            .map_err(EventSealCommitError::into_store)
+        })
+    }
+
+    fn list_pending_records(
+        &self,
+        realm_id: &RealmId,
+        limit: usize,
+    ) -> StoreResult<Vec<PendingControlEventRecord>> {
+        let pool = self.pool.clone();
+        let realm_id = realm_id.as_str().to_owned();
+        let limit = limit as i64;
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let rows = sql_query(
+                "SELECT event_json, proposal_receipt, proposal_decisions \
+                 FROM state_control_events \
+                 WHERE realm_id = $1 AND sealed_by IS NULL \
+                   AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+                 ORDER BY inserted_at ASC, event_digest ASC LIMIT $2",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<BigInt, _>(limit)
+            .load::<PendingControlEventRow>(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?;
+            rows.into_iter()
+                .map(|row| {
+                    Ok(PendingControlEventRecord {
+                        event: control_event_from_value(row.event_json)?,
+                        proposal_receipt: row
+                            .proposal_receipt
+                            .map(|value| serde_json::from_value(value).map_err(serde_to_store))
+                            .transpose()?,
+                        decisions: serde_json::from_value(row.proposal_decisions)
+                            .map_err(serde_to_store)?,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn list_pending_realms(&self, limit: usize) -> StoreResult<Vec<RealmId>> {
+        let pool = self.pool.clone();
+        let limit = limit as i64;
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            sql_query(
+                "SELECT DISTINCT realm_id AS value \
+                 FROM state_control_events \
+                 WHERE sealed_by IS NULL \
+                   AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
+                 ORDER BY realm_id \
+                 LIMIT $1",
+            )
+            .bind::<BigInt, _>(limit)
+            .load::<TextRow>(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?
+            .into_iter()
+            .map(|row| {
+                RealmId::new(row.value).map_err(|error| {
+                    StoreError::Backend(format!("stored pending Realm id is invalid: {error}"))
+                })
+            })
+            .collect()
+        })
+    }
+
     fn list_pending_for_notary(
         &self,
         realm_id: &RealmId,
@@ -493,6 +767,7 @@ impl ControlEventStore for PgControlEventStore {
                  FROM state_control_events \
                  WHERE realm_id = $1 \
                    AND sealed_by IS NULL \
+                   AND NOT (proposal_decisions @> '[{\"kind\":\"signed_reject\"}]'::jsonb) \
                    AND ( \
                      $2 IS NULL OR \
                      (inserted_at, event_digest) > ( \
@@ -528,7 +803,7 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             let rows = sql_query(
-                "SELECT event_json, sealed_by \
+                "SELECT event_json, sealed_by, proposal_receipt, proposal_decisions, decision_overdue \
                  FROM state_control_events \
                  WHERE realm_id = $1 \
                    AND sealed_by IS NOT NULL \
@@ -553,7 +828,57 @@ impl ControlEventStore for PgControlEventStore {
                     let event = control_event_from_value(row.event_json)?;
                     let seal = SealId::new(row.sealed_by)
                         .map_err(|error| StoreError::Backend(error.to_string()))?;
-                    Ok(SealedControlEventRecord { event, seal })
+                    Ok(SealedControlEventRecord {
+                        event,
+                        seal,
+                        proposal_receipt: row
+                            .proposal_receipt
+                            .map(|value| serde_json::from_value(value).map_err(serde_to_store))
+                            .transpose()?,
+                        decisions: serde_json::from_value(row.proposal_decisions)
+                            .map_err(serde_to_store)?,
+                        decision_overdue: row.decision_overdue,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    fn list_retained_faults(
+        &self,
+        realm_id: &RealmId,
+        limit: usize,
+    ) -> StoreResult<Vec<SealedControlEventRecord>> {
+        let pool = self.pool.clone();
+        let realm_id = realm_id.as_str().to_owned();
+        let limit = limit as i64;
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let rows = sql_query(
+                "SELECT event_json, sealed_by, proposal_receipt, proposal_decisions, decision_overdue \
+                 FROM state_control_events \
+                 WHERE realm_id = $1 AND sealed_by IS NOT NULL AND decision_overdue \
+                 ORDER BY sealed_at ASC, event_digest ASC LIMIT $2",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<BigInt, _>(limit)
+            .load::<SealedControlEventRow>(&mut *conn)
+            .await
+            .map_err(diesel_to_store)?;
+            rows.into_iter()
+                .map(|row| {
+                    Ok(SealedControlEventRecord {
+                        event: control_event_from_value(row.event_json)?,
+                        seal: SealId::new(row.sealed_by)
+                            .map_err(|error| StoreError::Backend(error.to_string()))?,
+                        proposal_receipt: row
+                            .proposal_receipt
+                            .map(|value| serde_json::from_value(value).map_err(serde_to_store))
+                            .transpose()?,
+                        decisions: serde_json::from_value(row.proposal_decisions)
+                            .map_err(serde_to_store)?,
+                        decision_overdue: row.decision_overdue,
+                    })
                 })
                 .collect()
         })
@@ -561,6 +886,88 @@ impl ControlEventStore for PgControlEventStore {
 }
 
 impl SealStore for PgSealStore {
+    fn try_claim_signing_lease(
+        &self,
+        realm_id: &RealmId,
+        signer_slot: &str,
+        holder: &str,
+        now_ms: i64,
+        until_ms: i64,
+    ) -> StoreResult<Option<u64>> {
+        if until_ms <= now_ms {
+            return Err(StoreError::Conflict(
+                "signing lease must end after its claim time".to_owned(),
+            ));
+        }
+        let pool = self.pool.clone();
+        let realm_id = realm_id.as_str().to_owned();
+        let signer_slot = signer_slot.to_owned();
+        let holder = holder.to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            let row = sql_query(
+                "INSERT INTO state_seal_signing_leases \
+                 (realm_id, signer_slot, holder, lease_until_ms, fence) \
+                 VALUES ($1, $2, $3, $5, 1) \
+                 ON CONFLICT (realm_id, signer_slot) DO UPDATE SET \
+                   holder = EXCLUDED.holder, \
+                   lease_until_ms = EXCLUDED.lease_until_ms, \
+                   fence = state_seal_signing_leases.fence + 1 \
+                 WHERE state_seal_signing_leases.holder = EXCLUDED.holder \
+                    OR state_seal_signing_leases.lease_until_ms <= $4 \
+                 RETURNING fence AS value",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&signer_slot)
+            .bind::<Text, _>(&holder)
+            .bind::<BigInt, _>(now_ms)
+            .bind::<BigInt, _>(until_ms)
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .optional()
+            .map_err(diesel_to_store)?;
+            row.map(|row| {
+                u64::try_from(row.value).map_err(|_| {
+                    StoreError::Backend("signing lease fence exceeded u64 range".to_owned())
+                })
+            })
+            .transpose()
+        })
+    }
+
+    fn release_signing_lease(
+        &self,
+        realm_id: &RealmId,
+        signer_slot: &str,
+        holder: &str,
+        fence: u64,
+    ) -> StoreResult<bool> {
+        let fence = i64::try_from(fence).map_err(|_| {
+            StoreError::Backend("signing lease fence exceeded i64 range".to_owned())
+        })?;
+        let pool = self.pool.clone();
+        let realm_id = realm_id.as_str().to_owned();
+        let signer_slot = signer_slot.to_owned();
+        let holder = holder.to_owned();
+        run_blocking(async move {
+            let mut conn = pg_conn(&pool).await?;
+            sql_query(
+                "UPDATE state_seal_signing_leases SET lease_until_ms = $5 \
+                 WHERE realm_id = $1 AND signer_slot = $2 \
+                   AND holder = $3 AND fence = $4",
+            )
+            .bind::<Text, _>(&realm_id)
+            .bind::<Text, _>(&signer_slot)
+            .bind::<Text, _>(&holder)
+            .bind::<BigInt, _>(fence)
+            .bind::<BigInt, _>(i64::MIN)
+            .execute(&mut *conn)
+            .await
+            .map(|affected| affected == 1)
+            .map_err(diesel_to_store)
+        })
+    }
+
     fn put(&self, seal: &Seal) -> StoreResult<()> {
         let pool = self.pool.clone();
         let seal_json = serde_json::to_value(seal).map_err(serde_to_store)?;

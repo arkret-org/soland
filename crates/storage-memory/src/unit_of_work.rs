@@ -260,6 +260,7 @@ mod tests {
                 envelope: serde_json::json!({"event_id": event_id}),
                 received_at: Utc::now(),
             },
+            control_proposal_receipt: None,
             projections: Vec::new(),
             idempotency,
             outbox: Vec::new(),

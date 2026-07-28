@@ -1227,11 +1227,146 @@ pub(crate) async fn apply_inbound_seal(
     if let Some(effect) = try_apply_device_generation_event_seal(state, seal).await? {
         return Ok(effect);
     }
+    verify_realm_notary_seal(state, seal).await?;
     let verifier = select_jws_verifier(state);
     state
         .projections()
         .apply_seal(seal, verifier)
         .map_err(app_error_from_seal_reject)
+}
+
+async fn verify_realm_notary_seal(state: &AppState, seal: &Seal) -> Result<(), AppError> {
+    let notary = crate::notary::NotaryWorker::for_service(state.service_id().clone())
+        .notary_value_for_seal(state, seal)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::SignatureInvalid,
+                format!("resolve Seal notary authority: {error}"),
+            )
+        })?;
+    let canonical_bytes = seal.canonical_bytes_for_id().map_err(|error| {
+        AppError::new(
+            ErrorCode::SchemaViolation,
+            format!("derive Seal signature transcript: {error}"),
+        )
+    })?;
+    let signatures = match (&notary, &seal.notary_signature) {
+        (arkret_wire::notary::NotaryValue::SingleDid { did, .. }, NotarySig::Single(signature))
+        | (arkret_wire::notary::NotaryValue::Mixed { did, .. }, NotarySig::Single(signature)) => {
+            let signer = arkret_identity::verification_method_did(&signature.verification_method)
+                .map_err(|error| {
+                AppError::new(
+                    ErrorCode::SignatureInvalid,
+                    format!("Seal signer DID is invalid: {error}"),
+                )
+            })?;
+            if signer != *did {
+                return Err(AppError::new(
+                    ErrorCode::SignatureInvalid,
+                    "Seal signer is not the current primary notary".to_owned(),
+                ));
+            }
+            vec![(signature, signer)]
+        }
+        (arkret_wire::notary::NotaryValue::OpenSet { members }, NotarySig::Single(signature)) => {
+            let signer = arkret_identity::verification_method_did(&signature.verification_method)
+                .map_err(|error| {
+                AppError::new(
+                    ErrorCode::SignatureInvalid,
+                    format!("Seal signer DID is invalid: {error}"),
+                )
+            })?;
+            if !members.contains(&signer) {
+                return Err(AppError::new(
+                    ErrorCode::SignatureInvalid,
+                    "Seal signer is outside the current open notary set".to_owned(),
+                ));
+            }
+            vec![(signature, signer)]
+        }
+        (arkret_wire::notary::NotaryValue::OpenSet { members }, NotarySig::Multi(multi)) => {
+            let mut signatures = Vec::with_capacity(multi.signatures.len());
+            for signature in &multi.signatures {
+                let signer =
+                    arkret_identity::verification_method_did(&signature.verification_method)
+                        .map_err(|error| {
+                            AppError::new(
+                                ErrorCode::SignatureInvalid,
+                                format!("Seal signer DID is invalid: {error}"),
+                            )
+                        })?;
+                if !members.contains(&signer) {
+                    return Err(AppError::new(
+                        ErrorCode::SignatureInvalid,
+                        "Seal signer is outside the current open notary set".to_owned(),
+                    ));
+                }
+                signatures.push((signature, signer));
+            }
+            signatures
+        }
+        (
+            arkret_wire::notary::NotaryValue::Threshold {
+                threshold, members, ..
+            },
+            NotarySig::Multi(multi),
+        ) => {
+            let mut signatures = Vec::with_capacity(multi.signatures.len());
+            let mut distinct_signers = BTreeSet::new();
+            for signature in &multi.signatures {
+                let signer =
+                    arkret_identity::verification_method_did(&signature.verification_method)
+                        .map_err(|error| {
+                            AppError::new(
+                                ErrorCode::SignatureInvalid,
+                                format!("Seal signer DID is invalid: {error}"),
+                            )
+                        })?;
+                if !members.contains(&signer) {
+                    return Err(AppError::new(
+                        ErrorCode::SignatureInvalid,
+                        "threshold Seal signer is outside the current committee".to_owned(),
+                    ));
+                }
+                if !distinct_signers.insert(signer.clone()) {
+                    return Err(AppError::new(
+                        ErrorCode::SignatureInvalid,
+                        "threshold Seal repeats a committee signer".to_owned(),
+                    ));
+                }
+                signatures.push((signature, signer));
+            }
+            if distinct_signers.len() < usize::try_from(*threshold).unwrap_or(usize::MAX) {
+                return Err(AppError::new(
+                    ErrorCode::SignatureInvalid,
+                    "threshold Seal does not carry enough distinct committee signatures".to_owned(),
+                ));
+            }
+            signatures
+        }
+        (arkret_wire::notary::NotaryValue::Threshold { .. }, NotarySig::Threshold(_)) => {
+            return Err(AppError::new(
+                ErrorCode::ProfileUnsupported,
+                "opaque threshold Seal proofs have no configured verifier".to_owned(),
+            ));
+        }
+        _ => {
+            return Err(AppError::new(
+                ErrorCode::SignatureInvalid,
+                "Seal signature shape does not match the current notary profile".to_owned(),
+            ));
+        }
+    };
+    for (signature, signer) in signatures {
+        crate::routing::events::event_log::governance_proof::verify_authoritative_event_seal_signature(
+            state,
+            signature,
+            signer.as_str(),
+            &canonical_bytes,
+        )
+        .await?;
+    }
+    Ok(())
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]

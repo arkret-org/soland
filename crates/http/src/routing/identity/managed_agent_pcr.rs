@@ -680,14 +680,22 @@ pub(crate) async fn managed_agent_event_frontier(
     Ok(managed_agent_event_seal_head(state, pcr_id)
         .await?
         .map(|seal| {
-            RealmSealFrontierView::new(
+            let health = state
+                .projections()
+                .control_governance_health(&seal.realm_id, chrono::Utc::now())
+                .map_err(|error| {
+                    AppError::internal(format!("control governance health unavailable: {error}"))
+                })?;
+            Ok::<_, AppError>(RealmSealFrontierView::new(
                 seal.realm_id,
                 seal.id,
                 seal.control_event_set_root,
                 seal.state_root,
+                health,
                 Some(seal.hlc),
-            )
-        }))
+            ))
+        })
+        .transpose()?)
 }
 
 pub(crate) async fn managed_agent_event_seal_head(
