@@ -626,7 +626,7 @@ pub(super) async fn submit_event_batch_outcome(
         match submit_event_value_with_context(
             state,
             session,
-            envelope,
+            envelope.clone(),
             &realm_bootstrap_contexts,
             None,
             None,
@@ -1491,8 +1491,8 @@ pub(crate) async fn submit_federation_events(
             }
             Err(error) if error.code == "dependency_missing" => render_error(
                 res,
-                StatusCode::SERVICE_UNAVAILABLE,
-                "federation_dependencies_pending",
+                StatusCode::CONFLICT,
+                "dependency_missing",
                 "the atomic Realm founding unit is waiting for dependencies",
             ),
             Err(error) => render_submit_one_error(res, error),
@@ -1510,7 +1510,8 @@ pub(crate) async fn submit_federation_events(
             EventsSubmitRejectedItem {
                 id: event_string_field_from_value(event, "event_id")
                     .unwrap_or_else(|| "unknown".to_owned()),
-                reason_code: "federation_dependencies_pending".to_owned(),
+                reason_code: "dependency_missing".to_owned(),
+                missing_event_ids: service_binding_ref.membership_frontier.clone(),
                 detail: Some("the referenced Realm bootstrap has not arrived yet".to_owned()),
                 ..Default::default()
             }
@@ -1591,7 +1592,12 @@ pub(crate) async fn submit_federation_events(
                 Err("peer_claim_welcome_pending") => {
                     rejected.push(EventsSubmitRejectedItem {
                         id,
-                        reason_code: "federation_dependencies_pending".to_owned(),
+                        reason_code: "dependency_missing".to_owned(),
+                        missing_event_ids: serde_json::from_value::<arkret_wire::Event>(
+                            envelope.clone(),
+                        )
+                        .map(|event| event.prev_refs)
+                        .unwrap_or_default(),
                         detail: Some(
                             "the Welcome peer claim ledger entry is not available yet".to_owned(),
                         ),
@@ -1691,9 +1697,18 @@ pub(crate) async fn submit_federation_events(
             rejected.push(EventsSubmitRejectedItem {
                 id,
                 reason_code: if error.code == ErrorCode::DependencyMissing {
-                    "federation_dependencies_pending".to_owned()
+                    "dependency_missing".to_owned()
                 } else {
                     error.wire_code().to_owned()
+                },
+                missing_seal_refs: if error.code == ErrorCode::DependencyMissing {
+                    serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+                        .ok()
+                        .and_then(|event| event.seal_ref)
+                        .into_iter()
+                        .collect()
+                } else {
+                    Vec::new()
                 },
                 detail: Some(error.message.to_string()),
                 ..Default::default()
@@ -1703,7 +1718,7 @@ pub(crate) async fn submit_federation_events(
         match submit_event_value_with_context(
             state,
             &session,
-            envelope,
+            envelope.clone(),
             &[],
             None,
             Some(&admission),
@@ -1734,7 +1749,12 @@ pub(crate) async fn submit_federation_events(
                 if error.code == "dependency_missing" {
                     rejected.push(EventsSubmitRejectedItem {
                         id,
-                        reason_code: "federation_dependencies_pending".to_owned(),
+                        reason_code: "dependency_missing".to_owned(),
+                        missing_event_ids: serde_json::from_value::<arkret_wire::Event>(
+                            envelope.clone(),
+                        )
+                        .map(|event| event.prev_refs)
+                        .unwrap_or_default(),
                         detail: Some("a predecessor Event has not arrived yet".to_owned()),
                         ..Default::default()
                     });

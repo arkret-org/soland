@@ -328,7 +328,6 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
 
 #[derive(Debug, PartialEq, Eq)]
 enum PeerEventPartialRetry {
-    SameRequest,
     Rebuilt {
         payload_json: String,
         idempotency_key: String,
@@ -351,12 +350,9 @@ fn peer_event_partial_retry(
         || outcome
             .rejected
             .iter()
-            .any(|item| item.reason_code != "federation_dependencies_pending")
+            .any(|item| item.reason_code != "dependency_missing")
     {
         return None;
-    }
-    if outcome.accepted.is_empty() && outcome.duplicate.is_empty() {
-        return Some(PeerEventPartialRetry::SameRequest);
     }
 
     let pending_ids = outcome
@@ -395,62 +391,20 @@ fn peer_event_partial_retry(
         }
     }
 
-    // Bundles are receiver-relative and MAY overlap, so flatten them into one
-    // id-keyed view before deciding which Seals the narrowed batch still needs.
-    let seals_by_id = request
+    let required_targets = retained_events
+        .iter()
+        .flat_map(|event| {
+            event.seal_ref.iter().chain(
+                event
+                    .seal_basis
+                    .iter()
+                    .flat_map(|basis| basis.leaves.iter()),
+            )
+        })
+        .collect::<std::collections::BTreeSet<_>>();
+    request
         .cba_proof_bundles
-        .iter()
-        .flat_map(|bundle| bundle.seals.iter())
-        .map(|seal| (seal.id.clone(), seal.clone()))
-        .collect::<std::collections::BTreeMap<_, _>>();
-    let mut pending_seals = Vec::new();
-    for event in &retained_events {
-        if let Some(seal_ref) = &event.seal_ref
-            && seals_by_id.contains_key(seal_ref)
-        {
-            pending_seals.push(seal_ref.clone());
-        }
-        if let Some(seal_basis) = &event.seal_basis {
-            pending_seals.extend(
-                seal_basis
-                    .leaves
-                    .iter()
-                    .filter(|seal_id| seals_by_id.contains_key(*seal_id))
-                    .cloned(),
-            );
-        }
-    }
-    let mut retained_seals = std::collections::BTreeSet::new();
-    while let Some(seal_id) = pending_seals.pop() {
-        if !retained_seals.insert(seal_id.clone()) {
-            continue;
-        }
-        if let Some(seal) = seals_by_id.get(&seal_id) {
-            pending_seals.extend(
-                seal.predecessor_refs
-                    .iter()
-                    .filter(|predecessor| seals_by_id.contains_key(*predecessor))
-                    .cloned(),
-            );
-        }
-    }
-    let mut retained: Vec<arkret_wire::Seal> = retained_seals
-        .iter()
-        .filter_map(|seal_id| seals_by_id.get(seal_id).cloned())
-        .collect();
-    retained.sort_by(|left, right| {
-        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
-    });
-    request.cba_proof_bundles = match retained.last().map(|seal| seal.id.clone()) {
-        Some(target_seal_ref) => vec![arkret_wire::CbaProofBundle {
-            target_seal_ref,
-            seals: retained,
-            control_moves: Vec::new(),
-            inclusion_proofs: Vec::new(),
-            availability_proofs: Vec::new(),
-        }],
-        None => Vec::new(),
-    };
+        .retain(|bundle| required_targets.contains(&bundle.target_seal_ref));
     request.validate_federation_transport().ok()?;
     let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
     let payload_json = String::from_utf8(bytes.clone()).ok()?;
@@ -488,7 +442,7 @@ fn causal_dependencies_pending(body: &str) -> bool {
                     .map(str::to_owned)
             })
             .as_deref(),
-        Some("federation_dependencies_pending" | "direct_binding_dependencies_pending")
+        Some("dependency_missing" | "direct_binding_dependencies_pending")
     )
 }
 
@@ -649,9 +603,6 @@ impl FederationDispatcher {
                     );
                 } else if (200..300).contains(&status) {
                     match peer_event_partial_retry(&row.endpoint, &row.payload_json, &body_text) {
-                        Some(PeerEventPartialRetry::SameRequest) => {
-                            self.schedule_retry(&mut row, status, true).await;
-                        }
                         Some(PeerEventPartialRetry::Rebuilt {
                             payload_json,
                             idempotency_key,
@@ -858,7 +809,7 @@ mod tests {
     #[test]
     fn causal_dependency_responses_are_classified_for_prompt_retry() {
         assert!(causal_dependencies_pending(
-            r#"{"ok":false,"error":{"code":"federation_dependencies_pending"}}"#
+            r#"{"ok":false,"error":{"code":"dependency_missing"}}"#
         ));
         assert!(causal_dependencies_pending(
             r#"{"ok":false,"error":{"code":"direct_binding_dependencies_pending"}}"#
@@ -914,19 +865,17 @@ mod tests {
     }
 
     #[test]
-    fn all_pending_peer_event_partial_reuses_the_same_request() {
+    fn all_pending_peer_event_partial_requires_a_parseable_request_for_a_fresh_key() {
         let response = r#"{
             "status":"partial",
             "accepted":[],
             "rejected":[{
                 "id":"ak:event:019f0000-0000-7000-8000-000000000001",
-                "reason_code":"federation_dependencies_pending"
+                "reason_code":"dependency_missing",
+                "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
             }]
         }"#;
-        assert_eq!(
-            peer_event_partial_retry("/_arkret/peer/events", "not-read", response),
-            Some(PeerEventPartialRetry::SameRequest)
-        );
+        assert!(peer_event_partial_retry("/_arkret/peer/events", "not-read", response).is_none());
     }
 
     #[test]
@@ -1102,7 +1051,8 @@ mod tests {
             "accepted":["{}"],
             "rejected":[{{
                 "id":"{pending_event_id}",
-                "reason_code":"federation_dependencies_pending"
+                "reason_code":"dependency_missing",
+                "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
             }}]
         }}"#,
             request.events[0].event.event_id.as_str()

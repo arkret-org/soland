@@ -116,61 +116,58 @@ pub(super) fn remove_rejected_claim_active_material(
 /// Every Seal a receiver needs to close the transported Events' CBA basis,
 /// packaged as the request's `cba_proof_bundles[]`.
 ///
-/// One bundle carries the whole closure. `offline-publication.md` §2.1 and the
-/// bundle contract both allow a bounded verifiable superset — a bundle is
-/// receiver-relative and unsigned, and the receiver revalidates every embedded
-/// object — so a single closure bundle is legal and keeps the deduplicated
-/// `(notary_seq, id)` ordering that `validate_federation_transport` requires
-/// trivially satisfied. `target_seal_ref` is the closure's maximum, which is
-/// the leaf the rest of the closure is reachable from.
+/// Each target gets its own single-target bundle. Bundles may overlap because
+/// the wire contract is receiver-relative and permits bounded verifiable
+/// supersets.
 fn federation_cba_proof_bundles(
     state: &AppState,
     events: &[Event],
 ) -> Result<Vec<arkret_wire::CbaProofBundle>, String> {
-    let mut pending = Vec::new();
+    let mut targets = BTreeSet::new();
     for event in events {
         if let Some(seal_ref) = &event.seal_ref {
-            pending.push(seal_ref.clone());
+            targets.insert(seal_ref.clone());
         }
         if let Some(seal_basis) = &event.seal_basis {
-            pending.extend(seal_basis.leaves.iter().cloned());
+            targets.extend(seal_basis.leaves.iter().cloned());
         }
     }
-    let mut by_id = BTreeMap::new();
-    while let Some(seal_id) = pending.pop() {
-        if by_id.contains_key(&seal_id) {
-            continue;
-        }
-        let seal = state
-            .projections()
-            .seal_by_id(&seal_id)
-            .map_err(|error| format!("read federation Seal prerequisite {seal_id}: {error}"))?
-            .ok_or_else(|| format!("federation Seal prerequisite {seal_id} is unavailable"))?;
-        pending.extend(seal.predecessor_refs.iter().cloned());
-        by_id.insert(seal_id, seal);
+    if targets.len() > arkret_wire::event_submission::MAX_SUBMISSION_CBA_BUNDLES {
+        return Err("federation CBA target count exceeds the v1 limit".to_owned());
     }
-    let mut seals = by_id.into_values().collect::<Vec<_>>();
-    if seals.is_empty() {
-        return Ok(Vec::new());
-    }
-    seals.sort_by(|left, right| {
-        (left.notary_seq, left.id.as_str()).cmp(&(right.notary_seq, right.id.as_str()))
-    });
-    if seals.len() > arkret_models_collaboration::event_sync::MAX_FEDERATED_SEAL_PREREQUISITES {
-        return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
-    }
-    let target_seal_ref = seals
-        .last()
-        .expect("non-empty closure has a maximum")
-        .id
-        .clone();
-    Ok(vec![arkret_wire::CbaProofBundle {
-        target_seal_ref,
-        seals,
-        control_moves: Vec::new(),
-        inclusion_proofs: Vec::new(),
-        availability_proofs: Vec::new(),
-    }])
+    targets
+        .into_iter()
+        .map(|target_seal_ref| {
+            let mut pending = vec![target_seal_ref.clone()];
+            let mut by_id = BTreeMap::new();
+            while let Some(seal_id) = pending.pop() {
+                if by_id.contains_key(&seal_id) {
+                    continue;
+                }
+                let seal = state
+                    .projections()
+                    .seal_by_id(&seal_id)
+                    .map_err(|error| {
+                        format!("read federation Seal prerequisite {seal_id}: {error}")
+                    })?
+                    .ok_or_else(|| {
+                        format!("federation Seal prerequisite {seal_id} is unavailable")
+                    })?;
+                pending.extend(seal.predecessor_refs.iter().cloned());
+                by_id.insert(seal_id, seal);
+            }
+            if by_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS {
+                return Err("federation Seal prerequisite closure exceeds the v1 limit".to_owned());
+            }
+            Ok(arkret_wire::CbaProofBundle {
+                target_seal_ref,
+                seals: by_id.into_values().collect(),
+                control_moves: Vec::new(),
+                inclusion_proofs: Vec::new(),
+                availability_proofs: Vec::new(),
+            })
+        })
+        .collect()
 }
 
 /// Pair each transported Event with the publication evidence it was admitted
