@@ -862,6 +862,10 @@ mod tests {
             revocation_ref: "ak:session:grant-1".to_owned(),
             session_public_key: "{}".to_owned(),
             cnf_jkt: Some("holder-thumbprint".to_owned()),
+            credential_class:
+                arkret_models_identity::session_credential::SessionGrantCredentialClass::Standard,
+            recovery_binding: None,
+            device_binding: None,
             proof_kind: None,
             scope_details: None,
             freshness_state: None,
