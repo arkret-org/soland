@@ -1,8 +1,9 @@
 use super::{
     Arc, BTreeMap, BTreeSet, Mutex, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
     RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore, RecoverySessionRecord,
-    RecoverySessionStore, SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord,
-    SecurityTransactionStore, async_trait, recovery_active_policy_locked,
+    RecoverySessionStore, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, async_trait,
+    recovery_active_policy_locked,
 };
 #[derive(Default)]
 pub(crate) struct MemoryRecoveryPolicyStore {
@@ -186,6 +187,7 @@ impl RecoverySessionStore for MemoryRecoverySessionStore {
 pub(crate) struct MemorySecurityTransactionStore {
     sessions: Arc<Mutex<BTreeMap<String, RecoverySessionRecord>>>,
     by_id: Mutex<BTreeMap<String, SecurityTransactionRecord>>,
+    step_attempts: Mutex<BTreeMap<(String, String), SecurityTransactionStepAttemptRecord>>,
     step_outcomes: Mutex<BTreeMap<(String, String), SecurityTransactionStepOutcomeRecord>>,
 }
 
@@ -194,6 +196,7 @@ impl MemorySecurityTransactionStore {
         Self {
             sessions,
             by_id: Mutex::new(BTreeMap::new()),
+            step_attempts: Mutex::new(BTreeMap::new()),
             step_outcomes: Mutex::new(BTreeMap::new()),
         }
     }
@@ -297,6 +300,34 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             .cloned())
     }
 
+    async fn begin_step(
+        &self,
+        attempt: SecurityTransactionStepAttemptRecord,
+    ) -> PersistenceResult<SecurityTransactionStepAttemptRecord> {
+        let key = (
+            attempt.transaction_id.clone(),
+            security_transaction_step_key(attempt.step),
+        );
+        if !self.by_id.lock().contains_key(&attempt.transaction_id) {
+            return Err(PersistenceError::NotFound(format!(
+                "transaction_id `{}` not found",
+                attempt.transaction_id
+            )));
+        }
+        let mut attempts = self.step_attempts.lock();
+        if let Some(existing) = attempts.get(&key) {
+            if existing.canonical_request == attempt.canonical_request {
+                return Ok(existing.clone());
+            }
+            return Err(PersistenceError::Conflict(format!(
+                "security transaction step {:?} already began with different canonical bytes",
+                attempt.step
+            )));
+        }
+        attempts.insert(key, attempt.clone());
+        Ok(attempt)
+    }
+
     async fn accept_step(
         &self,
         record: SecurityTransactionRecord,
@@ -312,7 +343,9 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             transaction_id.to_owned(),
             security_transaction_step_key(outcome.step),
         );
+        let mut sessions = self.sessions.lock();
         let mut by_id = self.by_id.lock();
+        let attempts = self.step_attempts.lock();
         let mut outcomes = self.step_outcomes.lock();
         if let Some(existing) = outcomes.get(&key) {
             if existing.canonical_request == outcome.canonical_request {
@@ -326,6 +359,18 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         let existing = by_id.get(transaction_id).ok_or_else(|| {
             PersistenceError::NotFound(format!("transaction_id `{transaction_id}` not found"))
         })?;
+        let attempt = attempts.get(&key).ok_or_else(|| {
+            PersistenceError::Conflict(format!(
+                "security transaction step {:?} was not durably begun",
+                outcome.step
+            ))
+        })?;
+        if attempt.canonical_request != outcome.canonical_request {
+            return Err(PersistenceError::Conflict(format!(
+                "security transaction step {:?} outcome changed the durable request bytes",
+                outcome.step
+            )));
+        }
         super::validate_security_transaction_update(existing, &record)?;
         if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
             || record.resource.accepted_steps.last().map(|step| step.step) != Some(outcome.step)
@@ -333,6 +378,25 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             return Err(PersistenceError::SchemaViolation(
                 "accepted step outcome must match the single appended transaction step".to_owned(),
             ));
+        }
+        if record.resource.state == arkret_wire::SecurityTransactionState::Completed
+            && let arkret_wire::SecurityTransactionBinding::Recovery(binding) =
+                &record.resource.binding
+        {
+            let session_id = binding.recovery_session_id().as_str();
+            let recovery_session = sessions.get_mut(session_id).ok_or_else(|| {
+                PersistenceError::NotFound(format!("recovery_session_id `{session_id}` not found"))
+            })?;
+            if recovery_session.transaction_id.as_deref() != Some(transaction_id)
+                || recovery_session.state != "verified"
+            {
+                return Err(PersistenceError::Conflict(
+                    "terminal recovery transaction does not own a verified recovery session"
+                        .to_owned(),
+                ));
+            }
+            recovery_session.state = "completed".to_owned();
+            recovery_session.updated_at = chrono::Utc::now();
         }
         by_id.insert(transaction_id.to_owned(), record);
         outcomes.insert(key, outcome.clone());
@@ -462,7 +526,16 @@ mod tests {
             step: SecurityTransactionStep::Revoke,
             canonical_request: b"fixed-request".to_vec(),
             response: json!({"first": true}),
+            participant_outcome: None,
         };
+        store
+            .begin_step(SecurityTransactionStepAttemptRecord {
+                transaction_id: outcome.transaction_id.clone(),
+                step: outcome.step,
+                canonical_request: outcome.canonical_request.clone(),
+            })
+            .await
+            .unwrap();
         let first = store
             .accept_step(advanced.clone(), outcome.clone())
             .await

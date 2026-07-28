@@ -552,6 +552,7 @@ pub trait EventReadPort: Send + Sync {
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
+        publication_evidence: Vec<PublicationEvidenceRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
@@ -819,6 +820,7 @@ impl EventQueryService {
         device: Option<IdentityAnchorDeviceState>,
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
+        publication_evidence: Vec<PublicationEvidenceRecord>,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(
@@ -828,6 +830,7 @@ impl EventQueryService {
                 device,
                 frontier_cas,
                 reanchor_slot,
+                publication_evidence,
             )
             .await
     }

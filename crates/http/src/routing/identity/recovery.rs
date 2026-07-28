@@ -20,6 +20,7 @@ use arkret_models_crypto::{
     RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
     RecoveryPolicySummary, RecoverySessionCreateRequestBody, RecoverySessionProofSubmitOutcome,
     RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState,
+    TypedSecurityTransactionContinueRequest,
 };
 use arkret_wire::{
     NonEmptyString, SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
@@ -106,6 +107,10 @@ pub(super) fn self_protocol_router() -> Router {
         .push(
             Router::with_path("security-transactions/{transaction_id}")
                 .get(security_transaction_get),
+        )
+        .push(
+            Router::with_path("security-transactions/{transaction_id}/continue")
+                .post(security_transaction_continue),
         )
 }
 

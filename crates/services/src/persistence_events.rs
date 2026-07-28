@@ -163,6 +163,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         device: Option<crate::events::IdentityAnchorDeviceState>,
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
+        publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
     ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0
@@ -195,6 +196,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     reanchor_digest: state.reanchor_digest,
                     authorize_digest: state.authorize_digest,
                 }),
+                publication_evidence,
             )
             .await?;
         Ok(crate::events::IdentityAnchorCommitResult {

@@ -32,6 +32,29 @@ pub(super) async fn mint_and_store_ingress_receipt(
     lease: &AuthorizationLease,
     received_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<IngressReceipt, SubmitOneError> {
+    let record = build_ingress_receipt_record(state, parsed, lease, received_at)?;
+    let stored = state
+        .event_queries()
+        .store_publication_evidence(record)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("publication evidence store unavailable: {error}"),
+            )
+        })?;
+    Ok(stored.ingress_receipt)
+}
+
+/// Build publication evidence without persisting it. Closed atomic Event units
+/// pass the returned records into the same storage transaction as the Events.
+pub(super) fn build_ingress_receipt_record(
+    state: &AppState,
+    parsed: &ValidatedEventEnvelope,
+    lease: &AuthorizationLease,
+    received_at: chrono::DateTime<chrono::Utc>,
+) -> Result<soland_services::events::PublicationEvidenceRecord, SubmitOneError> {
     let event_digest =
         arkret_identifiers::Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
             publication_reject(format!("Event canonical digest is invalid: {error}"))
@@ -46,24 +69,12 @@ pub(super) async fn mint_and_store_ingress_receipt(
         ));
     }
     let receipt = sign_ingress_receipt(state, &event_digest, lease, received_at)?;
-    let record = soland_services::events::PublicationEvidenceRecord {
+    Ok(soland_services::events::PublicationEvidenceRecord {
         event_digest: parsed.canonical_digest.clone(),
         realm_id: parsed.realm_id.clone(),
         authorization_lease: lease.clone(),
         ingress_receipt: receipt,
-    };
-    let stored = state
-        .event_queries()
-        .store_publication_evidence(record)
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                format!("publication evidence store unavailable: {error}"),
-            )
-        })?;
-    Ok(stored.ingress_receipt)
+    })
 }
 
 /// Build and sign one receipt with this service's notary key.

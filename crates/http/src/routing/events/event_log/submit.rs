@@ -23,7 +23,10 @@ static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod identity_anchor;
-use identity_anchor::{batch_contains_identity_anchor, submit_identity_anchor_batch};
+use identity_anchor::{
+    batch_contains_identity_anchor, submit_cross_signing_recovery_batch,
+    submit_identity_anchor_batch,
+};
 mod ghost_provision;
 pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
 mod realm_bootstrap;
@@ -741,6 +744,37 @@ async fn submit_event_batch_outcome_with_leases(
     outcome.ingress_receipts = ingress_receipts;
     outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
     Ok(outcome)
+}
+
+/// Submit a closed two-Event identity-anchor unit with publication evidence.
+/// Validation, Event rows, re-anchor receipt/device projection, and both
+/// ingress receipts are committed as one storage transaction.
+pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
+    state: &AppState,
+    session: &SessionRecord,
+    submissions: Vec<arkret_wire::EventInitialSubmission>,
+) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    for submission in &submissions {
+        validate_initial_submission_in_context(
+            submission,
+            arkret_wire::EventSubmitContext::AnchorUnit,
+        )?;
+    }
+    if submissions.len() == 2
+        && submissions[0].event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+        && submissions[1].event.kind == arkret_wire::events::EventKind::DEVICE_LIST_UPDATE
+    {
+        return submit_cross_signing_recovery_batch(state, session, submissions).await;
+    }
+    let envelopes = submissions
+        .iter()
+        .map(|submission| typed_event_to_canonical_value(submission.event.clone()))
+        .collect::<Result<Vec<_>, _>>()?;
+    let leases = submissions
+        .into_iter()
+        .map(|submission| submission.authorization_lease)
+        .collect::<Vec<_>>();
+    submit_identity_anchor_batch(state, session, envelopes, Some(&leases)).await
 }
 
 async fn direct_bootstrap_source_is_contact_authority(

@@ -1078,11 +1078,20 @@ diesel::table! {
 }
 
 diesel::table! {
+    security_transaction_step_attempts (transaction_id, step) {
+        transaction_id -> Uuid,
+        step -> Text,
+        canonical_request -> Binary,
+    }
+}
+
+diesel::table! {
     security_transaction_step_outcomes (transaction_id, step) {
         transaction_id -> Uuid,
         step -> Text,
         canonical_request -> Binary,
         response -> Jsonb,
+        participant_outcome -> Nullable<Jsonb>,
     }
 }
 
@@ -1417,6 +1426,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     recovery_policies,
     recovery_receipts,
     recovery_sessions,
+    security_transaction_step_attempts,
     security_transaction_step_outcomes,
     security_transactions,
     retention_policies,

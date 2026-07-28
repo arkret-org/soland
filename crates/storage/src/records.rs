@@ -182,6 +182,18 @@ pub struct SecurityTransactionRecord {
     pub resource: arkret_wire::SecurityTransaction,
 }
 
+/// First durable request bytes for one security-transaction step.
+///
+/// This record is committed before any participant side effect. Replays must
+/// present byte-identical input even when the participant accepted the first
+/// attempt but its response was lost.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SecurityTransactionStepAttemptRecord {
+    pub transaction_id: String,
+    pub step: arkret_wire::SecurityTransactionStep,
+    pub canonical_request: Vec<u8>,
+}
+
 /// First durable response for one accepted security-transaction step.
 ///
 /// This is deliberately separate from the public transaction resource:
@@ -193,6 +205,7 @@ pub struct SecurityTransactionStepOutcomeRecord {
     pub step: arkret_wire::SecurityTransactionStep,
     pub canonical_request: Vec<u8>,
     pub response: Value,
+    pub participant_outcome: Option<Value>,
 }
 
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.

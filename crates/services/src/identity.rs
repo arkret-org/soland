@@ -1667,6 +1667,14 @@ pub struct SecurityTransactionStepOutcomeState {
     pub step: arkret_wire::SecurityTransactionStep,
     pub canonical_request: Vec<u8>,
     pub response: Value,
+    pub participant_outcome: Option<Value>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SecurityTransactionStepAttemptState {
+    pub transaction_id: String,
+    pub step: arkret_wire::SecurityTransactionStep,
+    pub canonical_request: Vec<u8>,
 }
 
 #[async_trait]
@@ -1685,6 +1693,10 @@ pub trait SecurityTransactionPort: Send + Sync {
         transaction_id: &str,
         step: arkret_wire::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepOutcomeState>>;
+    async fn begin_step(
+        &self,
+        attempt: SecurityTransactionStepAttemptState,
+    ) -> ServiceResult<SecurityTransactionStepAttemptState>;
     async fn accept_step(
         &self,
         transaction: SecurityTransactionState,
@@ -1726,6 +1738,13 @@ impl SecurityTransactionService {
         step: arkret_wire::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepOutcomeState>> {
         self.transactions.step_outcome(transaction_id, step).await
+    }
+
+    pub async fn begin_step(
+        &self,
+        attempt: SecurityTransactionStepAttemptState,
+    ) -> ServiceResult<SecurityTransactionStepAttemptState> {
+        self.transactions.begin_step(attempt).await
     }
 
     pub async fn accept_step(

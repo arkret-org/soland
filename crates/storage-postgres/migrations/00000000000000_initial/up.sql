@@ -1223,8 +1223,17 @@ CREATE TABLE public.security_transaction_step_outcomes (
     step text NOT NULL,
     canonical_request bytea NOT NULL,
     response jsonb NOT NULL,
+    participant_outcome jsonb,
     CONSTRAINT security_transaction_step_outcomes_pkey PRIMARY KEY (transaction_id, step),
     CONSTRAINT security_transaction_step_outcomes_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.security_transactions(id) ON DELETE CASCADE
+);
+
+CREATE TABLE public.security_transaction_step_attempts (
+    transaction_id uuid NOT NULL,
+    step text NOT NULL,
+    canonical_request bytea NOT NULL,
+    CONSTRAINT security_transaction_step_attempts_pkey PRIMARY KEY (transaction_id, step),
+    CONSTRAINT security_transaction_step_attempts_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.security_transactions(id) ON DELETE CASCADE
 );
 
 CREATE TABLE public.sessions (

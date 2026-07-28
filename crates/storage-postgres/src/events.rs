@@ -5,8 +5,9 @@ use super::{
     DeviceInventoryRecord, EventBatchReceipt, EventStore, ExistsRow, IdentityAnchorCommitOutcome,
     IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable,
     OptionalExtension, PeerEventsPageQuery, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, QueryableByName, RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz,
-    Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
+    PgTransactionError, PublicationEvidenceRecord, QueryableByName, RealmEventStats, RunQueryDsl,
+    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids,
+    pg_conn, sql_query,
 };
 pub struct PgEventStore {
     pub pool: PgPool,
@@ -375,6 +376,7 @@ impl EventStore for PgEventStore {
         device: Option<DeviceInventoryRecord>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
+        publication_evidence: Vec<PublicationEvidenceRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut proposal_receipts_by_digest = BTreeMap::new();
         for receipt in proposal_receipts {
@@ -463,6 +465,31 @@ impl EventStore for PgEventStore {
                     && let Some(receipt) = receipt
                 {
                     insert_event_batch_receipt(conn, &receipt).await.map_err(PersistenceError::database)?;
+                }
+                if !reanchor_conflict {
+                    for evidence in publication_evidence {
+                        let lease = serde_json::to_value(&evidence.authorization_lease)
+                            .map_err(|error| PersistenceError::Internal(format!(
+                                "failed to encode authorization_lease: {error}"
+                            )))?;
+                        let ingress_receipt = serde_json::to_value(&evidence.ingress_receipt)
+                            .map_err(|error| PersistenceError::Internal(format!(
+                                "failed to encode ingress_receipt: {error}"
+                            )))?;
+                        sql_query(
+                            "INSERT INTO publication_evidence \
+                             (event_digest, realm_id, authorization_lease, ingress_receipt, created_at) \
+                             VALUES ($1, $2, $3, $4, NOW()) \
+                             ON CONFLICT (event_digest) DO NOTHING",
+                        )
+                        .bind::<Text, _>(&evidence.event_digest)
+                        .bind::<Text, _>(&evidence.realm_id)
+                        .bind::<Jsonb, _>(&lease)
+                        .bind::<Jsonb, _>(&ingress_receipt)
+                        .execute(&mut *conn)
+                        .await
+                        .map_err(PersistenceError::database)?;
+                    }
                 }
             Ok(IdentityAnchorCommitOutcome {
                 reanchor_conflict,

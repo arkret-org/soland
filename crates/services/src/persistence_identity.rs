@@ -1673,6 +1673,27 @@ fn application_security_transaction_step_outcome(
         step: record.step,
         canonical_request: record.canonical_request,
         response: record.response,
+        participant_outcome: record.participant_outcome,
+    }
+}
+
+fn application_security_transaction_step_attempt(
+    record: soland_storage::SecurityTransactionStepAttemptRecord,
+) -> crate::identity::SecurityTransactionStepAttemptState {
+    crate::identity::SecurityTransactionStepAttemptState {
+        transaction_id: record.transaction_id,
+        step: record.step,
+        canonical_request: record.canonical_request,
+    }
+}
+
+fn persistence_security_transaction_step_attempt(
+    attempt: crate::identity::SecurityTransactionStepAttemptState,
+) -> soland_storage::SecurityTransactionStepAttemptRecord {
+    soland_storage::SecurityTransactionStepAttemptRecord {
+        transaction_id: attempt.transaction_id,
+        step: attempt.step,
+        canonical_request: attempt.canonical_request,
     }
 }
 
@@ -1684,6 +1705,7 @@ fn persistence_security_transaction_step_outcome(
         step: outcome.step,
         canonical_request: outcome.canonical_request,
         response: outcome.response,
+        participant_outcome: outcome.participant_outcome,
     }
 }
 
@@ -1735,6 +1757,18 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .step_outcome(transaction_id, step)
             .await?
             .map(application_security_transaction_step_outcome))
+    }
+
+    async fn begin_step(
+        &self,
+        attempt: crate::identity::SecurityTransactionStepAttemptState,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionStepAttemptState> {
+        Ok(application_security_transaction_step_attempt(
+            self.0
+                .security_transactions()
+                .begin_step(persistence_security_transaction_step_attempt(attempt))
+                .await?,
+        ))
     }
 
     async fn accept_step(

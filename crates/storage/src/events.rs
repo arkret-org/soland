@@ -1,6 +1,7 @@
 use super::{
     BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
-    MessageRecord, PersistenceError, PersistenceResult, Value, async_trait,
+    MessageRecord, PersistenceError, PersistenceResult, PublicationEvidenceRecord, Value,
+    async_trait,
 };
 /// Trait for message storage operations.
 #[async_trait]
@@ -40,6 +41,7 @@ pub trait EventStore: Send + Sync {
         device: Option<DeviceInventoryRecord>,
         frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
+        publication_evidence: Vec<PublicationEvidenceRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome>;
     async fn batch_receipts_for_event(
         &self,

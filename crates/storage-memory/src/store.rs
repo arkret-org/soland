@@ -2,8 +2,8 @@
 
 use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
-    AgentParticipationStore, AgentStore, AppletStore, AuditStore, BlobStore, ConsentCellStore,
-    ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
+    AgentParticipationStore, AgentStore, AppletStore, Arc, AuditStore, BTreeMap, BlobStore,
+    ConsentCellStore, ContactStore, DeviceInventoryStore, DeviceKeyStore, DeviceMessageStore,
     DevicePairingAuthorizationCommit, DevicePairingCommitUnitOfWork, DevicePairingStore,
     DirectConversationBindingStore, EventStore, FederationFrontierExchangeStore,
     FederationOperationsStore, FederationOutboxStore, HandleReleaseStore, IdempotencyStore,
@@ -28,7 +28,7 @@ use super::{
     MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
     MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryWebvhStore, MessageStore,
     MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
-    MultisigPendingStore, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
+    MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
     OrganizationStore, PersistenceStore, PolicyDocumentStore, ProjectionEventStore,
     PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmInviteStore,
     RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
@@ -38,7 +38,7 @@ use super::{
     StrandProjectionStore, SyncCursorStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
-use crate::{Arc, FaultInjector};
+use crate::FaultInjector;
 
 /// In-memory implementation of persistence store.
 pub struct SolandMemoryPersistenceStore {
@@ -115,7 +115,11 @@ impl SolandMemoryPersistenceStore {
         let account_localparts = MemoryAccountLocalpartStore::new();
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
         let devices = MemoryDeviceInventoryStore::new();
-        let events = MemoryEventStore::with_devices(devices.shared_data());
+        let publication_evidence_data = Arc::new(Mutex::new(BTreeMap::new()));
+        let events = MemoryEventStore::with_devices(
+            devices.shared_data(),
+            publication_evidence_data.clone(),
+        );
         let recovery_sessions = MemoryRecoverySessionStore::new();
         let security_transactions =
             MemorySecurityTransactionStore::new(recovery_sessions.shared_data());
@@ -182,7 +186,9 @@ impl SolandMemoryPersistenceStore {
             space_container_projections: MemorySpaceContainerProjectionStore::new(),
             strand_projections: MemoryStrandProjectionStore::new(),
             morph_projections: MemoryMorphProjectionStore::new(),
-            publication_evidence: MemoryPublicationEvidenceStore::new(),
+            publication_evidence: MemoryPublicationEvidenceStore::with_data(
+                publication_evidence_data,
+            ),
             // G3.S1: MLS lifecycle stores.
             mls_key_packages: MemoryMlsKeyPackageStore::new(),
             mls_welcomes: MemoryMlsWelcomeStore::new(),

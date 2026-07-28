@@ -1,17 +1,17 @@
 use super::{
-    BTreeMap, Mutex, PersistenceResult, PublicationEvidenceRecord, PublicationEvidenceStore,
+    Arc, BTreeMap, Mutex, PersistenceResult, PublicationEvidenceRecord, PublicationEvidenceStore,
     async_trait,
 };
 
 /// In-memory publication evidence keyed by Event canonical digest.
 #[derive(Default)]
 pub(crate) struct MemoryPublicationEvidenceStore {
-    data: Mutex<BTreeMap<String, PublicationEvidenceRecord>>,
+    data: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
 }
 
 impl MemoryPublicationEvidenceStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
+    pub(crate) fn with_data(data: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>) -> Self {
+        Self { data }
     }
 }
 

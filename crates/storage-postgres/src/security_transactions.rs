@@ -6,8 +6,9 @@ use arkret_wire::{
 use super::{
     AsyncConnection, AsyncPgConnection, Binary, Jsonb, Nullable, OptionalExtension,
     PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    SecurityTransactionRecord, SecurityTransactionStepOutcomeRecord, SecurityTransactionStore,
-    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, SqlUuid, Text, Timestamptz,
+    Uuid, Value, async_trait, ids, pg_conn, sql_query,
 };
 
 pub struct PgSecurityTransactionStore {
@@ -58,6 +59,30 @@ struct SecurityTransactionStepOutcomeRow {
     canonical_request: Vec<u8>,
     #[diesel(sql_type = Jsonb)]
     response: Value,
+    #[diesel(sql_type = Nullable<Jsonb>)]
+    participant_outcome: Option<Value>,
+}
+
+#[derive(QueryableByName)]
+struct SecurityTransactionStepAttemptRow {
+    #[diesel(sql_type = SqlUuid)]
+    transaction_id: Uuid,
+    #[diesel(sql_type = Text)]
+    step: String,
+    #[diesel(sql_type = Binary)]
+    canonical_request: Vec<u8>,
+}
+
+impl TryFrom<SecurityTransactionStepAttemptRow> for SecurityTransactionStepAttemptRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: SecurityTransactionStepAttemptRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            transaction_id: ids::format_typed_uuid("transaction", &row.transaction_id),
+            step: parse_stored("step attempt step", Value::String(row.step))?,
+            canonical_request: row.canonical_request,
+        })
+    }
 }
 
 impl TryFrom<SecurityTransactionStepOutcomeRow> for SecurityTransactionStepOutcomeRecord {
@@ -69,6 +94,7 @@ impl TryFrom<SecurityTransactionStepOutcomeRow> for SecurityTransactionStepOutco
             step: parse_stored("step outcome step", Value::String(row.step))?,
             canonical_request: row.canonical_request,
             response: row.response,
+            participant_outcome: row.participant_outcome,
         })
     }
 }
@@ -223,7 +249,7 @@ async fn load_step_outcome(
             ))
         })?;
     sql_query(
-        "SELECT transaction_id, step, canonical_request, response \
+        "SELECT transaction_id, step, canonical_request, response, participant_outcome \
          FROM security_transaction_step_outcomes WHERE transaction_id = $1 AND step = $2",
     )
     .bind::<SqlUuid, _>(transaction_uuid)
@@ -233,6 +259,31 @@ async fn load_step_outcome(
     .optional()
     .map_err(PersistenceError::database)?
     .map(SecurityTransactionStepOutcomeRecord::try_from)
+    .transpose()
+}
+
+async fn load_step_attempt(
+    conn: &mut AsyncPgConnection,
+    transaction_id: &str,
+    step: SecurityTransactionStep,
+) -> PersistenceResult<Option<SecurityTransactionStepAttemptRecord>> {
+    let transaction_uuid =
+        ids::parse_typed_uuid(transaction_id, "transaction").ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!(
+                "malformed transaction_id `{transaction_id}`"
+            ))
+        })?;
+    sql_query(
+        "SELECT transaction_id, step, canonical_request \
+         FROM security_transaction_step_attempts WHERE transaction_id = $1 AND step = $2",
+    )
+    .bind::<SqlUuid, _>(transaction_uuid)
+    .bind::<Text, _>(enum_text(step)?)
+    .get_result::<SecurityTransactionStepAttemptRow>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(SecurityTransactionStepAttemptRecord::try_from)
     .transpose()
 }
 
@@ -436,6 +487,45 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         load_step_outcome(&mut conn, transaction_id, step).await
     }
 
+    async fn begin_step(
+        &self,
+        attempt: SecurityTransactionStepAttemptRecord,
+    ) -> PersistenceResult<SecurityTransactionStepAttemptRecord> {
+        let transaction_id = attempt.transaction_id.clone();
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if load_one(conn, &transaction_id, true).await?.is_none() {
+                return Err(PersistenceError::NotFound(format!(
+                    "transaction_id `{transaction_id}` not found"
+                ))
+                .into());
+            }
+            if let Some(existing) = load_step_attempt(conn, &transaction_id, attempt.step).await? {
+                if existing.canonical_request == attempt.canonical_request {
+                    return Ok(existing);
+                }
+                return Err(PersistenceError::Conflict(format!(
+                    "security transaction step {:?} already began with different canonical bytes",
+                    attempt.step
+                ))
+                .into());
+            }
+            sql_query(
+                "INSERT INTO security_transaction_step_attempts \
+                 (transaction_id, step, canonical_request) VALUES ($1, $2, $3)",
+            )
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<Text, _>(enum_text(attempt.step)?)
+            .bind::<Binary, _>(&attempt.canonical_request)
+            .execute(conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            Ok(attempt)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
     async fn accept_step(
         &self,
         record: SecurityTransactionRecord,
@@ -470,6 +560,21 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                 ))
                 .into());
             }
+            let attempt = load_step_attempt(conn, &transaction_id, outcome.step)
+                .await?
+                .ok_or_else(|| {
+                    PersistenceError::Conflict(format!(
+                        "security transaction step {:?} was not durably begun",
+                        outcome.step
+                    ))
+                })?;
+            if attempt.canonical_request != outcome.canonical_request {
+                return Err(PersistenceError::Conflict(format!(
+                    "security transaction step {:?} outcome changed the durable request bytes",
+                    outcome.step
+                ))
+                .into());
+            }
             super::validate_security_transaction_update(&existing, &record)?;
             if record.resource.accepted_steps.len() != existing.resource.accepted_steps.len() + 1
                 || record.resource.accepted_steps.last().map(|step| step.step) != Some(outcome.step)
@@ -482,16 +587,40 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
             }
             sql_query(
                 "INSERT INTO security_transaction_step_outcomes \
-                 (transaction_id, step, canonical_request, response) VALUES ($1, $2, $3, $4)",
+                 (transaction_id, step, canonical_request, response, participant_outcome) \
+                 VALUES ($1, $2, $3, $4, $5)",
             )
             .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
             .bind::<Text, _>(enum_text(outcome.step)?)
             .bind::<Binary, _>(&outcome.canonical_request)
             .bind::<Jsonb, _>(&outcome.response)
+            .bind::<Nullable<Jsonb>, _>(&outcome.participant_outcome)
             .execute(conn)
             .await
             .map_err(PersistenceError::database)?;
             update_mutable_fields(conn, &record).await?;
+            if record.resource.state == SecurityTransactionState::Completed
+                && let SecurityTransactionBinding::Recovery(binding) = &record.resource.binding
+            {
+                let affected = sql_query(
+                    "UPDATE recovery_sessions SET state = 'completed', updated_at = NOW() \
+                     WHERE id = $1 AND transaction_id = $2 AND state = 'verified'",
+                )
+                .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
+                    binding.recovery_session_id().as_str(),
+                ))
+                .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+                .execute(conn)
+                .await
+                .map_err(PersistenceError::database)?;
+                if affected != 1 {
+                    return Err(PersistenceError::Conflict(
+                        "terminal recovery transaction does not own a verified recovery session"
+                            .to_owned(),
+                    )
+                    .into());
+                }
+            }
             Ok(outcome)
         })
         .await

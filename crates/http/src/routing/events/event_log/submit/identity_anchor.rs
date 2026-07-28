@@ -66,9 +66,42 @@ pub(super) async fn submit_identity_anchor_batch(
     let generation_lock =
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
     let _generation_guard = generation_lock.lock().await;
-    if authorization_leases.is_none()
-        && let Some(outcome) = identical_historical_retry(state, &envelopes).await?
-    {
+    if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
+        if authorization_leases.is_some() {
+            let digests = envelopes
+                .iter()
+                .map(arkret_canonical::canonical_sha256)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "schema_violation",
+                        format!("identity anchor digest failed: {error}"),
+                    )
+                })?;
+            let evidence = state
+                .event_queries()
+                .publication_evidence_for_digests(&digests)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("publication evidence store unavailable: {error}"),
+                    )
+                })?;
+            if evidence.len() != envelopes.len() {
+                return Err(SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    "duplicate_conflict",
+                    "accepted identity anchor unit is missing its atomic publication evidence",
+                ));
+            }
+            outcome.ingress_receipts = evidence
+                .into_iter()
+                .map(|record| record.ingress_receipt)
+                .collect();
+        }
         return Ok(outcome);
     }
     let self_principal_pcr_context = if is_bootstrap {
@@ -104,13 +137,6 @@ pub(super) async fn submit_identity_anchor_batch(
             .await?;
     validate_unit_relationships(state, &first, &second, &envelopes, is_bootstrap).await?;
     let received_at = now();
-    let mut ingress_receipts = Vec::new();
-    if let Some(leases) = authorization_leases {
-        for (parsed, lease) in [(&first, &leases[0]), (&second, &leases[1])] {
-            ingress_receipts
-                .push(mint_and_store_ingress_receipt(state, parsed, lease, received_at).await?);
-        }
-    }
 
     let existing = state
         .event_queries()
@@ -123,37 +149,6 @@ pub(super) async fn submit_identity_anchor_batch(
                 format!("events store unavailable: {error}"),
             )
         })?;
-    let first_existing = existing
-        .iter()
-        .find(|record| record.event_id == first.event_id);
-    let second_existing = existing
-        .iter()
-        .find(|record| record.event_id == second.event_id);
-    match (first_existing, second_existing) {
-        (Some(a), Some(b))
-            if a.canonical_bytes == first.canonical_bytes
-                && b.canonical_bytes == second.canonical_bytes =>
-        {
-            let mut outcome = events_submit_outcome(
-                EventsSubmitStatus::Duplicate,
-                vec![first.event_id.clone(), second.event_id.clone()],
-                vec![first.event_id, second.event_id],
-                Vec::new(),
-                Vec::new(),
-                Some(super::super::super::sync::sync_token_for_state(state).await),
-            );
-            outcome.ingress_receipts = ingress_receipts;
-            return Ok(outcome);
-        }
-        (None, None) => {}
-        _ => {
-            return Err(SubmitOneError::new(
-                StatusCode::CONFLICT,
-                "duplicate_conflict",
-                "identity anchor unit conflicts with a partially or differently stored unit",
-            ));
-        }
-    }
     for dependency in &first.prev_refs {
         if !existing.iter().any(|record| record.event_id == *dependency) {
             return Err(SubmitOneError::new(
@@ -215,6 +210,18 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?
     };
+    let publication_evidence = if let Some(leases) = authorization_leases {
+        vec![
+            build_ingress_receipt_record(state, &first, &leases[0], received_at)?,
+            build_ingress_receipt_record(state, &second, &leases[1], received_at)?,
+        ]
+    } else {
+        Vec::new()
+    };
+    let ingress_receipts = publication_evidence
+        .iter()
+        .map(|record| record.ingress_receipt.clone())
+        .collect::<Vec<_>>();
     let records = vec![
         canonical_record(&first, envelopes[0].clone(), received_at),
         canonical_record(&second, envelopes[1].clone(), received_at),
@@ -299,6 +306,7 @@ pub(super) async fn submit_identity_anchor_batch(
             device_projection,
             frontier_cas,
             reanchor_slot,
+            publication_evidence,
         )
         .await
         .map_err(|error| {
@@ -422,6 +430,230 @@ pub(super) async fn submit_identity_anchor_batch(
         outcome.control_proposal_receipts = proposal_receipts;
         Ok(outcome)
     }
+}
+
+pub(super) async fn submit_cross_signing_recovery_batch(
+    state: &AppState,
+    session: &SessionRecord,
+    submissions: Vec<arkret_wire::EventInitialSubmission>,
+) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    if submissions.len() != 2 {
+        return Err(unit_error(
+            "cross-signing recovery unit must contain exactly two ordered submissions",
+        ));
+    }
+    let envelopes = submissions
+        .iter()
+        .map(|submission| typed_event_to_canonical_value(submission.event.clone()))
+        .collect::<Result<Vec<_>, _>>()?;
+    if event_string_field_from_value(&envelopes[0], "kind").as_deref()
+        != Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE)
+        || event_string_field_from_value(&envelopes[1], "kind").as_deref()
+            != Some(arkret_wire::events::EventKind::DEVICE_LIST_UPDATE)
+    {
+        return Err(unit_error(
+            "cross-signing recovery unit must be [ak.device.authorize, ak.device.list_update]",
+        ));
+    }
+    let lock_actor = event_string_field_from_value(&envelopes[0], "actor_id")
+        .ok_or_else(|| unit_error("cross-signing recovery Event requires actor_id"))?;
+    let lock_realm = event_string_field_from_value(&envelopes[0], "realm_id")
+        .ok_or_else(|| unit_error("cross-signing recovery Event requires realm_id"))?;
+    let actor_lock = actor_submit_lock(&lock_realm, &lock_actor);
+    let _guard = actor_lock.lock().await;
+    let generation_lock =
+        crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
+    let _generation_guard = generation_lock.lock().await;
+
+    if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
+        let digests = envelopes
+            .iter()
+            .map(arkret_canonical::canonical_sha256)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("recovery unit digest failed: {error}"),
+                )
+            })?;
+        let evidence = state
+            .event_queries()
+            .publication_evidence_for_digests(&digests)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("publication evidence store unavailable: {error}"),
+                )
+            })?;
+        if evidence.len() != envelopes.len() {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "duplicate_conflict",
+                "accepted recovery unit is missing its atomic publication evidence",
+            ));
+        }
+        outcome.ingress_receipts = evidence
+            .into_iter()
+            .map(|record| record.ingress_receipt)
+            .collect();
+        return Ok(outcome);
+    }
+
+    let first =
+        validate_event_envelope_with_context(state, session, &envelopes[0], &[], None).await?;
+    let second =
+        validate_event_envelope_with_context(state, session, &envelopes[1], &[], None).await?;
+    let authorize_payload = envelopes[0]
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| unit_error("recovery authorize payload must be an object"))?;
+    let list_payload = envelopes[1]
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| unit_error("device list update payload must be an object"))?;
+    let device_id = authorize_payload
+        .get("device_id")
+        .and_then(Value::as_str)
+        .ok_or_else(|| unit_error("recovery authorize payload requires device_id"))?;
+    if first.actor_id != second.actor_id
+        || first.realm_id != second.realm_id
+        || first.actor_seq + 1 != second.actor_seq
+        || second.prev_refs.as_slice() != [first.event_id.as_str()]
+        || authorize_payload
+            .get("principal_id")
+            .and_then(Value::as_str)
+            != Some(first.actor_id.as_str())
+        || authorize_payload
+            .get("recovery_session_id")
+            .and_then(Value::as_str)
+            .is_none()
+        || list_payload.get("principal_id").and_then(Value::as_str) != Some(first.actor_id.as_str())
+        || list_payload
+            .get("changed")
+            .and_then(Value::as_array)
+            .is_none_or(|changed| {
+                !changed
+                    .iter()
+                    .any(|candidate| candidate.as_str() == Some(device_id))
+            })
+    {
+        return Err(unit_error(
+            "cross-signing recovery Events do not form the fixed authorization unit",
+        ));
+    }
+    let existing = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("events store unavailable: {error}"),
+            )
+        })?;
+    if existing
+        .iter()
+        .any(|record| record.event_id == first.event_id || record.event_id == second.event_id)
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::CONFLICT,
+            "duplicate_conflict",
+            "recovery unit conflicts with a partially or differently stored unit",
+        ));
+    }
+    for dependency in &first.prev_refs {
+        if !existing.iter().any(|record| record.event_id == *dependency) {
+            return Err(SubmitOneError::new(
+                StatusCode::CONFLICT,
+                "dependency_missing",
+                "recovery authorize predecessor is not in accepted history",
+            ));
+        }
+    }
+    let received_at = now();
+    let records = vec![
+        canonical_record(&first, envelopes[0].clone(), received_at),
+        canonical_record(&second, envelopes[1].clone(), received_at),
+    ];
+    let publication_evidence = vec![
+        build_ingress_receipt_record(
+            state,
+            &first,
+            &submissions[0].authorization_lease,
+            received_at,
+        )?,
+        build_ingress_receipt_record(
+            state,
+            &second,
+            &submissions[1].authorization_lease,
+            received_at,
+        )?,
+    ];
+    let ingress_receipts = publication_evidence
+        .iter()
+        .map(|record| record.ingress_receipt.clone())
+        .collect::<Vec<_>>();
+    let device =
+        identity_anchor_device_projection(state, &first, &envelopes[0], None, received_at).await?;
+    state
+        .event_queries()
+        .store_identity_anchor_batch(
+            records,
+            Vec::new(),
+            None,
+            Some(device),
+            None,
+            None,
+            publication_evidence,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("atomic cross-signing recovery commit failed: {error}"),
+            )
+        })?;
+    for (parsed, envelope) in [(&first, &envelopes[0]), (&second, &envelopes[1])] {
+        if let Some(operation) = projection_operation_from_event(parsed, envelope) {
+            crate::routing::events::projection::project_accepted_operations_from_device(
+                state,
+                &parsed.actor_id,
+                &parsed.device_id,
+                &[operation],
+            )
+            .await;
+        }
+        enqueue_peer_event_fanout(state, parsed, envelope).await;
+        append_audit_log(
+            state,
+            Some(&session.actor),
+            "events.submit",
+            json!({
+                "event_id": parsed.event_id,
+                "realm_id": parsed.realm_id,
+                "kind": parsed.kind,
+                "canonical_digest": parsed.canonical_digest,
+                "atomic_cross_signing_recovery_unit": true,
+            }),
+            "accepted",
+        )
+        .await;
+    }
+    let mut outcome = events_submit_outcome(
+        EventsSubmitStatus::Accepted,
+        vec![first.event_id, second.event_id],
+        Vec::new(),
+        Vec::new(),
+        Vec::new(),
+        Some(super::super::super::sync::sync_token_for_state(state).await),
+    );
+    outcome.ingress_receipts = ingress_receipts;
+    Ok(outcome)
 }
 
 fn validate_self_principal_pcr_bootstrap_context(

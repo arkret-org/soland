@@ -361,7 +361,15 @@ async fn recovery_session_derives_enrollment_authority_model_and_rejects_a_model
     state
         .test_persistence()
         .events()
-        .put_identity_anchor_batch_atomic(bootstrap_records, Vec::new(), None, None, None, None)
+        .put_identity_anchor_batch_atomic(
+            bootstrap_records,
+            Vec::new(),
+            None,
+            None,
+            None,
+            None,
+            Vec::new(),
+        )
         .await
         .unwrap();
 
