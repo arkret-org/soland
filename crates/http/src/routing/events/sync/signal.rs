@@ -19,7 +19,7 @@
 use std::collections::BTreeSet;
 
 use arkret_models_collaboration::http_bodies::SignalSubmitOutcome;
-use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest};
+use arkret_wire::{SignalClass, SignalEnvelope, SignalRelayRequest, SignalStreamFrame};
 use futures_util::stream::StreamExt;
 use salvo::prelude::*;
 use serde_json::Value;
@@ -641,20 +641,20 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
         loop {
             tokio::select! {
                 _ = tokio::time::sleep_until(deadline) => {
-                    let frame = serde_json::json!({
-                        "kind": "close",
-                        "reconnect_after_ms": super::SUBSCRIBE_RECONNECT_AFTER_MS,
-                    });
+                    let frame = SignalStreamFrame::Drain {
+                        reconnect_after_ms: Some(super::SUBSCRIBE_RECONNECT_AFTER_MS),
+                        reason: None,
+                    };
                     yield Ok::<bytes::Bytes, std::io::Error>(ndjson_line(&frame));
                     break;
                 }
                 _ = poll.tick() => {
                     for envelope in pending_signals_for_subscriber(&state, &session).await {
-                        yield Ok(ndjson_line(&envelope));
+                        yield Ok(ndjson_line(&SignalStreamFrame::signal(envelope)));
                     }
                 }
                 _ = heartbeat.tick() => {
-                    yield Ok(ndjson_line(&serde_json::json!({"kind": "heartbeat"})));
+                    yield Ok(ndjson_line(&SignalStreamFrame::HEARTBEAT));
                 }
             }
         }
