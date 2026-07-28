@@ -1,6 +1,6 @@
 use super::{
-    BTreeMap, PersistenceError, PersistenceResult, RecoveryPolicyRecord, RecoveryReceiptRecord,
-    RecoverySessionRecord, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    BTreeMap, PersistenceError, PersistenceResult, RecoveryPolicyRecord, RecoverySessionRecord,
+    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, async_trait,
 };
 /// Durable recovery policy store. Implementations enforce policy_id
@@ -23,22 +23,6 @@ pub trait RecoveryPolicyStore: Send + Sync {
         principal_id: &str,
     ) -> PersistenceResult<Vec<RecoveryPolicyRecord>>;
     async fn insert(&self, record: RecoveryPolicyRecord) -> PersistenceResult<()>;
-}
-/// Durable recovery receipt store. `recovery_session_id` is globally unique
-/// because it is the replay fence for completed recovery attempts.
-#[async_trait]
-pub trait RecoveryReceiptStore: Send + Sync {
-    async fn get_by_session_id(
-        &self,
-        recovery_session_id: &str,
-    ) -> PersistenceResult<Option<RecoveryReceiptRecord>>;
-    /// All receipts for a principal, newest accepted first (REC-1 read API /
-    /// recovery history).
-    async fn list_for_principal(
-        &self,
-        principal_id: &str,
-    ) -> PersistenceResult<Vec<RecoveryReceiptRecord>>;
-    async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()>;
 }
 /// Durable recovery session lifecycle store.
 ///

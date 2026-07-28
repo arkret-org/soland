@@ -33,9 +33,6 @@ pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000
 
 pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-a11ce0000002";
 
-pub(crate) const AUTH_EVENT_ID: &str = "ak:event:01964137-0000-7000-8000-00000000a111";
-pub(crate) const LIST_EVENT_ID: &str = "ak:event:01964137-0000-7000-8000-00000000a222";
-
 /// Helper: seed an accepted v1 policy for `principal_id` and open a recovery
 /// session against it. Returns the session JSON body.
 pub(crate) async fn open_recovery_session(
@@ -195,61 +192,6 @@ fn recovery_model_generation_ref(session: &Value) -> Value {
     }
 }
 
-/// The recovering device's keypair (fixed for tests). Its public key is stored
-/// at authorization and used to verify a later recovery_receipt's signature.
-pub(crate) fn recovery_device_key() -> SigningKey {
-    SigningKey::from_bytes(&[230u8; 32])
-}
-
-/// Build a well-formed client `device_authorize` material bound to `session`,
-/// with a real `cross_signing_binding` signed by `ssk` over the canonical
-/// device-trust input at the session's ssk_generation.
-pub(crate) fn device_authorize_material(session: &Value, ssk: &SigningKey) -> Value {
-    let principal = session["principal_id"].as_str().unwrap();
-    let device = session["requesting_device_id"].as_str().unwrap();
-    let generation = session["ssk_generation"].as_u64().unwrap();
-    let did = arkret_identifiers::Did::new(principal.to_owned()).unwrap();
-    let device_id = arkret_identifiers::DeviceId::new(device.to_owned()).unwrap();
-    // The new device's real keypair — its multibase public key is what the
-    // server records, and what a later recovery_receipt MUST be signed by.
-    let device_public_key = test_ed25519_multibase_public(&recovery_device_key());
-    let hpke_key = "z6LSTestRecoveryHpkeKey";
-    let algorithms = [
-        "ak.hpke_x25519_aead_chacha20poly1305.v1".to_owned(),
-        "ak.mls.v1".to_owned(),
-    ];
-    let input = arkret_crypto::DeviceTrustBinding::canonical_input(
-        &did,
-        &device_id,
-        &device_public_key,
-        hpke_key,
-        &algorithms,
-        generation,
-    )
-    .unwrap();
-    let signature = URL_SAFE_NO_PAD.encode(ssk.sign(&input).to_bytes());
-    serde_json::json!({
-        "principal_id": principal,
-        "device_id": device,
-        "device_public_key": device_public_key,
-        "hpke_key": hpke_key,
-        "algorithms": algorithms,
-        "authorized_by": principal,
-        // Canonical operation timestamps are seconds-precision UTC.
-        "not_before": "2026-05-30T00:00:00.000Z",
-        "device_signature": "ZGV2aWNlLXNlbGYtc2lnbmF0dXJlLXBsYWNlaG9sZGVy",
-        "recovery_session_id": session["recovery_session_id"],
-        "cross_signing_binding": {
-            "verification_method": format!("{principal}#CK_self_signing_v1"),
-            "alg": "EdDSA",
-            "ssk_generation": generation,
-            "signature": signature,
-        },
-    })
-}
-
-/// Seed an accepted `ak.cross_signing.publish` (generation 1) into the server's
-/// cross-signing registry so `/complete` can verify the device binding against the SSK.
 pub(crate) fn seed_cross_signing(
     state: &AppState,
     principal_id: &str,
@@ -286,103 +228,7 @@ pub(crate) fn seed_cross_signing(
         .expect("seed cross-signing publish");
 }
 
-/// Seed a client-submitted control event into the durable event store (mirrors
-/// what `POST /events` persists), so `/complete` can resolve it by id.
-pub(crate) async fn seed_control_event(
-    state: &AppState,
-    event_id: &str,
-    kind: &str,
-    principal_id: &str,
-    payload: Value,
-) {
-    let envelope = serde_json::json!({ "payload": payload });
-    let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
-    state
-        .test_persistence()
-        .events()
-        .put(CanonicalEventRecord {
-            event_id: event_id.to_owned(),
-            actor_id: principal_id.to_owned(),
-            actor_seq: 1,
-            realm_id: None,
-            kind: kind.to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: format!("sha256:{}", "0".repeat(64)),
-            canonical_bytes,
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
-}
-
-/// Seed both control events (authorize from `device_authorize`, list_update for
-/// the session's device) and return `{authorization_event_id, device_list_update_event_id}`
-/// for the complete_request body.
-pub(crate) async fn seed_completion_events(
-    state: &AppState,
-    session: &Value,
-    device_authorize: Value,
-) -> Value {
-    let principal = session["principal_id"].as_str().unwrap();
-    let device = session["requesting_device_id"].as_str().unwrap();
-    seed_control_event(
-        state,
-        AUTH_EVENT_ID,
-        "ak.device.authorize",
-        principal,
-        device_authorize,
-    )
-    .await;
-    seed_control_event(
-        state,
-        LIST_EVENT_ID,
-        "ak.device.list_update",
-        principal,
-        serde_json::json!({ "principal_id": principal, "changed": [device] }),
-    )
-    .await;
-    serde_json::json!({
-        "authorization_event_id": AUTH_EVENT_ID,
-        "device_list_update_event_id": LIST_EVENT_ID,
-    })
-}
-
-/// Open a session for `signing`, submit a valid principal_signing proof, return
-/// the verified session JSON + id. (No cross-signing seed.)
-pub(crate) async fn verified_session_for(
-    state: &AppState,
-    token: &str,
-    signing: &SigningKey,
-    principal_id: &str,
-    vm: &str,
-) -> (Value, String) {
-    let session = open_recovery_session(state.clone(), token, signing, principal_id, vm).await;
-    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
-    let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let signature = sign_recovery_proof(signing, &session);
-    let proof_outcome = post_recovery(
-        state.clone(),
-        token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
-        &serde_json::json!({
-            "proof": {
-                "kind": "principal_signing",
-                "challenge": challenge,
-                "verification_method": vm,
-                "alg": "EdDSA",
-                "signature": signature,
-            },
-        }),
-        StatusCode::OK,
-    )
-    .await;
-    let mut session = session;
-    session["state"] = proof_outcome["state"].clone();
-    session["proof_summary"] = proof_outcome["proof_summary"].clone();
-    (session, session_id)
-}
-
+/// Build a schema-conforming DID recovery backup fixture.
 pub(crate) fn did_recovery_backup_body(
     principal_id: &str,
     backup_id: &str,
@@ -398,6 +244,7 @@ pub(crate) fn did_recovery_backup_body(
         "series_seq": 0,
         "recovery_policy_ref": { "policy_id": policy_id, "policy_version": 1 },
         "encryption": {
+
             "recipient_method": "recovery_public_key",
             "recipient_key_ref": "did:web:alice.example#recovery",
             "aead": {

@@ -53,7 +53,6 @@ fn cross_signing_reset_event(
     .expect("reset Event signing");
     serde_json::to_value(event).expect("reset Event serializes")
 }
-
 fn base_reset_payload(principal_id: &str, event_id: &str, proof: Value) -> Value {
     serde_json::json!({
         "principal_id": principal_id,
@@ -275,7 +274,7 @@ async fn recovery_session_create_and_get_roundtrip() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn recovery_session_derives_enrollment_authority_model_and_rejects_a_model_completion() {
+async fn recovery_session_derives_enrollment_authority_model() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let principal_id = "did:webvh:z6mkfixture:recovery.example";
     let authority_id = "did:webvh:z6mkauthority:recovery.example";
@@ -409,38 +408,6 @@ async fn recovery_session_derives_enrollment_authority_model_and_rejects_a_model
     assert_eq!(session["device_generation_status"], "active");
     assert_eq!(session["registry_head"], inception_digest);
     assert!(session.get("ssk_generation").is_none());
-
-    let session_id = session["recovery_session_id"].as_str().unwrap();
-    let mut stored = state
-        .test_persistence()
-        .recovery_sessions()
-        .get(session_id)
-        .await
-        .unwrap()
-        .unwrap();
-    stored.state = "verified".to_owned();
-    stored.proof_payload = Some(serde_json::json!({
-        "proof": {"kind": "principal_signing"},
-    }));
-    state
-        .test_persistence()
-        .recovery_sessions()
-        .update(stored)
-        .await
-        .unwrap();
-
-    let rejected = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({
-            "authorization_event_id": AUTH_EVENT_ID,
-            "device_list_update_event_id": LIST_EVENT_ID,
-        }),
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(rejected["error"]["code"], "failed_precondition");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -498,6 +465,7 @@ async fn recovery_session_get_enforces_principal_isolation() {
         "RecoveryB",
     )
     .await;
+
     let body = get_recovery(
         state,
         &token_b,
@@ -998,6 +966,7 @@ async fn recovery_session_proof_rejects_challenge_mismatch() {
 #[tokio::test(flavor = "multi_thread")]
 async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
+
     let signing = SigningKey::from_bytes(&[107u8; 32]);
     let (principal_id, vm) = did_key_principal(&signing);
     let token = dev_token_for_device(
@@ -1043,159 +1012,6 @@ async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
     )
     .await;
     assert_eq!(body["error"]["code"], "recovery_proof_kind_not_allowed");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_session_complete_rejects_unverified() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let signing = SigningKey::from_bytes(&[108u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
-    let token = dev_token_for_device(
-        state.clone(),
-        &principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    let session = open_recovery_session(state.clone(), &token, &signing, &principal_id, &vm).await;
-    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
-
-    let body = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &serde_json::json!({
-            "authorization_event_id": AUTH_EVENT_ID,
-            "device_list_update_event_id": LIST_EVENT_ID,
-        }),
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(body["error"]["code"], "failed_precondition");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_session_complete_authorizes_device_after_verify() {
-    // C-P4: a verified session completes by authorizing the requesting device
-    // into inventory (real, auth-consulted) + transitioning to `completed`. The
-    // canonical operation-stream emission is the acknowledged `production_gap`.
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let signing = SigningKey::from_bytes(&[112u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
-    let ssk = SigningKey::from_bytes(&[212u8; 32]);
-    let usk = SigningKey::from_bytes(&[213u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
-    let token = dev_token_for_device(
-        state.clone(),
-        &principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    let session = open_recovery_session(state.clone(), &token, &signing, &principal_id, &vm).await;
-    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
-    let device_id = session["requesting_device_id"].as_str().unwrap().to_owned();
-    let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let signature = sign_recovery_proof(&signing, &session);
-
-    post_recovery(
-        state.clone(),
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/proofs"),
-        &serde_json::json!({
-            "proof": {
-                "kind": "principal_signing",
-                "challenge": challenge,
-                "verification_method": vm,
-                "alg": "EdDSA",
-                "signature": signature,
-            },
-        }),
-        StatusCode::OK,
-    )
-    .await;
-
-    // Client has submitted authorize + list_update to /events (seeded here);
-    // completion references their ids.
-    let complete_body =
-        seed_completion_events(&state, &session, device_authorize_material(&session, &ssk)).await;
-    let body = post_recovery(
-        state.clone(),
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::OK,
-    )
-    .await;
-    // recovery-session.schema.json complete_response (references the durable ids).
-    assert_eq!(body["ok"], true);
-    assert_eq!(body["state"], "completed");
-    assert_eq!(body["device_id"], device_id);
-    assert_eq!(body["authorization_event_id"], AUTH_EVENT_ID);
-    assert_eq!(body["device_list_update_event_id"], LIST_EVENT_ID);
-    assert!(
-        body.get("production_gap").is_none(),
-        "no production_gap: {body}"
-    );
-
-    // The requesting device is now a verified device for the principal.
-    let device = state
-        .test_persistence()
-        .devices()
-        .get(&principal_id, &device_id)
-        .await
-        .unwrap()
-        .expect("recovered device authorized");
-    assert_eq!(device.verification_state, "verified");
-
-    // Re-read shows completed; a second complete is rejected (not verified)
-    // before the body is even inspected.
-    let again = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(again["error"]["code"], "failed_precondition");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_session_complete_rejects_ssk_generation_mismatch() {
-    // The authorize event's cross_signing_binding MUST bind the CURRENT accepted
-    // generation; a stale/forged generation is rejected.
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let signing = SigningKey::from_bytes(&[113u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
-    let ssk = SigningKey::from_bytes(&[214u8; 32]);
-    let usk = SigningKey::from_bytes(&[215u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
-    let token = dev_token_for_device(
-        state.clone(),
-        &principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    let (session, session_id) =
-        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
-
-    let mut material = device_authorize_material(&session, &ssk);
-    material["cross_signing_binding"]["ssk_generation"] = serde_json::json!(999);
-    let complete_body = seed_completion_events(&state, &session, material).await;
-    let body = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(
-        body["error"]["code"],
-        "device_recovery_ssk_generation_mismatch"
-    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1539,95 +1355,4 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     )
     .await;
     assert_eq!(replay["error"]["message"], "cross_signing_reset_replayed");
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_complete_rejected_after_cross_signing_reset() {
-    // An ak.cross_signing.reset advances the accepted generation fence. A
-    // device-authorize binding for the retired generation must be rejected as
-    // stale before its SSK signature is considered.
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let signing = SigningKey::from_bytes(&[117u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
-    let ssk = SigningKey::from_bytes(&[219u8; 32]);
-    let usk = SigningKey::from_bytes(&[220u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
-    let token = dev_token_for_device(
-        state.clone(),
-        &principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    let (session, session_id) =
-        seed_verified_recovery_session_for_reset_test(&state, &token, &signing, &principal_id, &vm)
-            .await;
-
-    // Record a cross-signing reset (gen 1 -> 2): drops the accepted publish.
-    let reset = serde_json::json!({
-        "principal_id": principal_id,
-        "trust_domain": "ak:trust_domain:soland.local",
-        "reset_event_id": "ak:event:01964137-0000-7000-8000-0000000000aa",
-        "previous_generation": 1,
-        "new_generation": 2,
-        "reset_reason_code": "rotation",
-        "proof": { "kind": "principal_signing", "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXI" },
-        "issued_at": "2026-05-30T00:00:00.000Z",
-    });
-    let content: arkret_models_identity::CrossSigningResetPayload =
-        serde_json::from_value(reset).expect("reset content");
-    state
-        .test_record_cross_signing_reset(&content)
-        .expect("record reset");
-
-    let complete_body =
-        seed_completion_events(&state, &session, device_authorize_material(&session, &ssk)).await;
-    let body = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::CONFLICT,
-    )
-    .await;
-    assert_eq!(
-        body["error"]["code"],
-        "device_recovery_ssk_generation_mismatch"
-    );
-}
-
-#[tokio::test(flavor = "multi_thread")]
-async fn recovery_session_complete_rejects_wrong_ssk_signature() {
-    let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
-    let signing = SigningKey::from_bytes(&[116u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
-    let ssk = SigningKey::from_bytes(&[216u8; 32]);
-    let usk = SigningKey::from_bytes(&[217u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
-    let token = dev_token_for_device(
-        state.clone(),
-        &principal_id,
-        RECOVERY_TEST_DEVICE,
-        "Recovery",
-    )
-    .await;
-    let (session, session_id) =
-        verified_session_for(&state, &token, &signing, &principal_id, &vm).await;
-    // Sign with an ATTACKER key, not the accepted SSK.
-    let attacker = SigningKey::from_bytes(&[218u8; 32]);
-    let complete_body = seed_completion_events(
-        &state,
-        &session,
-        device_authorize_material(&session, &attacker),
-    )
-    .await;
-    let body = post_recovery(
-        state,
-        &token,
-        &format!("/_arkret/root/identity/recovery-sessions/{session_id}/complete"),
-        &complete_body,
-        StatusCode::UNAUTHORIZED,
-    )
-    .await;
-    assert_eq!(body["error"]["code"], "proof_invalid");
 }

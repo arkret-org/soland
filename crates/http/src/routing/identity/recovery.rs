@@ -37,7 +37,7 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
-    RecoveryPolicyState as RecoveryPolicyRecord, RecoveryReceiptState as RecoveryReceiptRecord,
+    RecoveryPolicyState as RecoveryPolicyRecord,
     SecurityTransactionState as SecurityTransactionRecord, SessionIdentityState as SessionRecord,
     principal_control_realm_for_did,
 };

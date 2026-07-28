@@ -766,7 +766,6 @@ impl AppState {
             key_backup: key_backups,
             session: sessions,
             recovery_policy: recovery_policies,
-            recovery_receipt: _,
             recovery_session: recovery_sessions,
             security_transaction: security_transactions,
             did: dids,

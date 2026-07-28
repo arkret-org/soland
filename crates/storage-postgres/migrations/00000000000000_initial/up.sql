@@ -1151,24 +1151,6 @@ CREATE TABLE public.recovery_policies (
     CONSTRAINT recovery_policies_version_check CHECK ((version >= 1))
 );
 
-CREATE TABLE public.recovery_receipts (
-    id uuid NOT NULL,
-    principal_id text NOT NULL,
-    recovery_session_id uuid NOT NULL,
-    policy_id uuid NOT NULL,
-    policy_version integer NOT NULL,
-    trust_domain text NOT NULL,
-    new_device_id text NOT NULL,
-    proof_digest text NOT NULL,
-    outcome text NOT NULL,
-    started_at timestamp with time zone NOT NULL,
-    completed_at timestamp with time zone NOT NULL,
-    verification_method text NOT NULL,
-    raw_payload jsonb NOT NULL,
-    accepted_at timestamp with time zone NOT NULL,
-    CONSTRAINT recovery_receipts_policy_version_check CHECK ((policy_version >= 1))
-);
-
 CREATE TABLE public.recovery_sessions (
     id uuid NOT NULL,
     principal_id text NOT NULL,
@@ -1633,12 +1615,6 @@ ALTER TABLE ONLY public.recovery_policies
 ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_principal_id_version_key UNIQUE (principal_id, version);
 
-ALTER TABLE ONLY public.recovery_receipts
-    ADD CONSTRAINT recovery_receipts_pkey PRIMARY KEY (id);
-
-ALTER TABLE ONLY public.recovery_receipts
-    ADD CONSTRAINT recovery_receipts_recovery_session_id_key UNIQUE (recovery_session_id);
-
 ALTER TABLE ONLY public.recovery_sessions
     ADD CONSTRAINT recovery_sessions_pkey PRIMARY KEY (id);
 
@@ -1914,10 +1890,6 @@ CREATE INDEX realm_invites_realm_idx ON public.realm_invites USING btree (realm_
 
 CREATE INDEX recovery_policies_principal_active_idx ON public.recovery_policies USING btree (principal_id, version DESC);
 
-CREATE INDEX recovery_receipts_policy_idx ON public.recovery_receipts USING btree (policy_id, policy_version);
-
-CREATE INDEX recovery_receipts_principal_idx ON public.recovery_receipts USING btree (principal_id);
-
 CREATE INDEX recovery_sessions_principal_idx ON public.recovery_sessions USING btree (principal_id);
 
 CREATE INDEX security_transactions_principal_state_idx ON public.security_transactions USING btree (principal_id, state, created_at DESC);
@@ -1977,6 +1949,3 @@ ALTER TABLE ONLY public.projection_circle_members
 
 ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_supersedes_fkey FOREIGN KEY (supersedes) REFERENCES public.recovery_policies(id);
-
-ALTER TABLE ONLY public.recovery_receipts
-    ADD CONSTRAINT recovery_receipts_policy_id_fkey FOREIGN KEY (policy_id) REFERENCES public.recovery_policies(id);

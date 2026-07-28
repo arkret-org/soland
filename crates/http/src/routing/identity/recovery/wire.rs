@@ -1,7 +1,7 @@
 use super::*;
 
 /// Allowed `proof_kind` enum per the spec
-/// `recovery-policy.schema.json` / `recovery-receipt.schema.json`.
+/// `recovery-policy.schema.json`.
 pub(super) const ALLOWED_PROOF_KINDS: &[&str] = &[
     "principal_signing",
     "recovery_unlock",

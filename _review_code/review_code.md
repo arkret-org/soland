@@ -44,3 +44,17 @@
 - Prevention dimension: forbidden-wire-field changes must include a compile-time SDK DTO deletion
   and cross-repo search; schema-only deletion leaves typed producers able to generate invalid wire.
 - Status: fixed in the current SDK/Soland worktree; targeted and full regression rerun required.
+
+## 2026-07-29 — session-grant introspection test fixture lagged the credential-class contract
+
+- Surface: `soland-http` DPoP/introspection unit-test construction.
+- Regression: the SDK made `credential_class` mandatory and added typed recovery/device bindings,
+  while Soland's direct `SessionGrantIntrospectGrant` fixture still initialized the previous
+  shape. Pulling the latest SDK therefore made the HTTP lib-test target fail to compile before any
+  recovery transaction tests could run.
+- Detection: post-pull `cargo test -p soland-http security_transaction --lib`.
+- Required correction: construct an explicit `standard` credential with absent recovery/device
+  bindings; do not restore serde defaults or an old compatibility constructor.
+- Prevention dimension: required strong-type additions to cross-service DTOs must update direct
+  constructors in every consumer as part of the same cross-repository gate.
+- Status: fixed in the current Soland worktree; targeted test rerun pending.

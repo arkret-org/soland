@@ -26,7 +26,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
 use serde_json::{Map, Value};
-use soland_http::error::{AppError, ErrorCode};
 use soland_services::identity::{FindDeviceQuery, RecoveryPolicyState};
 
 use crate::state::AppState;
@@ -558,31 +557,6 @@ fn value_requires_attestation(value: &Value) -> bool {
     }
 }
 
-/// Verify a `ak.device.authorize` `cross_signing_binding` at recovery
-/// completion. The binding MUST be an SSK signature over the device-trust
-/// canonical input, at the currently accepted generation (device-lifecycle
-/// §5.2.1). Returns a typed `AppError` for the HTTP path.
-pub fn verify_device_cross_signing_binding(
-    state: &AppState,
-    principal_id: &str,
-    device_id: &str,
-    device_public_key: &str,
-    hpke_key: &str,
-    algorithms: &[String],
-    binding: &Map<String, Value>,
-) -> Result<(), AppError> {
-    check_device_cross_signing_binding(
-        state,
-        principal_id,
-        device_id,
-        device_public_key,
-        hpke_key,
-        algorithms,
-        binding,
-    )
-    .map_err(device_binding_reason_to_app_error)
-}
-
 pub(crate) fn current_accepted_ssk_generation(state: &AppState, principal_id: &str) -> Option<u64> {
     let principal = Did::new(principal_id.to_owned()).ok()?;
     state
@@ -631,36 +605,8 @@ pub(crate) fn persisted_device_is_anchored_to_ssk_generation(
     .is_ok()
 }
 
-/// Map a `check_device_cross_signing_binding` wire reason to a typed HTTP error,
-/// preserving the recovery `/complete` status semantics.
-fn device_binding_reason_to_app_error(reason: &'static str) -> AppError {
-    match reason {
-        "cross_signing_state_missing" => {
-            AppError::conflict("no accepted cross-signing publish for principal")
-                .with_wire_code("cross_signing_state_missing")
-        }
-        "device_recovery_ssk_generation_mismatch" => {
-            AppError::conflict("cross_signing_binding.ssk_generation != accepted generation")
-                .with_wire_code("device_recovery_ssk_generation_mismatch")
-        }
-        "cross_signing_binding_invalid" => AppError::new(
-            ErrorCode::InvalidSignature,
-            "cross_signing_binding signature does not verify against accepted SSK",
-        )
-        .with_status(salvo::http::StatusCode::UNAUTHORIZED)
-        .with_wire_code(arkret_wire::ReasonCode::PROOF_INVALID),
-        other
-            if other.starts_with("cross_signing_binding_missing")
-                || other.starts_with("device_authorize_") =>
-        {
-            AppError::invalid_param(other)
-        }
-        other => AppError::internal(format!("device cross_signing_binding check: {other}")),
-    }
-}
-
 /// 3a — reason-returning core for `ak.device.authorize` binding verification,
-/// shared by the recovery `/complete` path and the event-ingest validator.
+/// shared by durable recovery transactions and the Event-ingest validator.
 pub(crate) fn check_device_cross_signing_binding(
     state: &AppState,
     principal_id: &str,
@@ -712,8 +658,7 @@ pub(crate) fn check_device_cross_signing_binding(
 }
 
 /// 3a — validate a `ak.device.authorize` operation payload's cross_signing_binding
-/// at event ingest, so ANY submission path (recovery, or a future client-submitted
-/// control event) is verified, not just recovery `/complete`. B-model inception
+/// at event ingest, so every submission path is verified. B-model inception
 /// authorizations carry an `enrollment_authority_binding` and are validated by
 /// the closed identity-anchor path; here we only verify `cross_signing_binding`.
 pub fn validate_device_authorize_binding(

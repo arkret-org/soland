@@ -1034,25 +1034,6 @@ diesel::table! {
 }
 
 diesel::table! {
-    recovery_receipts (id) {
-        id -> Uuid,
-        principal_id -> Text,
-        recovery_session_id -> Uuid,
-        policy_id -> Uuid,
-        policy_version -> Int4,
-        trust_domain -> Text,
-        new_device_id -> Text,
-        proof_digest -> Text,
-        outcome -> Text,
-        started_at -> Timestamptz,
-        completed_at -> Timestamptz,
-        verification_method -> Text,
-        raw_payload -> Jsonb,
-        accepted_at -> Timestamptz,
-    }
-}
-
-diesel::table! {
     recovery_sessions (id) {
         id -> Uuid,
         principal_id -> Text,
@@ -1355,8 +1336,6 @@ diesel::joinable!(agent_sidecar_contexts -> agent_sidecars (sidecar_id));
 diesel::joinable!(federation_outbox_dead_letter -> federation_outbox (outbox_id));
 diesel::joinable!(pending_agent_drafts -> agent_principals (agent_id));
 diesel::joinable!(projection_circle_members -> projection_circles (circle_id));
-diesel::joinable!(recovery_receipts -> recovery_policies (policy_id));
-
 diesel::allow_tables_to_appear_in_same_query!(
     account_datas,
     account_lifecycle,
@@ -1424,7 +1403,6 @@ diesel::allow_tables_to_appear_in_same_query!(
     realm_organizations,
     realm_owning_organizations,
     recovery_policies,
-    recovery_receipts,
     recovery_sessions,
     security_transaction_step_attempts,
     security_transaction_step_outcomes,

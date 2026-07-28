@@ -39,10 +39,9 @@ pub(crate) use soland_storage::{
     PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
     RealmMetaRecord, RealmMetaStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
     RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
-    RecoveryPolicyRecord, RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore,
-    RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore,
-    RetentionTombstoneRecord, RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM,
-    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
+    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
     ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
     SignalRelayStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
@@ -143,8 +142,7 @@ pub(crate) use publication_evidence::MemoryPublicationEvidenceStore;
 pub(crate) use push::{MemoryPushBridgeCacheStore, MemoryPushDeviceStore};
 pub(crate) use realm_invites::MemoryRealmInviteStore;
 pub(crate) use recovery::{
-    MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore, MemoryRecoverySessionStore,
-    MemorySecurityTransactionStore,
+    MemoryRecoveryPolicyStore, MemoryRecoverySessionStore, MemorySecurityTransactionStore,
 };
 pub(crate) use service_identity::MemoryServiceIdentityStore;
 pub(crate) use sessions::MemorySessionStore;

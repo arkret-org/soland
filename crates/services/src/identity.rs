@@ -1549,53 +1549,6 @@ impl RecoveryPolicyService {
 }
 
 #[derive(Clone, Debug)]
-pub struct RecoveryReceiptState {
-    pub receipt_id: String,
-    pub principal_id: String,
-    pub recovery_session_id: String,
-    pub policy_id: String,
-    pub policy_version: u32,
-    pub trust_domain: String,
-    pub new_device_id: String,
-    pub proof_digest: String,
-    pub outcome: String,
-    pub started_at: DateTime<Utc>,
-    pub completed_at: DateTime<Utc>,
-    pub raw_payload: Value,
-    pub verification_method: String,
-    pub accepted_at: DateTime<Utc>,
-}
-
-#[async_trait]
-pub trait RecoveryReceiptPort: Send + Sync {
-    async fn receipt_history(&self, principal_id: &str)
-    -> ServiceResult<Vec<RecoveryReceiptState>>;
-    async fn insert_receipt(&self, receipt: RecoveryReceiptState) -> ServiceResult<()>;
-}
-
-#[derive(Clone)]
-pub struct RecoveryReceiptService {
-    receipts: Arc<dyn RecoveryReceiptPort>,
-}
-
-impl RecoveryReceiptService {
-    pub fn new(receipts: Arc<dyn RecoveryReceiptPort>) -> Self {
-        Self { receipts }
-    }
-
-    pub async fn receipt_history(
-        &self,
-        principal_id: &str,
-    ) -> ServiceResult<Vec<RecoveryReceiptState>> {
-        self.receipts.receipt_history(principal_id).await
-    }
-
-    pub async fn record_receipt(&self, receipt: RecoveryReceiptState) -> ServiceResult<()> {
-        self.receipts.insert_receipt(receipt).await
-    }
-}
-
-#[derive(Clone, Debug)]
 pub struct RecoverySessionState {
     pub recovery_session_id: String,
     pub principal_id: String,

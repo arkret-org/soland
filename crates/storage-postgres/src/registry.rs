@@ -50,7 +50,6 @@ pub struct PgPersistenceStore {
     key_backups: PgKeyBackupStore,
     policy_documents: PgPolicyDocumentStore,
     recovery_policies: PgRecoveryPolicyStore,
-    recovery_receipts: PgRecoveryReceiptStore,
     recovery_sessions: PgRecoverySessionStore,
     security_transactions: PgSecurityTransactionStore,
     space_container_projections: PgSpaceContainerProjectionStore,
@@ -114,7 +113,6 @@ impl PgPersistenceStore {
             key_backups: PgKeyBackupStore { pool: pool.clone() },
             policy_documents: PgPolicyDocumentStore { pool: pool.clone() },
             recovery_policies: PgRecoveryPolicyStore { pool: pool.clone() },
-            recovery_receipts: PgRecoveryReceiptStore { pool: pool.clone() },
             recovery_sessions: PgRecoverySessionStore { pool: pool.clone() },
             security_transactions: PgSecurityTransactionStore { pool: pool.clone() },
             space_container_projections: PgSpaceContainerProjectionStore { pool: pool.clone() },
@@ -346,10 +344,6 @@ impl DeliveryPolicyStoreRegistry for PgPersistenceStore {
 
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore {
         &self.recovery_policies
-    }
-
-    fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore {
-        &self.recovery_receipts
     }
 
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore {

@@ -22,20 +22,19 @@ use super::{
     MemoryPolicyDocumentStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
     MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
     MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore,
-    MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemorySessionStore,
-    MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
-    MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryWebvhStore, MessageStore,
-    MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
-    MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
-    OrganizationStore, PersistenceStore, PolicyDocumentStore, ProjectionEventStore,
-    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmInviteStore,
-    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
-    RealmOrganizationStore, RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore,
-    RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore, ServiceIdentityStore,
-    SessionStore, SidecarStore, SignalRelayStore, SpaceContainerProjectionStore,
-    StrandProjectionStore, SyncCursorStore, WebvhStore,
+    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
+    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
+    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
+    MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore,
+    ModerationStore, MorphProjectionStore, MultisigPendingStore, Mutex, NotificationStore,
+    OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore, PersistenceStore,
+    PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
+    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
+    RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
+    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
+    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
@@ -78,7 +77,6 @@ pub struct SolandMemoryPersistenceStore {
     push_bridge_cache: MemoryPushBridgeCacheStore,
     policy_documents: MemoryPolicyDocumentStore,
     recovery_policies: MemoryRecoveryPolicyStore,
-    recovery_receipts: MemoryRecoveryReceiptStore,
     recovery_sessions: MemoryRecoverySessionStore,
     security_transactions: MemorySecurityTransactionStore,
     webvh: MemoryWebvhStore,
@@ -160,7 +158,6 @@ impl SolandMemoryPersistenceStore {
             push_bridge_cache: MemoryPushBridgeCacheStore::new(),
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
-            recovery_receipts: MemoryRecoveryReceiptStore::new(),
             recovery_sessions,
             security_transactions,
             webvh: {
@@ -440,10 +437,6 @@ impl soland_storage::DeliveryPolicyStoreRegistry for SolandMemoryPersistenceStor
 
     fn recovery_policies(&self) -> &dyn RecoveryPolicyStore {
         &self.recovery_policies
-    }
-
-    fn recovery_receipts(&self) -> &dyn RecoveryReceiptStore {
-        &self.recovery_receipts
     }
 
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore {

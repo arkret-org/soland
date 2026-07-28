@@ -1,9 +1,8 @@
 use super::{
-    Arc, BTreeMap, BTreeSet, Mutex, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
-    RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore, RecoverySessionRecord,
-    RecoverySessionStore, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, async_trait,
-    recovery_active_policy_locked,
+    Arc, BTreeMap, Mutex, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
+    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
+    SecurityTransactionStore, async_trait, recovery_active_policy_locked,
 };
 #[derive(Default)]
 pub(crate) struct MemoryRecoveryPolicyStore {
@@ -81,59 +80,6 @@ impl RecoveryPolicyStore for MemoryRecoveryPolicyStore {
             )));
         }
         data.insert(record.policy_id.clone(), record);
-        Ok(())
-    }
-}
-#[derive(Default)]
-pub(crate) struct MemoryRecoveryReceiptStore {
-    by_session: Mutex<BTreeMap<String, RecoveryReceiptRecord>>,
-    receipt_ids: Mutex<BTreeSet<String>>,
-}
-impl MemoryRecoveryReceiptStore {
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-}
-#[async_trait]
-impl RecoveryReceiptStore for MemoryRecoveryReceiptStore {
-    async fn get_by_session_id(
-        &self,
-        recovery_session_id: &str,
-    ) -> PersistenceResult<Option<RecoveryReceiptRecord>> {
-        Ok(self.by_session.lock().get(recovery_session_id).cloned())
-    }
-
-    async fn list_for_principal(
-        &self,
-        principal_id: &str,
-    ) -> PersistenceResult<Vec<RecoveryReceiptRecord>> {
-        let by_session = self.by_session.lock();
-        let mut out: Vec<RecoveryReceiptRecord> = by_session
-            .values()
-            .filter(|record| record.principal_id == principal_id)
-            .cloned()
-            .collect();
-        out.sort_by_key(|r| std::cmp::Reverse(r.accepted_at));
-        Ok(out)
-    }
-
-    async fn insert(&self, record: RecoveryReceiptRecord) -> PersistenceResult<()> {
-        let mut by_session = self.by_session.lock();
-        let mut receipt_ids = self.receipt_ids.lock();
-        if receipt_ids.contains(&record.receipt_id) {
-            return Err(PersistenceError::Conflict(format!(
-                "recovery receipt_id `{}` already exists",
-                record.receipt_id
-            )));
-        }
-        if by_session.contains_key(&record.recovery_session_id) {
-            return Err(PersistenceError::Conflict(format!(
-                "recovery_session_id `{}` already accepted",
-                record.recovery_session_id
-            )));
-        }
-        receipt_ids.insert(record.receipt_id.clone());
-        by_session.insert(record.recovery_session_id.clone(), record);
         Ok(())
     }
 }

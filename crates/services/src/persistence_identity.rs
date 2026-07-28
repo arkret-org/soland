@@ -22,7 +22,6 @@ struct PersistenceAgentParticipation(Arc<dyn PersistenceStore>);
 struct PersistenceKeyBackups(Arc<dyn PersistenceStore>);
 struct PersistenceSessions(Arc<dyn PersistenceStore>);
 struct PersistenceRecoveryPolicies(Arc<dyn PersistenceStore>);
-struct PersistenceRecoveryReceipts(Arc<dyn PersistenceStore>);
 struct PersistenceRecoverySessions(Arc<dyn PersistenceStore>);
 struct PersistenceSecurityTransactions(Arc<dyn PersistenceStore>);
 struct PersistenceDidDocuments(Arc<dyn PersistenceStore>);
@@ -1486,76 +1485,6 @@ impl crate::identity::RecoveryPolicyPort for PersistenceRecoveryPolicies {
     }
 }
 
-fn application_recovery_receipt(
-    record: soland_storage::RecoveryReceiptRecord,
-) -> crate::identity::RecoveryReceiptState {
-    crate::identity::RecoveryReceiptState {
-        receipt_id: record.receipt_id,
-        principal_id: record.principal_id,
-        recovery_session_id: record.recovery_session_id,
-        policy_id: record.policy_id,
-        policy_version: record.policy_version,
-        trust_domain: record.trust_domain,
-        new_device_id: record.new_device_id,
-        proof_digest: record.proof_digest,
-        outcome: record.outcome,
-        started_at: record.started_at,
-        completed_at: record.completed_at,
-        raw_payload: record.raw_payload,
-        verification_method: record.verification_method,
-        accepted_at: record.accepted_at,
-    }
-}
-
-fn persistence_recovery_receipt(
-    receipt: crate::identity::RecoveryReceiptState,
-) -> soland_storage::RecoveryReceiptRecord {
-    soland_storage::RecoveryReceiptRecord {
-        receipt_id: receipt.receipt_id,
-        principal_id: receipt.principal_id,
-        recovery_session_id: receipt.recovery_session_id,
-        policy_id: receipt.policy_id,
-        policy_version: receipt.policy_version,
-        trust_domain: receipt.trust_domain,
-        new_device_id: receipt.new_device_id,
-        proof_digest: receipt.proof_digest,
-        outcome: receipt.outcome,
-        started_at: receipt.started_at,
-        completed_at: receipt.completed_at,
-        raw_payload: receipt.raw_payload,
-        verification_method: receipt.verification_method,
-        accepted_at: receipt.accepted_at,
-    }
-}
-
-#[async_trait::async_trait]
-impl crate::identity::RecoveryReceiptPort for PersistenceRecoveryReceipts {
-    async fn receipt_history(
-        &self,
-        principal_id: &str,
-    ) -> crate::ServiceResult<Vec<crate::identity::RecoveryReceiptState>> {
-        Ok(self
-            .0
-            .recovery_receipts()
-            .list_for_principal(principal_id)
-            .await?
-            .into_iter()
-            .map(application_recovery_receipt)
-            .collect())
-    }
-
-    async fn insert_receipt(
-        &self,
-        receipt: crate::identity::RecoveryReceiptState,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .recovery_receipts()
-            .insert(persistence_recovery_receipt(receipt))
-            .await?;
-        Ok(())
-    }
-}
-
 fn application_recovery_session(
     record: soland_storage::RecoverySessionRecord,
 ) -> crate::identity::RecoverySessionState {
@@ -1989,7 +1918,6 @@ pub struct PersistenceIdentityServices {
     pub key_backup: KeyBackupService,
     pub session: SessionService,
     pub recovery_policy: RecoveryPolicyService,
-    pub recovery_receipt: RecoveryReceiptService,
     pub recovery_session: RecoverySessionService,
     pub security_transaction: SecurityTransactionService,
     pub did: DidService,
@@ -2031,9 +1959,6 @@ pub fn build_persistence_identity_services(
         key_backup: KeyBackupService::new(Arc::new(PersistenceKeyBackups(persistence.clone()))),
         session: SessionService::new(Arc::new(PersistenceSessions(persistence.clone()))),
         recovery_policy: RecoveryPolicyService::new(Arc::new(PersistenceRecoveryPolicies(
-            persistence.clone(),
-        ))),
-        recovery_receipt: RecoveryReceiptService::new(Arc::new(PersistenceRecoveryReceipts(
             persistence.clone(),
         ))),
         recovery_session: RecoverySessionService::new(Arc::new(PersistenceRecoverySessions(

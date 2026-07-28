@@ -119,27 +119,6 @@ pub struct RecoveryPolicyRecord {
     pub verification_method: String,
 }
 
-/// REC-1 — accepted recovery receipt snapshot.
-///
-/// Spec: `arkret-spec/spec/v1/artifacts/schemas/recovery-receipt.schema.json`.
-#[derive(Clone, Debug)]
-pub struct RecoveryReceiptRecord {
-    pub receipt_id: String,
-    pub principal_id: String,
-    pub recovery_session_id: String,
-    pub policy_id: String,
-    pub policy_version: u32,
-    pub trust_domain: String,
-    pub new_device_id: String,
-    pub proof_digest: String,
-    pub outcome: String,
-    pub started_at: chrono::DateTime<chrono::Utc>,
-    pub completed_at: chrono::DateTime<chrono::Utc>,
-    pub raw_payload: Value,
-    pub verification_method: String,
-    pub accepted_at: chrono::DateTime<chrono::Utc>,
-}
-
 /// C-P2 (REC-1) — recovery session lifecycle record.
 ///
 /// A session binds a requesting device to the principal's active recovery
