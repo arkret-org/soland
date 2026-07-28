@@ -120,6 +120,18 @@ pub(super) fn validate_recovery_receipt(
             "receipt_id `{receipt_id}` must start with ak:receipt:",
         )));
     }
+    let transaction_id = require_string(payload, "transaction_id")?;
+    if !transaction_id.starts_with("ak:transaction:") {
+        return Err(AppError::invalid_param(format!(
+            "transaction_id `{transaction_id}` must start with ak:transaction:",
+        )));
+    }
+    let transaction_request_digest = require_string(payload, "transaction_request_digest")?;
+    Hash::new(transaction_request_digest).map_err(|error| {
+        AppError::invalid_param(format!(
+            "transaction_request_digest is not a canonical hash: {error}"
+        ))
+    })?;
     let principal_id = require_did(payload, "principal_id")?;
     let recovery_session_id = require_string(payload, "recovery_session_id")?;
     if !recovery_session_id.starts_with("ak:recovery_session:") {
@@ -149,6 +161,72 @@ pub(super) fn validate_recovery_receipt(
         return Err(AppError::invalid_param(format!(
             "new_device_id `{new_device_id}` must start with ak:device:",
         )));
+    }
+    let identity_model = require_string(payload, "identity_model")?;
+    let authorization_event_id = require_string(payload, "authorization_event_id")?;
+    if !authorization_event_id.starts_with("ak:event:") {
+        return Err(AppError::invalid_param(
+            "authorization_event_id must be an ak:event identifier",
+        ));
+    }
+    match identity_model.as_str() {
+        "cross_signing" => {
+            let previous = payload
+                .get("previous_model_generation_ref")
+                .and_then(Value::as_u64)
+                .filter(|generation| *generation > 0)
+                .ok_or_else(|| {
+                    AppError::invalid_param(
+                        "cross_signing previous_model_generation_ref must be a positive integer",
+                    )
+                })?;
+            let result = payload
+                .get("result_model_generation_ref")
+                .and_then(Value::as_u64)
+                .filter(|generation| *generation > 0)
+                .ok_or_else(|| {
+                    AppError::invalid_param(
+                        "cross_signing result_model_generation_ref must be a positive integer",
+                    )
+                })?;
+            if previous != result {
+                return Err(AppError::invalid_param(
+                    "cross_signing recovery receipt generation refs must be equal",
+                ));
+            }
+            require_string(payload, "device_list_update_event_id")?;
+            if payload.get("reanchor_event_id").is_some()
+                || payload.get("reanchor_batch_receipt_id").is_some()
+            {
+                return Err(AppError::invalid_param(
+                    "cross_signing recovery receipt must not carry re-anchor artifacts",
+                ));
+            }
+        }
+        "enrollment_authority" => {
+            let previous = require_string(payload, "previous_model_generation_ref")?;
+            let result = require_string(payload, "result_model_generation_ref")?;
+            if !valid_recovery_generation_ref(&previous)
+                || !valid_recovery_generation_ref(&result)
+                || previous == result
+            {
+                return Err(AppError::invalid_param(
+                    "enrollment_authority recovery receipt requires distinct DID generation refs",
+                ));
+            }
+            require_string(payload, "reanchor_event_id")?;
+            require_string(payload, "reanchor_batch_receipt_id")?;
+            if payload.get("device_list_update_event_id").is_some() {
+                return Err(AppError::invalid_param(
+                    "enrollment_authority recovery receipt must not carry device_list_update_event_id",
+                ));
+            }
+        }
+        other => {
+            return Err(AppError::invalid_param(format!(
+                "identity_model `{other}` is not registered"
+            )));
+        }
     }
     let proof_summary = payload
         .get("proof_summary")
@@ -268,11 +346,10 @@ pub(super) fn validate_recovery_receipt(
         .get("signature_algorithm")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::invalid_param("auth_data.signature_algorithm is required"))?;
-    // recovery-receipt.schema.json auth_data.signature_algorithm enum.
-    if !matches!(signature_algorithm, "EdDSA" | "ES256") {
-        return Err(AppError::invalid_param(format!(
-            "auth_data.signature_algorithm `{signature_algorithm}` not in {{EdDSA, ES256}}",
-        )));
+    if signature_algorithm != "Ed25519" {
+        return Err(AppError::invalid_param(
+            "auth_data.signature_algorithm must be Ed25519",
+        ));
     }
     auth_data
         .get("signature")
@@ -298,6 +375,16 @@ pub(super) fn validate_recovery_receipt(
         raw_payload: payload.clone(),
         verification_method: verification_method.to_owned(),
         accepted_at: chrono::Utc::now(),
+    })
+}
+
+fn valid_recovery_generation_ref(value: &str) -> bool {
+    value.split_once('-').is_some_and(|(generation, suffix)| {
+        generation
+            .parse::<u64>()
+            .is_ok_and(|generation| generation > 0)
+            && !suffix.is_empty()
+            && !suffix.chars().any(char::is_whitespace)
     })
 }
 
@@ -353,6 +440,9 @@ pub(super) fn parse_signed_fields(
         "not_before",
         "expires_at",
         "outcome_reason_code",
+        "device_list_update_event_id",
+        "reanchor_event_id",
+        "reanchor_batch_receipt_id",
     ] {
         if payload.get(optional_signed).is_some()
             && allowed.contains(optional_signed)

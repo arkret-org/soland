@@ -170,9 +170,16 @@ pub struct RecoverySessionRecord {
     pub state: String,
     /// The submitted proof payload (recorded on `/proofs`; verified in C-P3).
     pub proof_payload: Option<Value>,
+    pub transaction_id: Option<String>,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct SecurityTransactionRecord {
+    pub canonical_request: Vec<u8>,
+    pub resource: arkret_wire::SecurityTransaction,
 }
 
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.

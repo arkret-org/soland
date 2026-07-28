@@ -24,6 +24,7 @@ struct PersistenceSessions(Arc<dyn PersistenceStore>);
 struct PersistenceRecoveryPolicies(Arc<dyn PersistenceStore>);
 struct PersistenceRecoveryReceipts(Arc<dyn PersistenceStore>);
 struct PersistenceRecoverySessions(Arc<dyn PersistenceStore>);
+struct PersistenceSecurityTransactions(Arc<dyn PersistenceStore>);
 struct PersistenceDidDocuments(Arc<dyn PersistenceStore>);
 #[async_trait::async_trait]
 impl crate::identity::AccountLookupPort for PersistenceAccountLookup {
@@ -1575,6 +1576,7 @@ fn application_recovery_session(
         challenge: record.challenge,
         state: record.state,
         proof_payload: record.proof_payload,
+        transaction_id: record.transaction_id,
         created_at: record.created_at,
         updated_at: record.updated_at,
         expires_at: record.expires_at,
@@ -1601,6 +1603,7 @@ fn persistence_recovery_session(
         challenge: session.challenge,
         state: session.state,
         proof_payload: session.proof_payload,
+        transaction_id: session.transaction_id,
         created_at: session.created_at,
         updated_at: session.updated_at,
         expires_at: session.expires_at,
@@ -1639,6 +1642,62 @@ impl crate::identity::RecoverySessionPort for PersistenceRecoverySessions {
         self.0
             .recovery_sessions()
             .update(persistence_recovery_session(session))
+            .await?;
+        Ok(())
+    }
+}
+
+fn application_security_transaction(
+    record: soland_storage::SecurityTransactionRecord,
+) -> crate::identity::SecurityTransactionState {
+    crate::identity::SecurityTransactionState {
+        canonical_request: record.canonical_request,
+        resource: record.resource,
+    }
+}
+
+fn persistence_security_transaction(
+    transaction: crate::identity::SecurityTransactionState,
+) -> soland_storage::SecurityTransactionRecord {
+    soland_storage::SecurityTransactionRecord {
+        canonical_request: transaction.canonical_request,
+        resource: transaction.resource,
+    }
+}
+
+#[async_trait::async_trait]
+impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransactions {
+    async fn create(
+        &self,
+        transaction: crate::identity::SecurityTransactionState,
+    ) -> crate::ServiceResult<crate::identity::SecurityTransactionState> {
+        Ok(application_security_transaction(
+            self.0
+                .security_transactions()
+                .create(persistence_security_transaction(transaction))
+                .await?,
+        ))
+    }
+
+    async fn transaction(
+        &self,
+        transaction_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionState>> {
+        Ok(self
+            .0
+            .security_transactions()
+            .get(transaction_id)
+            .await?
+            .map(application_security_transaction))
+    }
+
+    async fn save(
+        &self,
+        transaction: crate::identity::SecurityTransactionState,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .security_transactions()
+            .update(persistence_security_transaction(transaction))
             .await?;
         Ok(())
     }
@@ -1847,6 +1906,7 @@ pub struct PersistenceIdentityServices {
     pub recovery_policy: RecoveryPolicyService,
     pub recovery_receipt: RecoveryReceiptService,
     pub recovery_session: RecoverySessionService,
+    pub security_transaction: SecurityTransactionService,
     pub did: DidService,
 }
 
@@ -1894,6 +1954,9 @@ pub fn build_persistence_identity_services(
         recovery_session: RecoverySessionService::new(Arc::new(PersistenceRecoverySessions(
             persistence.clone(),
         ))),
+        security_transaction: SecurityTransactionService::new(Arc::new(
+            PersistenceSecurityTransactions(persistence.clone()),
+        )),
         did: DidService::new(Arc::new(PersistenceDidDocuments(persistence)), did_resolver),
     }
 }

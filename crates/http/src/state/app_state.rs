@@ -33,7 +33,7 @@ use soland_services::hydration::HydrationProjectionAdapter;
 use soland_services::identity::{
     AccountDataService, AgentPairingService, AgentParticipationService, ConsentService,
     ContactService, DevicePairingService, DidService, IdentityService, KeyBackupService,
-    KeyMaterialService, RecoveryPolicyService, RecoveryReceiptService, RecoverySessionService,
+    KeyMaterialService, RecoveryPolicyService, RecoverySessionService, SecurityTransactionService,
     SessionService,
 };
 use soland_services::jobs::{JobsService, RuntimeHealthPort};
@@ -97,8 +97,8 @@ pub struct AppState {
     key_backups: KeyBackupService,
     sessions: SessionService,
     recovery_policies: RecoveryPolicyService,
-    recovery_receipts: RecoveryReceiptService,
     recovery_sessions: RecoverySessionService,
+    security_transactions: SecurityTransactionService,
     dids: DidService,
     federation: FederationService,
     governance: GovernanceService,
@@ -763,8 +763,9 @@ impl AppState {
             key_backup: key_backups,
             session: sessions,
             recovery_policy: recovery_policies,
-            recovery_receipt: recovery_receipts,
+            recovery_receipt: _,
             recovery_session: recovery_sessions,
+            security_transaction: security_transactions,
             did: dids,
         } = persistence.identity_services(did_resolver.clone());
         let PersistenceOperationalServices {
@@ -810,8 +811,8 @@ impl AppState {
             key_backups,
             sessions,
             recovery_policies,
-            recovery_receipts,
             recovery_sessions,
+            security_transactions,
             dids,
             federation,
             governance,
@@ -929,12 +930,12 @@ impl AppState {
         &self.recovery_policies
     }
 
-    pub(crate) fn recovery_receipts(&self) -> &RecoveryReceiptService {
-        &self.recovery_receipts
-    }
-
     pub(crate) fn recovery_sessions(&self) -> &RecoverySessionService {
         &self.recovery_sessions
+    }
+
+    pub(crate) fn security_transactions(&self) -> &SecurityTransactionService {
+        &self.security_transactions
     }
 
     pub(crate) fn federation(&self) -> &FederationService {

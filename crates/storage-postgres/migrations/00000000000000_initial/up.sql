@@ -1175,13 +1175,36 @@ CREATE TABLE public.recovery_sessions (
     challenge text NOT NULL,
     state text DEFAULT 'pending'::text NOT NULL,
     proof_payload jsonb,
+    transaction_id uuid,
     created_at timestamp with time zone NOT NULL,
     updated_at timestamp with time zone NOT NULL,
     expires_at timestamp with time zone NOT NULL,
     CONSTRAINT recovery_sessions_policy_version_check CHECK ((policy_version >= 1)),
     CONSTRAINT recovery_sessions_identity_model_check CHECK ((identity_model = ANY (ARRAY['cross_signing'::text, 'enrollment_authority'::text]))),
     CONSTRAINT recovery_sessions_generation_shape_check CHECK ((((identity_model = 'cross_signing'::text) AND (ssk_generation >= 1) AND (current_device_generation_ref IS NULL) AND (device_generation_status IS NULL) AND (registry_head IS NULL) AND (accepted_seal_frontier IS NULL)) OR ((identity_model = 'enrollment_authority'::text) AND (ssk_generation IS NULL) AND (current_device_generation_ref IS NOT NULL) AND (device_generation_status = ANY (ARRAY['active'::text, 'conflicted'::text])) AND (registry_head IS NOT NULL)))),
-    CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text])))
+    CONSTRAINT recovery_sessions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'verified'::text, 'completed'::text, 'rejected'::text, 'expired'::text]))),
+    CONSTRAINT recovery_sessions_transaction_id_key UNIQUE (transaction_id)
+);
+
+CREATE TABLE public.security_transactions (
+    id uuid NOT NULL,
+    kind text NOT NULL,
+    principal_id text NOT NULL,
+    coordinator_service_id text NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone NOT NULL,
+    request_digest text NOT NULL,
+    binding jsonb NOT NULL,
+    prepared_plan jsonb NOT NULL,
+    prepared_plan_digest text NOT NULL,
+    state text NOT NULL,
+    accepted_steps jsonb NOT NULL,
+    next_required_step text,
+    terminal_result jsonb,
+    canonical_request bytea NOT NULL,
+    CONSTRAINT security_transactions_pkey PRIMARY KEY (id),
+    CONSTRAINT security_transactions_kind_check CHECK ((kind = ANY (ARRAY['recovery'::text, 'security_rotation'::text]))),
+    CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'awaiting_device_attestation'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
 );
 
 CREATE TABLE public.sessions (
@@ -1587,6 +1610,9 @@ ALTER TABLE ONLY public.recovery_receipts
 ALTER TABLE ONLY public.recovery_sessions
     ADD CONSTRAINT recovery_sessions_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.recovery_sessions
+    ADD CONSTRAINT recovery_sessions_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.security_transactions(id);
+
 ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);
 
@@ -1861,6 +1887,8 @@ CREATE INDEX recovery_receipts_policy_idx ON public.recovery_receipts USING btre
 CREATE INDEX recovery_receipts_principal_idx ON public.recovery_receipts USING btree (principal_id);
 
 CREATE INDEX recovery_sessions_principal_idx ON public.recovery_sessions USING btree (principal_id);
+
+CREATE INDEX security_transactions_principal_state_idx ON public.security_transactions USING btree (principal_id, state, created_at DESC);
 
 CREATE INDEX sessions_actor_device_idx ON public.sessions USING btree (actor_id, device_id, expires_at) WHERE (revoked_at IS NULL);
 

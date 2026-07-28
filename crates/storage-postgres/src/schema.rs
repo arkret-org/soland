@@ -1070,9 +1070,30 @@ diesel::table! {
         challenge -> Text,
         state -> Text,
         proof_payload -> Nullable<Jsonb>,
+        transaction_id -> Nullable<Uuid>,
         created_at -> Timestamptz,
         updated_at -> Timestamptz,
         expires_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    security_transactions (id) {
+        id -> Uuid,
+        kind -> Text,
+        principal_id -> Text,
+        coordinator_service_id -> Text,
+        expires_at -> Timestamptz,
+        created_at -> Timestamptz,
+        request_digest -> Text,
+        binding -> Jsonb,
+        prepared_plan -> Jsonb,
+        prepared_plan_digest -> Text,
+        state -> Text,
+        accepted_steps -> Jsonb,
+        next_required_step -> Nullable<Text>,
+        terminal_result -> Nullable<Jsonb>,
+        canonical_request -> Binary,
     }
 }
 
@@ -1374,6 +1395,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     recovery_policies,
     recovery_receipts,
     recovery_sessions,
+    security_transactions,
     retention_policies,
     retention_tombstones,
     server_settings,

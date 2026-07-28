@@ -415,6 +415,8 @@ struct RecoverySessionRow {
     state: String,
     #[diesel(sql_type = Nullable<Jsonb>)]
     proof_payload: Option<Value>,
+    #[diesel(sql_type = Nullable<SqlUuid>)]
+    transaction_id: Option<Uuid>,
     #[diesel(sql_type = Timestamptz)]
     created_at: chrono::DateTime<chrono::Utc>,
     #[diesel(sql_type = Timestamptz)]
@@ -511,6 +513,9 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             challenge: row.challenge,
             state: row.state,
             proof_payload: row.proof_payload,
+            transaction_id: row
+                .transaction_id
+                .map(|id| ids::format_typed_uuid("transaction", &id)),
             created_at: row.created_at,
             updated_at: row.updated_at,
             expires_at: row.expires_at,
@@ -520,7 +525,7 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, requesting_device_id, \
      trust_domain, policy_id, policy_version, identity_model, ssk_generation, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
-     policy_payload, challenge, state, proof_payload, created_at, updated_at, expires_at";
+     policy_payload, challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
 #[async_trait]
 impl RecoverySessionStore for PgRecoverySessionStore {
     async fn get(
@@ -565,8 +570,8 @@ impl RecoverySessionStore for PgRecoverySessionStore {
              (id, principal_id, requesting_device_id, trust_domain, policy_id, \
               policy_version, identity_model, ssk_generation, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
-              challenge, state, proof_payload, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
+              challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -607,6 +612,12 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         .bind::<Text, _>(&record.challenge)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .transaction_id
+                .as_deref()
+                .map(ids::typed_uuid_part_expect_internal),
+        )
         .bind::<Timestamptz, _>(record.created_at)
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(record.expires_at)
@@ -622,7 +633,7 @@ impl RecoverySessionStore for PgRecoverySessionStore {
             .map_err(PersistenceError::database)?;
         let affected = sql_query(
             "UPDATE recovery_sessions SET \
-                state = $2, proof_payload = $3, updated_at = $4, expires_at = $5 \
+                state = $2, proof_payload = $3, transaction_id = $4, updated_at = $5, expires_at = $6 \
              WHERE id = $1",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
@@ -630,6 +641,12 @@ impl RecoverySessionStore for PgRecoverySessionStore {
         ))
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())
+        .bind::<Nullable<SqlUuid>, _>(
+            record
+                .transaction_id
+                .as_deref()
+                .map(ids::typed_uuid_part_expect_internal),
+        )
         .bind::<Timestamptz, _>(record.updated_at)
         .bind::<Timestamptz, _>(record.expires_at)
         .execute(&mut *conn)

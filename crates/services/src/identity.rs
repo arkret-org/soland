@@ -1613,6 +1613,7 @@ pub struct RecoverySessionState {
     pub challenge: String,
     pub state: String,
     pub proof_payload: Option<Value>,
+    pub transaction_id: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
@@ -1651,6 +1652,54 @@ impl RecoverySessionService {
 
     pub async fn save_session(&self, session: RecoverySessionState) -> ServiceResult<()> {
         self.sessions.update_session(session).await
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct SecurityTransactionState {
+    pub canonical_request: Vec<u8>,
+    pub resource: arkret_wire::SecurityTransaction,
+}
+
+#[async_trait]
+pub trait SecurityTransactionPort: Send + Sync {
+    async fn create(
+        &self,
+        transaction: SecurityTransactionState,
+    ) -> ServiceResult<SecurityTransactionState>;
+    async fn transaction(
+        &self,
+        transaction_id: &str,
+    ) -> ServiceResult<Option<SecurityTransactionState>>;
+    async fn save(&self, transaction: SecurityTransactionState) -> ServiceResult<()>;
+}
+
+#[derive(Clone)]
+pub struct SecurityTransactionService {
+    transactions: Arc<dyn SecurityTransactionPort>,
+}
+
+impl SecurityTransactionService {
+    pub fn new(transactions: Arc<dyn SecurityTransactionPort>) -> Self {
+        Self { transactions }
+    }
+
+    pub async fn create(
+        &self,
+        transaction: SecurityTransactionState,
+    ) -> ServiceResult<SecurityTransactionState> {
+        self.transactions.create(transaction).await
+    }
+
+    pub async fn transaction(
+        &self,
+        transaction_id: &str,
+    ) -> ServiceResult<Option<SecurityTransactionState>> {
+        self.transactions.transaction(transaction_id).await
+    }
+
+    pub async fn save(&self, transaction: SecurityTransactionState) -> ServiceResult<()> {
+        self.transactions.save(transaction).await
     }
 }
 

@@ -42,10 +42,11 @@ pub(crate) use soland_storage::{
     RecoveryPolicyRecord, RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore,
     RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore,
     RetentionTombstoneRecord, RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM,
-    ServiceIdentityStore, ServiceRegistrationCommitOutcome, SessionRecord, SessionStore,
-    SidecarStore, SignalRelayRecord, SignalRelayStore, SpaceContainerProjectionRecord,
-    SpaceContainerProjectionStore, StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord,
-    SyncCursorStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+    SecurityTransactionRecord, SecurityTransactionStore, ServiceIdentityStore,
+    ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
+    SignalRelayStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
+    StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord, SyncCursorStore,
+    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
     agent_participation_record_key, cross_signing_reset_blocks_queued_message,
     device_message_expires_at, document_declares_registration_key, ensure_device_message_id,
     evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
@@ -54,7 +55,8 @@ pub(crate) use soland_storage::{
     peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
     recovery_active_policy_locked, registration_as_existing, registrations_match,
     remove_third_party_active_material, stage_identity_anchor_events,
-    valid_new_service_registration_records, webvh_freshness_on_put,
+    valid_new_service_registration_records, validate_security_transaction_update,
+    webvh_freshness_on_put,
 };
 pub(crate) use uuid::Uuid;
 
@@ -141,6 +143,7 @@ pub(crate) use push::{MemoryPushBridgeCacheStore, MemoryPushDeviceStore};
 pub(crate) use realm_invites::MemoryRealmInviteStore;
 pub(crate) use recovery::{
     MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore, MemoryRecoverySessionStore,
+    MemorySecurityTransactionStore,
 };
 pub(crate) use service_identity::MemoryServiceIdentityStore;
 pub(crate) use sessions::MemorySessionStore;

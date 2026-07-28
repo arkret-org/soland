@@ -24,17 +24,18 @@ use super::{
     MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
     MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoveryReceiptStore,
     MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
-    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
-    MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
-    MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore,
-    ModerationStore, MorphProjectionStore, MultisigPendingStore, NotificationStore,
-    OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore, PersistenceStore,
-    PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
-    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
-    RecoveryReceiptStore, RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore,
-    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
-    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebvhStore,
+    MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemorySessionStore,
+    MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
+    MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryWebvhStore, MessageStore,
+    MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
+    MultisigPendingStore, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
+    OrganizationStore, PersistenceStore, PolicyDocumentStore, ProjectionEventStore,
+    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmInviteStore,
+    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore, RealmOrganizationStatementStore,
+    RealmOrganizationStore, RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore,
+    RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore, ServiceIdentityStore,
+    SessionStore, SidecarStore, SignalRelayStore, SpaceContainerProjectionStore,
+    StrandProjectionStore, SyncCursorStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::{Arc, FaultInjector};
@@ -79,6 +80,7 @@ pub struct SolandMemoryPersistenceStore {
     recovery_policies: MemoryRecoveryPolicyStore,
     recovery_receipts: MemoryRecoveryReceiptStore,
     recovery_sessions: MemoryRecoverySessionStore,
+    security_transactions: MemorySecurityTransactionStore,
     webvh: MemoryWebvhStore,
     service_identity: MemoryServiceIdentityStore,
     realm_invites: MemoryRealmInviteStore,
@@ -114,6 +116,9 @@ impl SolandMemoryPersistenceStore {
         let accounts = MemoryAccountStore::new(account_localparts.shared_data());
         let devices = MemoryDeviceInventoryStore::new();
         let events = MemoryEventStore::with_devices(devices.shared_data());
+        let recovery_sessions = MemoryRecoverySessionStore::new();
+        let security_transactions =
+            MemorySecurityTransactionStore::new(recovery_sessions.shared_data());
         Self {
             #[cfg(feature = "fault-injection")]
             fault_injector: fault_injector.clone(),
@@ -152,7 +157,8 @@ impl SolandMemoryPersistenceStore {
             policy_documents: MemoryPolicyDocumentStore::new(),
             recovery_policies: MemoryRecoveryPolicyStore::new(),
             recovery_receipts: MemoryRecoveryReceiptStore::new(),
-            recovery_sessions: MemoryRecoverySessionStore::new(),
+            recovery_sessions,
+            security_transactions,
             webvh: {
                 #[cfg(feature = "fault-injection")]
                 {
@@ -436,6 +442,10 @@ impl soland_storage::DeliveryPolicyStoreRegistry for SolandMemoryPersistenceStor
 
     fn recovery_sessions(&self) -> &dyn RecoverySessionStore {
         &self.recovery_sessions
+    }
+
+    fn security_transactions(&self) -> &dyn SecurityTransactionStore {
+        &self.security_transactions
     }
 
     fn webvh(&self) -> &dyn WebvhStore {
