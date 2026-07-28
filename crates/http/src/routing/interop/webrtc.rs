@@ -48,10 +48,9 @@ use crate::wire::{
 /// Spec-canonical RTC media surface. Mounted under the `self` trust segment by
 /// `interop::router()` so the only spec-registered media paths resolve at
 /// `/_arkret/self/rtc/ice-config` and `/_arkret/self/rtc/token` (see
-/// `contract-registry.json` / the OpenAPI binding). Ephemeral call signaling is
-/// the spec-registered `/_arkret/self/ephemeral` `ak.call.signal` relay (see
-/// `routing::events::sync::ephemeral`); the durable call model is the composite
-/// call-cell lattice. The legacy soland-internal `/_soland/self/webrtc/*`
+/// `contract-registry.json` / the OpenAPI binding). Call signalling travels
+/// encrypted inside the Signal Extension; the durable call model is the
+/// composite call-cell lattice. The legacy soland-internal `/_soland/self/webrtc/*`
 /// session stack has been removed — token/ICE authz and focus/ban now read the
 /// independent durable cells directly.
 pub(super) fn protocol_router() -> Router {

@@ -135,16 +135,9 @@ fn bottom_repair_request_body_round_trips_through_serde() {
                 Some("ak:proof:state-witness")
             );
         }
+        #[allow(unreachable_patterns)]
         other => panic!("expected HeadInWinner, got {other:?}"),
     }
-
-    let manual = BottomRepairRequestBody {
-        strategy: BottomRepairStrategy::Manual {
-            note: Some("schema-error rewrite".to_owned()),
-        },
-    };
-    let j = serde_json::to_value(&manual).unwrap();
-    assert_eq!(j.get("strategy").and_then(Value::as_str), Some("manual"));
 }
 
 #[test]

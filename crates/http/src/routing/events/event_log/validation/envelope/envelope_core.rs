@@ -44,10 +44,9 @@ pub(crate) async fn validate_event_envelope_with_context(
     let kind = event_string_field(object, &["kind"]).ok_or_else(|| {
         event_validation_error(StatusCode::BAD_REQUEST, "missing_param", "kind is required")
     })?;
-    // Round R2/R3 (T02/T23) — reject ephemeral kinds & receipt-object-only
-    // kinds at the submit entrypoint. Aggressive mode: no compat path —
-    // pre-Round-R2/R3 senders MUST switch to ak.schema.ephemeral_envelope.v1
-    // (broadcast forms) or ak.schema.device_message.v1 (ak.key.verification.*).
+    // Receipt objects are not durable Event kinds. Legacy plaintext transient
+    // kinds are absent from the active registry and fail the registry gate
+    // below; current transient product payloads travel encrypted inside Signal.
     if let Some((code, reason)) = events_submit_pre_admit_check(&kind) {
         return Err(event_validation_error(
             error_http_status(code),

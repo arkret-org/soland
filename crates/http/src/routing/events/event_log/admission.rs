@@ -128,21 +128,12 @@ where
     Ok(())
 }
 
-/// Reject any event kind that is ephemeral or receipt-object-only at the
-/// `ak.self.events.command.submit` entrypoint. Spec T02 + T23.
+/// Reject receipt objects at the `ak.self.events.command.submit` entrypoint.
 ///
 /// Returns the canonical [`ErrorCode`] + human reason when the kind MUST be
 /// rejected; returns `None` when the kind is fine to forward to the
 /// existing durable-event validator pipeline.
 pub fn events_submit_pre_admit_check(kind: &str) -> Option<(ErrorCode, &'static str)> {
-    if arkret_wire::events::is_ephemeral_kind(kind) {
-        return Some((
-            ErrorCode::SchemaViolation,
-            "ephemeral kind MUST be carried via ak.schema.ephemeral_envelope.v1 \
-             (broadcast forms) or ak.schema.device_message.v1 \
-             (ak.key.verification.* to-device); not durable ak.self.events.command.submit",
-        ));
-    }
     if arkret_wire::events::is_receipt_object_only(kind) {
         return Some((
             ErrorCode::SchemaViolation,

@@ -12,7 +12,6 @@ use soland_contracts::admin::seal::{
     BottomCandidateHead, BottomEntry, BottomRepairRequestBody, BottomRepairStrategy,
     SubmitControlMoveOutcome,
 };
-use soland_http::error::{AppError, ErrorCode};
 
 use super::AuthArgs;
 use crate::state::AppState;
@@ -322,23 +321,6 @@ pub(crate) async fn admin_repair_bottom(
                  Submit it on POST /_arkret/self/events"
             )
             .with_status(StatusCode::PRECONDITION_FAILED))
-        }
-        BottomRepairStrategy::Manual { .. } => {
-            // `event-auth-state-resolution.md` §9.5 gives exactly one way out
-            // of a `bottom=reject` cell's `⊥`: a signed conflict-recovery
-            // Control Move whose `refs[]` carry `role=recovery_capability` and
-            // `role=state_witness`, accepted through a control-plane Seal.
-            // There is no admin-supplied-writes form, so a `manual` request
-            // can only be recorded — never applied. Fail closed and name the
-            // supported strategy.
-            Err(AppError::new(
-                ErrorCode::InvalidParam,
-                "manual bottom repair carries no writes: `⊥` recovery requires a signed \
-                 conflict-recovery Control Move with recovery_capability + state_witness refs \
-                 (event-auth-state-resolution.md §9.5), submitted on POST /_arkret/self/events"
-                    .to_owned(),
-            )
-            .with_status(StatusCode::BAD_REQUEST))
         }
     }
 }
