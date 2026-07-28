@@ -266,7 +266,10 @@ fn signed_event_with_prev_refs(
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(ids::generate_event_id()).expect("fixture Event id"),
         kind,
-        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .expect("fixture Realm id"),
+        },
         actor_id.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -279,11 +282,7 @@ fn signed_event_with_prev_refs(
     )
     .expect("SDK Event builder accepts consent fixture");
     event.prev_refs = prev_refs;
-    if kind == arkret_wire::events::EventKind::REALM_CREATE {
-        event.effects =
-            arkret_bootstrap::realm_create_effects(&event).expect("canonical Realm create effects");
-    }
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         seed,
         actor_id,
         verification_method.clone(),

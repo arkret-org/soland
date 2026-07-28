@@ -595,7 +595,10 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .expect("fixture Realm id"),
+        },
         actor.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -617,7 +620,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     } else {
         [21_u8; 32]
     };
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         seed,
         actor,
         verification_method.clone(),

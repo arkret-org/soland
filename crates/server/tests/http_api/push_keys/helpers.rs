@@ -4,14 +4,8 @@
 
 use crate::common::*;
 
-pub(crate) fn presence_event<'a>(sync: &'a Value, actor: &str) -> &'a Value {
-    sync["presence"]["events"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|event| event["actor_id"] == actor || event["user_id"] == actor)
-        .expect("presence event present in account subscribe frame")
-}
+// `presence_event` is gone with the plaintext ephemeral rail: `signal.md` §1
+// leaves the server no presence projection to read out of a sync frame.
 
 pub(crate) fn account_data_entry<'a>(sync: &'a Value, account_data_key: &str) -> Option<&'a Value> {
     sync["account_data"]["events"]
@@ -69,40 +63,6 @@ pub(crate) fn signed_keys_upload_body(
     })
 }
 
-/// Persist a verified device for `actor` carrying an authoritative
-/// `device_public_key` (the shape the session-grant exchange and the
-/// `ak.device.authorize` projection both write), so the `keys/query`
-/// signing-key directory can resolve it.
-pub(crate) async fn seed_verified_device_with_public_key(
-    state: &AppState,
-    actor: &str,
-    device_id: &str,
-    device_public_key: &str,
-) {
-    let now = chrono::Utc::now();
-    state
-        .test_persistence()
-        .devices()
-        .put(&soland_storage::DeviceInventoryRecord {
-            actor: actor.to_owned(),
-            device_id: device_id.to_owned(),
-            display_name: Some("Directory Test Device".to_owned()),
-            verification_state: "verified".to_owned(),
-            payload: serde_json::json!({
-                "device_id": device_id,
-                "verification": "verified",
-                "device_public_key": device_public_key,
-                "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000aa",
-                "enrollment_authority_binding": {
-                    "kind": "service_attested",
-                    "authority_did": "did:web:auth.example",
-                    "authorization_ref": format!("{actor}#device-enrollment")
-                }
-            }),
-            created_at: now,
-            updated_at: now,
-            revoked_at: None,
-        })
-        .await
-        .unwrap();
-}
+// `seed_verified_device_with_public_key` moved to `crate::common`: the Signal
+// rail needs the same authoritative device directory row, and `common` is the
+// only module every domain submodule can reach.

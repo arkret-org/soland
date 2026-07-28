@@ -5,7 +5,7 @@ use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, OnceLock};
 
-use arkret_identifiers::{CellRef, Did, Hash, SealId};
+use arkret_identifiers::{CellRef, Did, Hash, RealmId, SealId};
 use arkret_identity::service_identity::{
     LocalServiceIdentity, ServiceIdentityKeyRef, ServiceIdentityState,
 };
@@ -97,7 +97,7 @@ pub fn app_state_with_identity(
     let projections = ProjectionService::new(
         control_event_store,
         seal_store.clone(),
-        cell_store,
+        cell_store.clone(),
         cell_registry,
         event_seal_committer,
         &service_id,
@@ -128,6 +128,7 @@ pub fn app_state_with_identity(
             projection: Some(projection),
             realms: Some(realms),
             seal_store: Some(seal_store),
+            cell_store: Some(cell_store),
         },
     );
     state
@@ -138,6 +139,21 @@ pub trait AppStateTestExt {
     fn test_projection(&self) -> &'static Arc<Mutex<ProjectionSnapshot>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
     fn test_put_seal(&self, seal: &Seal) -> StoreResult<()>;
+
+    /// Append sealed cell effects the way `apply_seal` commits them.
+    ///
+    /// `arkret_state::effective_state_at` resolves a Seal's governance view
+    /// from the cell log filtered by that Seal's covered Control-Move digests,
+    /// so a fixture that only puts a Seal object leaves the view empty. A
+    /// fixture that needs the Seal to actually *carry* state — a capability
+    /// grant, an MLS `covered_seals` accumulator — has to write the ops the
+    /// sealed Control Moves projected, which is what this does.
+    fn test_append_sealed_effects(
+        &self,
+        realm_id: &RealmId,
+        seal_id: &SealId,
+        ops: &[(CellRef, IssuedOp)],
+    ) -> StoreResult<()>;
 }
 
 pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceStore>) {
@@ -148,6 +164,7 @@ pub fn register_persistence(state: &AppState, persistence: Arc<dyn PersistenceSt
             projection: None,
             realms: None,
             seal_store: None,
+            cell_store: None,
         },
     );
 }
@@ -185,6 +202,20 @@ impl AppStateTestExt for AppState {
             .expect("test Seal store is unavailable for this AppState")
             .put(seal)
     }
+
+    fn test_append_sealed_effects(
+        &self,
+        realm_id: &RealmId,
+        seal_id: &SealId,
+        ops: &[(CellRef, IssuedOp)],
+    ) -> StoreResult<()> {
+        state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.cell_store.clone())
+            .expect("test cell store is unavailable for this AppState")
+            .append_sealed_effects(realm_id, seal_id, ops)
+    }
 }
 
 fn app_state_key(state: &AppState) -> usize {
@@ -196,6 +227,7 @@ struct StateTestResources {
     projection: Option<&'static Arc<Mutex<ProjectionSnapshot>>>,
     realms: Option<&'static Arc<Mutex<RealmDirectoryIndex>>>,
     seal_store: Option<Arc<dyn SealStore>>,
+    cell_store: Option<Arc<dyn CellStore>>,
 }
 
 fn state_test_registry() -> &'static Mutex<BTreeMap<usize, StateTestResources>> {

@@ -1232,358 +1232,403 @@ fn good_media_service_epoch() -> Value {
     })
 }
 
-/// Build a signed `ak.call.signal` ephemeral envelope (verbatim wire shape
-/// per `ak.schema.ephemeral_envelope.v1` + `webrtc-signaling.md` §5). `proof`
-/// is a development detached-signature stub — the relay stores it verbatim and
-/// the receiver (not the relay) verifies it.
-fn call_signal_envelope(
+/// A call signalling frame on the Signal rail (`webrtc-signaling.md` §5).
+///
+/// `call_id`, `signal_kind` and `seq` are inside `encrypted_payload`; the outer
+/// envelope exposes only `signal_class`. `invite` and other wake-up frames use
+/// `setup`, everything else `session`. `opaque_payload` stands in for that
+/// ciphertext: it varies the envelope digest exactly as a differing plaintext
+/// would, and nothing the server may read depends on it.
+fn call_signal(
     actor: &str,
     device_id: &str,
-    call_id: &str,
-    signal_kind: &str,
-    seq: u64,
-) -> Value {
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::minutes(2);
-    let mut envelope = serde_json::json!({
-        "kind": "ak.call.signal",
-        "realm_id": DEMO_REALM_ID,
-        "actor_id": actor,
-        "device_id": device_id,
-        "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-        "payload": {
-            "call_id": call_id,
-            "signal_kind": signal_kind,
-            "seq": seq,
-            "data": {"sdp_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}
-        }
-    });
-    let canonical = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
-    let event_digest = arkret_canonical::sha256_digest(&canonical);
-    envelope["proof"] = serde_json::json!({
-        "kind": "detached_jws",
-        "alg": "EdDSA",
-        "verification_method": format!("{actor}#{device_id}"),
-        "event_digest": event_digest,
-        "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
-        "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
-    });
-    envelope
-}
-
-async fn post_ephemeral(state: AppState, token: &str, envelope: &Value) -> salvo::http::Response {
-    TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(envelope)
-        .send(&app_from_state(state))
-        .await
-}
-
-/// Extract the verbatim relayed `ak.call.signal` envelopes from a subscribe
-/// frame's canonical ephemeral event container.
-fn call_signals_in_subscribe(frame: &Value, realm_id: &str) -> Vec<Value> {
-    let Some(realm) = frame["realms"].get(realm_id) else {
-        return Vec::new();
+    seal_ref: &arkret_wire::SealId,
+    signal_class: arkret_wire::SignalClass,
+    opaque_payload: &str,
+    signing_key: &SigningKey,
+) -> arkret_wire::SignalEnvelope {
+    // `signal.md` §2 per-class TTL ceilings.
+    let ttl_seconds = match signal_class {
+        arkret_wire::SignalClass::Setup => 120,
+        arkret_wire::SignalClass::Moderation => 60,
+        // `SignalClass` is `#[non_exhaustive]`; the narrowest ceiling is the
+        // safe default for a class this fixture does not yet know.
+        _ => 30,
     };
-    let Some(ephemeral) = realm["ephemeral"]["events"].as_array() else {
-        return Vec::new();
-    };
-    ephemeral
-        .iter()
-        .filter(|item| item["kind"] == "ak.call.signal")
-        .cloned()
-        .collect()
+    call_signal_at(
+        actor,
+        device_id,
+        seal_ref,
+        signal_class,
+        chrono::Utc::now(),
+        ttl_seconds,
+        opaque_payload,
+        signing_key,
+    )
 }
 
-#[tokio::test]
-async fn ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_device() {
-    let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:alice.example";
-    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice_token = dev_token(state.clone()).await;
-    let bob = "did:web:bob.example";
-    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
-    // §162 — the sender MUST hold `ak.call.signal.send` for the Realm.
-    grant_call_capability(
-        &state,
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the TTL-expiry case needs an explicit sent_at and lifetime"
+)]
+fn call_signal_at(
+    actor: &str,
+    device_id: &str,
+    seal_ref: &arkret_wire::SealId,
+    signal_class: arkret_wire::SignalClass,
+    sent_at: chrono::DateTime<chrono::Utc>,
+    ttl_seconds: i64,
+    opaque_payload: &str,
+    signing_key: &SigningKey,
+) -> arkret_wire::SignalEnvelope {
+    signed_signal_envelope(
         DEMO_REALM_ID,
-        alice,
-        arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+        },
+        actor,
+        device_id,
+        seal_ref,
+        signal_class,
+        sent_at,
+        ttl_seconds,
+        opaque_payload,
+        signing_key,
+    )
+}
+
+const WEBRTC_ALICE: &str = "did:web:alice.example";
+const WEBRTC_ALICE_DEVICE_A: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+const WEBRTC_BOB: &str = "did:web:bob.example";
+const WEBRTC_BOB_DEVICE: &str = "ak:device:01904100-0000-7000-8000-b0b000000001";
+
+/// Restates `ephemeral_call_signal_relays_to_other_realm_member_and_filters_self_device`.
+///
+/// Same premise, new rail: an admitted call frame reaches the other Realm
+/// member's device verbatim — so that receiver can verify `proof` over the exact
+/// canonical bytes the sender signed — and the originating device never gets its
+/// own frame echoed back.
+#[tokio::test]
+async fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
+    let state = soland_test_support::app_state(test_config());
+    add_test_realm_member(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    let (alice_token, alice_key) =
+        seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
+            .await;
+    let (bob_token, _bob_key) =
+        seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+
+    let invite = call_signal(
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        &seal_ref,
+        arkret_wire::SignalClass::Setup,
+        "invite",
+        &alice_key,
+    );
+    let mut submit = post_signal(state.clone(), &alice_token, &invite).await;
+    assert_eq!(submit.status_code, Some(StatusCode::OK));
+    let outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =
+        submit.take_json().await.unwrap();
+    assert!(outcome.accepted);
+    assert_eq!(
+        outcome.dispatched_recipient_count,
+        Some(1),
+        "eligibility count is Realm breadth minus the sender, not a delivery guarantee"
     );
 
-    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca11";
-    let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
-    let mut submit = post_ephemeral(state.clone(), &alice_token, &envelope).await;
-    assert_eq!(submit.status_code, Some(StatusCode::OK));
-    let outcome: Value = submit.take_json().await.unwrap();
-    assert_eq!(outcome["accepted"], true);
-    // dispatched_to now reflects the realm-broadcast breadth (bob), not None.
-    assert_eq!(outcome["dispatched_to"], 1);
-
-    // Bob (other member) receives the verbatim signed envelope (proof intact).
-    let bob_frame = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let bob_signals = call_signals_in_subscribe(&bob_frame, DEMO_REALM_ID);
+    let bob_signals = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert_eq!(
         bob_signals.len(),
         1,
         "bob must receive the relayed call signal"
     );
-    assert_eq!(bob_signals[0]["kind"], "ak.call.signal");
-    assert_eq!(bob_signals[0]["payload"]["call_id"], call_id);
-    assert_eq!(bob_signals[0]["payload"]["signal_kind"], "invite");
-    assert_eq!(bob_signals[0]["payload"]["seq"], 1);
-    assert_eq!(bob_signals[0]["proof"]["kind"], "detached_jws");
-    assert_eq!(bob_signals[0]["proof"]["alg"], "EdDSA");
-    assert!(bob_signals[0]["proof"]["event_digest"].is_string());
-    assert!(bob_signals[0]["proof"]["jws"].is_string());
     assert_eq!(
-        bob_signals[0]["proof"]["verification_method"],
-        "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
+        bob_signals[0], invite,
         "the relay delivers the envelope verbatim so the receiver can verify proof"
     );
+    assert_eq!(bob_signals[0].signal_class, arkret_wire::SignalClass::Setup);
 
-    // Alice's own device A subscribe does NOT echo her own signal back.
-    let alice_frame =
-        account_subscribe_frame(state.clone(), Some(&alice_token), "catchup=true").await;
-    let alice_signals = call_signals_in_subscribe(&alice_frame, DEMO_REALM_ID);
+    let alice_signals = signal_subscribe_envelopes(state.clone(), &alice_token, 400).await;
     assert!(
         alice_signals.is_empty(),
         "the sending device must not see its own self-echoed call signal"
     );
 }
 
+/// Restates `ephemeral_call_signal_reaches_same_actor_other_device`:
+/// `webrtc-signaling.md` §7 multi-device fan-out. Only the originating device is
+/// suppressed, so a sibling device of the same actor still rings.
 #[tokio::test]
-async fn ephemeral_call_signal_reaches_same_actor_other_device() {
-    // §7 — a same-actor *other* device receives the signal (multi-device
-    // fan-out); only the originating device self-echo is suppressed.
+async fn call_signal_reaches_same_actor_other_device() {
     let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:alice.example";
-    let alice_device_a = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice_device_b = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-    let token_a = dev_token(state.clone()).await;
-    let token_b = dev_token_for_device(state.clone(), alice, alice_device_b, "Alice Laptop").await;
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        alice,
-        arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND,
+    let device_b = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+    let (token_a, key_a) =
+        seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
+            .await;
+    let (token_b, _key_b) =
+        seed_signal_sender_device(&state, WEBRTC_ALICE, device_b, "Alice Laptop").await;
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+
+    let invite = call_signal(
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        &seal_ref,
+        arkret_wire::SignalClass::Setup,
+        "invite",
+        &key_a,
+    );
+    assert_eq!(
+        post_signal(state.clone(), &token_a, &invite)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
     );
 
-    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca12";
-    let envelope = call_signal_envelope(alice, alice_device_a, call_id, "invite", 1);
-    let submit = post_ephemeral(state.clone(), &token_a, &envelope).await;
-    assert_eq!(submit.status_code, Some(StatusCode::OK));
-
-    // Device B (same actor) receives the signal.
-    let frame_b = account_subscribe_frame(state.clone(), Some(&token_b), "catchup=true").await;
-    let signals_b = call_signals_in_subscribe(&frame_b, DEMO_REALM_ID);
+    let signals_b = signal_subscribe_envelopes(state.clone(), &token_b, 400).await;
     assert_eq!(
         signals_b.len(),
         1,
         "a second device of the same actor must receive the call signal"
     );
-    assert_eq!(signals_b[0]["payload"]["call_id"], call_id);
+    assert_eq!(signals_b[0], invite);
 
-    // Device A (originating) still does not see its own echo.
-    let frame_a = account_subscribe_frame(state.clone(), Some(&token_a), "catchup=true").await;
-    assert!(call_signals_in_subscribe(&frame_a, DEMO_REALM_ID).is_empty());
+    let signals_a = signal_subscribe_envelopes(state.clone(), &token_a, 400).await;
+    assert!(signals_a.is_empty());
 }
 
+/// Restates `ephemeral_call_signal_not_delivered_after_ttl_expiry`.
+///
+/// The relay TTL premise is unchanged; only its carrier moved. `expires_at` is
+/// now a signed member of the envelope with a §2 per-class ceiling, and the
+/// subscriber path skips any record whose `expires_at` has passed. The expired
+/// record is appended directly because an already-expired envelope can no longer
+/// be admitted through the endpoint at all — which is itself the stronger half
+/// of the rule.
 #[tokio::test]
-async fn ephemeral_call_signal_not_delivered_after_ttl_expiry() {
+async fn call_signal_not_delivered_after_ttl_expiry() {
     let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:alice.example";
-    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice_token = dev_token(state.clone()).await;
-    let bob = "did:web:bob.example";
-    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        alice,
-        arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND,
+    add_test_realm_member(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    let (alice_token, alice_key) =
+        seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
+            .await;
+    let (bob_token, _bob_key) =
+        seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+
+    let invite = call_signal(
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        &seal_ref,
+        arkret_wire::SignalClass::Setup,
+        "invite",
+        &alice_key,
     );
-
-    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca13";
-    let envelope = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
-    let submit = post_ephemeral(state.clone(), &alice_token, &envelope).await;
-    assert_eq!(submit.status_code, Some(StatusCode::OK));
-
-    // Force-expire the relayed record by rewriting its expires_at into the past.
-    {
-        let record = state
+    assert_eq!(
+        post_signal(state.clone(), &alice_token, &invite)
+            .await
+            .status_code,
+        Some(StatusCode::OK)
+    );
+    assert_eq!(
+        state
             .test_persistence()
-            .call_signal_relay()
+            .signal_relay()
             .list_for_realm(DEMO_REALM_ID)
             .await
-            .unwrap();
-        assert_eq!(record.len(), 1);
-    }
-    // Re-submit with an already-near expiry, then prune; simulate expiry by
-    // pruning after the relay TTL passes. We drive expiry deterministically by
-    // appending an expired record directly and pruning.
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let expired = call_signal_at(
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        &seal_ref,
+        arkret_wire::SignalClass::Setup,
+        chrono::Utc::now() - chrono::Duration::seconds(121),
+        120,
+        "hangup",
+        &alice_key,
+    );
     state
         .test_persistence()
-        .call_signal_relay()
-        .append(soland_storage::CallSignalRelayRecord {
+        .signal_relay()
+        .append(soland_storage::SignalRelayRecord {
             realm_id: DEMO_REALM_ID.to_owned(),
-            sender_actor: alice.to_owned(),
-            sender_device: alice_device.to_owned(),
-            call_id: call_id.to_owned(),
-            expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
-            envelope: serde_json::from_value(call_signal_envelope(
-                alice,
-                alice_device,
-                call_id,
-                "hangup",
-                2,
-            ))
-            .unwrap(),
+            scope_ref: expired.scope_ref.clone(),
+            sender_actor_id: expired.sender_actor_id.as_str().to_owned(),
+            sender_device_id: expired.sender_device_id.as_str().to_owned(),
+            signal_class: expired.signal_class,
+            envelope_digest: expired.envelope_digest().unwrap().as_str().to_owned(),
+            sent_at: expired.sent_at,
+            expires_at: expired.expires_at,
+            envelope: expired.clone(),
             position: 0,
         })
         .await
         .unwrap();
 
-    // The expired hangup must not be delivered; only the live invite remains.
-    let bob_frame = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let bob_signals = call_signals_in_subscribe(&bob_frame, DEMO_REALM_ID);
+    let bob_signals = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert!(
-        bob_signals
-            .iter()
-            .all(|signal| signal["payload"]["signal_kind"] != "hangup"),
+        bob_signals.iter().all(|signal| signal != &expired),
         "expired call signals must not be delivered"
     );
+    assert_eq!(
+        bob_signals,
+        vec![invite],
+        "only the live invite is delivered"
+    );
+
+    // §2 defines the TTL bound relative to `sent_at`, not to the ingress clock,
+    // so an envelope whose window has already closed is still *structurally*
+    // valid and is admitted. Expiry bites at delivery, which is the assertion
+    // above. A lifetime that exceeds the class ceiling is the case that fails
+    // closed at admission.
+    let mut over_ceiling = post_signal(
+        state.clone(),
+        &alice_token,
+        &call_signal_at(
+            WEBRTC_ALICE,
+            WEBRTC_ALICE_DEVICE_A,
+            &seal_ref,
+            arkret_wire::SignalClass::Setup,
+            chrono::Utc::now(),
+            121,
+            "hangup",
+            &alice_key,
+        ),
+    )
+    .await;
+    assert_eq!(over_ceiling.status_code, Some(StatusCode::BAD_REQUEST));
+    let over_ceiling_body: Value = over_ceiling.take_json().await.unwrap();
+    assert_eq!(
+        over_ceiling_body["error"]["code"],
+        "signal_ttl_out_of_range"
+    );
 }
 
+/// Restates `ephemeral_call_signal_without_send_capability_is_denied`.
+///
+/// The old test asserted `ak.call.signal.send` at the ingress. That gate cannot
+/// exist on this rail: `webrtc-signaling.md` §5 and `signal.md` §1 put
+/// `signal_kind` and `call_id` inside the ciphertext, so a service cannot tell a
+/// call frame from a typing frame — both are `setup` / `session` — and
+/// `signal.md` §3's admission list deliberately contains only the `moderation`
+/// action gate. `ak.call.signal.send` therefore binds the sender and the
+/// receiving client, not this endpoint. The send-side denial that does survive
+/// at the ingress is §3(2) eligibility: a non-member of the Realm may not send
+/// into it, and nothing enters the relay.
 #[tokio::test]
-async fn ephemeral_call_signal_without_send_capability_is_denied() {
+async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
     let state = soland_test_support::app_state(test_config());
-    // Use a non-owner member so owner-default authorization cannot mask the
-    // missing explicit `ak.call.signal.send` grant.
-    let actor = "did:web:bob.example";
-    let device_id = "ak:device:01904100-0000-7000-8000-b0b000000004";
-    add_test_realm_member(&state, DEMO_REALM_ID, actor);
-    let token = dev_token_for_device(state.clone(), actor, device_id, "Bob Phone").await;
-    // No `ak.call.signal.send` grant.
-    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca14";
-    let envelope = call_signal_envelope(actor, device_id, call_id, "invite", 1);
-    let denied = post_ephemeral(state.clone(), &token, &envelope).await;
+    // Bob is deliberately not added to the demo Realm.
+    let outsider_device = "ak:device:01904100-0000-7000-8000-b0b000000004";
+    let (token, signing_key) =
+        seed_signal_sender_device(&state, WEBRTC_BOB, outsider_device, "Bob Phone").await;
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_BOB);
+
+    let denied = post_signal(
+        state.clone(),
+        &token,
+        &call_signal(
+            WEBRTC_BOB,
+            outsider_device,
+            &seal_ref,
+            arkret_wire::SignalClass::Setup,
+            "invite",
+            &signing_key,
+        ),
+    )
+    .await;
     assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
 
-    // Nothing entered the relay.
-    let relayed = state
-        .test_persistence()
-        .call_signal_relay()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert!(relayed.is_empty());
-}
-
-/// Incremental subscribe (with an `after` cursor) for `token`, returning the
-/// relayed `ak.call.signal` envelopes and the next cursor. `is_incremental` on
-/// the server is `body.after.is_some()`, so passing `after=` exercises the
-/// deliver-once watermark path rather than a full sync.
-async fn incremental_call_signals(
-    state: AppState,
-    token: &str,
-    after: &str,
-) -> (Vec<Value>, String) {
-    let frame = account_subscribe_frame(state, Some(token), &format!("after={after}")).await;
-    let signals = call_signals_in_subscribe(&frame, DEMO_REALM_ID);
-    let next = frame["cursor"].as_str().unwrap().to_owned();
-    (signals, next)
-}
-
-#[tokio::test]
-async fn ephemeral_call_signal_incremental_resubscribe_does_not_redeliver() {
-    // Deliver-once: a subscriber-device that already received a relayed
-    // `ak.call.signal` on one sync MUST NOT receive it again on a later
-    // incremental sync inside the TTL window; a *new* signal still arrives;
-    // and a full sync (catchup, no `after`) still re-delivers pending signals.
-    let state = soland_test_support::app_state(test_config());
-    let alice = "did:web:alice.example";
-    let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let alice_token = dev_token(state.clone()).await;
-    let bob = "did:web:bob.example";
-    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000001";
-    let bob_token = dev_token_for_device(state.clone(), bob, bob_device, "Bob Phone").await;
-    add_test_realm_member(&state, DEMO_REALM_ID, bob);
-    grant_call_capability(
-        &state,
-        DEMO_REALM_ID,
-        alice,
-        arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND,
+    assert!(
+        state
+            .test_persistence()
+            .signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .is_empty()
     );
+}
 
-    let call_id = "ak:call:0196419b-0000-7000-8000-00000000ca20";
-    let first = call_signal_envelope(alice, alice_device, call_id, "invite", 1);
+/// Restates `ephemeral_call_signal_incremental_resubscribe_does_not_redeliver`.
+///
+/// Deliver-once is now the per-`(actor, device, realm)` relay watermark rather
+/// than a sync cursor: a reconnecting subscriber inside the TTL window sees
+/// nothing it already took, a genuinely new frame still arrives, and the sending
+/// device is never in its own fanout. The old "a full catchup re-delivers
+/// everything pending" half is gone with the cursor — §4 gives this stream no
+/// `after` token and no catchup mode, so the watermark is the only resume state.
+#[tokio::test]
+async fn call_signal_resubscribe_does_not_redeliver() {
+    let state = soland_test_support::app_state(test_config());
+    add_test_realm_member(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    let (alice_token, alice_key) =
+        seed_signal_sender_device(&state, WEBRTC_ALICE, WEBRTC_ALICE_DEVICE_A, "Alice Desktop")
+            .await;
+    let (bob_token, _bob_key) =
+        seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+
+    let invite = call_signal(
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        &seal_ref,
+        arkret_wire::SignalClass::Setup,
+        "invite",
+        &alice_key,
+    );
     assert_eq!(
-        post_ephemeral(state.clone(), &alice_token, &first)
+        post_signal(state.clone(), &alice_token, &invite)
             .await
             .status_code,
         Some(StatusCode::OK)
     );
 
-    // First (full) sync: bob receives the invite once and the watermark aligns.
-    let baseline = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let baseline_signals = call_signals_in_subscribe(&baseline, DEMO_REALM_ID);
-    assert_eq!(baseline_signals.len(), 1, "bob receives the first invite");
-    assert_eq!(baseline_signals[0]["payload"]["seq"], 1);
-    let cursor = baseline["cursor"].as_str().unwrap().to_owned();
+    let baseline = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
+    assert_eq!(baseline, vec![invite], "bob receives the first invite");
 
-    // Incremental re-subscribe inside the TTL window: the already-delivered
-    // invite MUST NOT be re-emitted.
-    let (repeat, cursor) = incremental_call_signals(state.clone(), &bob_token, &cursor).await;
+    let repeat = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert!(
         repeat.is_empty(),
-        "an incremental re-subscribe must not re-deliver an already-seen signal"
+        "a resubscribe must not re-deliver an already-seen signal"
     );
 
-    // A second, distinct signal is still delivered on the next incremental sync.
-    let second = call_signal_envelope(alice, alice_device, call_id, "answer", 2);
+    let answer = call_signal(
+        WEBRTC_ALICE,
+        WEBRTC_ALICE_DEVICE_A,
+        &seal_ref,
+        arkret_wire::SignalClass::Session,
+        "answer",
+        &alice_key,
+    );
     assert_eq!(
-        post_ephemeral(state.clone(), &alice_token, &second)
+        post_signal(state.clone(), &alice_token, &answer)
             .await
             .status_code,
         Some(StatusCode::OK)
     );
-    let (after_second, cursor) = incremental_call_signals(state.clone(), &bob_token, &cursor).await;
+    let after_second = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert_eq!(
-        after_second.len(),
-        1,
-        "a new signal must still be delivered incrementally"
+        after_second,
+        vec![answer],
+        "a new signal must still be delivered"
     );
-    assert_eq!(after_second[0]["payload"]["signal_kind"], "answer");
-
-    // And it is not re-delivered on a subsequent incremental sync.
-    let (after_second_repeat, _cursor) =
-        incremental_call_signals(state.clone(), &bob_token, &cursor).await;
     assert!(
-        after_second_repeat.is_empty(),
-        "the second signal must not be re-delivered incrementally either"
+        signal_subscribe_envelopes(state.clone(), &bob_token, 400)
+            .await
+            .is_empty(),
+        "the second signal must not be re-delivered either"
     );
 
-    // A full sync (catchup, no `after`) re-delivers all still-pending signals so
-    // a reconnecting device recovers a pending invite.
-    let full = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let full_signals = call_signals_in_subscribe(&full, DEMO_REALM_ID);
-    assert_eq!(
-        full_signals.len(),
-        2,
-        "a full sync re-delivers all non-expired pending signals (catchup recovery)"
-    );
-
-    // The sending device still never sees its own self-echo, even on full sync.
-    let alice_frame =
-        account_subscribe_frame(state.clone(), Some(&alice_token), "catchup=true").await;
     assert!(
-        call_signals_in_subscribe(&alice_frame, DEMO_REALM_ID).is_empty(),
+        signal_subscribe_envelopes(state.clone(), &alice_token, 400)
+            .await
+            .is_empty(),
         "the sending device must not see its own self-echoed call signal"
     );
 }

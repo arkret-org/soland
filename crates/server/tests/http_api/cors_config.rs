@@ -176,7 +176,6 @@ async fn invite_create_event_surfaces_via_authz_invites() {
         Vec::new(),
         payload,
     );
-    attach_invite_create_effects(&mut event);
     move_event_to_actor_realm_frontier(&state, &alice, alice_did, &realm_id, &mut event).await;
     event["seal_basis"] = created_realm["seal_basis"].clone();
     resign_canonical_event(&mut event);

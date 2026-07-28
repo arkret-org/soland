@@ -38,7 +38,7 @@ fn cross_signing_reset_event(
         || format!("{actor}#{device_id}"),
         |key| format!("{actor}#{key}"),
     );
-    let signer = arkret_signatures::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
         actor_signing_key.clone(),
         event.actor_id.clone(),
         verification_method.clone(),

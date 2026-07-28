@@ -6,7 +6,7 @@ use arkret_identifiers::TypedTrustDomainId;
 use arkret_models_identity::{
     CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };
-use arkret_wire::{MoveSigner as _, NonEmptyString};
+use arkret_wire::{NonEmptyString, PayloadSigner as _};
 use chrono::Utc;
 
 use super::common::*;
@@ -86,7 +86,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
         (0, Vec::new())
     };
     let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
-    let signer = arkret_signatures::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
         signing_key,
         arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
         verification_method.clone(),
@@ -197,8 +197,24 @@ async fn submit_direct_event_draft(
     event.actor_seq = frontier.next_actor_seq;
     event.prev_refs = frontier.frontier_event_ids;
     event.proofs.clear();
+    // `contact-and-direct-conversation.md` §6 submits the PCR binding fact only
+    // after the Realm bootstrap batch is canonical, so it is an ordinary
+    // Control Move outside the §5 basis-exempt anchor unit and MUST carry
+    // `seal_basis` (`event-auth-state-resolution.md` §5). The resolver hands
+    // back an unsigned draft without one; the producer fills it from the
+    // Realm's accepted Seal frontier, which the fixture has to seed first.
+    if event.seal_basis.is_none()
+        && event.seal_ref.is_none()
+        && event.kind.descriptor().is_some_and(|descriptor| {
+            descriptor.reducer_input && descriptor.plane == Some("control")
+        })
+    {
+        let basis_seal = test_realm_uncovered_basis_seal(realm_id);
+        state.test_put_seal(&basis_seal).unwrap();
+        event.seal_basis = Some(basis_seal.seal_basis());
+    }
     let verification_method = format!("{actor}#{ALICE_SIGNING_DEVICE}");
-    let signer = arkret_signatures::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
         signing_key,
         arkret_identifiers::Did::new(actor.to_owned()).unwrap(),
         verification_method.clone(),

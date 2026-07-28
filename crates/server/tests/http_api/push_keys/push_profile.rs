@@ -1,94 +1,70 @@
-//! Integration tests — `push_keys` domain: push / profile / blob / presence /
-//! call-signal contracts.
+//! Integration tests — `push_keys` domain: push / profile / blob / Signal-rail
+//! contracts.
 
 use soland_http::state::EventNotificationKind;
 
 use super::helpers::*;
 use crate::common::*;
 
-/// Broadcast ephemeral envelope with the authenticated source contract from
-/// `profiles-presence.md` §3.4. The deterministic test key is projected into
-/// the authoritative device directory by [`ephemeral_test_token`].
-fn broadcast_ephemeral_envelope(kind: &str, payload: Value) -> Value {
-    let actor_id = "did:web:alice.example";
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    broadcast_ephemeral_envelope_signed_by(
-        kind,
-        payload,
-        test_ephemeral_device_signing_key(actor_id, device_id),
+const ALICE: &str = "did:web:alice.example";
+const ALICE_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+
+/// A `session`-class Realm-scoped Signal from Alice's seeded device.
+///
+/// `profiles-presence.md` §3.4/§3.5 put presence and typing on exactly this
+/// rail: the payload type, the target Strand and the state value are inside the
+/// ciphertext, and `signal_class` is the only classification the server sees.
+fn alice_signal(
+    seal_ref: &arkret_wire::SealId,
+    opaque_payload: &str,
+    signing_key: &SigningKey,
+) -> arkret_wire::SignalEnvelope {
+    signed_signal_envelope(
+        DEMO_REALM_ID,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+        },
+        ALICE,
+        ALICE_DEVICE,
+        seal_ref,
+        arkret_wire::SignalClass::Session,
+        chrono::Utc::now(),
+        30,
+        opaque_payload,
+        signing_key,
     )
 }
 
-fn broadcast_ephemeral_envelope_signed_by(
-    kind: &str,
-    payload: Value,
-    signing_key: SigningKey,
-) -> Value {
-    let actor_id = "did:web:alice.example";
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let sent_at = chrono::Utc::now();
-    let expires_at = sent_at + chrono::Duration::seconds(30);
-    let mut env = serde_json::json!({
-        "kind": kind,
-        "realm_id": DEMO_REALM_ID,
-        "actor_id": actor_id,
-        "device_id": device_id,
-        "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
-        "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-        "payload": payload,
-    });
-    let canonical = arkret_canonical::canonical_json_bytes(&env).unwrap();
-    let event_digest = arkret_canonical::sha256_digest(&canonical);
-    let verification_method = format!("{actor_id}#{device_id}");
-    let mut proof = arkret_wire::Proof {
-        proof_purpose: None,
-        kind: "detached_jws".to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method: verification_method.clone(),
-        event_digest: arkret_identifiers::Hash::new(event_digest).unwrap(),
-        created_at: sent_at,
-        domain: None,
-        audience: None,
-        jws: String::new(),
-    };
-    let actor = arkret_identifiers::Did::new(actor_id.to_owned()).unwrap();
-    let binding = proof.canonical_ephemeral_binding_bytes(&actor).unwrap();
-    let signer = arkret_signatures::Ed25519DetachedJwsSigner::new(signing_key, verification_method);
-    proof.jws = signer.sign_detached_jws(&binding);
-    env["proof"] = serde_json::to_value(proof).unwrap();
-    env
+/// Seed Alice's bearer session, her authoritative device signing key and an
+/// accepted Seal for the demo Realm.
+async fn signal_test_context(state: &AppState) -> (String, SigningKey, arkret_wire::SealId) {
+    let (token, signing_key) =
+        seed_signal_sender_device(state, ALICE, ALICE_DEVICE, "Alice Desktop").await;
+    let seal_ref = seed_signal_basis_seal(state, DEMO_REALM_ID, ALICE);
+    (token, signing_key, seal_ref)
 }
 
-async fn ephemeral_test_token(state: AppState) -> String {
-    let actor = "did:web:alice.example";
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-    let token = dev_token(state.clone()).await;
-    let signing_key = test_ephemeral_device_signing_key(actor, device_id);
-    seed_verified_device_with_public_key(
-        &state,
-        actor,
-        device_id,
-        &test_ed25519_multibase_public(&signing_key),
-    )
-    .await;
-    token
-}
-
+/// Restates `ephemeral_presence_requires_active_authorized_device_signature`.
+///
+/// The plaintext ephemeral rail is gone, but its premise is unchanged and is now
+/// `signal.md` §3(4): the envelope's device proof MUST verify against the key
+/// the accepted device directory authorizes for `sender_device_id`, and a
+/// fragment-to-device-id string match may not stand in for it. Two things the
+/// old rail could only assert weakly become structural here: a session may not
+/// relay a *sibling* device's envelope at all, and a revoked device's envelope
+/// is rejected on the directory lookup rather than on its signature.
 #[tokio::test]
-async fn ephemeral_presence_requires_active_authorized_device_signature() {
+async fn signal_requires_active_authorized_device_signature() {
     let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
     let wrong_key = SigningKey::from_bytes(&[0x6d; 32]);
-    let mut rejected = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope_signed_by(
-            "ak.presence",
-            serde_json::json!({"state": "online"}),
-            wrong_key,
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let mut rejected = post_signal(
+        state.clone(),
+        &token,
+        &alice_signal(&seal_ref, "unbound-key", &wrong_key),
+    )
+    .await;
     assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
     let rejected_body: Value = rejected.take_json().await.unwrap();
     assert_eq!(rejected_body["error"]["code"], "invalid_param");
@@ -99,50 +75,49 @@ async fn ephemeral_presence_requires_active_authorized_device_signature() {
     assert!(
         state
             .test_persistence()
-            .presence()
-            .list_for_actor("did:web:alice.example")
+            .signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
             .await
             .unwrap()
             .is_empty(),
-        "a signature from an unbound key must not reach presence storage"
+        "a signature from an unbound key must never reach the live relay"
     );
 
-    let accepted = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({"state": "online"}),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
+    let accepted = post_signal(
+        state.clone(),
+        &token,
+        &alice_signal(&seal_ref, "authorized", &signing_key),
+    )
+    .await;
     assert_eq!(accepted.status_code, Some(StatusCode::OK));
 
-    let actor = "did:web:alice.example";
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    // A sibling device's session may not relay Alice's device-A envelope: §3
+    // binds `sender_device_id` to the bearer session's device, so the old
+    // "a revoked device's envelope replayed by a sibling" shape cannot even be
+    // expressed on this rail.
     let sibling_device_id = "ak:device:01904100-0000-7000-8000-a11ce0000002";
-    let sibling_token = dev_token_for_device(
+    let (sibling_token, _sibling_key) =
+        seed_signal_sender_device(&state, ALICE, sibling_device_id, "Alice Sibling Device").await;
+    let sibling_relay = post_signal(
         state.clone(),
-        actor,
-        sibling_device_id,
-        "Alice Sibling Device",
+        &sibling_token,
+        &alice_signal(&seal_ref, "relayed-by-sibling", &signing_key),
     )
     .await;
-    let sibling_key = test_ephemeral_device_signing_key(actor, sibling_device_id);
-    seed_verified_device_with_public_key(
-        &state,
-        actor,
-        sibling_device_id,
-        &test_ed25519_multibase_public(&sibling_key),
-    )
-    .await;
+    assert_eq!(sibling_relay.status_code, Some(StatusCode::FORBIDDEN));
+
+    // Dropping device A out of the *authorized* set — without revoking it, so
+    // the bearer session still resolves — makes its own further Signals fail on
+    // the §3(4) directory resolution rather than on the signature itself: the
+    // key is still the right one, but the directory no longer authorizes it.
     let mut device = state
         .test_persistence()
         .devices()
-        .get(actor, device_id)
+        .get(ALICE, ALICE_DEVICE)
         .await
         .unwrap()
         .unwrap();
-    device.revoked_at = Some(chrono::Utc::now());
+    device.verification_state = "unverified".to_owned();
     state
         .test_persistence()
         .devices()
@@ -150,20 +125,36 @@ async fn ephemeral_presence_requires_active_authorized_device_signature() {
         .await
         .unwrap();
 
-    let mut revoked = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {sibling_token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({"state": "dnd"}),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(revoked.status_code, Some(StatusCode::BAD_REQUEST));
-    let revoked_body: Value = revoked.take_json().await.unwrap();
+    let mut unauthorized = post_signal(
+        state.clone(),
+        &token,
+        &alice_signal(&seal_ref, "after-deauthorization", &signing_key),
+    )
+    .await;
+    assert_eq!(unauthorized.status_code, Some(StatusCode::BAD_REQUEST));
+    let unauthorized_body: Value = unauthorized.take_json().await.unwrap();
     assert_eq!(
-        revoked_body["error"]["details"]["reason_code"],
+        unauthorized_body["error"]["details"]["reason_code"],
         "proof_invalid"
     );
+
+    // Full revocation fails even earlier: the session itself no longer
+    // authenticates, so a revoked device never reaches the Signal admission set.
+    device.verification_state = "verified".to_owned();
+    device.revoked_at = Some(chrono::Utc::now());
+    state
+        .test_persistence()
+        .devices()
+        .put(&device)
+        .await
+        .unwrap();
+    let revoked = post_signal(
+        state.clone(),
+        &token,
+        &alice_signal(&seal_ref, "after-revocation", &signing_key),
+    )
+    .await;
+    assert_eq!(revoked.status_code, Some(StatusCode::UNAUTHORIZED));
 }
 
 #[tokio::test]
@@ -308,151 +299,92 @@ async fn profile_avatar_get_recovers_existing_local_object_without_metadata() {
     assert_eq!(recovered.realm_id, None);
 }
 
+/// Restates the presence and typing halves of
+/// `push_profile_and_moderation_contracts_work`.
+///
+/// Those halves asserted a server-visible `ak.presence` / `ak.typing` product
+/// type, a `state` enum the server validated, and a projection it re-emitted.
+/// `signal.md` §1 removes all three: `signal_class` is the only classification
+/// the server may see and §6 makes an outer `signal_kind=typing` an explicit
+/// counter-example. What survives at this layer is the accepted-envelope
+/// contract — the send needs a session, an admitted Signal reports the class-free
+/// `SignalSubmitOutcome`, and a legacy plaintext ephemeral body fails closed.
+#[tokio::test]
+async fn signal_send_requires_a_session_and_rejects_the_legacy_plaintext_body() {
+    let state = soland_test_support::app_state(test_config());
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
+
+    let unauthenticated = TestClient::post("http://server/_arkret/self/signal")
+        .json(&alice_signal(&seal_ref, "presence", &signing_key))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(unauthenticated.status_code, Some(StatusCode::UNAUTHORIZED));
+
+    // §3 states there is no plaintext branch. The old `ak.presence` /`ak.typing`
+    // envelope is not a malformed Signal, it is a rail that no longer exists,
+    // and it MUST fail closed under the registered reason code.
+    let mut plaintext = TestClient::post("http://server/_arkret/self/signal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "kind": "ak.presence",
+            "realm_id": DEMO_REALM_ID,
+            "actor_id": ALICE,
+            "device_id": ALICE_DEVICE,
+            "payload": {"state": "dnd", "status_message": "In a meeting"}
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(plaintext.status_code, Some(StatusCode::BAD_REQUEST));
+    let plaintext_body: Value = plaintext.take_json().await.unwrap();
+    assert_eq!(
+        plaintext_body["error"]["details"]["reason_code"],
+        "signal_plaintext_forbidden"
+    );
+
+    let envelope = alice_signal(&seal_ref, "presence", &signing_key);
+    let outcome: arkret_models_collaboration::http_bodies::SignalSubmitOutcome =
+        post_signal(state.clone(), &token, &envelope)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(outcome.accepted);
+    assert_eq!(outcome.realm_id.as_str(), DEMO_REALM_ID);
+    assert_eq!(
+        outcome.envelope_digest,
+        envelope.envelope_digest().unwrap(),
+        "the outcome commits to the exact envelope the sender signed"
+    );
+
+    // §2 short-term replay suppression: the identical envelope is answered as
+    // accepted but is not appended a second time, so it cannot be delivered
+    // twice.
+    let replay = post_signal(state.clone(), &token, &envelope).await;
+    assert_eq!(replay.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        state
+            .test_persistence()
+            .signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "a repeat inside the retention window must not enter the relay twice"
+    );
+}
+
 #[tokio::test]
 async fn push_profile_and_moderation_contracts_work() {
     let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
-    let unauth_presence = TestClient::post("http://server/_arkret/self/ephemeral")
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({"state": "online"}),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(unauth_presence.status_code, Some(StatusCode::UNAUTHORIZED));
-
-    // Matrix-legacy `unavailable` is outside the closed v1 wire set →
-    // schema_violation, never remapped (profiles-presence.md §3.2).
-    let mut legacy_state = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({"state": "unavailable"}),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
-    let legacy_state_body: Value = legacy_state.take_json().await.unwrap();
-    assert_eq!(legacy_state_body["error"]["code"], "schema_violation");
-
-    let presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({
-                "state": "dnd",
-                "status_message": "In a meeting"
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(presence["accepted"], true);
-    assert_eq!(presence["kind"], "ak.presence");
-
-    let presence_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    let profile = presence_event(&presence_sync, "did:web:alice.example");
-    assert_eq!(profile["actor_id"], "did:web:alice.example");
-    assert_eq!(profile["payload"]["state"], "dnd");
-    assert_eq!(
-        profile["payload"]["status_message"], "In a meeting",
-        "admitted status_message must survive into the presence projection: {profile}"
-    );
-
-    state
-        .test_persistence()
-        .presence()
-        .put(PresenceRecord {
-            actor: "did:web:alice.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
-            status: "online".to_owned(),
-            status_message: None,
-            last_active_at: None,
-            expires_at: Some(chrono::Utc::now() - chrono::Duration::seconds(1)),
-            updated_at: chrono::Utc::now() - chrono::Duration::seconds(10),
-            envelope: serde_json::from_value(broadcast_ephemeral_envelope(
-                "ak.presence",
-                serde_json::json!({"state": "online"}),
-            ))
-            .unwrap(),
-        })
-        .await
-        .unwrap();
-    let stale_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    assert!(
-        stale_sync["presence"]["events"]
-            .as_array()
-            .is_some_and(|events| events
-                .iter()
-                .all(|event| event["actor_id"] != "did:web:alice.example")),
-        "expired presence is represented by absence: {stale_sync}"
-    );
-
-    let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000003";
-    insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
-
-    let unauth_typing = TestClient::post("http://server/_arkret/self/ephemeral")
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": typing_strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(unauth_typing.status_code, Some(StatusCode::UNAUTHORIZED));
-
-    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": typing_strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing["accepted"], true);
-    assert_eq!(typing["kind"], "ak.typing");
-
-    let active_typing = state
-        .test_persistence()
-        .typing()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert_eq!(active_typing.len(), 1);
-    assert_eq!(active_typing[0].actor, "did:web:alice.example");
-    assert_eq!(active_typing[0].scope_id.as_deref(), Some(typing_strand_id));
-
-    let typing_stopped: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "typing": false
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing_stopped["accepted"], true);
-
-    let cleared_typing = state
-        .test_persistence()
-        .typing()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert!(cleared_typing.is_empty());
+    let token = dev_token(state.clone()).await;
+    seed_verified_device_with_public_key(
+        &state,
+        ALICE,
+        ALICE_DEVICE,
+        &test_ed25519_multibase_public(&test_ephemeral_device_signing_key(ALICE, ALICE_DEVICE)),
+    )
+    .await;
 
     let push: Value = TestClient::post("http://server/_arkret/edge/push/register-device")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -517,25 +449,34 @@ async fn push_profile_and_moderation_contracts_work() {
         "rejected plaintext push rules must not appear as account_data: {listed_rules}"
     );
 
-    let notify_after_rejected_rule: Value = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "push_target_id": push_target,
-                "wakeup_kind": "message",
-                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
-            }
-        }))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    let rejected = notify_after_rejected_rule["rejected"].as_array().unwrap();
+    let notify_after_rejected_rule: arkret_models_integration::models_push::PushNotifyOutcome =
+        TestClient::post("http://server/_arkret/edge/push/notify")
+            .json(&serde_json::json!({
+                "notification": {
+                    "push_target_id": push_target,
+                    "wakeup_kind": "message",
+                    "devices": [{"device_id": ALICE_DEVICE}, {"device_id": "ak:device:01904100-0000-7000-8000-71551c000004"}]
+                }
+            }))
+            .send(&app_from_state(state.clone()))
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    let rejected = notify_after_rejected_rule
+        .outcomes
+        .iter()
+        .filter(|outcome| outcome.reason_code.is_some())
+        .collect::<Vec<_>>();
     assert_eq!(rejected.len(), 1);
-    assert!(rejected.iter().any(|device| {
-        device["device_id"] == "ak:device:01904100-0000-7000-8000-71551c000004"
-            && device["reason_code"] == "unknown_device"
-    }));
+    assert_eq!(
+        rejected[0].device_id.as_str(),
+        "ak:device:01904100-0000-7000-8000-71551c000004"
+    );
+    assert_eq!(
+        rejected[0].reason_code,
+        Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown)
+    );
 
     let report: Value = TestClient::post("http://server/_arkret/self/moderation/report")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -589,10 +530,22 @@ async fn push_profile_and_moderation_contracts_work() {
     assert_eq!(unauthenticated_report.status_code.unwrap().as_u16(), 401);
 }
 
+/// Restates `presence_visibility_account_data_requires_encrypted_content`.
+///
+/// The plaintext-rejection half is unchanged and still live. The other half —
+/// "an opaque policy clears server-visible presence and suppresses server-visible
+/// typing" — asserted the exact server-side plaintext filtering
+/// `profiles-presence.md` §3.4 forbids: `ak.presence.visibility` is a
+/// *sender-side* principal-private policy that MUST NOT become a plaintext
+/// projection of the Sync Service. Its enforcement point moved to the sender,
+/// which decides whether
+/// to encrypt for the scope at all. So the surviving server-side premise is the
+/// inverse: whatever this key holds, it neither gates nor rewrites the Signal
+/// rail, because §3's admission set does not contain it.
 #[tokio::test]
-async fn presence_visibility_account_data_requires_encrypted_content() {
+async fn presence_visibility_account_data_requires_encrypted_content_and_never_gates_the_rail() {
     let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
     let plaintext_policy =
         TestClient::put("http://server/_arkret/self/account_data/ak.presence.visibility")
@@ -606,92 +559,13 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
             .await;
     assert_eq!(plaintext_policy.status_code.unwrap().as_u16(), 400);
 
-    state
-        .test_persistence()
-        .presence()
-        .put(PresenceRecord {
-            actor: "did:web:alice.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-a11ce0000001".to_owned(),
-            status: "online".to_owned(),
-            status_message: None,
-            last_active_at: None,
-            expires_at: Some(chrono::Utc::now() + chrono::Duration::seconds(60)),
-            updated_at: chrono::Utc::now(),
-            envelope: serde_json::from_value(broadcast_ephemeral_envelope(
-                "ak.presence",
-                serde_json::json!({"state": "online"}),
-            ))
-            .unwrap(),
-        })
-        .await
-        .unwrap();
-
-    let visible_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    assert!(
-        visible_sync["presence"]["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|event| event["actor_id"] == "did:web:alice.example"),
-        "encrypted presence account_data must not be parsed as plaintext relay policy: {visible_sync}"
-    );
-
-    let presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({"state": "online"}),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(presence["accepted"], true);
-    assert!(
-        !state
-            .test_persistence()
-            .presence()
-            .list_for_actor("did:web:alice.example")
-            .await
-            .unwrap()
-            .is_empty(),
-        "encrypted presence preferences must not clear server-visible presence"
-    );
-
-    let typing_strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
-    insert_typing_scope_strand(state.clone(), typing_strand_id, Some(true));
-    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": typing_strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing["accepted"], true);
-    let typing_records = state
-        .test_persistence()
-        .typing()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert!(
-        !typing_records.is_empty(),
-        "encrypted presence preferences must not suppress server-visible typing"
-    );
-
+    // The strictest possible declared preference, stored the only way it may be
+    // stored: opaque to this service.
     state
         .test_persistence()
         .account_data()
         .put(&soland_storage::AccountDataRecord {
-            actor: "did:web:alice.example".to_owned(),
+            actor: ALICE.to_owned(),
             account_data_key: "ak.presence.visibility".to_owned(),
             payload: serde_json::json!({
                 "encrypted_payload": {
@@ -703,165 +577,162 @@ async fn presence_visibility_account_data_requires_encrypted_content() {
         .await
         .unwrap();
 
-    let hidden_sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
-    assert!(
-        hidden_sync["presence"]["events"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|event| event["actor_id"] != "did:web:alice.example"),
-        "opaque presence policy must fail closed for cached presence: {hidden_sync}"
+    let accepted = post_signal(
+        state.clone(),
+        &token,
+        &alice_signal(&seal_ref, "presence-under-nobody-policy", &signing_key),
+    )
+    .await;
+    assert_eq!(
+        accepted.status_code,
+        Some(StatusCode::OK),
+        "an opaque presence preference is not an admission input: the server \
+         cannot read it and MUST NOT infer a plaintext relay policy from it"
     );
+    assert_eq!(
+        state
+            .test_persistence()
+            .signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .len(),
+        1,
+        "the Signal is relayed unchanged; suppression is the sender's decision"
+    );
+}
 
-    let hidden_presence: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.presence",
-            serde_json::json!({"state": "online"}),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(hidden_presence["accepted"], true);
+/// Restates `typing_submit_rejects_unknown_strand_scope`.
+///
+/// The old rejection was a *Strand* scope check: the server read `strand_id` off
+/// the plaintext envelope and refused an unknown one. `signal.md` §6 makes an
+/// outer target id an explicit counter-example and `profiles-presence.md` §3.5
+/// puts `strand_id` inside the ciphertext, so that check cannot exist. The scope
+/// check that survives is the one the envelope still signs: §3(2) live send
+/// eligibility for `scope_ref`, which for a Circle requires a joined Circle
+/// membership rather than mere Realm membership.
+#[tokio::test]
+async fn signal_send_rejects_a_circle_scope_the_sender_has_not_joined() {
+    let state = soland_test_support::app_state(test_config());
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
+    let circle_id = "ak:circle:01904100-0000-7000-8000-c17c1e000001";
+    // The Circle exists in the parent Realm but Alice is not a member of it.
+    seed_test_circle(&state, DEMO_REALM_ID, circle_id, &["did:web:bob.example"]);
+
+    let denied = post_signal(
+        state.clone(),
+        &token,
+        &signed_signal_envelope(
+            DEMO_REALM_ID,
+            arkret_wire::ScopeRef::Circle {
+                realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+                circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
+            },
+            ALICE,
+            ALICE_DEVICE,
+            &seal_ref,
+            arkret_wire::SignalClass::Session,
+            chrono::Utc::now(),
+            30,
+            "typing",
+            &signing_key,
+        ),
+    )
+    .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
     assert!(
         state
             .test_persistence()
-            .presence()
-            .list_for_actor("did:web:alice.example")
+            .signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
             .await
             .unwrap()
             .is_empty(),
-        "opaque presence policy must clear server-visible presence"
-    );
-
-    let hidden_typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": typing_strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(hidden_typing["accepted"], true);
-    let hidden_typing_records = state
-        .test_persistence()
-        .typing()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert!(
-        hidden_typing_records.is_empty(),
-        "opaque presence policy must suppress server-visible typing"
+        "a Signal denied at scope eligibility must not enter the relay"
     );
 }
 
+/// Restates `typing_submit_accepts_default_realm_strand_scope`: the Realm-default
+/// scope is admitted for a joined Realm member, and the relay records only the
+/// server-visible header — `signal_class`, scope, sender and the envelope digest.
 #[tokio::test]
-async fn typing_submit_rejects_unknown_strand_scope() {
+async fn signal_send_accepts_the_realm_scope_for_a_joined_member() {
     let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
 
-    let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": new_prefixed_uuid7("ak:strand:"),
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
-    let typing_after_reject = state
+    let envelope = alice_signal(&seal_ref, "typing", &signing_key);
+    let accepted = post_signal(state.clone(), &token, &envelope).await;
+    assert_eq!(accepted.status_code, Some(StatusCode::OK));
+
+    let relayed = state
         .test_persistence()
-        .typing()
+        .signal_relay()
         .list_for_realm(DEMO_REALM_ID)
         .await
         .unwrap();
-    assert!(typing_after_reject.is_empty());
-}
-
-#[tokio::test]
-async fn typing_submit_accepts_default_realm_strand_scope() {
-    let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
-    let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
-    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": default_strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing["accepted"], true);
-
-    let active_typing = state
-        .test_persistence()
-        .typing()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert_eq!(active_typing.len(), 1);
+    assert_eq!(relayed.len(), 1);
+    assert_eq!(relayed[0].signal_class, arkret_wire::SignalClass::Session);
     assert_eq!(
-        active_typing[0].scope_id.as_deref(),
-        Some(default_strand_id.as_str())
+        relayed[0].scope_ref,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap()
+        }
+    );
+    assert_eq!(relayed[0].sender_actor_id, ALICE);
+    assert_eq!(relayed[0].sender_device_id, ALICE_DEVICE);
+    assert_eq!(
+        relayed[0].envelope, envelope,
+        "the relay holds the verbatim admitted envelope"
     );
 }
 
+/// Restates `typing_submit_wakes_account_subscribe_stream` — the push half.
+///
+/// The wakeup still exists, but it is no longer an `Ephemeral { kind }` carrying
+/// a product type: `signal.md` §1 makes `signal_class` the only server-visible
+/// classification, so the live-stream notification is
+/// `EventNotificationKind::Signal { signal_class }` and carries nothing else. A
+/// wakeup that named `ak.typing` would be exactly the metadata leak this rail
+/// removed.
 #[tokio::test]
-async fn typing_submit_wakes_account_subscribe_stream() {
+async fn signal_send_wakes_the_live_stream_carrying_only_the_signal_class() {
     let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
-    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000004";
-    insert_typing_scope_strand(state.clone(), strand_id, Some(true));
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
     let mut wakeups = state.test_subscribe_event_notifications();
-    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing["accepted"], true);
+
+    let accepted = post_signal(
+        state.clone(),
+        &token,
+        &alice_signal(&seal_ref, "typing", &signing_key),
+    )
+    .await;
+    assert_eq!(accepted.status_code, Some(StatusCode::OK));
 
     let notification = tokio::time::timeout(Duration::from_secs(1), wakeups.recv())
         .await
-        .expect("typing submit should wake account subscribe")
+        .expect("an admitted Signal must wake the live stream")
         .expect("event broadcast stays open");
     assert_eq!(notification.realm_id, DEMO_REALM_ID);
     match notification.kind {
-        EventNotificationKind::Ephemeral { kind } => assert_eq!(kind, "ak.typing"),
-        other => panic!("expected ak.typing ephemeral wakeup, got {other:?}"),
+        EventNotificationKind::Signal { signal_class } => {
+            assert_eq!(signal_class, arkret_wire::SignalClass::Session);
+        }
+        other => panic!("expected a Signal-class wakeup, got {other:?}"),
     }
 }
 
+/// Restates `typing_submit_is_visible_in_incremental_account_subscribe_delta`.
+///
+/// A Signal is not a durable Event, so it never appears in the account-subscribe
+/// delta; §4 gives it its own `signal/subscribe` rail. Deliver-once moved with
+/// it: it is a per-`(actor, device, realm)` watermark over the relay position
+/// rather than a sync cursor revision, and a sending device never receives its
+/// own Signal back.
 #[tokio::test]
-async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
+async fn signal_is_delivered_once_per_subscriber_device_and_never_self_echoed() {
     let state = soland_test_support::app_state(test_config());
     add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
-    let alice_token = ephemeral_test_token(state.clone()).await;
+    let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
     let bob_token = verified_dev_token_for_device(
         state.clone(),
         "did:web:bob.example",
@@ -869,98 +740,126 @@ async fn typing_submit_is_visible_in_incremental_account_subscribe_delta() {
         "Bob Desktop",
     )
     .await;
-    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000005";
-    insert_typing_scope_strand(state.clone(), strand_id, Some(true));
 
-    let baseline = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let cursor = baseline["cursor"]
-        .as_str()
-        .expect("baseline sync cursor")
-        .to_owned();
-    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing["accepted"], true);
-
-    let delta = account_subscribe_frame(
+    let accepted = post_signal(
         state.clone(),
-        Some(&bob_token),
-        &format!("catchup=true&after={cursor}"),
+        &alice_token,
+        &alice_signal(&seal_ref, "typing", &alice_key),
     )
     .await;
-    let ephemeral = delta["realms"][DEMO_REALM_ID]["ephemeral"]["events"]
-        .as_array()
-        .unwrap_or_else(|| panic!("incremental typing delta must include realm: {delta}"));
-    assert!(
-        ephemeral.iter().any(|entry| {
-            entry["kind"] == "ak.typing"
-                && entry["realm_id"] == DEMO_REALM_ID
-                && entry["payload"]["strand_id"] == strand_id
-                && entry["actor_id"] == "did:web:alice.example"
-        }),
-        "incremental typing delta must include Alice typing: {delta}"
-    );
-    let realm_delta = &delta["realms"][DEMO_REALM_ID];
-    assert!(realm_delta.get("timeline").is_none());
-    assert!(realm_delta.get("state").is_none());
-    assert!(realm_delta.get("summary").is_none());
-    assert!(realm_delta.get("members").is_none());
+    assert_eq!(accepted.status_code, Some(StatusCode::OK));
 
-    let delta_cursor = delta["cursor"]
-        .as_str()
-        .expect("typing delta sync cursor")
-        .to_owned();
-    let replay = tokio::time::timeout(
-        Duration::from_millis(500),
-        account_subscribe_frame(
-            state.clone(),
-            Some(&bob_token),
-            &format!("catchup=true&after={delta_cursor}"),
-        ),
-    )
-    .await;
+    let delivered = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
+    assert_eq!(delivered.len(), 1, "Bob receives the Signal once");
+    assert_eq!(delivered[0].sender_actor_id.as_str(), ALICE);
+
+    let repeat = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
     assert!(
-        replay.is_err(),
-        "the same active typing revision must not immediately replay: {replay:?}"
+        repeat.is_empty(),
+        "the per-device watermark makes redelivery inside the TTL window impossible"
+    );
+
+    let self_echo = signal_subscribe_envelopes(state.clone(), &alice_token, 400).await;
+    assert!(
+        self_echo.is_empty(),
+        "the sending device never receives its own Signal back"
+    );
+
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .realm_events_newest_first(DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .iter()
+            .all(|record| record.kind != "ak.typing"),
+        "admitting a Signal mints no durable Event"
     );
 }
 
+/// Restates `typing_submit_rejects_disabled_discussion_strand_scope`.
+///
+/// The disabled-track rejection was a server-side plaintext filter on
+/// `strand_id` + `track_name`. `profiles-presence.md` §3.5 moved it to the
+/// receiver: §3.5 requires the personal blocklist, membership and target-track
+/// visibility to keep failing closed on the client after decryption, and
+/// forbids degrading any of them into server-readable plaintext filtering. So
+/// this service must not
+/// re-implement it and cannot: the track name is inside the ciphertext. The one
+/// class gate `signal.md` §3(3) does keep at the ingress is `moderation`, which
+/// had no HTTP-level coverage before; it takes this test's slot.
 #[tokio::test]
-async fn typing_submit_rejects_disabled_discussion_strand_scope() {
+async fn signal_moderation_class_requires_the_moderation_action() {
     let state = soland_test_support::app_state(test_config());
-    let token = ephemeral_test_token(state.clone()).await;
-    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000001";
-    insert_typing_scope_strand(state.clone(), strand_id, Some(false));
-    let rejected_typing = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(rejected_typing.status_code, Some(StatusCode::FORBIDDEN));
-    let typing_after_reject = state
-        .test_persistence()
-        .typing()
-        .list_for_realm(DEMO_REALM_ID)
-        .await
-        .unwrap();
-    assert!(typing_after_reject.is_empty());
+    let bob = "did:web:bob.example";
+    let bob_device = "ak:device:01904100-0000-7000-8000-b0b000000005";
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    let (token, signing_key) =
+        seed_signal_sender_device(&state, bob, bob_device, "Bob Phone").await;
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, bob);
+
+    let moderation = |class| {
+        signed_signal_envelope(
+            DEMO_REALM_ID,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+            },
+            bob,
+            bob_device,
+            &seal_ref,
+            class,
+            chrono::Utc::now(),
+            30,
+            "moderation-decision",
+            &signing_key,
+        )
+    };
+
+    let mut denied = post_signal(
+        state.clone(),
+        &token,
+        &moderation(arkret_wire::SignalClass::Moderation),
+    )
+    .await;
+    assert_eq!(denied.status_code, Some(StatusCode::FORBIDDEN));
+    let denied_body: Value = denied.take_json().await.unwrap();
+    assert_eq!(denied_body["error"]["code"], "signal_class_not_permitted");
+    assert!(
+        state
+            .test_persistence()
+            .signal_relay()
+            .list_for_realm(DEMO_REALM_ID)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    // The identical envelope under `session` is admitted: the gate is the class,
+    // not anything the server reads out of the payload.
+    let allowed = post_signal(
+        state.clone(),
+        &token,
+        &moderation(arkret_wire::SignalClass::Session),
+    )
+    .await;
+    assert_eq!(allowed.status_code, Some(StatusCode::OK));
+
+    state.test_authz().create_grant(
+        DEMO_REALM_ID.to_owned(),
+        bob.to_owned(),
+        bob.to_owned(),
+        DEMO_REALM_ID.to_owned(),
+        vec![arkret_wire::CapabilityActionId::MODERATION_DECISION.to_owned()],
+        vec![],
+    );
+    let granted = post_signal(
+        state.clone(),
+        &token,
+        &moderation(arkret_wire::SignalClass::Moderation),
+    )
+    .await;
+    assert_eq!(granted.status_code, Some(StatusCode::OK));
 }
 
 #[tokio::test]
@@ -1019,34 +918,61 @@ async fn public_read_receipt_policy_rejected_for_world_readable_realm_without_op
     );
 }
 
+/// Restates `typing_fanout_respects_receiver_blocklist` and
+/// `typing_fanout_hides_cached_record_when_discussion_track_disabled`.
+///
+/// Both asserted a server-side receiver-side filter — a decrypted blocklist and
+/// a Strand track flag. `profiles-presence.md` §3.5 forbids exactly that:
+/// the personal blocklist, membership and target-track visibility keep failing
+/// closed on the client after decryption and MUST NOT be degraded into
+/// server-readable plaintext filtering. Bob's blocklist is sealed account data
+/// and the target track lives in the ciphertext, so this service can decide
+/// neither. The one receiver-side filter it may apply is the signed `scope_ref`:
+/// a Circle-scoped Signal reaches only that Circle's members, and a Realm member
+/// outside the Circle sees nothing.
 #[tokio::test]
-async fn typing_fanout_respects_receiver_blocklist() {
+async fn signal_fanout_is_filtered_by_signed_scope_only() {
     let state = soland_test_support::app_state(test_config());
-    let alice_token = ephemeral_test_token(state.clone()).await;
-    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
+    let bob = "did:web:bob.example";
+    let carol = "did:web:carol.example";
+    add_test_realm_member(&state, DEMO_REALM_ID, bob);
+    add_test_realm_member(&state, DEMO_REALM_ID, carol);
+    let (alice_token, alice_key, seal_ref) = signal_test_context(&state).await;
+    // Bob and Carol only receive here, so they need a session and Realm
+    // membership but no Signal signing key of their own.
     let bob_token = verified_dev_token_for_device(
         state.clone(),
-        "did:web:bob.example",
+        bob,
         "ak:device:01904100-0000-7000-8000-b0b000000001",
         "Bob Desktop",
     )
     .await;
+    let carol_token = verified_dev_token_for_device(
+        state.clone(),
+        carol,
+        "ak:device:01904100-0000-7000-8000-ca4010000001",
+        "Carol Desktop",
+    )
+    .await;
+
+    // Bob blocks Alice. The entry is sealed account data: the service stores
+    // ciphertext and cannot evaluate it.
     let bob_blocklist = submit_actor_private_event(
         state.clone(),
         &bob_token,
-        "did:web:bob.example",
+        bob,
         "ak:device:01904100-0000-7000-8000-b0b000000001",
         DEMO_REALM_ID,
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.account.blocklist",
-            "owner": "did:web:bob.example",
+            "owner": bob,
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(
                     &[7u8; 32],
-                    "did:web:bob.example",
+                    bob,
                     "ak.account.blocklist",
-                    &serde_json::json!({"entries": [{"target": "did:web:alice.example"}]}),
+                    &serde_json::json!({"entries": [{"target": ALICE}]}),
                     [10u8; 24],
                 )
                 .unwrap(),
@@ -1061,217 +987,176 @@ async fn typing_fanout_respects_receiver_blocklist() {
         "blocklist event: {bob_blocklist}"
     );
 
-    let default_strand_id = DEMO_REALM_ID.replacen("ak:realm:", "ak:strand:", 1);
-    let typing: Value = TestClient::post("http://server/_arkret/self/ephemeral")
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&broadcast_ephemeral_envelope(
-            "ak.typing",
-            serde_json::json!({
-                "strand_id": default_strand_id,
-                "typing": true
-            }),
-        ))
-        .send(&app_from_state(state.clone()))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(typing["accepted"], true);
-
-    let bob_sync = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]["events"]
-        .as_array()
-        .expect("demo realm ephemeral segment");
-    assert!(
-        bob_ephemeral
-            .iter()
-            .all(|entry| entry["kind"] != "ak.typing"
-                || entry["actor_id"] != "did:web:alice.example"),
-        "Bob's blocklist must suppress Alice typing fanout: {bob_ephemeral:?}"
-    );
-}
-
-#[tokio::test]
-async fn typing_fanout_hides_cached_record_when_discussion_track_disabled() {
-    let state = soland_test_support::app_state(test_config());
-    add_test_realm_member(&state, DEMO_REALM_ID, "did:web:bob.example");
-    let bob_token = dev_token_for_device(
+    // Alice and Bob share a Circle; Carol does not.
+    let circle_id = "ak:circle:01904100-0000-7000-8000-c17c1e000002";
+    seed_test_circle(&state, DEMO_REALM_ID, circle_id, &[ALICE, bob]);
+    let accepted = post_signal(
         state.clone(),
-        "did:web:bob.example",
-        "ak:device:01904100-0000-7000-8000-b0b000000002",
-        "Bob Desktop",
+        &alice_token,
+        &signed_signal_envelope(
+            DEMO_REALM_ID,
+            arkret_wire::ScopeRef::Circle {
+                realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+                circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
+            },
+            ALICE,
+            ALICE_DEVICE,
+            &seal_ref,
+            arkret_wire::SignalClass::Session,
+            chrono::Utc::now(),
+            30,
+            "typing",
+            &alice_key,
+        ),
     )
     .await;
-    let strand_id = "ak:strand:01904100-0000-7000-8000-7a1c00000002";
-    insert_typing_scope_strand(state.clone(), strand_id, Some(false));
-    let now = chrono::Utc::now();
-    state
+    assert_eq!(accepted.status_code, Some(StatusCode::OK));
+
+    let carol_delivered = signal_subscribe_envelopes(state.clone(), &carol_token, 400).await;
+    assert!(
+        carol_delivered.is_empty(),
+        "a Realm member outside the Circle scope receives nothing"
+    );
+
+    let bob_delivered = signal_subscribe_envelopes(state.clone(), &bob_token, 400).await;
+    assert_eq!(
+        bob_delivered.len(),
+        1,
+        "the blocklist is not a server-side fanout filter: Bob receives the          ciphertext and fails closed after decrypting it"
+    );
+    assert_eq!(bob_delivered[0].sender_actor_id.as_str(), ALICE);
+}
+
+/// Restates `ephemeral_call_signal_enforces_structural_contract`.
+///
+/// The old contract was product-shaped: the relay checked `device_id`, a `proof`
+/// object and a canonical `payload.signal_kind`. `webrtc-signaling.md` §5 now
+/// routes every call frame through `SignalEnvelope`, and `call_id`,
+/// `signal_kind` and `seq` are all inside `encrypted_payload` — a server that
+/// still validated them would be reading exactly the metadata the rail removed.
+/// The structural contract that replaced it is `SignalEnvelope::validate_structural`
+/// plus the §3(4) E2EE-profile rule, so this asserts each of its arms at the
+/// HTTP boundary.
+#[tokio::test]
+async fn signal_envelope_structural_contract_is_enforced() {
+    let state = soland_test_support::app_state(test_config());
+    let (token, signing_key, seal_ref) = signal_test_context(&state).await;
+    let realm_scope = || arkret_wire::ScopeRef::Realm {
+        realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
+    };
+    let envelope = |class, ttl_seconds| {
+        signed_signal_envelope(
+            DEMO_REALM_ID,
+            realm_scope(),
+            ALICE,
+            ALICE_DEVICE,
+            &seal_ref,
+            class,
+            chrono::Utc::now(),
+            ttl_seconds,
+            "call-invite",
+            &signing_key,
+        )
+    };
+
+    // A `setup`-class frame — the class §5 assigns to an invite — inside its
+    // 120 s ceiling is admitted.
+    let accepted = post_signal(
+        state.clone(),
+        &token,
+        &envelope(arkret_wire::SignalClass::Setup, 120),
+    )
+    .await;
+    assert_eq!(accepted.status_code, Some(StatusCode::OK));
+
+    // §2 per-class TTL ceilings have their own registered wire code.
+    let mut over_ttl = post_signal(
+        state.clone(),
+        &token,
+        &envelope(arkret_wire::SignalClass::Setup, 121),
+    )
+    .await;
+    assert_eq!(over_ttl.status_code, Some(StatusCode::BAD_REQUEST));
+    let over_ttl_body: Value = over_ttl.take_json().await.unwrap();
+    assert_eq!(over_ttl_body["error"]["code"], "signal_ttl_out_of_range");
+
+    // §1 — the algorithm is carried by `aead_profile`, which MUST name an
+    // `status=active` row of the MLS ciphersuite registry. A reserved row fails
+    // closed. Re-signing after the mutation isolates the profile check from the
+    // digest checks below.
+    let mut reserved_suite = envelope(arkret_wire::SignalClass::Session, 30);
+    reserved_suite.encrypted_payload.aead_profile =
+        "MLS_128_MLKEM768X25519_AES128GCM_SHA256_Ed25519".to_owned();
+    reserved_suite.encrypted_payload.aad_digest = reserved_suite.expected_aad_digest().unwrap();
+    reserved_suite.proof.envelope_digest = reserved_suite.envelope_digest().unwrap();
+    reserved_suite.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
+        signing_key.clone(),
+        reserved_suite.proof.verification_method.clone(),
+    )
+    .sign_detached_jws(&reserved_suite.proof_binding_bytes().unwrap());
+    let mut reserved = post_signal(state.clone(), &token, &reserved_suite).await;
+    assert_eq!(reserved.status_code, Some(StatusCode::BAD_REQUEST));
+    let reserved_body: Value = reserved.take_json().await.unwrap();
+    assert_eq!(reserved_body["error"]["code"], "invalid_param");
+
+    // §1 — `aad_digest` is recomputed from the immutable header, never trusted.
+    let mut forged_aad = envelope(arkret_wire::SignalClass::Session, 30);
+    forged_aad.encrypted_payload.aad_digest =
+        arkret_identifiers::Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap();
+    let forged_aad_response = post_signal(state.clone(), &token, &forged_aad).await;
+    assert_eq!(
+        forged_aad_response.status_code,
+        Some(StatusCode::BAD_REQUEST)
+    );
+
+    // §1 — `proof.created_at` MUST equal the outer `sent_at` verbatim.
+    let mut skewed = envelope(arkret_wire::SignalClass::Session, 30);
+    skewed.proof.created_at = skewed.sent_at + chrono::Duration::seconds(1);
+    let skewed_response = post_signal(state.clone(), &token, &skewed).await;
+    assert_eq!(skewed_response.status_code, Some(StatusCode::BAD_REQUEST));
+
+    // §1 — `scope_ref.realm_id == realm_id`.
+    let mut foreign_scope = envelope(arkret_wire::SignalClass::Session, 30);
+    foreign_scope.scope_ref = arkret_wire::ScopeRef::Realm {
+        realm_id: RealmId::new("ak:realm:0196419b-0000-7000-8000-0000000000ff".to_owned()).unwrap(),
+    };
+    let foreign_scope_response = post_signal(state.clone(), &token, &foreign_scope).await;
+    assert_eq!(
+        foreign_scope_response.status_code,
+        Some(StatusCode::BAD_REQUEST)
+    );
+
+    // §3(2) — an unknown Seal basis leaves nothing to evaluate eligibility
+    // against.
+    let unknown_seal = signed_signal_envelope(
+        DEMO_REALM_ID,
+        realm_scope(),
+        ALICE,
+        ALICE_DEVICE,
+        &arkret_wire::SealId::new(format!("ak:seal:sha256:{}", "f".repeat(64))).unwrap(),
+        arkret_wire::SignalClass::Session,
+        chrono::Utc::now(),
+        30,
+        "call-invite",
+        &signing_key,
+    );
+    let mut unknown_seal_response = post_signal(state.clone(), &token, &unknown_seal).await;
+    assert_eq!(
+        unknown_seal_response.status_code,
+        Some(StatusCode::BAD_REQUEST)
+    );
+    let unknown_seal_body: Value = unknown_seal_response.take_json().await.unwrap();
+    assert_eq!(unknown_seal_body["error"]["code"], "invalid_param");
+
+    // Only the one accepted `setup` frame ever reached the relay.
+    let relayed = state
         .test_persistence()
-        .typing()
-        .put(soland_storage::TypingRecord {
-            actor: "did:web:alice.example".to_owned(),
-            realm_id: DEMO_REALM_ID.to_owned(),
-            scope_id: Some(strand_id.to_owned()),
-            position: 0,
-            expires_at: now + chrono::Duration::seconds(30),
-            envelope: serde_json::from_value(broadcast_ephemeral_envelope(
-                "ak.typing",
-                serde_json::json!({"strand_id": strand_id, "typing": true}),
-            ))
-            .unwrap(),
-        })
+        .signal_relay()
+        .list_for_realm(DEMO_REALM_ID)
         .await
         .unwrap();
-
-    let bob_sync = account_subscribe_frame(state.clone(), Some(&bob_token), "catchup=true").await;
-    let bob_ephemeral = bob_sync["realms"][DEMO_REALM_ID]["ephemeral"]["events"]
-        .as_array()
-        .cloned()
-        .unwrap_or_default();
-    assert!(
-        bob_ephemeral
-            .iter()
-            .all(|entry| entry["kind"] != "ak.typing"
-                || entry["actor_id"] != "did:web:alice.example"),
-        "disabled discussion track must suppress cached typing fanout: {bob_ephemeral:?}"
-    );
-}
-
-fn insert_typing_scope_strand(state: AppState, strand_id: &str, discussion_enabled: Option<bool>) {
-    let now = chrono::Utc::now();
-    state.test_projection().lock().strands.insert(
-        strand_id.to_owned(),
-        soland_domain::reducer::StrandProjection {
-            strand_id: strand_id.to_owned(),
-            realm_id: DEMO_REALM_ID.to_owned(),
-            tracks: std::collections::BTreeMap::from([(
-                arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION
-                    .to_owned(),
-                arkret_models_collaboration::objects::profiles::StrandTrackConfig {
-                    enabled: discussion_enabled,
-                    is_primary: Some(true),
-                    profile: Some("discussion".to_owned()),
-                    ..Default::default()
-                },
-            )]),
-            title: "Typing scope".to_owned(),
-            summary: None,
-            fields: Default::default(),
-            state: soland_domain::reducer::ObjectLifecycleState::Active,
-            state_changed_at: None,
-            created_by: "did:web:alice.example".to_owned(),
-            created_at: now,
-            history_basis_seals: Vec::new(),
-            updated_by: None,
-            updated_at: None,
-            schema_refs: Vec::new(),
-            schedule_revision_heads: Vec::new(),
-            scope_circle_id: None,
-        },
-    );
-}
-
-#[tokio::test]
-async fn ephemeral_call_signal_enforces_structural_contract() {
-    // `webrtc-signaling.md` §5 — the /ephemeral relay structurally validates
-    // ak.call.signal envelopes (device_id + proof present, payload
-    // {call_id, signal_kind, seq} with a canonical signal_kind incl.
-    // moderation). It does NOT cryptographically verify the proof (receiver's
-    // job).
-    let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
-    state.test_authz().create_grant(
-        DEMO_REALM_ID.to_owned(),
-        "did:web:alice.example".to_owned(),
-        "did:web:alice.example".to_owned(),
-        DEMO_REALM_ID.to_owned(),
-        vec![arkret_wire::CapabilityActionId::CALL_SIGNAL_SEND.to_owned()],
-        vec![],
-    );
-    let call_id = "ak:call:01904100-0000-7000-8000-ca110000001a";
-    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
-
-    let post_signal = |state: AppState, bearer: String, body: Value| async move {
-        TestClient::post("http://server/_arkret/self/ephemeral")
-            .add_header("authorization", format!("Bearer {bearer}"), true)
-            .json(&body)
-            .send(&app_from_state(state))
-            .await
-    };
-
-    let envelope = |signal_kind: &str, with_device: bool, with_proof: bool| {
-        let sent_at = chrono::Utc::now();
-        let expires_at = sent_at + chrono::Duration::seconds(30);
-        let mut env = serde_json::json!({
-            "kind": "ak.call.signal",
-            "realm_id": DEMO_REALM_ID,
-            "actor_id": "did:web:alice.example",
-            "sent_at": arkret_canonical::format_timestamp_canonical(sent_at),
-            "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
-            "payload": {
-                "call_id": call_id,
-                "signal_kind": signal_kind,
-                "seq": 1
-            }
-        });
-        if with_device {
-            env["device_id"] = serde_json::json!(device_id);
-        }
-        if with_proof {
-            let canonical = arkret_canonical::canonical_json_bytes(&env).unwrap();
-            let event_digest = arkret_canonical::sha256_digest(&canonical);
-            env["proof"] = serde_json::json!({
-                "kind": "detached_jws",
-                "alg": "EdDSA",
-                "verification_method": format!("did:web:alice.example#{device_id}"),
-                "event_digest": event_digest,
-                "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
-                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
-            });
-        }
-        env
-    };
-
-    // Legal moderation signal with device_id + proof → accepted.
-    let accepted: Value = post_signal(
-        state.clone(),
-        token.clone(),
-        envelope("moderation", true, true),
-    )
-    .await
-    .take_json()
-    .await
-    .unwrap();
-    assert_eq!(accepted["accepted"], true, "accepted body: {accepted}");
-    assert_eq!(accepted["kind"], "ak.call.signal");
-
-    // Non-canonical signal_kind → invalid_param.
-    let mut bad_type = post_signal(
-        state.clone(),
-        token.clone(),
-        envelope("not_a_signal", true, true),
-    )
-    .await;
-    assert_eq!(bad_type.status_code.unwrap().as_u16(), 400);
-    let bad_type_body: Value = bad_type.take_json().await.unwrap();
-    assert_eq!(bad_type_body["error"]["code"], "invalid_param");
-
-    // Missing device_id is rejected by the strong wire extractor.
-    let mut no_device = post_signal(
-        state.clone(),
-        token.clone(),
-        envelope("invite", false, true),
-    )
-    .await;
-    assert_eq!(no_device.status_code.unwrap().as_u16(), 422);
-    let no_device_body: Value = no_device.take_json().await.unwrap();
-    assert_eq!(no_device_body["error"]["code"], "schema_violation");
-
-    // Missing proof is rejected by the strong wire extractor.
-    let mut no_proof = post_signal(state.clone(), token, envelope("invite", true, false)).await;
-    assert_eq!(no_proof.status_code.unwrap().as_u16(), 422);
-    let no_proof_body: Value = no_proof.take_json().await.unwrap();
-    assert_eq!(no_proof_body["error"]["code"], "schema_violation");
+    assert_eq!(relayed.len(), 1);
+    assert_eq!(relayed[0].signal_class, arkret_wire::SignalClass::Setup);
 }
 
 #[tokio::test]
@@ -1401,20 +1286,24 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     // pseudonym returned as registration_id, not a stable literal id.
     let push_target = registered["registration_id"].as_str().unwrap().to_owned();
 
-    let stale_notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "push_target_id": push_target.clone(),
-                "wakeup_kind": "message",
-                "devices": [{"device_id": device_id}]
-            }
-        }))
-        .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert_eq!(stale_notify["rejected"][0]["reason_code"], "contract_drift");
+    let stale_notify: arkret_models_integration::models_push::PushNotifyOutcome =
+        TestClient::post("http://server/_arkret/edge/push/notify")
+            .json(&serde_json::json!({
+                "notification": {
+                    "push_target_id": push_target.clone(),
+                    "wakeup_kind": "message",
+                    "devices": [{"device_id": device_id}]
+                }
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert_eq!(
+        stale_notify.outcomes[0].reason_code,
+        Some(arkret_models_integration::models_push::PushNotifyReasonCode::DeliveryBindingStale)
+    );
 
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
         chrono::Utc::now().timestamp_millis(),
@@ -1450,20 +1339,26 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
     .unwrap();
     assert_eq!(fresh_import["total_entries"], 1);
 
-    let fresh_notify: Value = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "push_target_id": push_target.clone(),
-                "wakeup_kind": "message",
-                "devices": [{"device_id": device_id}]
-            }
-        }))
-        .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(fresh_notify["rejected"].as_array().unwrap().is_empty());
+    let fresh_notify: arkret_models_integration::models_push::PushNotifyOutcome =
+        TestClient::post("http://server/_arkret/edge/push/notify")
+            .json(&serde_json::json!({
+                "notification": {
+                    "push_target_id": push_target.clone(),
+                    "wakeup_kind": "message",
+                    "devices": [{"device_id": device_id}]
+                }
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
+    assert!(
+        fresh_notify
+            .outcomes
+            .iter()
+            .all(|outcome| outcome.reason_code.is_none())
+    );
 
     let unregistered: Value = TestClient::post("http://server/_arkret/edge/push/unregister-device")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -1479,21 +1374,22 @@ async fn push_unregister_mutates_registration_and_gateway_snapshot_gates_notify(
         .unwrap();
     assert_eq!(unregistered["ok"], true);
 
-    let after_unregister: Value = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&serde_json::json!({
-            "notification": {
-                "push_target_id": push_target.clone(),
-                "wakeup_kind": "message",
-                "devices": [{"device_id": device_id}]
-            }
-        }))
-        .send(&service)
-        .await
-        .take_json()
-        .await
-        .unwrap();
+    let after_unregister: arkret_models_integration::models_push::PushNotifyOutcome =
+        TestClient::post("http://server/_arkret/edge/push/notify")
+            .json(&serde_json::json!({
+                "notification": {
+                    "push_target_id": push_target.clone(),
+                    "wakeup_kind": "message",
+                    "devices": [{"device_id": device_id}]
+                }
+            }))
+            .send(&service)
+            .await
+            .take_json()
+            .await
+            .unwrap();
     assert_eq!(
-        after_unregister["rejected"][0]["reason_code"],
-        "unknown_device"
+        after_unregister.outcomes[0].reason_code,
+        Some(arkret_models_integration::models_push::PushNotifyReasonCode::PushTokenUnknown)
     );
 }

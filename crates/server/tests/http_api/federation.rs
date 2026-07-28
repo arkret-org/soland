@@ -12,6 +12,11 @@ const PEER_SOURCE_DID: &str = "did:web:remote.example";
 const PEER_DELIVERY_FRONTIER: &str = "ak:event:01904100-0000-7000-8000-fede00000001";
 
 fn seed_peer_delivery_binding(state: &AppState) {
+    // The receiving peer has already accepted the Realm's control basis, so a
+    // transported DataEvent's `seal_ref` resolves locally. Without it every
+    // inbound Event is deferred as `federation_dependencies_pending` before the
+    // check under test is ever reached.
+    seed_test_realm_basis_seal(state, TEST_REALM_ID, "did:web:alice.example");
     let now = Utc::now();
     state.test_projection().lock().members.insert(
         (TEST_REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
@@ -47,7 +52,7 @@ fn resign_federation_event(event: Value) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
     let verification_method = format!("{}#cotest", event.actor_id);
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(&verification_method),
         event.actor_id.clone(),
         verification_method.clone(),
@@ -250,7 +255,7 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
         Vec::new(),
     );
     let mut body = peer_submit_body(&event);
-    body["events"][0]["unsigned"] = serde_json::json!({});
+    body["events"][0]["event"]["unsigned"] = serde_json::json!({});
 
     // Event's typed serializer intentionally omits an empty `unsigned` map.
     // The HTTP signature nevertheless binds the exact canonical wire body,
@@ -493,7 +498,13 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     let hidden_event_id = "ak:event:01904100-0000-7000-8000-c1ac1e000002";
     let mut event = signed_event_envelope(hidden_event_id, 32, Vec::new());
     event["actor_id"] = serde_json::json!("did:web:alice.example");
-    event["effective_scope"] = serde_json::json!({
+    // The Circle security scope of a message is the producer-SIGNED
+    // `scope_ref` (`conformance/encoding.md` §6, and the spec's
+    // `circle-scope-fixture.json`: message payloads carry no `scope_circle_id`
+    // fragment and "still sign Event.scope_ref"). The reducer-managed
+    // `effective_scope` this fixture used to stamp on the envelope is not an
+    // Event member at all in v1 — it exists only on object read projections.
+    event["scope_ref"] = serde_json::json!({
         "kind": "circle",
         "realm_id": TEST_REALM_ID,
         "circle_id": TEST_CIRCLE_ID
@@ -581,27 +592,147 @@ async fn self_events_reject_federation_wire() {
     );
 }
 
+/// Wrap `event` in the publication evidence a federation submission transports.
+///
+/// `offline-publication.md` §2.1 — a peer never forwards a bare envelope: the
+/// Event travels with the basis-bound `authorization_lease` it was first
+/// published under and the `ingress_receipt` the origin service signed for that
+/// exact digest inside the lease window. The receiving peer stores that evidence
+/// verbatim instead of re-stamping `received_at`, which is what keeps a fixed
+/// revocation window from being silently widened.
+fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmission {
+    let event: arkret_wire::Event =
+        serde_json::from_value(event.clone()).expect("federation fixture is a typed Event");
+    let event_digest =
+        arkret_identifiers::Hash::new(event.event_digest().expect("fixture Event digest"))
+            .expect("fixture Event digest is a Hash");
+    // The lease window has to contain the moment the origin ingress signed its
+    // receipt, so both are anchored on one instant here.
+    let issued_at = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
+        .expect("fixture publication instant");
+    let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
+        authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+        authority_set_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "e".repeat(64)))
+            .unwrap(),
+    };
+    let mut lease = arkret_wire::offline_publication::AuthorizationLease {
+        authorization_lease_id: arkret_identifiers::AuthorizationLeaseId::new(
+            "ak:authorization_lease:01904100-0000-7000-8000-fede1ea5e001",
+        )
+        .unwrap(),
+        basis_ref: arkret_wire::offline_publication::LeaseBasisRef::Seal(
+            test_cited_basis_seal(&event).id,
+        ),
+        actor_id: event.actor_id.clone(),
+        device_id: arkret_identifiers::DeviceId::new(
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        )
+        .unwrap(),
+        scope_ref: event.scope_ref.clone(),
+        action: event.kind.as_str().to_owned(),
+        risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
+        issued_at,
+        expires_at: issued_at + ChronoDuration::hours(4),
+        authority_set_ref: authority_set_ref.clone(),
+        proofs: Vec::new(),
+    };
+    lease.proofs = vec![publication_proof(
+        &format!("{PEER_SOURCE_DID}#authorization-lease-key"),
+        lease.lease_digest().expect("fixture lease digest"),
+        issued_at,
+    )];
+    let mut receipt = arkret_wire::offline_publication::IngressReceipt {
+        receipt_id: arkret_identifiers::ReceiptId::new(
+            "ak:receipt:01904100-0000-7000-8000-fede4ece17e1",
+        )
+        .unwrap(),
+        event_digest,
+        authorization_lease_id: lease.authorization_lease_id.clone(),
+        received_at: issued_at,
+        service_id: arkret_identifiers::Did::new(PEER_SOURCE_DID.to_owned()).unwrap(),
+        authority_set_ref,
+        proofs: Vec::new(),
+    };
+    receipt.proofs = vec![publication_proof(
+        &format!("{PEER_SOURCE_DID}#notary-key"),
+        receipt.receipt_digest().expect("fixture receipt digest"),
+        issued_at,
+    )];
+    arkret_wire::EventFederationSubmission {
+        event,
+        authorization_lease: lease,
+        ingress_receipts: vec![receipt],
+    }
+}
+
+/// One issuer proof over a lease or receipt digest.
+///
+/// `payload_digest` is the object with `proofs` removed, and `created_at` MUST
+/// equal `issued_at` / `received_at` verbatim — that equality is the revocation
+/// boundary, not a formatting detail.
+fn publication_proof(
+    verification_method: &str,
+    payload_digest: arkret_identifiers::Hash,
+    created_at: DateTime<Utc>,
+) -> arkret_wire::primitives::Proof {
+    arkret_wire::primitives::Proof {
+        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
+        alg: "EdDSA".to_owned(),
+        verification_method: verification_method.to_owned(),
+        event_digest: payload_digest,
+        created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: "a..b".to_owned(),
+    }
+}
+
 fn peer_submit_body(event: &Value) -> Value {
-    let wire_event = event.clone();
-    let event_id = wire_event["event_id"].as_str().unwrap().to_owned();
-    let event_digest = event_canonical_digest(&wire_event);
+    let event_id = event["event_id"].as_str().unwrap().to_owned();
+    let event_digest = event_canonical_digest(event);
+    let typed_event: arkret_wire::Event =
+        serde_json::from_value(event.clone()).expect("federation fixture is a typed Event");
+    let basis_seal = test_cited_basis_seal(&typed_event);
     let binding_payload = serde_json::json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": TEST_REALM_ID,
         "event_id": &event_id,
         "canonical_digest": &event_digest,
     });
-    serde_json::json!({
-        "service_binding_ref": {
-            "realm_id": TEST_REALM_ID,
-            "realm_policy_digest": sha256_json(&binding_payload),
-            "membership_frontier": [event_id],
-            "delivery_binding_frontier": [PEER_DELIVERY_FRONTIER],
-            "destination_service_kind": "principal_server",
-            "reducer_profile_digest": arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+    let body = arkret_models_collaboration::event_sync::EventsSubmitFederationRequestBody {
+        service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
+            realm_id: arkret_identifiers::RealmId::new(TEST_REALM_ID.to_owned()).unwrap(),
+            realm_policy_digest: arkret_identifiers::Hash::new(sha256_json(&binding_payload))
+                .unwrap(),
+            membership_frontier: vec![arkret_wire::EventId::new(event_id).unwrap()],
+            delivery_binding_frontier: vec![
+                arkret_wire::EventId::new(PEER_DELIVERY_FRONTIER.to_owned()).unwrap(),
+            ],
+            destination_service_kind: "principal_server".to_owned(),
+            reducer_profile_digest: arkret_identifiers::Hash::new(
+                arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST
+                    .to_owned(),
+            )
+            .unwrap(),
         },
-        "events": [wire_event],
-    })
+        events: vec![peer_event_submission(event)],
+        // The DataEvent's `seal_ref` is a receiver-side prerequisite: a peer
+        // that has not accepted that Seal cannot resolve the authorization
+        // pre-state. `event-auth-state-resolution.md` §8 disclosure travels in
+        // the bundle, reachable from the transported Event's basis, never as a
+        // bare `seals[]` rail.
+        cba_proof_bundles: vec![arkret_wire::CbaProofBundle {
+            target_seal_ref: basis_seal.id.clone(),
+            seals: vec![basis_seal],
+            control_moves: Vec::new(),
+            inclusion_proofs: Vec::new(),
+            availability_proofs: Vec::new(),
+        }],
+        signer_key_evidence: Vec::new(),
+        agent_signer_evidence_bundle: None,
+    };
+    serde_json::to_value(body).expect("federation submit body serializes")
 }
 
 async fn submit_peer_event(state: AppState, event: &Value) -> Value {

@@ -173,7 +173,10 @@ fn signed_actor_private_event_envelope(
         arkret_wire::EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
             .expect("fixture Event id"),
         kind,
-        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .expect("fixture Realm id"),
+        },
         actor_id.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -186,7 +189,7 @@ fn signed_actor_private_event_envelope(
     )
     .expect("SDK Event builder accepts actor-private fixture");
     event.prev_refs = prev_refs;
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         actor_id,
         verification_method.clone(),

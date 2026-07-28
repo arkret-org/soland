@@ -93,7 +93,9 @@ fn signed_event(
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         kind,
-        arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
+        },
         actor.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -105,7 +107,7 @@ fn signed_event(
         now,
     )
     .unwrap();
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         actor,
         verification_method.clone(),
@@ -131,31 +133,7 @@ fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
         .map(|event_id| arkret_wire::EventId::new((*event_id).to_owned()).unwrap())
         .collect();
     typed.proofs.clear();
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
-        [21_u8; 32],
-        typed.actor_id.clone(),
-        verification_method.clone(),
-    );
-    let created_at = typed.created_at;
-    arkret_signatures::sign_event(
-        &mut typed,
-        &signer,
-        &verification_method,
-        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
-    )
-    .unwrap();
-    *event = serde_json::to_value(typed).unwrap();
-}
-
-fn set_realm_create_effects(event: &mut Value) {
-    let verification_method = event["proofs"][0]["verification_method"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-    let mut typed: arkret_wire::Event = serde_json::from_value(event.clone()).unwrap();
-    typed.effects = arkret_bootstrap::realm_create_effects(&typed).unwrap();
-    typed.proofs.clear();
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         typed.actor_id.clone(),
         verification_method.clone(),
@@ -496,7 +474,6 @@ async fn mls_lifecycle_end_to_end() {
             }
         }),
     );
-    set_realm_create_effects(&mut realm_create);
     let grant_id = "ak:grant:01904100-0000-7000-8000-00000000e2ef";
     let grant_created_at = realm_create["created_at"].as_str().unwrap();
     let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant = serde_json::from_value(json!({

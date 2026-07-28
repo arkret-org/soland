@@ -8,6 +8,10 @@ use super::common::*;
 async fn projection_space_containers_endpoint_reports_lifecycle_state() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
     let container_space_id = "ak:space:01904100-0000-7000-8000-f10dc0000001";
 
@@ -130,6 +134,10 @@ async fn projection_space_containers_endpoint_reports_lifecycle_state() {
 async fn projection_strands_endpoint_reports_lifecycle_state() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let realm_id = DEMO_REALM_ID;
     let strand_id = "ak:strand:01904100-0000-7000-8000-f20dc0000001";
     let board_space_id = "ak:space:01904100-0000-7000-8000-f20dc0000100";
@@ -208,6 +216,10 @@ async fn projection_strands_endpoint_reports_lifecycle_state() {
 async fn projection_morphs_endpoint_reports_lifecycle_state() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let realm_id = DEMO_REALM_ID;
     let morph_id = "ak:morph:01904100-0000-7000-8000-d20dc0000001";
 
@@ -414,6 +426,10 @@ async fn projection_morphs_endpoint_filters_circle_scope() {
 async fn projection_document_endpoint_reports_body_versions_relations_and_range_comments() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let realm_id = DEMO_REALM_ID;
     let morph_id = "ak:morph:01904100-0000-7000-8000-d21dc0000001";
     let relation_event_id = "ak:event:01904100-0000-7000-8000-d21ec0000002";
@@ -634,6 +650,10 @@ async fn projection_document_endpoint_reports_body_versions_relations_and_range_
 async fn projection_document_relations_return_lazy_and_locked_stubs() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let realm_id = DEMO_REALM_ID;
     let morph_id = "ak:morph:01904100-0000-7000-8000-d22dc0000001";
     let same_target_ref = "ak:strand:01904100-0000-7000-8000-d22dc0000101";
@@ -827,6 +847,10 @@ async fn projection_document_relations_return_lazy_and_locked_stubs() {
 async fn projection_endpoints_hide_terminal_state_by_default() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
     let container_space_id = "ak:space:01904100-0000-7000-8000-c15d70000001";
     let strand_id = "ak:strand:01904100-0000-7000-8000-c15d70000002";
@@ -997,6 +1021,10 @@ async fn projection_endpoints_hide_terminal_state_by_default() {
 async fn projection_persistence_write_through_mirrors_lifecycle_events() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let container_space_id = "ak:space:01904100-0000-7000-8000-15a15a000001";
     let strand_id = "ak:strand:01904100-0000-7000-8000-15a15a000002";
     let morph_id = "ak:morph:01904100-0000-7000-8000-15a15a000003";

@@ -8,6 +8,10 @@ use super::common::*;
 async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let container_space_id = "ak:space:01904100-0000-7000-8000-c10dc0000001";
 
     // 1) ak.space.create — Active.
@@ -159,6 +163,10 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
 async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transitions() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let strand_id = "ak:strand:01904100-0000-7000-8000-e10dc0000001";
     let morph_id = "ak:morph:01904100-0000-7000-8000-e20dc0000001";
 
@@ -366,6 +374,10 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
 async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persist() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let now = chrono::Utc::now();
     state
         .test_persistence()
@@ -480,6 +492,10 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
 async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let task_strand_id = "ak:strand:01904100-0000-7000-8000-f51dc0000001";
     let incident_strand_id = "ak:strand:01904100-0000-7000-8000-f51dc0000002";
 
@@ -664,6 +680,10 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
 async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal_repeat() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let strand_id = "ak:strand:01904100-0000-7000-8000-f10dc0000001";
     let morph_id = "ak:morph:01904100-0000-7000-8000-f20dc0000001";
 
@@ -820,6 +840,10 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
 async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // Every fixture DataEvent below names the demo Realm's basis Seal in
+    // `seal_ref`; that Seal and the founding unit it covers have to be accepted
+    // before the first submit (`event-auth-state-resolution.md` §4.3).
+    seed_demo_realm_basis(&state);
     let strand_id = "ak:strand:01904100-0000-7000-8000-aabbccdd0001";
 
     let create_strand = signed_strand_event(
@@ -864,7 +888,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(resp["status"], "accepted");
+    assert_eq!(resp["status"], "accepted", "tracks update response: {resp}");
 
     let archive = signed_strand_event(
         "ak:event:01904100-0000-7000-8000-aabbcc000003",

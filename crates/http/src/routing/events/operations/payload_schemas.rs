@@ -673,9 +673,14 @@ pub(crate) const ACCOUNT_DATA_SET_REQUIREMENTS: &[PayloadRequirement] = &[
         "account_data.set requires body, encrypted_payload, or tombstone",
     ),
 ];
+// `event-payload.schema.json#/$defs/rsvp_set_payload` closes the payload over
+// `{event_ref, occurrence, entry}` with `additionalProperties:false`, and the
+// registered `ak.rsvp.set` contract projects `set(payload.entry)`. A top-level
+// `status` is therefore not merely unnecessary — the schema forbids it, so
+// requiring one made every conformant RSVP unsubmittable.
 pub(crate) const RSVP_SET_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("event_ref", "ak.rsvp.set requires event_ref"),
-    PayloadRequirement::Required("status", "ak.rsvp.set requires status"),
+    PayloadRequirement::Required("entry", "ak.rsvp.set requires entry"),
     PayloadRequirement::AnyKey(&["occurrence"], "ak.rsvp.set requires occurrence"),
 ];
 pub(crate) const PIN_ADD_REQUIREMENTS: &[PayloadRequirement] = &[

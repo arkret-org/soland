@@ -46,20 +46,35 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
 }
 
 fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
+    // v1 carries no producer `effects[]`: the reducer is handed the writes the
+    // registered `ak.realm.join_rule` contract derives from `kind + payload`
+    // (`event-and-patch.md` section 2.4.2). `realm_join_rule_payload` is
+    // `{"value": <enum>}` and the registered projection sets the whole payload.
+    let payload = json!({"value": join_rule});
+    let event = arkret_wire::Event::new_with_id_at(
+        arkret_identifiers::EventId::new(format!("ak:event:{}", uuid::Uuid::now_v7())).unwrap(),
+        arkret_wire::events::EventKind::REALM_JOIN_RULE,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),
+        },
+        arkret_identifiers::Did::new("did:web:join-policy-test.example").unwrap(),
+        0,
+        arkret_identifiers::Hlc::new("000000000000-0000-00000000").unwrap(),
+        payload.clone(),
+        Utc::now(),
+    )
+    .expect("join-rule Event envelope");
+    let cell_writes = arkret_schema::project_registered_cell_writes(
+        &event,
+        arkret_canonical::DigestSuite::Sha256,
+    )
+    .expect("registered join-rule contract must be evaluable");
     let operation = op(
         arkret_wire::events::EventKind::REALM_JOIN_RULE,
         REALM_A,
-        json!({
-            "effects": [{
-                "cell": "ak:cell:ak.component.realm.join_rule.v1:null",
-                "op": {
-                    "type": "set",
-                    "value": join_rule
-                }
-            }]
-        }),
+        payload,
     );
-    let effect = state.apply_validated_realm_bootstrap_facet(&operation);
+    let effect = state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes);
     assert!(
         matches!(
             effect,

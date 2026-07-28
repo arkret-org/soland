@@ -1,11 +1,21 @@
 //! Integration tests - personal-agent HTTP surfaces.
 
-use arkret_wire::MoveSigner as _;
+use arkret_wire::PayloadSigner as _;
 
 use super::common::*;
 
 pub(crate) const CONTROLLER_DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 pub(crate) const CONTROLLER_DEVICE_SIGNING_SEED: [u8; 32] = [91u8; 32];
+
+/// Genesis-context registry projector: a bootstrap unit has no accepted Realm
+/// yet, so there is no digest-suite cell to read and the protocol baseline
+/// suite is the only defined one.
+pub(crate) fn genesis_projector(
+    event: &arkret_wire::Event,
+) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, String> {
+    arkret_schema::project_registered_cell_writes(event, arkret_canonical::DigestSuite::Sha256)
+        .map_err(|error| error.to_string())
+}
 
 fn test_session_credential_hash(token: &str, audience: &str) -> String {
     let mut hasher = Sha256::new();
@@ -119,10 +129,11 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
         },
+        &genesis_projector,
     )
     .unwrap();
     let verification_method = format!("{controller}#{CONTROLLER_DEVICE_ID}");
-    let bootstrap_signer = arkret_signatures::Ed25519MoveSigner::new(
+    let bootstrap_signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
         actor.clone(),
         verification_method.clone(),
@@ -165,7 +176,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     };
     let mut authorize = arkret_wire::Event::new_at(
         arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
-        realm,
+        arkret_wire::ScopeRef::Realm { realm_id: realm },
         actor.clone(),
         1,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e")).unwrap(),
@@ -188,6 +199,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         &authorize,
         arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0003-a13f9c2e")).unwrap(),
         &bootstrap_signer,
+        &genesis_projector,
     )
     .unwrap();
     for (event, kind, actor_seq) in [
@@ -410,7 +422,7 @@ async fn provision_agent_sdk_commit_attempt(
         chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", now.timestamp_millis());
     let verification_method = format!("{controller}#{CONTROLLER_DEVICE_ID}");
-    let signer = arkret_signatures::Ed25519MoveSigner::new(
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
         controller_id,
         verification_method.clone(),
@@ -732,7 +744,9 @@ async fn agent_provision_commit_requires_its_server_allocation() {
             .unwrap();
     let accountability = arkret_wire::Event::new(
         arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
-        controller_realm_id.clone(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: controller_realm_id.clone(),
+        },
         controller_id.clone(),
         1,
         hlc.clone(),
@@ -741,7 +755,9 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     .unwrap();
     let selector = arkret_wire::Event::new(
         arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM,
-        controller_realm_id,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: controller_realm_id,
+        },
         controller_id,
         2,
         hlc,

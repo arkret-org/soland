@@ -26,7 +26,7 @@ pub(crate) use soland_http::{
     service, service_with_rate_limiter_config, service_with_request_size_limit,
 };
 pub(crate) use soland_storage::{
-    MessageRecord, PresenceRecord, RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
+    MessageRecord, RealmInviteRecord, RealmMetaRecord, WebvhDocumentRecord,
 };
 pub(crate) use soland_storage_postgres::Db;
 pub(crate) use soland_test_support::AppStateTestExt;
@@ -531,7 +531,7 @@ pub(crate) async fn seed_test_realm(
         )
         .await
         .unwrap();
-    let seal_signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         Did::new(owner.to_owned()).unwrap(),
         format!("{owner}#test-realm-notary"),
@@ -769,6 +769,55 @@ pub(crate) fn event_canonical_digest(event: &Value) -> String {
     sha256_json(&canonical)
 }
 
+/// Give `event` the CBA envelope shape its kind's registry row declares.
+///
+/// `event-auth-state-resolution.md` §3 puts `plane` on the cell family, and the
+/// event-kind registry row carries the plane every derived write of that kind
+/// lands in — the same descriptor soland's admission reads through
+/// `arkret_schema::validate_registered_cell_writes_in_context`. §4(1) then makes
+/// a data-plane Event a DataEvent (`seal_ref` + `auth_context`, never
+/// `seal_basis`) and §5 makes a control-plane Event a Control Move
+/// (`seal_basis`, never `seal_ref` / `auth_context`).
+///
+/// Two closed exceptions carry no basis field at all and are listed by §5, not
+/// derived from the kind's plane: the `ak.realm.create` genesis anchor unit and
+/// the B-model `ak.device.reanchor`, which fixes its frontier in
+/// `payload.pre_fence_basis`. Non-reducer-input kinds carry no CBA field either
+/// (`Event::validate_for_submit_structural`).
+fn apply_registered_cba_plane(event: &mut arkret_wire::Event, verification_method: &str) {
+    let Some(descriptor) = event.kind.descriptor().filter(|row| row.reducer_input) else {
+        return;
+    };
+    if matches!(
+        event.kind.as_str(),
+        arkret_wire::events::EventKind::REALM_CREATE | "ak.device.reanchor"
+    ) {
+        return;
+    }
+    let basis_seal = test_realm_basis_seal(event.realm_id.as_str(), event.actor_id.as_str());
+    match descriptor.plane {
+        Some("data") => {
+            event.seal_ref = Some(basis_seal.id);
+            event.auth_context = Some(arkret_wire::AuthContext {
+                did: event.actor_id.clone(),
+                key_id: verification_method
+                    .split_once('#')
+                    .map_or_else(|| verification_method.to_owned(), |(_, key)| key.to_owned()),
+                key_epoch: 0,
+                credential_epoch: None,
+            });
+        }
+        Some("control") => {
+            event.seal_basis = Some(arkret_wire::SealBasis {
+                leaves: vec![basis_seal.id],
+                control_event_set_root: basis_seal.control_event_set_root,
+                state_root: basis_seal.state_root,
+            });
+        }
+        _ => {}
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "the fixture mirrors the complete canonical event envelope"
@@ -797,7 +846,10 @@ pub(crate) fn signed_canonical_event(
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_identifiers::RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .expect("fixture Realm id"),
+        },
         actor.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -813,16 +865,12 @@ pub(crate) fn signed_canonical_event(
         .into_iter()
         .map(|event_id| arkret_wire::EventId::new(event_id.to_owned()).expect("fixture prev_ref"))
         .collect();
-    // Admission runs the registry cell contract over every reducer input, so a
-    // fixture that hand-builds an effect-less Event is simply not a valid
-    // producer Event. Derive the effects from the registry here instead of
-    // teaching each test to write them: the fixture then exercises the same
-    // path a real client takes. Kinds with no registered cell contract are
-    // left untouched.
-    if event.effects.is_empty() {
-        let _ = arkret_schema::materialize_registered_cell_writes(&mut event);
-    }
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    // v1 carries no producer `effects[]`: the receiver derives every write from
+    // `kind + payload` through the registered contract
+    // (`event-and-patch.md` section 2.4.2). What a fixture still owes is the CBA
+    // envelope shape, which follows from the kind's registered plane.
+    apply_registered_cba_plane(&mut event, &verification_method);
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         actor,
         verification_method.clone(),
@@ -845,7 +893,7 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
     let mut typed: arkret_wire::Event =
         serde_json::from_value(event.clone()).expect("fixture Event roundtrip");
     typed.proofs.clear();
-    let signer = arkret_signatures::Ed25519MoveSigner::from_did_key_seed(
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         typed.actor_id.clone(),
         verification_method.clone(),
@@ -861,25 +909,63 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
     *event = serde_json::to_value(typed).expect("re-signed fixture serializes");
 }
 
-pub(crate) fn attach_invite_create_effects(event: &mut Value) {
-    let invite_id = event["payload"]["invite_id"]
-        .as_str()
-        .expect("invite fixture has invite_id");
-    let invitee = event["payload"]["invitee"]
-        .as_str()
-        .expect("directed invite fixture has invitee");
-    event["effects"] = serde_json::json!([
-        {
-            "cell": format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"),
-            "op": {"kind": "transition", "from": null, "to": "pending"}
-        },
-        {
-            "cell": format!("ak:cell:ak.component.member.state.v1:{invitee}"),
-            "op": {"kind": "transition", "from": "leave", "to": "invite"}
-        }
-    ]);
+/// Turn a fixture Event into a member of a `event-auth-state-resolution.md` §5
+/// anchor unit and re-sign it.
+///
+/// The ordinary Realm genesis transaction has no accepted Seal to point at, so
+/// every member of its closed unit — the `ak.realm.create` head, the founding
+/// grant and the whitelisted initial facets — MUST carry no CBA basis field at
+/// all, and no `preconditions` either: the receiver runs the registry plane
+/// check under `EventCellContractContext::OrdinaryRealmBootstrap`, where a
+/// half-filled basis is a `plane_cross_write`.
+pub(crate) fn make_realm_bootstrap_unit_member(event: &mut Value) {
+    if let Some(object) = event.as_object_mut() {
+        object.remove("seal_ref");
+        object.remove("auth_context");
+        object.remove("seal_basis");
+        object.remove("preconditions");
+    }
     resign_canonical_event(event);
 }
+
+/// The Realm Seal frontier — the registered source for a Control Move
+/// `seal_basis` and a DataEvent `seal_ref`.
+///
+/// `ak.self.events.query.frontier` with a Realm-only selector returns
+/// `{realm_id, seal_id, control_event_set_root, state_root}`; a producer that
+/// derives its basis from anywhere else is asserting a governance view it never
+/// observed.
+pub(crate) async fn realm_seal_frontier(
+    state: &AppState,
+    token: &str,
+    realm_id: &str,
+) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
+    let mut response = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state.clone()))
+    .await;
+    let status = response.status_code;
+    let body: Value = response
+        .take_json()
+        .await
+        .expect("Realm Seal frontier body");
+    assert_eq!(status, Some(StatusCode::OK), "Realm Seal frontier: {body}");
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        serde_json::from_value(body).expect("typed Realm Seal frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+        frontier.frontier
+    else {
+        panic!("Realm-only selector must materialize a Seal view");
+    };
+    frontier
+}
+
+// `attach_invite_create_effects` is gone with the producer `effects[]` array:
+// the v1 `Event` envelope has no such member (it is `deny_unknown_fields`), and
+// the `ak.invite.create` writes are receiver-projected from the registered
+// contract. The invite fixtures now carry only the Control Move `seal_basis`.
 
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
@@ -1015,6 +1101,10 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     realm_id: &str,
     event: &mut Value,
 ) {
+    // A DataEvent's `seal_ref` MUST resolve to a verified control-plane Seal of
+    // this Realm (`event-auth-state-resolution.md` §4.3(1)), so the basis Seal
+    // the envelope builder named has to be accepted before the Event is sent.
+    seed_test_realm_basis_seal(state, realm_id, actor);
     let frontier_value: Value = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
@@ -1283,6 +1373,675 @@ pub(crate) fn test_ephemeral_device_signing_key(actor: &str, device_id: &str) ->
     hasher.update([0]);
     hasher.update(device_id.as_bytes());
     SigningKey::from_bytes(&hasher.finalize().into())
+}
+
+/// Persist a verified device for `actor` carrying an authoritative
+/// `device_public_key` (the shape the session-grant exchange and the
+/// `ak.device.authorize` projection both write), so the signing-key directory
+/// can resolve it.
+pub(crate) async fn seed_verified_device_with_public_key(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    device_public_key: &str,
+) {
+    let now = chrono::Utc::now();
+    state
+        .test_persistence()
+        .devices()
+        .put(&soland_storage::DeviceInventoryRecord {
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
+            display_name: Some("Directory Test Device".to_owned()),
+            verification_state: "verified".to_owned(),
+            payload: serde_json::json!({
+                "device_id": device_id,
+                "verification": "verified",
+                "device_public_key": device_public_key,
+                "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000aa",
+                "enrollment_authority_binding": {
+                    "kind": "service_attested",
+                    "authority_did": "did:web:auth.example",
+                    "authorization_ref": format!("{actor}#device-enrollment")
+                }
+            }),
+            created_at: now,
+            updated_at: now,
+            revoked_at: None,
+        })
+        .await
+        .unwrap();
+}
+
+// ── Signal Extension rail (`sync/signal.md`) test fixtures ──────────────────
+//
+// `POST /_arkret/self/signal` admits an encrypted-only `SignalEnvelope`. There
+// is no plaintext branch, so every Signal integration test needs the same three
+// things seeded: a bearer session, an authoritative device signing key the
+// device directory resolves (the proof is verified by
+// `arkret_signatures::verify_eddsa_signal_proof`, not merely parsed), and an
+// accepted Seal in the target Realm for `seal_ref` to resolve to.
+
+/// The closed founding-grant action set of `realm-and-space.md` §2.5 step 5.
+///
+/// The set is exact: a founding grant that adds, drops or aggregates any of
+/// these is `invalid_realm_founding_grant`. `ak.realm.admin` is the only
+/// `aggregate_admin` member, which is why the grant body also has to carry a
+/// `capability_action_registry_digest` (`capabilities.md` §3.2).
+const FIXTURE_FOUNDING_GRANT_ACTIONS: [&str; 4] = [
+    "ak.capability.grant",
+    "ak.capability.revoke",
+    "ak.realm.admin",
+    "ak.realm_key.share",
+];
+
+/// The data-plane actions this suite's DataEvents actually exercise.
+///
+/// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
+/// per receiver-derived cell, over the effective grants the governance basis at
+/// `seal_ref` yields for the actor — so the basis has to name every data-plane
+/// kind a test submits, and nothing beyond it. None of these are reachable from
+/// the founding grant: `ak.realm.admin`'s registry `target_event_kinds` are
+/// Realm-facet Control Moves only, so a second, explicit grant carries them.
+const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
+    "ak.message.create",
+    "ak.morph.create",
+    "ak.morph.update",
+    "ak.relation.create",
+    "ak.rsvp.set",
+    "ak.space.create",
+    "ak.strand.create",
+    "ak.strand.tracks.update",
+    "ak.strand.update",
+];
+
+/// One fixture Realm's accepted governance basis for one subject.
+#[derive(Clone)]
+pub(crate) struct TestRealmBasis {
+    seal: arkret_wire::Seal,
+    ops: Vec<(
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::ordered_log::IssuedOp,
+    )>,
+}
+
+/// The accepted Seal a fixture Event names, plus the sealed cell effects that
+/// Seal's coverage produces.
+///
+/// A `seal_ref` is not a token: `event-auth-state-resolution.md` §4.1(3) /
+/// §4.3(2) make the verifier resolve the actor's whole effective capability set
+/// from the state at that Seal, and soland does exactly that
+/// (`capability_refs.rs::data_event_state_at_seal_ref` →
+/// `arkret_state::effective_state_at`, which joins the cell log filtered by the
+/// Seal's covered Control-Move digests). An empty Seal therefore authorizes
+/// nothing, and no per-test patch can fix that — the Realm has to have sealed a
+/// real founding unit.
+///
+/// So the basis is keyed by `(realm, subject)` and seals one closed unit:
+///
+/// 1. the founding grant of `realm-and-space.md` §2.5 step 5 — `issuer == subject`, the exact
+///    [`FIXTURE_FOUNDING_GRANT_ACTIONS`] set, one Realm-wide resource selector, no
+///    `parent_grant_id`, and the embedded `capability-action-registry.json` digest;
+/// 2. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`];
+/// 3. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
+///    MLS-backed DataEvent clears the governance-binding gate.
+///
+/// Keying by subject rather than by Realm is what makes the Seal
+/// self-consistent: `predecessor_refs` is empty, so `control_event_set_root` is
+/// exactly `delta`'s root, and `state_root` is the genuine
+/// [`arkret_state::compute_state_root`] of the grant cells the unit writes. A
+/// single per-Realm Seal would have to grow its covered set every time a new
+/// actor appeared, and every such growth invalidates both roots.
+///
+/// The one member that cannot be inside `state_root` is (3): its or-set element
+/// value is the enclosing Seal's own id, which does not exist until the body —
+/// `state_root` included — has been hashed. See the report note on
+/// `capability_refs.rs::validate_data_event_covered_seals`.
+static TEST_REALM_BASES: LazyLock<
+    std::sync::Mutex<std::collections::BTreeMap<(String, String), TestRealmBasis>>,
+> = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+
+fn test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
+    TEST_REALM_BASES
+        .lock()
+        .expect("fixture basis cache")
+        .entry((realm_id.to_owned(), subject.to_owned()))
+        .or_insert_with(|| build_test_realm_basis(realm_id, subject))
+        .clone()
+}
+
+/// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
+pub(crate) fn test_realm_basis_seal(realm_id: &str, subject: &str) -> arkret_wire::Seal {
+    test_realm_basis(realm_id, subject).seal
+}
+
+/// The fixture basis Seal an already-built Event cites.
+///
+/// Federation disclosure is keyed off the transported Event, not off its actor:
+/// `event_sync.rs::validate_federation_transport` refuses a `cba_proof_bundles`
+/// entry that is not reachable from some transported `seal_ref` or
+/// `seal_basis.leaves` entry. So a fixture that re-authors an Event after the
+/// envelope was built has to disclose the Seal the envelope still names.
+pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::Seal {
+    let cited = event
+        .seal_ref
+        .as_ref()
+        .or_else(|| {
+            event
+                .seal_basis
+                .as_ref()
+                .and_then(|basis| basis.leaves.first())
+        })
+        .expect("fixture Event cites a basis Seal");
+    TEST_REALM_BASES
+        .lock()
+        .expect("fixture basis cache")
+        .values()
+        .find(|basis| basis.seal.id == *cited)
+        .map(|basis| basis.seal.clone())
+        .expect("cited Seal was built by this fixture")
+}
+
+/// A citable accepted Seal that covers no Control Move at all.
+///
+/// [`test_realm_basis_seal`] covers a founding unit, which is exactly what a
+/// DataEvent needs and exactly what a Realm whose *first canonical* Seal the
+/// server is about to materialize must not already have: the notary refuses to
+/// build a Seal whose canonical coverage does not contain what the current
+/// frontier already covers (`notary.rs` — "existing Seal coverage is not a
+/// subset of canonical Event coverage"). A fixture that only needs something
+/// for a Control Move's `seal_basis.leaves` to point at uses this instead.
+pub(crate) fn test_realm_uncovered_basis_seal(realm_id: &str) -> arkret_wire::Seal {
+    TEST_REALM_UNCOVERED_BASES
+        .lock()
+        .expect("fixture uncovered basis Seal cache")
+        .entry(realm_id.to_owned())
+        .or_insert_with(|| {
+            let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+                [0x53; 32],
+                Did::new("did:web:alice.example").unwrap(),
+                "did:web:alice.example#fixture-notary",
+            );
+            arkret_wire::Seal::sign_single(
+                RealmId::new(realm_id.to_owned()).unwrap(),
+                Vec::new(),
+                Vec::new(),
+                arkret_identifiers::Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned()).unwrap(),
+                arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
+                &signer,
+            )
+            .unwrap()
+        })
+        .clone()
+}
+
+static TEST_REALM_UNCOVERED_BASES: LazyLock<
+    std::sync::Mutex<std::collections::BTreeMap<String, arkret_wire::Seal>>,
+> = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+
+fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
+    let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
+    let issuer = Did::new(subject.to_owned()).expect("fixture grant issuer DID");
+    let founding_move = fixture_move_id(realm_id, subject, "founding-grant");
+    let content_move = fixture_move_id(realm_id, subject, "content-grant");
+    let covered_move = fixture_move_id(realm_id, subject, "mls-commit");
+
+    let founding_grant_id = fixture_grant_id(realm_id, subject, "founding-grant");
+    let content_grant_id = fixture_grant_id(realm_id, subject, "content-grant");
+    let mut ops = vec![
+        (
+            fixture_capability_grant_cell(&founding_grant_id),
+            fixture_issued_op(
+                &issuer,
+                &founding_move,
+                fixture_or_set_add(
+                    founding_move.as_str(),
+                    fixture_grant_body(
+                        &founding_grant_id,
+                        realm_id,
+                        subject,
+                        &FIXTURE_FOUNDING_GRANT_ACTIONS,
+                        true,
+                    ),
+                ),
+            ),
+        ),
+        (
+            fixture_capability_grant_cell(&content_grant_id),
+            fixture_issued_op(
+                &issuer,
+                &content_move,
+                fixture_or_set_add(
+                    content_move.as_str(),
+                    fixture_grant_body(
+                        &content_grant_id,
+                        realm_id,
+                        subject,
+                        &FIXTURE_DATA_PLANE_GRANT_ACTIONS,
+                        false,
+                    ),
+                ),
+            ),
+        ),
+    ];
+
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+        [0x53; 32],
+        Did::new("did:web:alice.example").unwrap(),
+        "did:web:alice.example#fixture-notary",
+    );
+    // `Seal.delta` is a sorted, unique digest list
+    // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`
+    // hashes it as a set, so the order is part of the wire contract rather
+    // than a formatting choice.
+    let mut delta = vec![
+        founding_move.clone(),
+        content_move.clone(),
+        covered_move.clone(),
+    ];
+    delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    let seal = arkret_wire::Seal::sign_single(
+        realm.clone(),
+        Vec::new(),
+        delta,
+        fixture_sealed_state_root(&realm, &ops),
+        arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
+        &signer,
+    )
+    .expect("fixture basis Seal signs");
+
+    // `encryption-and-audit.md` §2.5.2 — the accumulator element value is the
+    // governance Seal ref itself; the tag is the commit batch digest and is
+    // never compared against a Seal id (`arkret_state::mls_move`).
+    ops.push((
+        arkret_state::mls_move::covered_seals_cell_id(realm_id)
+            .expect("fixture covered_seals cell id"),
+        fixture_issued_op(
+            &issuer,
+            &covered_move,
+            fixture_or_set_add(covered_move.as_str(), Value::String(seal.id.to_string())),
+        ),
+    ));
+
+    TestRealmBasis { seal, ops }
+}
+
+/// The `state_root` a notary would commit for these sealed effects: join every
+/// covered op under the Realm's registered lattice, then Merkleize the result.
+fn fixture_sealed_state_root(
+    realm: &RealmId,
+    ops: &[(
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::ordered_log::IssuedOp,
+    )],
+) -> arkret_identifiers::Hash {
+    let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
+    let mut grouped: std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+    > = std::collections::BTreeMap::new();
+    for (cell, op) in ops {
+        grouped.entry(cell.clone()).or_default().push(op.clone());
+    }
+    let mut post_state = std::collections::BTreeMap::new();
+    for (cell, cell_ops) in grouped {
+        let binding = registry
+            .resolve(realm, &cell)
+            .expect("fixture cell family is registered");
+        post_state.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
+        );
+    }
+    arkret_state::compute_state_root(&post_state).expect("fixture state_root")
+}
+
+fn fixture_capability_grant_cell(grant_id: &str) -> arkret_identifiers::CellRef {
+    arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+    ))
+    .expect("fixture capability grant cell id")
+}
+
+/// A deterministic Control-Move digest for one member of the founding unit.
+fn fixture_move_id(realm_id: &str, subject: &str, slot: &str) -> arkret_identifiers::Hash {
+    arkret_identifiers::Hash::new(format!(
+        "sha256:{}",
+        fixture_basis_digest_hex(realm_id, subject, slot)
+    ))
+    .expect("fixture Control Move digest")
+}
+
+/// A deterministic `ak:grant:` id, so re-seeding the same Realm/subject writes
+/// the same OR-Set cell instead of piling up look-alike grants.
+fn fixture_grant_id(realm_id: &str, subject: &str, slot: &str) -> String {
+    let hex = fixture_basis_digest_hex(realm_id, subject, slot);
+    format!(
+        "ak:grant:{}-{}-{}-{}-{}",
+        &hex[0..8],
+        &hex[8..12],
+        &hex[12..16],
+        &hex[16..20],
+        &hex[20..32]
+    )
+}
+
+fn fixture_basis_digest_hex(realm_id: &str, subject: &str, slot: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"soland:http_api:realm-basis:");
+    hasher.update(slot.as_bytes());
+    hasher.update(b"\x00");
+    hasher.update(realm_id.as_bytes());
+    hasher.update(b"\x00");
+    hasher.update(subject.as_bytes());
+    hex::encode(hasher.finalize())
+}
+
+fn fixture_or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
+    arkret_wire::LatticeOp {
+        op_type: arkret_wire::LatticeOpType::Add,
+        tag: Some(tag.to_owned()),
+        value: Some(value),
+        from: None,
+        to: None,
+        reason: None,
+        issuer_seq: None,
+    }
+}
+
+fn fixture_issued_op(
+    issuer: &Did,
+    move_id: &arkret_identifiers::Hash,
+    op: arkret_wire::LatticeOp,
+) -> arkret_state::lattice::ordered_log::IssuedOp {
+    arkret_state::lattice::ordered_log::IssuedOp {
+        issuer: issuer.clone(),
+        op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
+    }
+}
+
+/// The `ak.capability.grant` payload the OR-Set element carries.
+///
+/// `capabilities.md` §3 fixes the body; `soland_domain::reducer`'s
+/// `engine_grant_from_capability_cell_state` is the reader, and it drops any
+/// element whose actions are unregistered, whose resource selector is malformed
+/// or whose aggregate-admin registry binding does not resolve — so a fixture
+/// that gets this wrong produces a silently empty capability set, not an error.
+fn fixture_grant_body(
+    grant_id: &str,
+    realm_id: &str,
+    subject: &str,
+    actions: &[&str],
+    aggregate_admin: bool,
+) -> Value {
+    let mut body = serde_json::json!({
+        "grant_id": grant_id,
+        "schema": "ak.schema.capability_grant.v1",
+        "realm_id": realm_id,
+        "issuer": subject,
+        "subject": subject,
+        "actions": actions,
+        "resources": [{
+            "kind": "realm",
+            "realm_id": realm_id,
+            "match_scope": "realm_wide"
+        }],
+        "issued_at": "2026-01-01T00:00:00.000Z"
+    });
+    if aggregate_admin {
+        body["capability_action_registry_digest"] = Value::String(
+            arkret_policy::current_capability_action_registry_digest()
+                .expect("embedded capability action registry digest")
+                .to_string(),
+        );
+    }
+    body
+}
+
+/// Put the founding unit of `realm_id` in place for `subject`.
+///
+/// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
+/// same Realm (`event-auth-state-resolution.md` §4.3(1)) **and** the governance
+/// state that Seal covers MUST authorize the Event's derived writes, so both
+/// the Seal object and its sealed cell effects have to exist before the Event
+/// is admitted. The cell writes are OR-Set adds under a fixed tag, so repeating
+/// this for the same Realm/subject is idempotent.
+pub(crate) fn seed_test_realm_basis_seal(
+    state: &AppState,
+    realm_id: &str,
+    subject: &str,
+) -> arkret_wire::SealId {
+    let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
+    let basis = test_realm_basis(realm_id, subject);
+    state.test_put_seal(&basis.seal).unwrap();
+    state
+        .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
+        .unwrap();
+    basis.seal.id
+}
+
+/// Seal the demo Realm's founding unit for the actor [`dev_token`] logs in.
+///
+/// The stateless envelope builders (`signed_space_event`,
+/// `signed_strand_event`, `signed_morph_event`, …) all author demo-Realm
+/// DataEvents as `did:web:alice.example` and name that Realm's basis Seal in
+/// `seal_ref`; a test that POSTs one has to put the Seal and the governance
+/// state it covers in place first. Tests that instead make the *server*
+/// materialize the demo Realm's first canonical Seal must not call this — see
+/// [`test_realm_uncovered_basis_seal`].
+pub(crate) fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
+    seed_test_realm_basis_seal(state, DEMO_REALM_ID, "did:web:alice.example")
+}
+
+/// Put an accepted Seal in `realm_id` so a Signal can name it as its Seal basis.
+pub(crate) fn seed_signal_basis_seal(
+    state: &AppState,
+    realm_id: &str,
+    subject: &str,
+) -> arkret_wire::SealId {
+    seed_test_realm_basis_seal(state, realm_id, subject)
+}
+
+/// A bearer session plus the device signing key the Signal proof is made with.
+///
+/// The returned key is the one the device directory now authorizes for
+/// `device_id`, so an envelope signed with any other key fails the §3(4) device
+/// proof rather than a structural check.
+pub(crate) async fn seed_signal_sender_device(
+    state: &AppState,
+    actor: &str,
+    device_id: &str,
+    display_name: &str,
+) -> (String, SigningKey) {
+    let token = dev_token_for_device(state.clone(), actor, device_id, display_name).await;
+    let signing_key = test_ephemeral_device_signing_key(actor, device_id);
+    seed_verified_device_with_public_key(
+        state,
+        actor,
+        device_id,
+        &test_ed25519_multibase_public(&signing_key),
+    )
+    .await;
+    (token, signing_key)
+}
+
+/// Build a fully signed `SignalEnvelope`.
+///
+/// `opaque_payload` only varies the ciphertext: nothing the server may read
+/// lives in it. It exists so two Signals in one test differ in
+/// `envelope_digest` and are not collapsed by the §2 replay suppression.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture exposes every server-visible header member of the envelope"
+)]
+pub(crate) fn signed_signal_envelope(
+    realm_id: &str,
+    scope_ref: arkret_wire::ScopeRef,
+    sender_actor: &str,
+    sender_device: &str,
+    seal_ref: &arkret_wire::SealId,
+    signal_class: arkret_wire::SignalClass,
+    sent_at: chrono::DateTime<chrono::Utc>,
+    ttl_seconds: i64,
+    opaque_payload: &str,
+    signing_key: &SigningKey,
+) -> arkret_wire::SignalEnvelope {
+    let sent_at = chrono::DateTime::from_timestamp_millis(sent_at.timestamp_millis()).unwrap();
+    let verification_method = format!("{sender_actor}#device-key");
+    let mut envelope = arkret_wire::SignalEnvelope {
+        realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
+        scope_ref,
+        sender_actor_id: Did::new(sender_actor.to_owned()).unwrap(),
+        sender_device_id: arkret_identifiers::DeviceId::new(sender_device.to_owned()).unwrap(),
+        seal_ref: seal_ref.clone(),
+        signal_class,
+        sent_at,
+        expires_at: sent_at + chrono::Duration::seconds(ttl_seconds),
+        encrypted_payload: arkret_wire::SignalEncryptedPayload {
+            scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
+            key_ref: arkret_wire::SignalKeyRef {
+                algorithm: "MLS-EXPORTER-AEAD".to_owned(),
+                group_state_ref: "ak:event:01904100-0000-7000-8000-cccccccccccc".to_owned(),
+            },
+            purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
+            aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
+            epoch: 7,
+            nonce: "AAAAAAAAAAAAAAAA".to_owned(),
+            ciphertext: URL_SAFE_NO_PAD.encode(opaque_payload.as_bytes()),
+            aad_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+        },
+        proof: arkret_wire::SignalProof {
+            kind: "detached_jws".to_owned(),
+            verification_method: verification_method.clone(),
+            alg: "EdDSA".to_owned(),
+            envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                .unwrap(),
+            created_at: sent_at,
+            domain: None,
+            audience: None,
+            jws: String::new(),
+        },
+    };
+    envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
+    envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
+    let binding = envelope.proof_binding_bytes().unwrap();
+    envelope.proof.jws =
+        arkret_signatures::Ed25519DetachedJwsSigner::new(signing_key.clone(), verification_method)
+            .sign_detached_jws(&binding);
+    envelope
+}
+
+/// `POST /_arkret/self/signal` — `ak.self.signal.command.send`.
+pub(crate) async fn post_signal(
+    state: AppState,
+    token: &str,
+    envelope: &arkret_wire::SignalEnvelope,
+) -> salvo::http::Response {
+    TestClient::post("http://server/_arkret/self/signal")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(envelope)
+        .send(&app_from_state(state))
+        .await
+}
+
+/// Seed an active Circle with a joined member set in the reducer projection.
+///
+/// The Circle is the only scope discriminator a Signal exposes to the server, so
+/// it is what the §3(2) live send-eligibility and the receiver-side fanout
+/// checks are decided against.
+pub(crate) fn seed_test_circle(
+    state: &AppState,
+    realm_id: &str,
+    circle_id: &str,
+    members: &[&str],
+) {
+    let now = chrono::Utc::now();
+    let mut projection = state.test_projection().lock();
+    projection.circles.insert(
+        circle_id.to_owned(),
+        soland_domain::reducer::CircleProjection {
+            circle_id: circle_id.to_owned(),
+            realm_id: realm_id.to_owned(),
+            profile_ref: None,
+            title: "Signal scope".to_owned(),
+            summary: None,
+            display: serde_json::json!({
+                "short_name": "Signal",
+                "color_token": "slate",
+                "symbol": {"glyph": "ring"}
+            }),
+            directory_visibility: "members".to_owned(),
+            join_rule: "invite".to_owned(),
+            history_visibility: "joined".to_owned(),
+            content_encryption_floor: None,
+            metadata_encryption_floor: None,
+            encryption_profile: "none".to_owned(),
+            mls_group_ref: None,
+            state: soland_domain::reducer::CircleLifecycleState::Active,
+            state_changed_at: None,
+            created_by: members.first().copied().unwrap_or_default().to_owned(),
+            created_at: now,
+            updated_by: None,
+            updated_at: None,
+            members: members.iter().map(|member| (*member).to_owned()).collect(),
+        },
+    );
+    for member in members {
+        projection.circle_memberships.insert(
+            (circle_id.to_owned(), (*member).to_owned()),
+            soland_domain::reducer::CircleMembershipState {
+                circle_id: circle_id.to_owned(),
+                member: (*member).to_owned(),
+                state: "join".to_owned(),
+                invited_at: None,
+                joined_at: now,
+                updated_at: now,
+            },
+        );
+    }
+}
+
+/// Drain one `GET /_arkret/self/signal/subscribe` connection.
+///
+/// §4 forbids a per-payload-type stream frame kind, so the stream is exactly
+/// verbatim `SignalEnvelope` lines plus bounded transport control frames. The
+/// control frames are dropped here and every envelope line is decoded back into
+/// the strong type, which is also the assertion that it was relayed verbatim.
+pub(crate) async fn signal_subscribe_envelopes(
+    state: AppState,
+    token: &str,
+    max_duration_ms: u64,
+) -> Vec<arkret_wire::SignalEnvelope> {
+    let mut response = TestClient::get(format!(
+        "http://server/_arkret/self/signal/subscribe\
+         ?max_duration_ms={max_duration_ms}&heartbeat_ms=600000"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await;
+    let mut envelopes = Vec::new();
+    while let Some(Ok(frame)) = response.body.next().await {
+        let Ok(bytes) = frame.into_data() else {
+            continue;
+        };
+        for line in String::from_utf8_lossy(&bytes).lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: Value = serde_json::from_str(line).expect("signal stream emits NDJSON");
+            // A `SignalEnvelope` has no `kind` member; the transport control
+            // frames are the only lines that do.
+            if value.get("kind").is_some() {
+                continue;
+            }
+            envelopes.push(
+                serde_json::from_value(value)
+                    .expect("signal subscribe relays a verbatim SignalEnvelope"),
+            );
+        }
+    }
+    envelopes
 }
 
 #[expect(
@@ -1578,9 +2337,19 @@ pub(crate) fn normalize_strand_payload(kind: &str, payload: &mut Value) {
             })
         });
     }
+    // Every Strand kind that addresses an existing Strand identifies it by
+    // `payload.target_ref`: that is the `cell_subject` the registered contract
+    // reads (`contract-registry.json`), and `event-payload.schema.json`'s
+    // Strand payload classes close over `target_ref` with
+    // `additionalProperties:false`, so a `strand_id` member is not merely an
+    // alias — it has no place on the wire.
     if matches!(
         kind,
-        "ak.strand.archive" | "ak.strand.restore" | "ak.strand.tombstone"
+        "ak.strand.archive"
+            | "ak.strand.restore"
+            | "ak.strand.tombstone"
+            | "ak.strand.update"
+            | "ak.strand.tracks.update"
     ) {
         if !object.contains_key("target_ref") {
             if let Some(strand_id) = object.get("strand_id").and_then(Value::as_str) {

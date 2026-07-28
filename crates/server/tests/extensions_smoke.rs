@@ -14,7 +14,7 @@ use arkret_models_integration::applet::{
     AppletGhostPolicy, AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, WebhookAuth,
     WebhookSignatureAlg,
 };
-use arkret_signatures::Ed25519MoveSigner;
+use arkret_signatures::Ed25519PayloadSigner;
 use base64::Engine as _;
 use ed25519_dalek::{Signer, SigningKey};
 use salvo::http::StatusCode;
@@ -121,7 +121,7 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 }
 
 fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
-    let signer = Ed25519MoveSigner::from_did_key_seed(
+    let signer = Ed25519PayloadSigner::from_did_key_seed(
         [0x21; 32],
         Did::new("did:web:alice.example").unwrap(),
         "did:web:alice.example#extension-test-notary",
@@ -168,7 +168,7 @@ fn signed_ghost_provision_body(
     };
     let verification_method = package.webhook_auth.key_ref.clone();
     let signing_key = applet_service_signing_key(&verification_method);
-    let signer = Ed25519MoveSigner::new(
+    let signer = Ed25519PayloadSigner::new(
         signing_key.clone(),
         package.service_id.clone(),
         verification_method.clone(),
@@ -200,7 +200,9 @@ fn signed_ghost_provision_body(
         arkret_signatures::jws::sign_jws_ed25519(&grant_binding, &signing_key).unwrap();
     let mut accountability_event = arkret_event_draft::accountability_grant_event(
         &grant,
-        realm_id.clone(),
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
         0,
         arkret_identifiers::Hlc::new(format!(
             "{:012x}-0000-a11ce001",
@@ -259,7 +261,7 @@ fn signed_ghost_provision_body(
     );
     let mut profile_event = profile
         .profile_create_event(
-            realm_id,
+            arkret_wire::ScopeRef::Realm { realm_id },
             0,
             arkret_identifiers::Hlc::new(format!(
                 "{:012x}-0001-a11ce001",
@@ -895,7 +897,7 @@ fn applet_message_event(
     });
     let verification_method = format!("{}#applet-service-key", package.service_id);
     let signing_key = applet_service_signing_key(&verification_method);
-    let signer = Ed25519MoveSigner::new(
+    let signer = Ed25519PayloadSigner::new(
         signing_key,
         package.service_id.clone(),
         verification_method.clone(),
@@ -1210,14 +1212,14 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         ..Default::default()
     };
     package.receive_events = true;
-    package.receive_ephemeral = true;
+    package.receive_signals = true;
     package
         .seal_registration_epoch(registration_epoch_evidence)
         .unwrap();
     package.seal().unwrap();
     let verification_method = format!("{controller_id}#applet-package");
     let signer =
-        Ed25519MoveSigner::from_did_key_seed([13u8; 32], controller_id, &verification_method);
+        Ed25519PayloadSigner::from_did_key_seed([13u8; 32], controller_id, &verification_method);
     package.sign(&signer, &verification_method).unwrap();
     package
 }
