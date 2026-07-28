@@ -211,7 +211,7 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
         events: &[Event],
-    ) -> Result<Option<Hash>, NotaryError> {
+    ) -> Result<Option<arkret_wire::AuthoritySetRef>, NotaryError> {
         let notary_cell = notary_cell_ref(realm_id)
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         let sealed = state
@@ -260,7 +260,8 @@ impl NotaryWorker {
             }
             arkret_wire::notary::NotaryValue::OpenSet { members } => members
                 .iter()
-                .any(|member| member.as_str() == self.service_id),
+                .min_by(|left, right| left.as_str().as_bytes().cmp(right.as_str().as_bytes()))
+                .is_some_and(|member| member.as_str() == self.service_id),
             arkret_wire::notary::NotaryValue::Mixed { did, .. } => did.as_str() == self.service_id,
             arkret_wire::notary::NotaryValue::Threshold { .. } => false,
         };
@@ -269,9 +270,11 @@ impl NotaryWorker {
         }
         let digest = arkret_canonical::canonical_sha256(&notary_profile_wire(&envelope))
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
-        Hash::new(digest)
-            .map(Some)
-            .map_err(|error| NotaryError::Construction(error.to_string()))
+        Ok(Some(arkret_wire::AuthoritySetRef {
+            authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+            authority_set_digest: Hash::new(digest)
+                .map_err(|error| NotaryError::Construction(error.to_string()))?,
+        }))
     }
 
     /// Run one signing pass for the given Realm. Returns:
