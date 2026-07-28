@@ -1127,6 +1127,10 @@ pub(crate) async fn identity_submit_did_operation(
         .map(|event| WebvhLogEntry::new(event.operation.clone()))
         .collect();
     candidate.push(WebvhLogEntry::new(operation.clone()));
+    if let Err(message) = verify_webvh_log_proof(&operation) {
+        return Err(AppError::new(ErrorCode::InvalidSignature, message)
+            .with_status(StatusCode::UNAUTHORIZED));
+    }
     validate_log_chain(&candidate)?;
     verify_scid_against_did(&did, &candidate[0])?;
     verify_log_subject(&did, &candidate)?;

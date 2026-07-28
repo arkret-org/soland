@@ -723,6 +723,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
             "notification": {
                 "push_target_id": push_target_id,
                 "wakeup_kind": "message",
+                "timing_profile_hint": "default",
                 "event_id": "ak:event:01904100-0000-7000-8000-0000000000ee",
                 "realm_id": "ak:realm:0190419b-0000-7000-8000-0000000000ee",
                 "sender_actor_id": "did:web:bob.example",
@@ -746,6 +747,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
                 "notification": {
                     "push_target_id": push_target_id,
                     "wakeup_kind": "message",
+                    "timing_profile_hint": "default",
                     "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
                 }
             }))

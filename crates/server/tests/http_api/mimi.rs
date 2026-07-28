@@ -233,7 +233,9 @@ fn identifier_commitment(identifier: &str) -> String {
 
 #[tokio::test]
 async fn mimi_provider_facade_contracts_work() {
-    let service = app();
+    let state = soland_test_support::app_state(test_config());
+    seed_test_realm_basis_seal(&state, DEMO_REALM_ID, state.service_id());
+    let service = app_from_state(state);
 
     let well_known: Value = TestClient::get("http://server/.well-known/mimi-protocol-directory")
         .send(&service)
@@ -450,6 +452,8 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let service = app_from_state(state.clone());
     let demo_realm = DEMO_REALM_ID;
     let custom_realm = "ak:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
+    seed_test_realm_basis_seal(&state, demo_realm, state.service_id());
+    seed_test_realm_basis_seal(&state, custom_realm, state.service_id());
     let room_id = "01JSMIMI-P4-E2E";
     let group_id = "mimi-group-p4-001";
     let room_uri = mimi_room_uri(room_id);
@@ -678,6 +682,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let realm_id = DEMO_REALM_ID;
+    seed_test_realm_basis_seal(&state, realm_id, state.service_id());
     let room_id = "01JSMIMI-P75-POLICY";
     let group_id = "mimi-group-policy-001";
     let room_uri = mimi_room_uri(room_id);

@@ -414,7 +414,7 @@ async fn embedded_webvh_provider_registers_and_serves_identity() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(registered["status"], "created");
+    assert_eq!(registered["status"], "created", "{registered}");
     // DIF did:webvh v1.0: the SCID is the bare base58btc sha256 multihash
     // (46 chars, `Qm…`) — no multibase `z` prefix.
     assert!(
@@ -559,16 +559,32 @@ async fn submit_did_operation_webvh_serves_canonical_did_json() {
     );
 
     let mut invalid_proof = request.clone();
-    invalid_proof["operation"]["proof"][0]["proofValue"] =
-        Value::String("zinvalidSignature".to_owned());
-    let invalid_proof_response =
+    let proof_value = invalid_proof["operation"]["proof"][0]["proofValue"]
+        .as_str()
+        .expect("SDK inception proofValue");
+    let mut invalid_signature = bs58::decode(
+        proof_value
+            .strip_prefix('z')
+            .expect("proofValue uses base58btc multibase"),
+    )
+    .into_vec()
+    .expect("SDK inception proofValue decodes");
+    invalid_signature[0] ^= 1;
+    invalid_proof["operation"]["proof"][0]["proofValue"] = Value::String(format!(
+        "z{}",
+        bs58::encode(invalid_signature).into_string()
+    ));
+    let mut invalid_proof_response =
         TestClient::post("http://server/_arkret/root/identity/submit-did-operation")
             .json(&invalid_proof)
             .send(&app_from_state(state.clone()))
             .await;
+    let invalid_proof_status = invalid_proof_response.status_code.unwrap();
+    let invalid_proof_body: Value = invalid_proof_response.take_json().await.unwrap();
     assert_eq!(
-        invalid_proof_response.status_code.unwrap(),
-        StatusCode::UNAUTHORIZED
+        invalid_proof_status,
+        StatusCode::UNAUTHORIZED,
+        "{invalid_proof_body}"
     );
 
     let submitted: Value =

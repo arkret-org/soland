@@ -67,6 +67,24 @@ pub(super) async fn persist_mimi_canonical_message_event(
     .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     event.prev_refs = prev_refs;
     let verification_method = format!("{}#notary-key", state.service_id());
+    let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
+        .map_err(|error| AppError::internal(format!("MIMI Realm id invalid: {error}")))?;
+    let seal = crate::notary::ensure_realm_seal_head(state, &realm)
+        .map_err(|error| AppError::internal(format!("MIMI Realm Seal lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                "MIMI target Realm has no accepted Seal",
+            )
+            .with_status(StatusCode::SERVICE_UNAVAILABLE)
+        })?;
+    event.seal_ref = Some(seal.id);
+    event.auth_context = Some(arkret_wire::AuthContext {
+        did: service_did.clone(),
+        key_id: "notary-key".to_owned(),
+        key_epoch: 0,
+        credential_epoch: None,
+    });
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,

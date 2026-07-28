@@ -1184,29 +1184,13 @@ fn record_requires_private_plaintext_visibility(
 
 fn record_scope_circle_id(record: &CanonicalEventRecord) -> Option<String> {
     let object = record.envelope.as_object()?;
-    if let Some(scope) = object.get("effective_scope") {
-        if let Some(scope) = scope.as_str()
-            && scope.starts_with("ak:circle:")
-        {
-            return Some(scope.to_owned());
-        }
-        if let Some(circle_id) = scope.get("circle_id").and_then(Value::as_str)
-            && circle_id.starts_with("ak:circle:")
-        {
-            return Some(circle_id.to_owned());
-        }
+    let scope = object.get("scope_ref")?.as_object()?;
+    if scope.get("kind").and_then(Value::as_str) != Some("circle") {
+        return None;
     }
-    let payload = object.get("payload").and_then(Value::as_object)?;
-    payload
-        .get("scope_circle_id")
+    scope
+        .get("circle_id")
         .and_then(Value::as_str)
-        .or_else(|| {
-            payload
-                .get("object")
-                .and_then(Value::as_object)
-                .and_then(|object| object.get("scope_circle_id"))
-                .and_then(Value::as_str)
-        })
         .filter(|scope| scope.starts_with("ak:circle:"))
         .map(ToOwned::to_owned)
 }

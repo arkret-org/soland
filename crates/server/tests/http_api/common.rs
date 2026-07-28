@@ -2092,7 +2092,6 @@ pub(crate) fn test_embedded_webvh_proof(
         },
     });
     let scid = test_scid(&skeleton);
-    let did = format!("did:webvh:{scid}:{method_authority}:webvh:{local_id}");
     let mut entry = test_replace_scid(skeleton, &scid);
     let entry_hash = test_webvh_entry_hash(&entry, &scid);
     if let Value::Object(map) = &mut entry {
@@ -2105,7 +2104,9 @@ pub(crate) fn test_embedded_webvh_proof(
         "type": "DataIntegrityProof",
         "cryptosuite": "eddsa-jcs-2022",
         "proofPurpose": "assertionMethod",
-        "verificationMethod": format!("{did}#{update_public_key_multibase}"),
+        "verificationMethod": format!(
+            "did:key:{update_public_key_multibase}#{update_public_key_multibase}"
+        ),
     });
     let proof_config = arkret_canonical::canonical_json_bytes(&proof).unwrap();
     let document = arkret_canonical::canonical_json_bytes(&entry).unwrap();
