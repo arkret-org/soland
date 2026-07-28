@@ -1,5 +1,7 @@
 #![forbid(unsafe_code)]
 
+pub mod cba_basis;
+
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::path::Path;

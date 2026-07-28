@@ -120,6 +120,17 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
     dev_login_token(state, actor, device_suffix).await
 }
 
+/// The data-plane actions this suite's ghost-authored DataEvents exercise.
+const DATA_PLANE_GRANT_ACTIONS: [&str; 1] = ["ak.message.create"];
+
+/// A citable accepted Seal of the demo Realm that covers no Control Move.
+///
+/// `event-auth-state-resolution.md` §5 makes a control-plane Event a Control
+/// Move whose `seal_basis.leaves` must be non-empty; unlike a DataEvent
+/// `seal_ref`, the leaves are not resolved into an authorization pre-state at
+/// admission, so a Control Move fixture only needs a real accepted Seal to
+/// point at. A DataEvent fixture needs the sealed founding unit instead —
+/// see [`DATA_PLANE_GRANT_ACTIONS`] and `soland_test_support::cba_basis`.
 fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         [0x21; 32],
@@ -275,6 +286,12 @@ fn signed_ghost_provision_body(
         accountability_event.event_id.as_str(),
         "accountability",
     ));
+    // `ak.profile.create` is a control-plane reducer input in the event-kind
+    // registry, so `event-auth-state-resolution.md` §5 makes it a Control Move:
+    // it names the same accepted Seal basis as the accountability grant it
+    // travels with. The delegated applet authorization on the envelope is a
+    // separate, additive check — it never substitutes for the CBA basis.
+    profile_event.seal_basis = Some(seal_basis.clone());
     arkret_signatures::sign_event(
         &mut profile_event,
         &signer,
@@ -789,6 +806,7 @@ async fn canonical_did_document(app: &salvo::Service, did: &str) -> Value {
 }
 
 struct AppletMessageTransactionRequest<'a> {
+    state: &'a AppState,
     applet_id: &'a str,
     actor_id: &'a str,
     realm_id: &'a str,
@@ -856,6 +874,7 @@ fn applet_message_event(
     request: &AppletMessageTransactionRequest<'_>,
 ) -> Value {
     let AppletMessageTransactionRequest {
+        state,
         applet_id,
         actor_id,
         realm_id,
@@ -866,7 +885,6 @@ fn applet_message_event(
         ..
     } = request;
     let now = chrono::Utc::now();
-    let created_at = arkret_canonical::format_timestamp_canonical(now);
     let payload = json!({
         "strand_id": strand_id_for_realm(realm_id),
         "track_name": "discussion",
@@ -875,34 +893,60 @@ fn applet_message_event(
             "body": text,
         },
     });
-    let event = json!({
-        "event_id": arkret_identifiers::new_prefixed_uuid7("ak:event:"),
-        "kind": "ak.message.create",
-        "realm_id": realm_id,
-        "actor_id": actor_id,
-        "actor_seq": *actor_seq,
-        "created_at": created_at,
-        "hlc": format!("{:012x}-0000-00000000", now.timestamp_millis().max(0) as u64),
-        "prev_refs": [prev_ref],
-        "refs": [],
-        "payload": payload,
-        "executed_by": package.service_id.to_string(),
-        "authorization_ref": authorization_ref,
-        "applet_id": applet_id,
-        "external_ref": {
-            "protocol": "smoke",
-            "external_id": actor_id,
+    let mut event = arkret_wire::Event::new_with_id_at(
+        arkret_wire::EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
+            .expect("fixture Event id"),
+        "ak.message.create",
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new((*realm_id).to_owned())
+                .expect("fixture Realm id"),
         },
-        "proofs": [],
-    });
+        Did::new((*actor_id).to_owned()).expect("fixture ghost actor DID"),
+        *actor_seq,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .expect("fixture HLC"),
+        payload,
+        now,
+    )
+    .expect("SDK Event builder accepts applet transaction fixture");
+    event.prev_refs =
+        vec![arkret_wire::EventId::new((*prev_ref).to_owned()).expect("fixture prev_ref")];
+    event.executed_by = Some(package.service_id.clone());
+    event.authorization_ref = Some((*authorization_ref).to_owned());
+    event.applet_id = Some(
+        arkret_identifiers::AppletId::new((*applet_id).to_owned()).expect("fixture applet id"),
+    );
+    event.external_ref = Some(std::collections::BTreeMap::from([
+        ("protocol".to_owned(), json!("smoke")),
+        ("external_id".to_owned(), json!(actor_id)),
+    ]));
     let verification_method = format!("{}#applet-service-key", package.service_id);
+    // `ak.message.create` is a data-plane reducer input, so
+    // `event-auth-state-resolution.md` §4(1) makes this a DataEvent: the
+    // envelope's `seal_ref` has to resolve to governance state that already
+    // authorizes `ak.message.create` for the ghost actor. The applet's
+    // `authorization_ref` delegation is checked separately and never stands in
+    // for that basis, so the fixture seals the ghost actor's founding unit.
+    soland_test_support::cba_basis::seed_realm_basis(
+        state,
+        realm_id,
+        actor_id,
+        &DATA_PLANE_GRANT_ACTIONS,
+    );
+    soland_test_support::cba_basis::apply_registered_cba_plane(
+        &mut event,
+        &verification_method,
+        &DATA_PLANE_GRANT_ACTIONS,
+    );
     let signing_key = applet_service_signing_key(&verification_method);
     let signer = Ed25519PayloadSigner::new(
         signing_key,
         package.service_id.clone(),
         verification_method.clone(),
     );
-    let mut event: arkret_wire::Event = serde_json::from_value(event).unwrap();
     arkret_signatures::sign_event(
         &mut event,
         &signer,
@@ -1019,6 +1063,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         &app,
         &package,
         AppletMessageTransactionRequest {
+            state: &state,
             applet_id: &applet_id,
             actor_id: &ghost_actor_id,
             realm_id,
@@ -1081,6 +1126,7 @@ async fn applet_bridge_register_ghost_route_revoke_smoke() {
         &app,
         &package,
         AppletMessageTransactionRequest {
+            state: &state,
             applet_id: &applet_id,
             actor_id: &ghost_actor_id,
             realm_id,

@@ -78,6 +78,44 @@ fn sha256_json(value: &Value) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(&bytes)))
 }
 
+/// The Realm's accepted Seal frontier — the registered sourcing for a
+/// single-leaf Control Move `seal_basis` (`events.rs::events_frontier`).
+///
+/// This suite bootstraps its Realm through `ak.realm.create` +
+/// `ak.capability.grant`, so the Seal every MLS Control Move here cites is the
+/// Realm's real accepted governance Seal, read back from the server.
+async fn realm_seal_frontier(
+    state: AppState,
+    token: &str,
+    realm_id: &str,
+) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
+    let mut response = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .send(&app_from_state(state))
+    .await;
+    let status = response.status_code;
+    let body: Value = response.take_json().await.unwrap_or(Value::Null);
+    assert_eq!(
+        status,
+        Some(StatusCode::OK),
+        "Realm Seal frontier failed with {status:?}: {body}"
+    );
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        serde_json::from_value(body).expect("typed Realm Seal frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+        frontier.frontier
+    else {
+        panic!("Realm-only selector returned the wrong frontier variant");
+    };
+    frontier
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture mirrors the complete canonical event envelope"
+)]
 fn signed_event(
     event_id: &str,
     actor_seq: u64,
@@ -86,6 +124,7 @@ fn signed_event(
     realm_id: &str,
     kind: &str,
     payload: Value,
+    seal_basis: Option<arkret_wire::SealBasis>,
 ) -> Value {
     let now = Utc::now();
     let actor = arkret_identifiers::Did::new(actor.to_owned()).unwrap();
@@ -107,6 +146,7 @@ fn signed_event(
         now,
     )
     .unwrap();
+    event.seal_basis = seal_basis;
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         actor,
@@ -423,24 +463,9 @@ async fn mls_lifecycle_end_to_end() {
     let keypackage_ref = claimed_keypackage_ref;
     let welcome_ref =
         "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
-    let governance_binding = json!({
-        "binding_version": 1,
-        "encoding_profile": "cbor-deterministic-rfc8949-v1",
-        "realm_id": realm_id,
-        "effective_scope": effective_scope.clone(),
-        "mls_group_id": group_id,
-        "previous_epoch": 0,
-        "next_epoch": 0,
-        "membership_frontier": [frontier_ref],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-        "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
-    });
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
-    let mut realm_create = signed_event(
+    let realm_create = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e0",
         0,
         alice_did,
@@ -463,9 +488,15 @@ async fn mls_lifecycle_end_to_end() {
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
+                // This deployment hosts the Realm, so it is the Realm's
+                // notary: `notary.rs::is_authorized_for_notary_ops` only lets
+                // the service materialize accepted Seals for a `single_did`
+                // Realm whose notary DID is its own `service_id`, and without
+                // an accepted Seal no Control Move of this Realm could ever
+                // resolve a `seal_basis`.
                 "notary": {
                     "kind": "single_did",
-                    "did": alice_did,
+                    "did": state.service_id(),
                     "recovery_members": ["did:web:recovery.example"],
                     "controller_organization": "did:web:organization.primary.example",
                     "recovery_controller_organizations": ["did:web:organization.recovery.example"]
@@ -473,6 +504,9 @@ async fn mls_lifecycle_end_to_end() {
                 "created_at": "2026-05-25T00:00:00.000Z"
             }
         }),
+        // `event-auth-state-resolution.md` §5 — `ak.realm.create` is the
+        // genesis anchor unit and carries no basis field at all.
+        None,
     );
     let grant_id = "ak:grant:01904100-0000-7000-8000-00000000e2ef";
     let grant_created_at = realm_create["created_at"].as_str().unwrap();
@@ -527,6 +561,10 @@ async fn mls_lifecycle_end_to_end() {
         realm_id,
         arkret_wire::events::EventKind::CAPABILITY_GRANT,
         json!({"grant_id": grant_id, "grant": grant}),
+        // `realm-and-space.md` §2.5 — the founding grant is the recognized
+        // `ak.realm.create` bootstrap followup, submitted in the genesis batch
+        // before any Seal of this Realm exists, so it carries no basis.
+        None,
     );
     set_event_prev_refs(
         &mut founding_grant,
@@ -542,6 +580,29 @@ async fn mls_lifecycle_end_to_end() {
         let error: Value = create_resp.take_json().await.unwrap_or(Value::Null);
         panic!("Realm create failed with {create_status:?}: {error}");
     }
+
+    // The bootstrapped Realm now has an accepted governance Seal. Every MLS
+    // Control Move below cites it as its `seal_basis`, and
+    // `encryption-and-audit.md` §2.5.2 makes the binding attest the governance
+    // Seal set the epoch covers — here that set is exactly this one Seal.
+    let realm_seal = realm_seal_frontier(state.clone(), &alice_token, realm_id).await;
+    let realm_seal_basis = realm_seal.seal_basis();
+    let governance_binding = json!({
+        "binding_version": 1,
+        "encoding_profile": "cbor-deterministic-rfc8949-v1",
+        "realm_id": realm_id,
+        "effective_scope": effective_scope.clone(),
+        "mls_group_id": group_id,
+        "previous_epoch": 0,
+        "next_epoch": 0,
+        "membership_frontier": [frontier_ref],
+        "covered_seal_refs": [realm_seal.seal_id],
+        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
+        "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
+        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
+    });
 
     let mut genesis = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e1",
@@ -562,6 +623,7 @@ async fn mls_lifecycle_end_to_end() {
             "governance_binding": governance_binding,
             "created_at": "2026-05-25T00:00:01.000Z"
         }),
+        Some(realm_seal_basis.clone()),
     );
     set_event_prev_refs(
         &mut genesis,
@@ -644,6 +706,7 @@ async fn mls_lifecycle_end_to_end() {
             "commit_ref": "ak:event:01904100-0000-7000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
+        Some(realm_seal_basis.clone()),
     );
     set_event_prev_refs(
         &mut welcome,
@@ -680,6 +743,7 @@ async fn mls_lifecycle_end_to_end() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "membership_frontier": [frontier_ref],
+        "covered_seal_refs": [realm_seal.seal_id],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
         "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
@@ -702,6 +766,7 @@ async fn mls_lifecycle_end_to_end() {
             "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
             "governance_binding": commit_binding
         }),
+        Some(realm_seal_basis),
     );
     set_event_prev_refs(
         &mut commit,

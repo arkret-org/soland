@@ -244,9 +244,57 @@ fn signed_event(
     actor_seq: u64,
     payload: Value,
 ) -> Value {
-    signed_event_with_prev_refs(seed, actor, realm_id, kind, actor_seq, payload, Vec::new())
+    signed_event_with_prev_refs(
+        seed,
+        actor,
+        realm_id,
+        kind,
+        actor_seq,
+        payload,
+        Vec::new(),
+        None,
+    )
 }
 
+/// The Realm's accepted Seal frontier, which is the registered sourcing for a
+/// single-leaf Control Move `seal_basis` (`events.rs::events_frontier` — a
+/// Realm-only selector returns the `RealmSeal` view precisely for this).
+///
+/// These fixtures bootstrap their Realm through `ak.realm.create` +
+/// `ak.capability.grant`, so the Realm really does have an accepted Seal: the
+/// basis is read back from the server rather than fabricated.
+async fn realm_seal_basis(
+    app: &salvo::Service,
+    token: &str,
+    realm_id: &str,
+) -> arkret_wire::SealBasis {
+    let mut response = TestClient::get(format!(
+        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+    ))
+    .add_header("Authorization", format!("Bearer {token}"), true)
+    .send(app)
+    .await;
+    let status = response.status_code.expect("Realm Seal frontier status");
+    let body = response.take_string().await.unwrap_or_default();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "Realm Seal frontier failed with {status}: {body}"
+    );
+    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+        serde_json::from_str(&body).expect("typed Realm Seal frontier");
+    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+        frontier.frontier
+    else {
+        panic!("Realm-only selector returned the wrong frontier variant");
+    };
+    frontier.seal_basis()
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the fixture mirrors the complete signed-event envelope"
+)]
 fn signed_event_with_prev_refs(
     seed: [u8; 32],
     actor: &str,
@@ -255,6 +303,7 @@ fn signed_event_with_prev_refs(
     actor_seq: u64,
     payload: Value,
     prev_refs: Vec<arkret_wire::EventId>,
+    seal_basis: Option<arkret_wire::SealBasis>,
 ) -> Value {
     let now = Utc::now();
     assert_eq!(actor, signing_actor(seed));
@@ -282,6 +331,7 @@ fn signed_event_with_prev_refs(
     )
     .expect("SDK Event builder accepts consent fixture");
     event.prev_refs = prev_refs;
+    event.seal_basis = seal_basis;
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         seed,
         actor_id,
@@ -330,6 +380,7 @@ async fn submit_event(
         actor_seq >= frontier.next_actor_seq,
         "fixture-requested actor_seq must not precede the accepted frontier"
     );
+    let seal_basis = realm_seal_basis(app, token, realm_id).await;
     let event = signed_event_with_prev_refs(
         seed,
         actor,
@@ -338,6 +389,7 @@ async fn submit_event(
         frontier.next_actor_seq,
         payload,
         frontier.frontier_event_ids,
+        Some(seal_basis),
     );
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -353,7 +405,13 @@ async fn submit_event(
     serde_json::from_str(&body).unwrap()
 }
 
-async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: &str) -> String {
+async fn create_realm(
+    app: &salvo::Service,
+    token: &str,
+    seed: [u8; 32],
+    actor: &str,
+    service_id: &str,
+) -> String {
     let realm_id = ids::generate_realm_id();
     let created_at = iso_now();
     let create = signed_event(
@@ -380,9 +438,15 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
+                // This deployment hosts the Realm, so it is the Realm's
+                // notary: `notary.rs::is_authorized_for_notary_ops` only lets
+                // the service materialize accepted Seals for a `single_did`
+                // Realm whose notary DID is its own `service_id`, and without
+                // an accepted Seal no Control Move of this Realm could ever
+                // resolve a `seal_basis`.
                 "notary": {
                     "kind": "single_did",
-                    "did": actor,
+                    "did": service_id,
                     "recovery_members": ["did:web:recovery.soland.local"],
                     "controller_organization": "did:web:organization.primary.soland.local",
                     "recovery_controller_organizations": ["did:web:organization.recovery.soland.local"]
@@ -460,6 +524,10 @@ async fn create_realm(app: &salvo::Service, token: &str, seed: [u8; 32], actor: 
             "grant": grant
         }),
         vec![create_event_id],
+        // `realm-and-space.md` §2.5 — the founding grant is the recognized
+        // `ak.realm.create` bootstrap followup, submitted in the genesis batch
+        // before any Seal of this Realm exists, so it carries no basis.
+        None,
     );
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
@@ -511,13 +579,13 @@ async fn consent_grant_revoke_regrant_does_not_implicitly_accept_contact_request
 #[tokio::test]
 async fn consent_events_project_cells_without_implicitly_accepting_contact_request() {
     let state = soland_test_support::app_state(test_config());
-    let app = service(state);
+    let app = service(state.clone());
     let alice_seed = [31_u8; 32];
     let alice = signing_actor(alice_seed);
     let bob = "did:web:event-consent-bob.example";
     let alice_token = dev_token(&app, &alice).await;
     let bob_token = dev_token(&app, bob).await;
-    let realm_id = create_realm(&app, &alice_token, alice_seed, &alice).await;
+    let realm_id = create_realm(&app, &alice_token, alice_seed, &alice, state.service_id()).await;
 
     let pending_contact = request_contact(&app, &bob_token, &alice, "message").await;
     assert_eq!(pending_contact["status"], "pending");
@@ -664,14 +732,14 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 #[tokio::test]
 async fn contact_row_surfaces_invite_consent_grant_ref() {
     let state = soland_test_support::app_state(test_config());
-    let app = service(state);
+    let app = service(state.clone());
     let alice = "did:web:icgr-alice.example";
     let bob_seed = [32_u8; 32];
     let bob = signing_actor(bob_seed);
     let alice_token = dev_token(&app, alice).await;
     let bob_token = dev_token(&app, &bob).await;
     // bob (the consent-cell holder) grants alice (peer) an `invite` scope.
-    let realm_id = create_realm(&app, &bob_token, bob_seed, &bob).await;
+    let realm_id = create_realm(&app, &bob_token, bob_seed, &bob, state.service_id()).await;
 
     // Open the contact relationship so a row exists for alice's list.
     request_contact(&app, &alice_token, &bob, "invite").await;

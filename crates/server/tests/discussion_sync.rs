@@ -15,6 +15,17 @@ use soland_http::state::{AppState, RealmDirectoryEntry};
 use soland_storage::{RealmInviteRecord, RealmMetaRecord};
 use soland_test_support::AppStateTestExt as _;
 
+/// The data-plane actions this suite's DataEvents exercise.
+///
+/// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
+/// per receiver-derived cell over the effective grants the governance basis at
+/// `seal_ref` yields for the actor, so the fixture basis has to name every
+/// data-plane kind this suite submits and nothing beyond it. None of them are
+/// reachable from the founding grant: `ak.realm.admin`'s registry
+/// `target_event_kinds` are Realm-facet Control Moves only.
+const DATA_PLANE_GRANT_ACTIONS: [&str; 3] =
+    ["ak.message.create", "ak.reaction.add", "ak.reaction.remove"];
+
 static ALICE_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([21_u8; 32]));
 static BOB_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([22_u8; 32]));
 static CAROL_DID: LazyLock<String> = LazyLock::new(|| test_signer_did([23_u8; 32]));
@@ -592,13 +603,11 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         || format!("{actor_id}#{device_id}"),
         |key| format!("{actor_id}#{key}"),
     );
+    let scope_ref = derived_scope_ref(state, realm_id, kind, &payload);
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
-                .expect("fixture Realm id"),
-        },
+        scope_ref,
         actor.clone(),
         actor_seq,
         arkret_identifiers::Hlc::new(format!(
@@ -611,6 +620,24 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     )
     .expect("SDK Event builder accepts discussion fixture");
     event.prev_refs = prev_refs;
+    // `seed_realm` writes the Realm straight into `AppState` instead of
+    // bootstrapping it through `ak.realm.create`, so the Realm owns no sealed
+    // governance state of its own. Every reducer-input Event still has to be a
+    // DataEvent or a Control Move (`event-auth-state-resolution.md` §5), and a
+    // DataEvent's `seal_ref` has to resolve to a Seal whose covered state
+    // authorizes the receiver-derived writes — so the founding unit is sealed
+    // here, per author, before the envelope names it.
+    soland_test_support::cba_basis::seed_realm_basis(
+        state,
+        realm_id,
+        actor_id,
+        &DATA_PLANE_GRANT_ACTIONS,
+    );
+    soland_test_support::cba_basis::apply_registered_cba_plane(
+        &mut event,
+        &verification_method,
+        &DATA_PLANE_GRANT_ACTIONS,
+    );
     let seed = if actor_id == BOB_DID.as_str() {
         [22_u8; 32]
     } else if actor_id == CAROL_DID.as_str() {
@@ -633,6 +660,45 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     )
     .expect("SDK Event signer accepts discussion fixture");
     serde_json::to_value(event).expect("SDK Event serializes")
+}
+
+/// The producer-signed security scope of an Event, derived the way a receiver
+/// derives it.
+///
+/// `event-envelope.schema.json` makes `scope_ref` a required producer-signed
+/// member that enters `proof.event_digest`, and states that reducers
+/// independently derive the Realm/Circle scope from the schema-validated
+/// payload and accepted references, failing closed on any unequal field. For
+/// `ak.message.create` that derivation is the message's Strand: a Strand bound
+/// to a Circle scopes every message on it to that Circle. So the fixture reads
+/// the same Strand binding the server reads instead of hardcoding a Realm
+/// scope, which for a Circle-bound Strand would be a scope a conformant
+/// receiver has to reject.
+fn derived_scope_ref(
+    state: &AppState,
+    realm_id: &str,
+    kind: &str,
+    payload: &Value,
+) -> arkret_wire::ScopeRef {
+    let typed_realm_id = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
+    let circle_id = (kind == "ak.message.create")
+        .then(|| payload.get("strand_id").and_then(Value::as_str))
+        .flatten()
+        .and_then(|strand_id| {
+            state
+                .test_projection()
+                .lock()
+                .strand_scope_circle_id(strand_id)
+        });
+    match circle_id {
+        Some(circle_id) => arkret_wire::ScopeRef::Circle {
+            realm_id: typed_realm_id,
+            circle_id: arkret_identifiers::CircleId::new(circle_id).expect("fixture Circle id"),
+        },
+        None => arkret_wire::ScopeRef::Realm {
+            realm_id: typed_realm_id,
+        },
+    }
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
@@ -1015,8 +1081,15 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .iter()
         .find(|event| event["event_id"].as_str() == Some(event_id.as_str()))
         .unwrap_or_else(|| panic!("Circle member did not receive scoped event: {bob_sync:?}"));
+    // The v1 Event Envelope has no `effective_scope` member — soland refuses a
+    // client-supplied one as reducer-managed
+    // (`envelope_core.rs`: "envelope.effective_scope is reducer-managed"), and
+    // `event-envelope.schema.json` closes the envelope over `scope_ref`
+    // instead. `scope_ref` is the producer-signed security scope that enters
+    // `proof.event_digest`, so the Circle scope is now inside the signed
+    // transcript rather than stamped on beside it.
     assert_eq!(
-        bob_event["effective_scope"],
+        bob_event["scope_ref"],
         json!({
             "kind": "circle",
             "realm_id": realm_id,
@@ -1044,16 +1117,26 @@ async fn circle_scoped_encrypted_message_is_hidden_from_realm_member_outside_cir
         .await
         .unwrap();
     assert_eq!(bob_read["event"]["event_id"], event_id);
-    // The Circle scope is server-derived from the Strand and surfaced through
-    // the SDK Event `effective_scope` object — NOT carried inside the
+    // The Circle scope rides in the signed `scope_ref` — NOT inside the
     // encrypted envelope's aad (spec: messages don't carry scope_circle_id).
+    // The server-derived half of the same fact is the Strand→Circle binding
+    // the visibility gate reads: it is what hid this Event from Mallory above,
+    // and it is what a conformant receiver re-derives `scope_ref` from.
     assert_eq!(
-        bob_read["event"]["effective_scope"],
+        bob_read["event"]["scope_ref"],
         json!({
             "kind": "circle",
             "realm_id": realm_id,
             "circle_id": circle_id,
         })
+    );
+    assert_eq!(
+        state
+            .test_projection()
+            .lock()
+            .strand_scope_circle_id(&strand_id_for_realm(&realm_id)),
+        Some(circle_id.clone()),
+        "the Circle scope the server derives for this Strand"
     );
     assert!(
         bob_read["event"]["payload"]["encrypted_content"]["aad"]

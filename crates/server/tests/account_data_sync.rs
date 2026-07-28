@@ -733,18 +733,45 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
         .await;
     assert_eq!(rejected.status_code, Some(StatusCode::BAD_REQUEST));
 
-    let accepted: Value = TestClient::post("http://server/_arkret/edge/push/notify")
-        .json(&json!({
-            "notification": {
-                "push_target_id": push_target_id,
-                "wakeup_kind": "message",
-                "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
-            }
-        }))
-        .send(&app_from_state(state))
-        .await
-        .take_json()
-        .await
-        .unwrap();
-    assert!(accepted["rejected"].as_array().unwrap().is_empty());
+    // `push-operations.schema.json#/$defs/push_notify_outcome` is a closed
+    // response whose only members are `push_target_id` and a conserved
+    // `outcomes[]` — one entry per requested device, each carrying its own
+    // `gateway_status`. There is no top-level rejected array to read, and the
+    // per-device status is the stronger assertion anyway: it says the sanitized
+    // blind wakeup was accepted *for this device*, not merely that some list
+    // stayed empty.
+    let accepted: arkret_models_integration::models_push::PushNotifyOutcome =
+        TestClient::post("http://server/_arkret/edge/push/notify")
+            .json(&json!({
+                "notification": {
+                    "push_target_id": push_target_id,
+                    "wakeup_kind": "message",
+                    "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]
+                }
+            }))
+            .send(&app_from_state(state))
+            .await
+            .take_json()
+            .await
+            .expect("typed push notify outcome");
+    assert_eq!(accepted.push_target_id, push_target_id);
+    assert_eq!(
+        accepted
+            .outcomes
+            .iter()
+            .map(|outcome| (outcome.device_id.as_str(), outcome.gateway_status))
+            .collect::<Vec<_>>(),
+        vec![(
+            "ak:device:01904100-0000-7000-8000-a11ce0000001",
+            arkret_models_integration::models_push::PushNotifyGatewayStatus::Accepted
+        )]
+    );
+    assert!(
+        accepted
+            .outcomes
+            .iter()
+            .all(|outcome| outcome.reason_code.is_none()),
+        "{:?}",
+        accepted.outcomes
+    );
 }
