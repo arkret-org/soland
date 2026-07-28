@@ -18,23 +18,25 @@ use super::{
     MemoryJoinApplicationStore, MemoryKeyBackupStore, MemoryMessageStore, MemoryMlsCommitStore,
     MemoryMlsKeyPackageStore, MemoryMlsWelcomeStore, MemoryModerationStore,
     MemoryMorphProjectionStore, MemoryMultisigPendingStore, MemoryNotificationStore,
-    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationStore,
-    MemoryPolicyDocumentStore, MemoryProjectionEventStore, MemoryPublicationEvidenceStore,
-    MemoryPushBridgeCacheStore, MemoryPushDeviceStore, MemoryRealmInviteStore,
-    MemoryRealmMetaStore, MemoryRealmModerationPolicyStore, MemoryRealmOrganizationStatementStore,
-    MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore, MemoryRecoverySessionStore,
-    MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore, MemorySecurityTransactionStore,
-    MemoryServiceIdentityStore, MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
+    MemoryOneTimeKeyStore, MemoryOrganizationPolicyStore, MemoryOrganizationRegistrationStore,
+    MemoryOrganizationStore, MemoryPolicyDocumentStore, MemoryProjectionEventStore,
+    MemoryPublicationEvidenceStore, MemoryPushBridgeCacheStore, MemoryPushDeviceStore,
+    MemoryRealmInviteStore, MemoryRealmMetaStore, MemoryRealmModerationPolicyStore,
+    MemoryRealmOrganizationStatementStore, MemoryRealmOrganizationStore, MemoryRecoveryPolicyStore,
+    MemoryRecoveryReceiptStore, MemoryRecoverySessionStore, MemoryRetentionPolicyStore,
+    MemoryRetentionTombstoneStore, MemorySecurityTransactionStore, MemoryServiceIdentityStore,
+    MemorySessionStore, MemorySidecarStore, MemorySignalRelayStore,
     MemorySpaceContainerProjectionStore, MemoryStrandProjectionStore, MemorySyncCursorStore,
     MemoryWebvhStore, MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore,
     ModerationStore, MorphProjectionStore, MultisigPendingStore, Mutex, NotificationStore,
-    OneTimeKeyStore, OrganizationPolicyStore, OrganizationStore, PersistenceStore,
-    PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
-    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
-    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
-    RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
-    ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
-    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebvhStore,
+    OneTimeKeyStore, OrganizationPolicyStore, OrganizationRegistrationStore, OrganizationStore,
+    PersistenceStore, PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore,
+    PushBridgeCacheStore, PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
+    RealmModerationPolicyStore, RealmOrganizationStatementStore, RealmOrganizationStore,
+    RecoveryPolicyStore, RecoveryReceiptStore, RecoverySessionStore, RetentionPolicyStore,
+    RetentionTombstoneStore, SecurityTransactionStore, ServiceIdentityStore, SessionStore,
+    SidecarStore, SignalRelayStore, SpaceContainerProjectionStore, StrandProjectionStore,
+    SyncCursorStore, WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
@@ -64,6 +66,7 @@ pub struct SolandMemoryPersistenceStore {
     retention_policies: MemoryRetentionPolicyStore,
     retention_tombstones: MemoryRetentionTombstoneStore,
     organizations: MemoryOrganizationStore,
+    organization_registrations: MemoryOrganizationRegistrationStore,
     organization_policies: MemoryOrganizationPolicyStore,
     realm_organizations: MemoryRealmOrganizationStore,
     realm_organization_statements: MemoryRealmOrganizationStatementStore,
@@ -145,6 +148,7 @@ impl SolandMemoryPersistenceStore {
             retention_policies: MemoryRetentionPolicyStore::new(),
             retention_tombstones: MemoryRetentionTombstoneStore::new(),
             organizations: MemoryOrganizationStore::new(),
+            organization_registrations: MemoryOrganizationRegistrationStore::new(),
             organization_policies: MemoryOrganizationPolicyStore::new(),
             realm_organizations: MemoryRealmOrganizationStore::new(),
             realm_organization_statements: MemoryRealmOrganizationStatementStore::new(),
@@ -383,6 +387,10 @@ impl soland_storage::FederationGovernanceStoreRegistry for SolandMemoryPersisten
 
     fn organizations(&self) -> &dyn OrganizationStore {
         &self.organizations
+    }
+
+    fn organization_registrations(&self) -> &dyn OrganizationRegistrationStore {
+        &self.organization_registrations
     }
 
     fn organization_policies(&self) -> &dyn OrganizationPolicyStore {

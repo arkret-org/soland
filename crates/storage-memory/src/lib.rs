@@ -31,30 +31,31 @@ pub(crate) use soland_storage::{
     MlsKeyPackageStore, MlsWelcomeRecord, MlsWelcomeStore, ModerationStore, MorphProjectionRecord,
     MorphProjectionStore, MultisigPendingRecord, MultisigPendingStore, NotificationStore,
     OneTimeKeyStore, OrganizationPolicyRecord, OrganizationPolicyStore, OrganizationRecord,
-    OrganizationStore, OutboundPushBridgeCacheRecord, PeerEventsPageQuery,
-    PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, PersistenceError, PersistenceResult, PersistenceStore,
-    PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome, ProjectionEventRecord,
-    ProjectionEventStore, PublicationEvidenceRecord, PublicationEvidenceStore,
-    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
-    RealmMetaRecord, RealmMetaStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
-    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
-    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
-    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
-    SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, ServiceIdentityStore,
-    ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
-    SignalRelayStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
-    StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord, SyncCursorStore,
-    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
-    agent_participation_record_key, cross_signing_reset_blocks_queued_message,
-    device_message_expires_at, document_declares_registration_key, ensure_device_message_id,
-    evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
-    frontier_exchange_failure_record, frontier_exchange_success_record,
-    identity_anchor_slot_conflicts, mls_epoch_key, peer_page_record_after_cursor,
-    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
-    recovery_active_policy_locked, registration_as_existing, registrations_match,
-    remove_third_party_active_material, stage_identity_anchor_events,
+    OrganizationRegistrationStore, OrganizationStore, OutboundPushBridgeCacheRecord,
+    PeerEventsPageQuery, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
+    PersistenceResult, PersistenceStore, PolicyDocumentRecord, PolicyDocumentStore,
+    ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore,
+    PublicationEvidenceRecord, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
+    RealmEventStats, RealmInviteRecord, RealmInviteStore, RealmMetaRecord, RealmMetaStore,
+    RealmModerationPolicyRecord, RealmModerationPolicyStore, RealmOrganizationStatementRecord,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
+    RecoveryPolicyStore, RecoveryReceiptRecord, RecoveryReceiptStore, RecoverySessionRecord,
+    RecoverySessionStore, RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord,
+    RetentionTombstoneStore, SIGNAL_RELAY_MAX_PER_REALM, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
+    SecurityTransactionStore, ServiceIdentityStore, ServiceRegistrationCommitOutcome,
+    SessionRecord, SessionStore, SidecarStore, SignalRelayRecord, SignalRelayStore,
+    SpaceContainerProjectionRecord, SpaceContainerProjectionStore, StrandProjectionRecord,
+    StrandProjectionStore, SyncCursorRecord, SyncCursorStore, WebvhDocumentRecord,
+    WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore, agent_participation_record_key,
+    cross_signing_reset_blocks_queued_message, device_message_expires_at,
+    document_declares_registration_key, ensure_device_message_id, evaluate_drift,
+    event_position_cmp, fresh_device_message_ack_token, frontier_exchange_failure_record,
+    frontier_exchange_success_record, identity_anchor_slot_conflicts, mls_epoch_key,
+    peer_page_record_after_cursor, peer_page_record_matches, receipt_covers_event,
+    record_is_peer_authz_state_record, recovery_active_policy_locked, registration_as_existing,
+    registrations_match, remove_third_party_active_material, stage_identity_anchor_events,
     valid_new_service_registration_records, validate_security_transaction_update,
     webvh_freshness_on_put,
 };
@@ -81,6 +82,7 @@ mod mls;
 mod moderation;
 mod multisig;
 mod notifications;
+mod organization_registration;
 mod policy;
 mod projection;
 mod publication_evidence;
@@ -133,6 +135,7 @@ pub(crate) use mls::{MemoryMlsCommitStore, MemoryMlsKeyPackageStore, MemoryMlsWe
 pub(crate) use moderation::MemoryModerationStore;
 pub(crate) use multisig::MemoryMultisigPendingStore;
 pub(crate) use notifications::MemoryNotificationStore;
+pub(crate) use organization_registration::MemoryOrganizationRegistrationStore;
 pub(crate) use policy::MemoryPolicyDocumentStore;
 pub(crate) use projection::{
     MemoryMorphProjectionStore, MemoryProjectionEventStore, MemoryRealmMetaStore,

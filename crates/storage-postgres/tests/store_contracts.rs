@@ -1,10 +1,10 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_event_commit_unit_of_work_contract,
-    assert_idempotency_store_contract,
+    assert_idempotency_store_contract, assert_organization_registration_store_contract,
 };
 use soland_storage_postgres::{
-    Db, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore, PgPool,
-    PgProjectionEventStore,
+    Db, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
+    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -48,4 +48,17 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
         &namespace,
     )
     .await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_organization_registration_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let store = PgOrganizationRegistrationStore::new(pool);
+    let namespace = format!(
+        "postgres-organization-registration-{}",
+        uuid::Uuid::now_v7()
+    );
+    assert_organization_registration_store_contract(&store, &namespace).await;
 }

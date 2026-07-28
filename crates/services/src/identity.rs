@@ -2381,6 +2381,117 @@ pub struct DidLogEvent {
     pub created_at: DateTime<Utc>,
 }
 
+/// Relationship between a verified pinned did:webvh version and the verified
+/// head observed during the same history resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PinnedDidVersionStatus {
+    /// The requested version is the current verified head.
+    Current,
+    /// A later verified rotation exists. The pinned document remains usable
+    /// only for proofs whose transcript names this exact historical version.
+    Rotated,
+    /// The verified history head deactivates the DID. No pinned version may be
+    /// used to establish or refresh an active control relationship.
+    Deactivated,
+}
+
+/// Method-history-verified did:webvh state selected by both native version id
+/// and the canonical digest of that exact log entry.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PinnedDidDocumentState {
+    pub did: Did,
+    pub version_id: String,
+    pub log_head_digest: Hash,
+    pub document: Value,
+    pub update_keys: Vec<String>,
+    pub current_version_id: String,
+    pub status: PinnedDidVersionStatus,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum PinnedDidResolutionError {
+    #[error("pinned DID resolution requires did:webvh")]
+    UnsupportedMethod,
+    #[error("did:webvh method is disabled by resolver policy")]
+    MethodNotAllowed,
+    #[error("verified did:webvh history is unavailable")]
+    HistoryUnavailable,
+    #[error("did:webvh history could not be verified: {0}")]
+    HistoryUnverifiable(String),
+    #[error("requested did:webvh version was not found: {0}")]
+    VersionNotFound(String),
+    #[error("requested did:webvh version digest does not match verified history")]
+    DigestMismatch,
+}
+
+/// Select a pinned state only after the SDK verifier has authenticated the
+/// complete history. This deliberately never accepts a separately resolved
+/// current document as evidence for a historical version.
+pub fn select_pinned_did_webvh_state(
+    did: &Did,
+    history: &arkret_identity::VerifiedDidWebvhLog,
+    version_id: &str,
+    log_head_digest: &Hash,
+) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
+    if did.method() != "webvh" {
+        return Err(PinnedDidResolutionError::UnsupportedMethod);
+    }
+    if history.entries.len() != history.raw_entries.len() || history.entries.is_empty() {
+        return Err(PinnedDidResolutionError::HistoryUnverifiable(
+            "verified history has inconsistent entry projections".to_owned(),
+        ));
+    }
+    let selected_index = history
+        .entries
+        .iter()
+        .position(|entry| entry.version_id == version_id)
+        .ok_or_else(|| PinnedDidResolutionError::VersionNotFound(version_id.to_owned()))?;
+    let selected_raw = &history.raw_entries[selected_index];
+    let actual_digest = arkret_canonical::canonical_sha256(selected_raw).map_err(|error| {
+        PinnedDidResolutionError::HistoryUnverifiable(format!(
+            "pinned log entry digest failed: {error}"
+        ))
+    })?;
+    if actual_digest != log_head_digest.as_str() {
+        return Err(PinnedDidResolutionError::DigestMismatch);
+    }
+
+    let deactivated_index = history.entries.iter().position(|entry| {
+        entry.parameters.get("deactivated").and_then(Value::as_bool) == Some(true)
+    });
+    if deactivated_index.is_some_and(|index| index + 1 != history.entries.len()) {
+        return Err(PinnedDidResolutionError::HistoryUnverifiable(
+            "did:webvh history continues after terminal deactivation".to_owned(),
+        ));
+    }
+    let status = if deactivated_index.is_some() {
+        PinnedDidVersionStatus::Deactivated
+    } else if selected_index + 1 == history.entries.len() {
+        PinnedDidVersionStatus::Current
+    } else {
+        PinnedDidVersionStatus::Rotated
+    };
+    let selected = &history.entries[selected_index];
+    let update_keys = selected
+        .parameters
+        .get("updateKeys")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(ToOwned::to_owned)
+        .collect();
+    Ok(PinnedDidDocumentState {
+        did: did.clone(),
+        version_id: selected.version_id.clone(),
+        log_head_digest: log_head_digest.clone(),
+        document: selected.state.clone(),
+        update_keys,
+        current_version_id: history.head_version_id.clone(),
+        status,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DidLogCommitResult {
     Accepted,
@@ -2424,6 +2535,12 @@ pub trait DidDocumentPort: Send + Sync {
 #[async_trait]
 pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
     async fn resolve_did_async(&self, did: &Did) -> Result<arkret_identity::DidDocument, String>;
+    async fn resolve_external_pinned_webvh_state(
+        &self,
+        did: &Did,
+        version_id: &str,
+        log_head_digest: &Hash,
+    ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError>;
     fn cache_document_state(
         &self,
         document: DidDocumentState,
@@ -2462,6 +2579,66 @@ impl DidService {
             return self.resolver.cache_document_state(document);
         }
         self.resolver.resolve_did_async(did).await
+    }
+
+    /// Resolve a did:webvh document at an exact native version and canonical
+    /// log-entry digest. Durable native history is preferred; external
+    /// resolution is used only when no local log exists.
+    pub async fn resolve_pinned_webvh_state(
+        &self,
+        did: &Did,
+        version_id: &str,
+        log_head_digest: &Hash,
+    ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
+        if did.method() != "webvh" {
+            return Err(PinnedDidResolutionError::UnsupportedMethod);
+        }
+        let mut local_events = self
+            .documents
+            .log_events(did.as_str())
+            .await
+            .map_err(|error| {
+                PinnedDidResolutionError::HistoryUnverifiable(format!(
+                    "local DID history lookup failed: {error}"
+                ))
+            })?;
+        if local_events.is_empty() {
+            return self
+                .resolver
+                .resolve_external_pinned_webvh_state(did, version_id, log_head_digest)
+                .await;
+        }
+        local_events.sort_by_key(|event| event.seq);
+        let mut raw_entries = Vec::with_capacity(local_events.len());
+        for (index, event) in local_events.iter().enumerate() {
+            let expected_seq = index as u64 + 1;
+            if event.did != did.as_str() || event.seq != expected_seq {
+                return Err(PinnedDidResolutionError::HistoryUnverifiable(
+                    "local did:webvh log identity or sequence is inconsistent".to_owned(),
+                ));
+            }
+            let canonical_digest =
+                arkret_canonical::canonical_sha256(&event.operation).map_err(|error| {
+                    PinnedDidResolutionError::HistoryUnverifiable(format!(
+                        "local did:webvh event digest failed: {error}"
+                    ))
+                })?;
+            if canonical_digest != event.event_digest {
+                return Err(PinnedDidResolutionError::HistoryUnverifiable(
+                    "local did:webvh event digest does not match stored operation".to_owned(),
+                ));
+            }
+            if event.operation.pointer("/parameters/witness").is_some() {
+                return Err(PinnedDidResolutionError::HistoryUnverifiable(
+                    "local did:webvh witness evidence is unavailable at the resolver boundary"
+                        .to_owned(),
+                ));
+            }
+            raw_entries.push(event.operation.clone());
+        }
+        let history = arkret_identity::verify_did_webvh_v1_chain(did, &raw_entries)
+            .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
+        select_pinned_did_webvh_state(did, &history, version_id, log_head_digest)
     }
 
     pub fn cache_resolved_document_state(
@@ -2562,6 +2739,15 @@ mod tests {
             Err("DID resolver is unused in this test".to_owned())
         }
 
+        async fn resolve_external_pinned_webvh_state(
+            &self,
+            _did: &Did,
+            _version_id: &str,
+            _log_head_digest: &Hash,
+        ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
+            Err(PinnedDidResolutionError::HistoryUnavailable)
+        }
+
         fn cache_document_state(
             &self,
             _document: DidDocumentState,
@@ -2573,6 +2759,120 @@ mod tests {
     struct AcceptPairing;
 
     struct CurrentRecoveryPolicy;
+
+    fn pinned_history_fixture() -> (Did, arkret_identity::VerifiedDidWebvhLog, Hash) {
+        let did = Did::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
+        let first_state = serde_json::json!({
+            "id": did,
+            "verificationMethod": [{
+                "id": format!("{did}#control-1"),
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": "z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu"
+            }]
+        });
+        let second_state = serde_json::json!({
+            "id": did,
+            "verificationMethod": [{
+                "id": format!("{did}#control-2"),
+                "type": "Multikey",
+                "controller": did,
+                "publicKeyMultibase": "z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu"
+            }]
+        });
+        let first_raw = serde_json::json!({
+            "versionId": "1-first",
+            "versionTime": "2026-07-01T00:00:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "scid": "zFixture",
+                "updateKeys": ["z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu"]
+            },
+            "state": first_state,
+            "proof": []
+        });
+        let second_raw = serde_json::json!({
+            "versionId": "2-second",
+            "versionTime": "2026-07-02T00:00:00Z",
+            "parameters": {
+                "method": "did:webvh:1.0",
+                "scid": "zFixture",
+                "updateKeys": ["z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu"]
+            },
+            "state": second_state,
+            "proof": []
+        });
+        let first_digest =
+            Hash::new(arkret_canonical::canonical_sha256(&first_raw).unwrap()).unwrap();
+        let history = arkret_identity::VerifiedDidWebvhLog {
+            raw_entries: vec![first_raw, second_raw],
+            entries: vec![
+                arkret_identity::DidWebvhLogEntry {
+                    version_id: "1-first".to_owned(),
+                    version_time: "2026-07-01T00:00:00Z".parse().unwrap(),
+                    parameters: serde_json::json!({
+                        "method": "did:webvh:1.0",
+                        "scid": "zFixture",
+                        "updateKeys": ["z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu"]
+                    }),
+                    state: first_state,
+                    proof: Vec::new(),
+                },
+                arkret_identity::DidWebvhLogEntry {
+                    version_id: "2-second".to_owned(),
+                    version_time: "2026-07-02T00:00:00Z".parse().unwrap(),
+                    parameters: serde_json::json!({
+                        "method": "did:webvh:1.0",
+                        "scid": "zFixture",
+                        "updateKeys": ["z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu"]
+                    }),
+                    state: second_state,
+                    proof: Vec::new(),
+                },
+            ],
+            head_version_id: "2-second".to_owned(),
+            head_state: serde_json::Value::Null,
+            active_update_keys: vec!["z6MkrJVnaZkeFzdQyHL9T5yCDonTuB9R2cZWLMgLMN8GX4gu".to_owned()],
+        };
+        (did, history, first_digest)
+    }
+
+    #[test]
+    fn pinned_webvh_selection_returns_exact_historical_state_and_rotation_status() {
+        let (did, history, first_digest) = pinned_history_fixture();
+        let selected =
+            select_pinned_did_webvh_state(&did, &history, "1-first", &first_digest).unwrap();
+        assert_eq!(selected.version_id, "1-first");
+        assert_eq!(selected.current_version_id, "2-second");
+        assert_eq!(selected.status, PinnedDidVersionStatus::Rotated);
+        assert_eq!(
+            selected.document["verificationMethod"][0]["id"],
+            format!("{did}#control-1")
+        );
+    }
+
+    #[test]
+    fn pinned_webvh_selection_rejects_digest_substitution() {
+        let (did, history, _) = pinned_history_fixture();
+        let wrong_digest = Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap();
+        assert_eq!(
+            select_pinned_did_webvh_state(&did, &history, "1-first", &wrong_digest),
+            Err(PinnedDidResolutionError::DigestMismatch)
+        );
+    }
+
+    #[test]
+    fn pinned_webvh_selection_surfaces_terminal_deactivation() {
+        let (did, mut history, first_digest) = pinned_history_fixture();
+        history.entries[1]
+            .parameters
+            .as_object_mut()
+            .unwrap()
+            .insert("deactivated".to_owned(), Value::Bool(true));
+        let selected =
+            select_pinned_did_webvh_state(&did, &history, "1-first", &first_digest).unwrap();
+        assert_eq!(selected.status, PinnedDidVersionStatus::Deactivated);
+    }
 
     #[async_trait]
     impl SidecarPort for NoSidecars {

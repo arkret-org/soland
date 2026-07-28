@@ -60,13 +60,7 @@ pub fn build_conformance_realm_basis(
                 &founding_move,
                 or_set_add(
                     founding_move.as_str(),
-                    grant_body(
-                        &founding_grant_id,
-                        realm_id,
-                        subject,
-                        &founding_actions,
-                        true,
-                    )?,
+                    grant_body(&founding_grant_id, realm_id, subject, &founding_actions)?,
                 ),
             ),
         ),
@@ -77,13 +71,7 @@ pub fn build_conformance_realm_basis(
                 &content_move,
                 or_set_add(
                     content_move.as_str(),
-                    grant_body(
-                        &content_grant_id,
-                        realm_id,
-                        subject,
-                        data_plane_actions,
-                        false,
-                    )?,
+                    grant_body(&content_grant_id, realm_id, subject, data_plane_actions)?,
                 ),
             ),
         ),
@@ -218,28 +206,62 @@ fn grant_body(
     realm_id: &str,
     subject: &str,
     actions: &[String],
-    aggregate_admin: bool,
 ) -> Result<Value, String> {
-    let mut body = serde_json::json!({
+    Ok(serde_json::json!({
         "grant_id": grant_id,
-        "schema": "ak.schema.capability_grant.v1",
+        "schema": "ak.schema.capability.v1",
         "realm_id": realm_id,
         "issuer": subject,
         "subject": subject,
         "actions": actions,
+        "capability_action_registry_digest":
+            arkret_policy::current_capability_action_registry_digest()
+                .map_err(|error| error.to_string())?
+                .to_string(),
         "resources": [{
             "kind": "realm",
             "realm_id": realm_id,
             "match_scope": "realm_wide"
         }],
         "issued_at": "2026-01-01T00:00:00.000Z"
-    });
-    if aggregate_admin {
-        body["capability_action_registry_digest"] = Value::String(
-            arkret_policy::current_capability_action_registry_digest()
-                .map_err(|error| error.to_string())?
-                .to_string(),
+    }))
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_state::lattice::CellState;
+    use serde_json::{Value, json};
+    use soland_domain::reducer::engine_grant_from_capability_cell_state;
+
+    use super::grant_body;
+
+    #[test]
+    fn content_grant_is_visible_to_the_capability_engine() {
+        let grant_id = "ak:grant:019fa9d5-0000-7000-8000-000000000001";
+        let realm_id = "ak:realm:019fa9d5-0000-7000-8000-000000000002";
+        let subject = "did:web:soland.example";
+        let action = "ak.message.create".to_owned();
+        let body = grant_body(grant_id, realm_id, subject, std::slice::from_ref(&action))
+            .expect("canonical conformance grant");
+
+        assert_eq!(
+            body.get("schema").and_then(Value::as_str),
+            Some("ak.schema.capability.v1")
         );
+        assert_eq!(
+            body.get("capability_action_registry_digest")
+                .and_then(Value::as_str),
+            Some(
+                arkret_policy::current_capability_action_registry_digest()
+                    .expect("embedded registry digest")
+                    .as_str()
+            )
+        );
+
+        let state = CellState::Value(json!([{"value": body}]));
+        let grant = engine_grant_from_capability_cell_state(grant_id, &state)
+            .expect("content grant must enter the effective capability set");
+        assert_eq!(grant.subject, subject);
+        assert_eq!(grant.actions, vec![action]);
     }
-    Ok(body)
 }

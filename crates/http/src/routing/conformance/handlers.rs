@@ -354,7 +354,7 @@ pub async fn realm_basis(
     super::ensure_enabled()?;
     let state = depot.get_typed::<AppState>().expect("state injected");
     let mut body = body.into_inner();
-    arkret_identifiers::RealmId::new(body.realm_id.clone())
+    let realm_id = arkret_identifiers::RealmId::new(body.realm_id.clone())
         .map_err(|_| AppError::invalid_param("realm_id must be a canonical Realm id"))?;
     arkret_identifiers::Did::new(body.subject.clone())
         .map_err(|_| AppError::invalid_param("subject must be a canonical DID"))?;
@@ -373,6 +373,32 @@ pub async fn realm_basis(
             return Err(AppError::invalid_param(format!(
                 "data-plane fixture action {action} is not an Event action"
             )));
+        }
+    }
+
+    // The conformance helper may extend an already-sealed fixture Realm, but
+    // it must never create a competing synthetic genesis while a real,
+    // atomically accepted Realm founding unit is waiting for the durable
+    // coordinator to materialize its first Seal.
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(&realm_id)
+        .map_err(|error| AppError::internal(format!("read Realm Seal frontier: {error}")))?;
+    if leaves.is_empty() {
+        let accepted = state
+            .event_queries()
+            .canonical_events()
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("read accepted Realm bootstrap events: {error}"))
+            })?;
+        if accepted.iter().any(|record| {
+            record.kind == arkret_wire::events::EventKind::REALM_CREATE
+                && record.realm_id.as_deref() == Some(body.realm_id.as_str())
+        }) {
+            return Err(AppError::conflict(
+                "conformance Realm basis cannot replace an accepted founding unit before its genesis Seal is materialized",
+            ));
         }
     }
 

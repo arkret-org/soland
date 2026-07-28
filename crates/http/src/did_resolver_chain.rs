@@ -31,8 +31,9 @@ use arkret_http_client::http_did_resolver::HttpDidResolver;
 use arkret_identity::{
     CompositeDidResolver, DidDocument, DidKeyResolver, DidResolver, DidWebResolver,
     DidWebvhResolver, IdentityError, ResolverFailMode, ResolverPolicy,
+    verify_did_webvh_v1_chain_and_witness_bytes,
 };
-use arkret_wire::Did;
+use arkret_wire::{Did, Hash};
 use parking_lot::RwLock;
 use serde_json::Value;
 
@@ -74,6 +75,7 @@ pub struct SolandDidResolver {
     fallback: CompositeDidResolver,
     external: Option<Arc<HttpDidResolver>>,
     allowed_methods: Vec<String>,
+    development_mode: bool,
     local_snapshot: RwLock<BTreeMap<Did, CachedDidDocument>>,
 }
 
@@ -117,6 +119,7 @@ impl SolandDidResolver {
             fallback: build_fallback_did_resolver_chain(config),
             external,
             allowed_methods: config.did_resolver_allow_methods.clone(),
+            development_mode: config.development_mode,
             local_snapshot: RwLock::new(BTreeMap::new()),
         }
     }
@@ -201,6 +204,136 @@ impl SolandDidResolver {
         }
         self.fallback.resolve_did(did)
     }
+
+    async fn fetch_verified_webvh_history(
+        &self,
+        did: &Did,
+    ) -> Result<arkret_identity::VerifiedDidWebvhLog, String> {
+        if !self.method_allowed("webvh") {
+            return Err("did:webvh method is disabled by resolver policy".to_owned());
+        }
+        if did.method() != "webvh" {
+            return Err("pinned DID resolution requires did:webvh".to_owned());
+        }
+        let log_url = self.webvh_url_for_environment(
+            DidWebvhResolver::log_url(did).map_err(|error| error.to_string())?,
+        )?;
+        let log_body = self
+            .fetch_webvh_bytes(
+                &log_url,
+                arkret_identity::DID_WEB_MAX_DOCUMENT_BYTES.saturating_mul(32),
+                true,
+                "did:webvh pinned history",
+            )
+            .await?;
+        let witness_declared = log_body
+            .split(|byte| *byte == b'\n')
+            .filter(|line| !line.iter().all(u8::is_ascii_whitespace))
+            .filter_map(|line| serde_json::from_slice::<Value>(line).ok())
+            .any(|entry| entry.pointer("/parameters/witness").is_some());
+        let witness_body = if witness_declared {
+            let witness_url = self.webvh_url_for_environment(
+                DidWebvhResolver::witness_url(did).map_err(|error| error.to_string())?,
+            )?;
+            Some(
+                self.fetch_webvh_bytes(
+                    &witness_url,
+                    arkret_identity::DID_WEB_MAX_DOCUMENT_BYTES.saturating_mul(32),
+                    false,
+                    "did:webvh pinned witness history",
+                )
+                .await?,
+            )
+        } else {
+            None
+        };
+        verify_did_webvh_v1_chain_and_witness_bytes(did, &log_body, witness_body.as_deref())
+            .map(|verified| verified.log)
+            .map_err(|error| format!("did:webvh history verification failed: {error}"))
+    }
+
+    fn webvh_url_for_environment(&self, raw_url: String) -> Result<String, String> {
+        let mut url = reqwest::Url::parse(&raw_url)
+            .map_err(|error| format!("did:webvh history URL is invalid: {error}"))?;
+        if self.development_mode
+            && url
+                .host_str()
+                .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+                .is_some_and(|address| address.is_loopback())
+        {
+            url.set_scheme("http")
+                .map_err(|()| "did:webvh loopback history URL scheme is invalid".to_owned())?;
+        }
+        Ok(url.into())
+    }
+
+    async fn fetch_webvh_bytes(
+        &self,
+        raw_url: &str,
+        max_bytes: usize,
+        allow_json_lines: bool,
+        purpose: &str,
+    ) -> Result<Vec<u8>, String> {
+        let request_timeout = Duration::from_secs(10);
+        let (url, client) = crate::security::validate_http_url_for_egress_with_pinned_client(
+            raw_url,
+            purpose,
+            self.development_mode,
+            request_timeout,
+        )?;
+        let mut response = client
+            .get(url)
+            .send()
+            .await
+            .map_err(|error| format!("{purpose} fetch failed: {error}"))?;
+        if !response.status().is_success() {
+            return Err(format!(
+                "{purpose} fetch returned HTTP {}",
+                response.status()
+            ));
+        }
+        if response
+            .content_length()
+            .is_some_and(|length| length > max_bytes as u64)
+        {
+            return Err(format!("{purpose} exceeds maximum size"));
+        }
+        let content_type = response
+            .headers()
+            .get(reqwest::header::CONTENT_TYPE)
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or_default()
+            .split(';')
+            .next()
+            .unwrap_or_default()
+            .trim()
+            .to_ascii_lowercase();
+        let content_type_allowed = matches!(
+            content_type.as_str(),
+            "application/json" | "application/did+ld+json"
+        ) || (allow_json_lines
+            && matches!(
+                content_type.as_str(),
+                "application/jsonl" | "application/jsonlines" | "application/ld+json"
+            ));
+        if !content_type_allowed {
+            return Err(format!(
+                "{purpose} response content type is not an allowed JSON type: {content_type}"
+            ));
+        }
+        let mut body = Vec::new();
+        while let Some(chunk) = response
+            .chunk()
+            .await
+            .map_err(|error| format!("{purpose} body read failed: {error}"))?
+        {
+            if body.len().saturating_add(chunk.len()) > max_bytes {
+                return Err(format!("{purpose} exceeds maximum size"));
+            }
+            body.extend_from_slice(&chunk);
+        }
+        Ok(body)
+    }
 }
 
 impl DidResolver for SolandDidResolver {
@@ -222,6 +355,29 @@ impl soland_services::identity::DidResolverPort for SolandDidResolver {
         SolandDidResolver::resolve_did_async(self, did)
             .await
             .map_err(|error| error.to_string())
+    }
+
+    async fn resolve_external_pinned_webvh_state(
+        &self,
+        did: &Did,
+        version_id: &str,
+        log_head_digest: &Hash,
+    ) -> Result<
+        soland_services::identity::PinnedDidDocumentState,
+        soland_services::identity::PinnedDidResolutionError,
+    > {
+        use soland_services::identity::{PinnedDidResolutionError, select_pinned_did_webvh_state};
+        if did.method() != "webvh" {
+            return Err(PinnedDidResolutionError::UnsupportedMethod);
+        }
+        if !self.method_allowed("webvh") {
+            return Err(PinnedDidResolutionError::MethodNotAllowed);
+        }
+        let history = self
+            .fetch_verified_webvh_history(did)
+            .await
+            .map_err(PinnedDidResolutionError::HistoryUnverifiable)?;
+        select_pinned_did_webvh_state(did, &history, version_id, log_head_digest)
     }
 
     fn cache_document_state(
@@ -374,9 +530,12 @@ mod tests {
     use std::collections::BTreeMap;
 
     use arkret_identifiers::Did;
-    use arkret_identity::DidResolver;
+    use arkret_identity::{DidResolver, VerifiedDidWebvhLog};
+    use arkret_wire::{Hash, PayloadSigner};
     use serde_json::json;
-    use soland_services::identity::DidDocumentState;
+    use soland_services::identity::{
+        DidDocumentState, PinnedDidVersionStatus, select_pinned_did_webvh_state,
+    };
 
     use super::*;
     use crate::config::ObjectStorageConfig;
@@ -405,6 +564,98 @@ mod tests {
 
     fn sample_web_did() -> Did {
         Did::new("did:web:alice.example").expect("valid did:web")
+    }
+
+    #[test]
+    fn current_key_cannot_back_sign_a_proof_for_a_pinned_old_version() {
+        let did = Did::new("did:webvh:zFixture:organization.example".to_owned()).unwrap();
+        let verification_method = format!("{did}#control");
+        let old_signing_key = ed25519_dalek::SigningKey::from_bytes(&[11; 32]);
+        let current_signing_key = ed25519_dalek::SigningKey::from_bytes(&[22; 32]);
+        let document = |key: &ed25519_dalek::SigningKey| arkret_identity::DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.clone(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    key.verifying_key().as_bytes(),
+                ),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: None,
+            raw_properties: BTreeMap::new(),
+        };
+        let old_document = serde_json::to_value(document(&old_signing_key)).unwrap();
+        let current_document = serde_json::to_value(document(&current_signing_key)).unwrap();
+        let first_raw = json!({
+            "versionId": "1-old",
+            "versionTime": "2026-07-01T00:00:00Z",
+            "parameters": {"updateKeys": ["old"]},
+            "state": old_document,
+            "proof": []
+        });
+        let second_raw = json!({
+            "versionId": "2-current",
+            "versionTime": "2026-07-02T00:00:00Z",
+            "parameters": {"updateKeys": ["current"]},
+            "state": current_document,
+            "proof": []
+        });
+        let history = VerifiedDidWebvhLog {
+            raw_entries: vec![first_raw.clone(), second_raw],
+            entries: vec![
+                arkret_identity::DidWebvhLogEntry {
+                    version_id: "1-old".to_owned(),
+                    version_time: "2026-07-01T00:00:00Z".parse().unwrap(),
+                    parameters: json!({"updateKeys": ["old"]}),
+                    state: old_document.clone(),
+                    proof: Vec::new(),
+                },
+                arkret_identity::DidWebvhLogEntry {
+                    version_id: "2-current".to_owned(),
+                    version_time: "2026-07-02T00:00:00Z".parse().unwrap(),
+                    parameters: json!({"updateKeys": ["current"]}),
+                    state: current_document.clone(),
+                    proof: Vec::new(),
+                },
+            ],
+            head_version_id: "2-current".to_owned(),
+            head_state: current_document.clone(),
+            active_update_keys: vec!["current".to_owned()],
+        };
+        let first_digest =
+            Hash::new(arkret_canonical::canonical_sha256(&first_raw).unwrap()).unwrap();
+        let pinned = select_pinned_did_webvh_state(&did, &history, "1-old", &first_digest).unwrap();
+        assert_eq!(pinned.status, PinnedDidVersionStatus::Rotated);
+
+        let payload = br#"{"context":"pinned-old-version"}"#;
+        let current_signer = arkret_signatures::Ed25519PayloadSigner::new(
+            current_signing_key,
+            did.clone(),
+            verification_method.clone(),
+        );
+        let signature = current_signer.sign_payload(payload).unwrap();
+        assert!(
+            crate::jws_verify::verify_jws_ed25519_with_document(
+                payload,
+                &signature.jws,
+                &verification_method,
+                did.as_str(),
+                &current_document,
+            )
+            .is_ok(),
+            "test signature must be valid under the current key"
+        );
+        assert!(
+            crate::jws_verify::verify_jws_ed25519_with_document(
+                payload,
+                &signature.jws,
+                &verification_method,
+                did.as_str(),
+                &pinned.document,
+            )
+            .is_err(),
+            "a current key must not authenticate a transcript pinned to the old version"
+        );
     }
 
     #[test]
