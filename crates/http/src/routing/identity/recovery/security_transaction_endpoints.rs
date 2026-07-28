@@ -184,6 +184,7 @@ pub(super) async fn recovery_authority_ticket_issue(
         trust_domain: plan.authorization_preimage.trust_domain.clone(),
         principal_server_id: transaction.resource.coordinator_service_id.clone(),
         account_authority_id: plan.authorization_preimage.account_authority_id.clone(),
+        recovery_holder_jkt: plan.authorization_preimage.recovery_holder_jkt.clone(),
         replacement_device_id: binding.replacement_device_id.clone(),
         previous_model_generation_ref: plan.previous_model_generation_ref.clone(),
         result_model_generation_ref: plan.result_model_generation_ref.clone(),
