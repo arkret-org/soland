@@ -42,6 +42,7 @@ use sha2::{Digest, Sha256};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::util::query_param;
 use soland_services::events::{CanonicalEventRecord, ProjectedEvent as ProjectionEventRecord};
+use soland_services::identity::{DeviceIdentity, SaveDeviceCommand};
 
 use super::util::{canonical_json, order_hlc_clocks, sha256_digest};
 use crate::state::AppState;
@@ -263,6 +264,18 @@ pub struct RealmBasisOutcome {
     state_root: String,
 }
 
+#[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
+pub struct DeviceSigningKeyRequest {
+    actor_id: String,
+    device_id: String,
+    public_key_multibase: String,
+}
+
+#[derive(Debug, Serialize, salvo::oapi::ToSchema)]
+pub struct DeviceSigningKeyOutcome {
+    accepted: bool,
+}
+
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct CanonicalEventDiagnostic {
     event_id: String,
@@ -384,6 +397,56 @@ pub async fn realm_basis(
         control_event_set_root: basis.seal.control_event_set_root.to_string(),
         state_root: basis.seal.state_root.to_string(),
     })
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "org.arkret.soland.conformance.device_signing_key",
+    tags("conformance")
+)]
+#[tracing::instrument(
+    skip_all,
+    fields(op = "org.arkret.soland.conformance.device_signing_key")
+)]
+pub async fn device_signing_key(
+    depot: &mut Depot,
+    body: JsonBody<DeviceSigningKeyRequest>,
+) -> JsonResult<DeviceSigningKeyOutcome> {
+    super::ensure_enabled()?;
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let body = body.into_inner();
+    arkret_identifiers::Did::new(body.actor_id.clone())
+        .map_err(|_| AppError::invalid_param("actor_id must be a canonical DID"))?;
+    arkret_identifiers::DeviceId::new(body.device_id.clone())
+        .map_err(|_| AppError::invalid_param("device_id must be canonical"))?;
+    arkret_canonical::decode_ed25519_multibase(&body.public_key_multibase)
+        .map_err(|_| AppError::invalid_param("public_key_multibase must encode Ed25519"))?;
+    let now = chrono::Utc::now();
+    let payload = json!({
+        "device_id": body.device_id,
+        "device_public_key": body.public_key_multibase,
+        "verification": "verified",
+        "last_seen_at": now,
+    });
+    state
+        .identities()
+        .save_device(SaveDeviceCommand {
+            actor_id: body.actor_id.clone(),
+            device_id: body.device_id.clone(),
+            display_name: Some("Cotest Signal Device".to_owned()),
+            device: DeviceIdentity {
+                actor_id: body.actor_id,
+                device_id: body.device_id,
+                display_name: Some("Cotest Signal Device".to_owned()),
+                verification_state: "verified".to_owned(),
+                payload,
+                created_at: now,
+                updated_at: now,
+                revoked_at: None,
+            },
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("store Signal device key: {error}")))?;
+    json_ok(DeviceSigningKeyOutcome { accepted: true })
 }
 
 #[salvo::oapi::endpoint(
