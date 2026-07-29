@@ -236,7 +236,30 @@ pub(crate) async fn verify_control_proposal_receipt(
     }
 
     if !profile.proposal_quorum_met(&signers) {
-        return Err("proposal receipt does not satisfy the current notary quorum".to_owned());
+        let delegated_controller = event
+            .executed_by
+            .as_ref()
+            .filter(|controller| signers.len() == 1 && signers.contains(*controller));
+        let delegated_quorum = if let Some(controller) = delegated_controller {
+            let envelope = serde_json::to_value(event)
+                .map_err(|error| error.to_string())?
+                .as_object()
+                .cloned()
+                .ok_or_else(|| "delegated Agent Event is not an object".to_owned())?;
+            crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
+                state,
+                &envelope,
+                controller.as_str(),
+            )
+            .await
+            .is_ok()
+                && profile.proposal_quorum_met(&BTreeSet::from([event.actor_id.clone()]))
+        } else {
+            false
+        };
+        if !delegated_quorum {
+            return Err("proposal receipt does not satisfy the current notary quorum".to_owned());
+        }
     }
     Ok(())
 }
