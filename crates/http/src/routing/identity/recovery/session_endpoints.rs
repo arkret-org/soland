@@ -42,6 +42,8 @@ pub(super) fn recovery_session_summary(record: &RecoverySessionServiceState) -> 
         "policy_id": record.policy_id,
         "policy_version": record.policy_version,
         "identity_model": record.identity_model,
+        "publication_authority_context": record.publication_authority_context,
+        "publication_authority_context_digest": record.publication_authority_context_digest,
         "challenge": record.challenge,
         "state": record.state,
         "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
@@ -171,6 +173,262 @@ fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value 
     }
 }
 
+fn recovery_policy_basis_leaves(basis: &LeaseBasisRef) -> Vec<arkret_identifiers::SealId> {
+    match basis {
+        LeaseBasisRef::Seal(seal_id) => vec![seal_id.clone()],
+        LeaseBasisRef::Joined(basis) => basis.leaves.clone(),
+    }
+}
+
+async fn verify_device_quorum_rule_at_policy_basis(
+    state: &AppState,
+    active: &RecoveryPolicyState,
+    policy: &RecoveryPolicy,
+) -> Result<(), AppError> {
+    let Some(quorum) = policy.device_quorum.as_ref() else {
+        return Ok(());
+    };
+    let rule = policy
+        .publication_authorization_rules
+        .iter()
+        .find(|rule| rule.proof_kind == RecoveryProofKind::DeviceQuorum)
+        .ok_or_else(|| {
+            AppError::conflict("device quorum policy has no publication authorization rule")
+                .with_wire_code("recovery_publication_authority_invalid")
+        })?;
+    let expected_methods = quorum
+        .members
+        .iter()
+        .map(|device_id| format!("{}#{}", active.principal_id, device_id))
+        .collect::<BTreeSet<_>>();
+    let declared_methods = rule
+        .issuers
+        .iter()
+        .map(|issuer| issuer.verification_method.to_string())
+        .collect::<BTreeSet<_>>();
+    if expected_methods != declared_methods {
+        return Err(AppError::conflict(
+            "device quorum publication issuers do not match the policy member devices",
+        )
+        .with_wire_code("recovery_publication_authority_invalid"));
+    }
+
+    let leaves = recovery_policy_basis_leaves(&active.acceptance_basis);
+    let covered = state
+        .projections()
+        .seal_leaf_union_proof(&leaves)
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "recovery policy acceptance basis cannot be resolved: {error}"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid")
+        })?
+        .into_iter()
+        .flat_map(|proof| proof.covered_event_digests)
+        .map(|digest| digest.to_string())
+        .collect::<BTreeSet<_>>();
+    let events = state
+        .events()
+        .accepted_events_for_actor(&active.principal_id)
+        .await
+        .map_err(recovery_service_error)?;
+    for member in &quorum.members {
+        let member = member.as_str();
+        let latest_authorize = events
+            .iter()
+            .filter(|event| {
+                covered.contains(&event.canonical_digest)
+                    && event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
+            })
+            .map(|event| event.actor_seq)
+            .max();
+        let latest_revoke = events
+            .iter()
+            .filter(|event| {
+                covered.contains(&event.canonical_digest)
+                    && event.kind == arkret_wire::events::EventKind::DEVICE_REVOKE
+                    && event.envelope["payload"]["device_id"].as_str() == Some(member)
+            })
+            .map(|event| event.actor_seq)
+            .max();
+        if latest_authorize.is_none()
+            || latest_revoke.is_some_and(|revoke| Some(revoke) >= latest_authorize)
+        {
+            return Err(AppError::conflict(format!(
+                "device quorum member `{member}` was not active at policy acceptance basis"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid"));
+        }
+    }
+    Ok(())
+}
+
+async fn enrollment_recovery_publication_authority_context(
+    state: &AppState,
+    active: &RecoveryPolicyState,
+    realm_id: &RealmId,
+) -> Result<RecoveryPublicationAuthorityContext, AppError> {
+    let policy: RecoveryPolicy =
+        serde_json::from_value(active.raw_payload.clone()).map_err(|error| {
+            AppError::internal(format!("stored recovery policy is invalid: {error}"))
+        })?;
+    policy.validate().map_err(|error| {
+        AppError::conflict(format!(
+            "stored recovery policy cannot define publication authority: {error}"
+        ))
+        .with_wire_code("recovery_publication_authority_invalid")
+    })?;
+    verify_device_quorum_rule_at_policy_basis(state, active, &policy).await?;
+
+    let authority_set_policy = AuthoritySetPolicy {
+        schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
+        policy_kind: AuthoritySetPolicyKind::PrincipalControl,
+        scope_ref: arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        source: AuthoritySetPolicySource {
+            source_kind: AuthoritySetSourceKind::RecoveryPolicy,
+            source_ref: active.policy_id.clone(),
+            source_digest: Hash::new(arkret_canonical::canonical_sha256(&policy).map_err(
+                |error| AppError::internal(format!("recovery policy digest failed: {error}")),
+            )?)
+            .map_err(|error| AppError::internal(format!("recovery policy digest: {error}")))?,
+            generation_ref: active.version.to_string(),
+        },
+        authorization_rules: policy
+            .publication_authorization_rules
+            .iter()
+            .map(|rule| AuthoritySetAuthorizationRule {
+                rule_id: rule.rule_id.clone(),
+                issuer_role: rule.issuer_role,
+                allowed_actions: rule.allowed_actions.clone(),
+                issuers: rule.issuers.clone(),
+                threshold: rule.threshold,
+            })
+            .collect(),
+    };
+    let authority_set_ref = AuthoritySetRef {
+        authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
+        authority_set_digest: authority_set_policy.digest().map_err(|error| {
+            AppError::internal(format!("recovery authority policy digest failed: {error}"))
+        })?,
+    };
+    let context = RecoveryPublicationAuthorityContext {
+        identity_model: RecoveryIdentityModel::EnrollmentAuthority,
+        basis_ref: active.acceptance_basis.clone(),
+        scope_ref: authority_set_policy.scope_ref.clone(),
+        authority_set_ref,
+        authority_set_policy,
+        allowed_actions: vec![RecoveryPublicationAction::DeviceReanchor],
+    };
+    context
+        .validate_for(RecoveryIdentityModel::EnrollmentAuthority)
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "recovery publication authority context is invalid: {error}"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid")
+        })?;
+    Ok(context)
+}
+
+async fn cross_signing_recovery_publication_authority_context(
+    state: &AppState,
+    principal_id: &str,
+    realm_id: &RealmId,
+    generation: u64,
+) -> Result<RecoveryPublicationAuthorityContext, AppError> {
+    let events = state
+        .events()
+        .accepted_events_for_actor(principal_id)
+        .await
+        .map_err(recovery_service_error)?;
+    let source = events
+        .iter()
+        .filter(|event| {
+            event.kind == arkret_wire::events::EventKind::CROSS_SIGNING_PUBLISH
+                && event.envelope["payload"]["generation"].as_u64() == Some(generation)
+        })
+        .max_by_key(|event| event.actor_seq)
+        .ok_or_else(|| {
+            AppError::conflict(
+                "accepted cross-signing generation has no canonical publish Event source",
+            )
+            .with_wire_code("cross_signing_state_missing")
+        })?;
+    let source_digest = Hash::new(source.canonical_digest.clone())
+        .map_err(|error| AppError::internal(format!("cross-signing Event digest: {error}")))?;
+    let basis_ref = recovery_policy_acceptance_basis(state, realm_id, &source_digest)?;
+    let issuer = source.envelope["payload"]["self_signing_key"]["kid"]
+        .as_str()
+        .ok_or_else(|| {
+            AppError::conflict("accepted cross-signing publish has no self-signing method")
+                .with_wire_code("cross_signing_state_missing")
+        })?;
+    let scope_ref = arkret_wire::ScopeRef::Realm {
+        realm_id: realm_id.clone(),
+    };
+    let authority_set_policy = AuthoritySetPolicy {
+        schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        authority_set_id: RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
+        policy_kind: AuthoritySetPolicyKind::PrincipalControl,
+        scope_ref: scope_ref.clone(),
+        source: AuthoritySetPolicySource {
+            source_kind: AuthoritySetSourceKind::CrossSigningPublish,
+            source_ref: source.event_id.clone(),
+            source_digest,
+            generation_ref: generation.to_string(),
+        },
+        authorization_rules: vec![AuthoritySetAuthorizationRule {
+            rule_id: "cross_signing".to_owned(),
+            issuer_role: AuthoritySetIssuerRole::CrossSigningSelfSigning,
+            allowed_actions: vec![
+                arkret_wire::events::EventKind::DEVICE_AUTHORIZE.to_owned(),
+                arkret_wire::events::EventKind::DEVICE_LIST_UPDATE.to_owned(),
+            ],
+            issuers: vec![AuthoritySetIssuer {
+                verification_method: DidUrl::new(issuer.to_owned()).map_err(|error| {
+                    AppError::conflict(format!(
+                        "accepted cross-signing self-signing method is invalid: {error}"
+                    ))
+                    .with_wire_code("cross_signing_state_missing")
+                })?,
+            }],
+            threshold: 1,
+        }],
+    };
+    let authority_set_ref = AuthoritySetRef {
+        authority_set_id: RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
+        authority_set_digest: authority_set_policy.digest().map_err(|error| {
+            AppError::internal(format!(
+                "cross-signing authority policy digest failed: {error}"
+            ))
+        })?,
+    };
+    let context = RecoveryPublicationAuthorityContext {
+        identity_model: RecoveryIdentityModel::CrossSigning,
+        basis_ref,
+        scope_ref,
+        authority_set_ref,
+        authority_set_policy,
+        allowed_actions: vec![
+            RecoveryPublicationAction::DeviceAuthorize,
+            RecoveryPublicationAction::DeviceListUpdate,
+        ],
+    };
+    context
+        .validate_for(RecoveryIdentityModel::CrossSigning)
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "cross-signing publication authority context is invalid: {error}"
+            ))
+            .with_wire_code("recovery_publication_authority_invalid")
+        })?;
+    Ok(context)
+}
+
 /// Load a session and enforce principal isolation: only the authenticated
 /// principal (== `session.actor`) may read or act on its own recovery sessions.
 pub(super) async fn load_owned_recovery_session(
@@ -293,6 +551,8 @@ pub(super) async fn recovery_session_create(
         crate::routing::identity::device_generation::current_device_generation(state, &principal)
             .await
             .map_err(recovery_store_error)?;
+    let realm_id = RealmId::new(principal_control_realm_for_did(&principal))
+        .map_err(|error| AppError::internal(format!("principal-control Realm id: {error}")))?;
     let (
         identity_model,
         ssk_generation,
@@ -314,8 +574,6 @@ pub(super) async fn recovery_session_create(
                 AppError::conflict("B-model recovery requires an accepted DID registry head")
                     .with_wire_code("device_reanchor_entry_not_head")
             })?;
-        let realm_id = RealmId::new(principal_control_realm_for_did(&principal))
-            .map_err(|error| AppError::internal(format!("principal-control Realm id: {error}")))?;
         let leaves =
             crate::routing::identity::device_generation::accepted_device_generation_seal_leaves(
                 state, &principal, &realm_id,
@@ -377,6 +635,27 @@ pub(super) async fn recovery_session_create(
         )
     };
 
+    let publication_authority_context = match identity_model {
+        RecoveryIdentityModel::CrossSigning => {
+            cross_signing_recovery_publication_authority_context(
+                state,
+                &principal,
+                &realm_id,
+                ssk_generation.expect("cross-signing branch fixes ssk_generation"),
+            )
+            .await?
+        }
+        RecoveryIdentityModel::EnrollmentAuthority => {
+            enrollment_recovery_publication_authority_context(state, &active, &realm_id).await?
+        }
+    };
+    let publication_authority_context_digest =
+        publication_authority_context.digest().map_err(|error| {
+            AppError::internal(format!(
+                "recovery publication authority context digest failed: {error}"
+            ))
+        })?;
+
     let now = chrono::Utc::now();
     let record = RecoverySessionServiceState {
         recovery_session_id: crate::ids::generate("recovery_session"),
@@ -392,6 +671,8 @@ pub(super) async fn recovery_session_create(
         registry_head,
         accepted_seal_frontier,
         policy_payload: active.raw_payload.clone(),
+        publication_authority_context,
+        publication_authority_context_digest,
         challenge: generate_recovery_challenge(),
         state: "pending".to_owned(),
         proof_payload: None,
@@ -1038,6 +1319,7 @@ pub(super) fn recovery_proof_transcript(record: &RecoverySessionServiceState, ki
         "recovery_session_id": record.recovery_session_id,
         "identity_model": record.identity_model,
         "model_generation_ref": recovery_model_generation_ref(record),
+        "publication_authority_context_digest": record.publication_authority_context_digest,
         "challenge": record.challenge,
         // created_at is the SESSION creation/signing time (not proof time), per
         // recovery-session.schema.json $defs/principal_signing_transcript.
@@ -1062,6 +1344,7 @@ pub(super) fn generic_recovery_proof_transcript(
         "recovery_session_id": record.recovery_session_id,
         "identity_model": record.identity_model,
         "model_generation_ref": recovery_model_generation_ref(record),
+        "publication_authority_context_digest": record.publication_authority_context_digest,
         "challenge": record.challenge,
         "created_at": arkret_canonical::format_timestamp_canonical(record.created_at),
         "expires_at": arkret_canonical::format_timestamp_canonical(record.expires_at),

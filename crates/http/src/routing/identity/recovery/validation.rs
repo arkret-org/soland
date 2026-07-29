@@ -1,6 +1,31 @@
 use super::*;
 
-pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicyRecord, AppError> {
+pub(super) struct ValidatedRecoveryPolicy {
+    pub policy_id: String,
+    pub principal_id: String,
+    pub version: u32,
+    pub trust_domain: String,
+    pub allowed_proof_kinds: Vec<String>,
+    pub supersedes: Option<String>,
+    pub expires_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub raw_payload: Value,
+    pub verification_method: String,
+}
+
+pub(super) fn validate_recovery_policy(
+    payload: &Value,
+) -> Result<ValidatedRecoveryPolicy, AppError> {
+    let typed: RecoveryPolicy = serde_json::from_value(payload.clone()).map_err(|error| {
+        AppError::invalid_param(format!("recovery policy violates SDK shape: {error}"))
+            .with_wire_code("schema_violation")
+    })?;
+    typed.validate().map_err(|error| {
+        AppError::invalid_param(format!(
+            "recovery policy violates protocol invariants: {error}"
+        ))
+        .with_wire_code("schema_violation")
+    })?;
     require_const_string(payload, "schema", "ak.schema.recovery_policy.v1")?;
     let policy_id = require_string(payload, "policy_id")?;
     require_policy_id_pattern(&policy_id)?;
@@ -95,7 +120,7 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
         .and_then(Value::as_array)
         .ok_or_else(|| AppError::invalid_param("auth_data.signed_fields is required"))?;
 
-    Ok(RecoveryPolicyRecord {
+    Ok(ValidatedRecoveryPolicy {
         policy_id,
         principal_id,
         version,
@@ -106,7 +131,6 @@ pub(super) fn validate_recovery_policy(payload: &Value) -> Result<RecoveryPolicy
         issued_at,
         verification_method: verification_method.to_owned(),
         raw_payload: payload.clone(),
-        accepted_at: chrono::Utc::now(),
     })
 }
 

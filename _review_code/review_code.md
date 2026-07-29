@@ -58,3 +58,18 @@
 - Prevention dimension: required strong-type additions to cross-service DTOs must update direct
   constructors in every consumer as part of the same cross-repository gate.
 - Status: fixed in the current Soland worktree; targeted test rerun pending.
+
+## 2026-07-29 — recovery authority outcome checked the wrong Event bytes
+
+- Surface: B-model `authorize_recovery_device` participant outcome validation.
+- Regression: Soland compared `authorized_event_digest` with SHA-256 of the full signed Event JSON,
+  including `proofs`. The Event contract defines the digest over `Event::digest_payload()`, which
+  excludes proofs and reducer-local fields, so a correctly signed authority Event could never
+  satisfy this check.
+- Detection: migrating the outcome to carry its authority-signed publication lease and auditing
+  the new SDK `validate_against_request` relation checks.
+- Correction: delegate first-outcome validation to the SDK closed request/outcome validator and
+  use `Event::event_digest()` when reloading the durable participant outcome for the atomic
+  re-anchor unit.
+- Prevention dimension: consumers must never recreate Event digests by hashing serialized Event
+  values; only the SDK Event digest transcript is authoritative.

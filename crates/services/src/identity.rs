@@ -5,12 +5,14 @@ use arkret_identifiers::{BlobRef, DeviceId, Did, EventId, Hash};
 use arkret_identity::IdentityError;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_collaboration::objects::account_status::AccountStatus;
-use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
+use arkret_models_crypto::{
+    DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
+};
 use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
-use arkret_wire::{DidUrl, NonEmptyString, OpaqueLocalId, SealBasis};
+use arkret_wire::{DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId, SealBasis};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -1456,6 +1458,7 @@ pub struct RecoveryPolicyState {
     pub policy_id: String,
     pub principal_id: String,
     pub version: u32,
+    pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
     pub allowed_proof_kinds: Vec<String>,
     pub supersedes: Option<String>,
@@ -1563,6 +1566,8 @@ pub struct RecoverySessionState {
     pub registry_head: Option<Hash>,
     pub accepted_seal_frontier: Option<SealBasis>,
     pub policy_payload: Value,
+    pub publication_authority_context: RecoveryPublicationAuthorityContext,
+    pub publication_authority_context_digest: Hash,
     pub challenge: String,
     pub state: String,
     pub proof_payload: Option<Value>,

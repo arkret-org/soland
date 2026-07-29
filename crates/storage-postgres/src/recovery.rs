@@ -17,6 +17,8 @@ struct RecoveryPolicyRow {
     principal_id: String,
     #[diesel(sql_type = Integer)]
     version: i32,
+    #[diesel(sql_type = Jsonb)]
+    acceptance_basis: Value,
     #[diesel(sql_type = Text)]
     trust_domain: String,
     #[diesel(sql_type = Array<Text>)]
@@ -44,10 +46,17 @@ impl TryFrom<RecoveryPolicyRow> for RecoveryPolicyRecord {
                 row.policy_id, row.version
             ))
         })?;
+        let acceptance_basis = serde_json::from_value(row.acceptance_basis).map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery policy `{}` has invalid acceptance_basis: {error}",
+                row.policy_id
+            ))
+        })?;
         Ok(Self {
             policy_id: ids::format_typed_uuid("policy", &row.policy_id),
             principal_id: row.principal_id,
             version,
+            acceptance_basis,
             trust_domain: row.trust_domain,
             allowed_proof_kinds: row.allowed_proof_kinds,
             supersedes: row.supersedes.map(|u| ids::format_typed_uuid("policy", &u)),
@@ -69,7 +78,7 @@ impl PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 AND version = $2",
         )
@@ -92,7 +101,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE id = $1",
         )
@@ -112,7 +121,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 \
              ORDER BY version DESC, accepted_at DESC LIMIT 1",
@@ -133,7 +142,7 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
             .await
             .map_err(PersistenceError::database)?;
         let rows = sql_query(
-            "SELECT id AS policy_id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
+            "SELECT id AS policy_id, principal_id, version, acceptance_basis, trust_domain, allowed_proof_kinds, supersedes, \
                     expires_at, issued_at, verification_method, raw_payload, accepted_at \
              FROM recovery_policies WHERE principal_id = $1 \
              ORDER BY version DESC, accepted_at DESC",
@@ -199,8 +208,8 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
         sql_query(
             "INSERT INTO recovery_policies \
              (id, principal_id, version, trust_domain, allowed_proof_kinds, supersedes, \
-              expires_at, issued_at, verification_method, raw_payload, accepted_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+              acceptance_basis, expires_at, issued_at, verification_method, raw_payload, accepted_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.policy_id))
         .bind::<Text, _>(&record.principal_id)
@@ -212,6 +221,13 @@ impl RecoveryPolicyStore for PgRecoveryPolicyStore {
                 .supersedes
                 .as_deref()
                 .map(ids::typed_uuid_part_expect_internal),
+        )
+        .bind::<Jsonb, _>(
+            serde_json::to_value(&record.acceptance_basis).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery policy acceptance_basis encode failed: {error}"
+                ))
+            })?,
         )
         .bind::<Nullable<Timestamptz>, _>(record.expires_at)
         .bind::<Timestamptz, _>(record.issued_at)
@@ -255,6 +271,10 @@ struct RecoverySessionRow {
     accepted_seal_frontier: Option<Value>,
     #[diesel(sql_type = Jsonb)]
     policy_payload: Value,
+    #[diesel(sql_type = Jsonb)]
+    publication_authority_context: Value,
+    #[diesel(sql_type = Text)]
+    publication_authority_context_digest: String,
     #[diesel(sql_type = Text)]
     challenge: String,
     #[diesel(sql_type = Text)]
@@ -339,6 +359,22 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
                 })
             })
             .transpose()?;
+        let publication_authority_context =
+            serde_json::from_value(row.publication_authority_context).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session `{}` has invalid publication_authority_context: {error}",
+                    row.recovery_session_id
+                ))
+            })?;
+        let publication_authority_context_digest = arkret_identifiers::Hash::new(
+            row.publication_authority_context_digest,
+        )
+        .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "recovery session `{}` has invalid publication_authority_context_digest: {error}",
+                row.recovery_session_id
+            ))
+        })?;
         Ok(Self {
             recovery_session_id: ids::format_typed_uuid(
                 "recovery_session",
@@ -356,6 +392,8 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
             registry_head,
             accepted_seal_frontier,
             policy_payload: row.policy_payload,
+            publication_authority_context,
+            publication_authority_context_digest,
             challenge: row.challenge,
             state: row.state,
             proof_payload: row.proof_payload,
@@ -371,7 +409,8 @@ impl TryFrom<RecoverySessionRow> for RecoverySessionRecord {
 const RECOVERY_SESSION_COLUMNS: &str = "id AS recovery_session_id, principal_id, requesting_device_id, \
      trust_domain, policy_id, policy_version, identity_model, ssk_generation, \
      current_device_generation_ref, device_generation_status, registry_head, accepted_seal_frontier, \
-     policy_payload, challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
+     policy_payload, publication_authority_context, publication_authority_context_digest, \
+     challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at";
 #[async_trait]
 impl RecoverySessionStore for PgRecoverySessionStore {
     async fn get(
@@ -416,8 +455,9 @@ impl RecoverySessionStore for PgRecoverySessionStore {
              (id, principal_id, requesting_device_id, trust_domain, policy_id, \
               policy_version, identity_model, ssk_generation, current_device_generation_ref, \
               device_generation_status, registry_head, accepted_seal_frontier, policy_payload, \
-              challenge, state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+              publication_authority_context, publication_authority_context_digest, challenge, \
+              state, proof_payload, transaction_id, created_at, updated_at, expires_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)",
         )
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(
             &record.recovery_session_id,
@@ -455,6 +495,14 @@ impl RecoverySessionStore for PgRecoverySessionStore {
                 })?,
         )
         .bind::<Jsonb, _>(&record.policy_payload)
+        .bind::<Jsonb, _>(
+            serde_json::to_value(&record.publication_authority_context).map_err(|error| {
+                PersistenceError::Internal(format!(
+                    "recovery session publication_authority_context encode failed: {error}"
+                ))
+            })?,
+        )
+        .bind::<Text, _>(record.publication_authority_context_digest.as_str())
         .bind::<Text, _>(&record.challenge)
         .bind::<Text, _>(&record.state)
         .bind::<Nullable<Jsonb>, _>(record.proof_payload.as_ref())

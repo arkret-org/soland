@@ -610,10 +610,36 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
     // receipt, so both are anchored on one instant here.
     let issued_at = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
         .expect("fixture publication instant");
-    let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
+    let authority_set_policy = arkret_wire::AuthoritySetPolicy {
+        schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
-        authority_set_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "e".repeat(64)))
-            .unwrap(),
+        policy_kind: arkret_wire::AuthoritySetPolicyKind::RealmAdmission,
+        scope_ref: event.scope_ref.clone(),
+        source: arkret_wire::AuthoritySetPolicySource {
+            source_kind: arkret_wire::AuthoritySetSourceKind::RealmControl,
+            source_ref: test_cited_basis_seal(&event).id.as_str().to_owned(),
+            source_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "c".repeat(64)))
+                .unwrap(),
+            generation_ref: "1".to_owned(),
+        },
+        authorization_rules: vec![arkret_wire::AuthoritySetAuthorizationRule {
+            rule_id: "realm_admission".to_owned(),
+            issuer_role: arkret_wire::AuthoritySetIssuerRole::RealmAdmission,
+            allowed_actions: vec![event.kind.as_str().to_owned()],
+            issuers: vec![arkret_wire::AuthoritySetIssuer {
+                verification_method: arkret_identifiers::DidUrl::new(format!(
+                    "{PEER_SOURCE_DID}#authorization-lease-key"
+                ))
+                .unwrap(),
+            }],
+            threshold: 1,
+        }],
+    };
+    let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
+        authority_set_id: authority_set_policy.authority_set_id.clone(),
+        authority_set_digest: authority_set_policy
+            .digest()
+            .expect("fixture authority-set policy digest"),
     };
     let mut lease = arkret_wire::offline_publication::AuthorizationLease {
         authorization_lease_id: arkret_identifiers::AuthorizationLeaseId::new(
@@ -634,6 +660,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         issued_at,
         expires_at: issued_at + ChronoDuration::hours(4),
         authority_set_ref: authority_set_ref.clone(),
+        authority_set_policy,
         proofs: Vec::new(),
     };
     lease.proofs = vec![publication_proof(
@@ -674,12 +701,12 @@ fn publication_proof(
     verification_method: &str,
     payload_digest: arkret_identifiers::Hash,
     created_at: DateTime<Utc>,
-) -> arkret_wire::primitives::Proof {
-    arkret_wire::primitives::Proof {
+) -> arkret_wire::primitives::PayloadProof {
+    arkret_wire::primitives::PayloadProof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method: verification_method.to_owned(),
-        event_digest: payload_digest,
+        payload_digest,
         created_at,
         domain: None,
         audience: None,

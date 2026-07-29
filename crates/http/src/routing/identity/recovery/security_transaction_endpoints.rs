@@ -1066,19 +1066,17 @@ async fn continue_submit_reanchor_unit(
                 "recovery authority outcome does not contain a typed Event: {error}"
             ))
         })?;
-    let authorized_event_bytes = arkret_canonical::canonical_json_bytes(&authorized_event)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    arkret_canonical::verify_digest(
-        &authorized_event_bytes,
-        authority_outcome.authorized_event_digest.as_str(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!(
-            "recovery authority Event digest is invalid: {error}"
-        ))
-    })?;
+    if authorized_event
+        .event_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != authority_outcome.authorized_event_digest.as_str()
+    {
+        return Err(AppError::internal(
+            "recovery authority Event digest is invalid",
+        ));
+    }
     if authorized_event.event_id != binding.authorize_event_id
-        || plan.authorize_event_publication_evidence.event_id != binding.authorize_event_id
+        || plan.authorize_event_publication_intent.event_id != binding.authorize_event_id
         || plan.reanchor_event_submission.event.event_id != binding.reanchor_event_id
     {
         return Err(AppError::internal(
@@ -1087,14 +1085,8 @@ async fn continue_submit_reanchor_unit(
     }
     let authorize_submission = arkret_wire::EventInitialSubmission {
         event: authorized_event,
-        authorization_lease: plan
-            .authorize_event_publication_evidence
-            .authorization_lease
-            .clone(),
-        cba_proof_bundles: plan
-            .authorize_event_publication_evidence
-            .cba_proof_bundles
-            .clone(),
+        authorization_lease: authority_outcome.authorization_lease.clone(),
+        cba_proof_bundles: authority_outcome.cba_proof_bundles.clone(),
     };
     authorize_submission
         .validate_structural()
@@ -1336,27 +1328,14 @@ async fn continue_authorize_recovery_device(
             AppError::internal(format!("Account Authority authorization failed: {error}"))
                 .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    let authorized_event_bytes = arkret_canonical::canonical_json_bytes(&outcome.authorized_event)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    arkret_canonical::verify_digest(
-        &authorized_event_bytes,
-        outcome.authorized_event_digest.as_str(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!(
-            "Account Authority outcome event digest is invalid: {error}"
-        ))
-    })?;
-    if outcome
-        .authorized_event
-        .get("event_id")
-        .and_then(Value::as_str)
-        != Some(binding.authorize_event_id.as_str())
-    {
-        return Err(AppError::internal(
-            "Account Authority outcome changed the reserved authorize Event id",
-        ));
-    }
+    outcome
+        .validate_against_request(participant_request)
+        .map_err(|error| {
+            AppError::conflict(format!(
+                "Account Authority outcome disagrees with the durable recovery request: {error}"
+            ))
+            .with_wire_code("recovery_authority_binding_mismatch")
+        })?;
 
     let participant_request_digest = canonical_digest(participant_request)?;
     let outcome_digest = canonical_digest(&outcome)?;

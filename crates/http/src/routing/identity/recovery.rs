@@ -17,13 +17,18 @@ use std::collections::BTreeSet;
 use arkret_identifiers::{Did, Hash, PolicyId, RealmId, RecoverySessionId};
 use arkret_models_crypto::{
     DeviceGenerationStatus, ProofSummary, RecoveryIdentityModel, RecoveryPolicy,
-    RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyRef,
-    RecoveryPolicySummary, RecoverySessionCreateRequestBody, RecoverySessionProofSubmitOutcome,
-    RecoverySessionProofSubmitRequestBody, RecoverySessionState, SessionState,
-    TypedSecurityTransactionContinueRequest,
+    RecoveryPolicyActiveOutcome, RecoveryPolicyPublishOutcome, RecoveryPolicyPublishRequest,
+    RecoveryPolicyRef, RecoveryPolicySummary, RecoveryProofKind, RecoveryPublicationAction,
+    RecoveryPublicationAuthorityContext, RecoverySessionCreateRequestBody,
+    RecoverySessionProofSubmitOutcome, RecoverySessionProofSubmitRequestBody, RecoverySessionState,
+    SessionState, TypedSecurityTransactionContinueRequest,
 };
 use arkret_wire::{
-    NonEmptyString, SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
+    AUTHORITY_SET_POLICY_SCHEMA, AuthoritySetAuthorizationRule, AuthoritySetIssuer,
+    AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource,
+    AuthoritySetRef, AuthoritySetSourceKind, DidUrl, LeaseBasisRef, NonEmptyString,
+    RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID,
+    SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
@@ -37,9 +42,8 @@ use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
 use soland_services::ServiceError as PersistenceError;
 use soland_services::identity::{
-    RecoveryPolicyState as RecoveryPolicyRecord,
-    SecurityTransactionState as SecurityTransactionRecord, SessionIdentityState as SessionRecord,
-    principal_control_realm_for_did,
+    RecoveryPolicyState, SecurityTransactionState as SecurityTransactionRecord,
+    SessionIdentityState as SessionRecord, principal_control_realm_for_did,
 };
 
 use super::{AuthArgs, append_audit_log};

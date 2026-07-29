@@ -15,7 +15,7 @@
 //!   <= expires_at` is the revocation boundary.
 
 use arkret_wire::offline_publication::{AuthorizationLease, IngressReceipt};
-use arkret_wire::primitives::{Proof, proof_kind};
+use arkret_wire::primitives::{PayloadProof, proof_kind};
 
 use super::*;
 
@@ -115,11 +115,11 @@ fn sign_ingress_receipt(
     let receipt_digest = receipt
         .receipt_digest()
         .map_err(|error| publication_reject(format!("receipt digest failed: {error}")))?;
-    let mut proof = Proof {
+    let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method,
-        event_digest: receipt_digest,
+        payload_digest: receipt_digest,
         // §2 — verbatim equality, not "close enough": a retry that re-stamped
         // this would move the revocation boundary.
         created_at: received_at,

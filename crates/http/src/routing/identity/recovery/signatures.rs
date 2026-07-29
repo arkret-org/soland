@@ -3,9 +3,9 @@ use super::*;
 pub(super) async fn verify_recovery_policy_auth_signature(
     state: &AppState,
     payload: &Value,
-    record: &RecoveryPolicyRecord,
+    record: &ValidatedRecoveryPolicy,
     session: &SessionRecord,
-    existing: Option<&RecoveryPolicyRecord>,
+    existing: Option<&RecoveryPolicyState>,
 ) -> Result<(), AppError> {
     let primary = verify_recovery_auth_signature(
         state,
@@ -29,7 +29,7 @@ pub(super) async fn verify_recovery_policy_auth_signature(
 
 pub(super) fn recovery_policy_uses_session_device(
     payload: &Value,
-    record: &RecoveryPolicyRecord,
+    record: &ValidatedRecoveryPolicy,
     session: &SessionRecord,
 ) -> bool {
     let expected = format!("{}#{}", record.principal_id, session.device_id);
@@ -45,7 +45,7 @@ pub(super) fn recovery_policy_uses_session_device(
 pub(super) async fn verify_recovery_policy_session_device_signature(
     state: &AppState,
     payload: &Value,
-    record: &RecoveryPolicyRecord,
+    record: &ValidatedRecoveryPolicy,
     session: &SessionRecord,
 ) -> Result<(), AppError> {
     if session.actor != record.principal_id {

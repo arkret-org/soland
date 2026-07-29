@@ -961,13 +961,37 @@ mod tests {
             arkret_identifiers::RealmId::new("ak:realm:019f0000-0000-7000-8000-000000000000")
                 .unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
-        let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
+        let scope_ref = arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        };
+        let authority_set_policy = arkret_wire::AuthoritySetPolicy {
+            schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
             authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
-            authority_set_digest: arkret_identifiers::Hash::new(format!(
-                "sha256:{}",
-                "e".repeat(64)
-            ))
-            .unwrap(),
+            policy_kind: arkret_wire::AuthoritySetPolicyKind::RealmAdmission,
+            scope_ref: scope_ref.clone(),
+            source: arkret_wire::AuthoritySetPolicySource {
+                source_kind: arkret_wire::AuthoritySetSourceKind::RealmControl,
+                source_ref: format!("ak:seal:sha256:{}", "d".repeat(64)),
+                source_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "c".repeat(64)))
+                    .unwrap(),
+                generation_ref: "1".to_owned(),
+            },
+            authorization_rules: vec![arkret_wire::AuthoritySetAuthorizationRule {
+                rule_id: "realm_admission".to_owned(),
+                issuer_role: arkret_wire::AuthoritySetIssuerRole::RealmAdmission,
+                allowed_actions: vec!["ak.message.create".to_owned()],
+                issuers: vec![arkret_wire::AuthoritySetIssuer {
+                    verification_method: arkret_identifiers::DidUrl::new(
+                        "did:web:authority.example#key-1",
+                    )
+                    .unwrap(),
+                }],
+                threshold: 1,
+            }],
+        };
+        let authority_set_ref = arkret_wire::offline_publication::AuthoritySetRef {
+            authority_set_id: authority_set_policy.authority_set_id.clone(),
+            authority_set_digest: authority_set_policy.digest().unwrap(),
         };
         let issued_at: chrono::DateTime<chrono::Utc> = "2026-07-26T00:00:00.000Z".parse().unwrap();
         let received_at: chrono::DateTime<chrono::Utc> =
@@ -1032,22 +1056,21 @@ mod tests {
                     "ak:device:019f0000-0000-7000-8000-00000000de01",
                 )
                 .unwrap(),
-                scope_ref: arkret_wire::ScopeRef::Realm {
-                    realm_id: realm_id.clone(),
-                },
+                scope_ref: scope_ref.clone(),
                 action: "ak.message.create".to_owned(),
                 risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
                 issued_at,
                 expires_at: issued_at + chrono::Duration::hours(4),
                 authority_set_ref: authority_set_ref.clone(),
+                authority_set_policy: authority_set_policy.clone(),
                 proofs: Vec::new(),
             };
             let lease_digest = lease.lease_digest().unwrap();
-            lease.proofs = vec![arkret_wire::primitives::Proof {
+            lease.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
                 verification_method: "did:web:authority.example#key-1".to_owned(),
-                event_digest: lease_digest,
+                payload_digest: lease_digest,
                 created_at: issued_at,
                 domain: None,
                 audience: None,
@@ -1068,11 +1091,11 @@ mod tests {
                 proofs: Vec::new(),
             };
             let receipt_digest = receipt.receipt_digest().unwrap();
-            receipt.proofs = vec![arkret_wire::primitives::Proof {
+            receipt.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
                 verification_method: "did:web:alpha.example#notary-key".to_owned(),
-                event_digest: receipt_digest,
+                payload_digest: receipt_digest,
                 created_at: received_at,
                 domain: None,
                 audience: None,

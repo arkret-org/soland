@@ -2,8 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{BlobRef, Hash};
 use arkret_models_collaboration::objects::blob::BlobVisibility;
-use arkret_models_crypto::{DeviceGenerationStatus, RecoveryIdentityModel};
-use arkret_wire::{FreshnessState, NonEmptyString, PlaintextDataClassKind, SealBasis};
+use arkret_models_crypto::{
+    DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
+};
+use arkret_wire::{
+    FreshnessState, LeaseBasisRef, NonEmptyString, PlaintextDataClassKind, SealBasis,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -105,6 +109,7 @@ pub struct RecoveryPolicyRecord {
     pub policy_id: String,
     pub principal_id: String,
     pub version: u32,
+    pub acceptance_basis: LeaseBasisRef,
     pub trust_domain: String,
     pub allowed_proof_kinds: Vec<String>,
     pub supersedes: Option<String>,
@@ -143,6 +148,10 @@ pub struct RecoverySessionRecord {
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).
     pub policy_payload: Value,
+    /// Immutable publication authority derived from the policy's accepted
+    /// basis and the identity model at session creation.
+    pub publication_authority_context: RecoveryPublicationAuthorityContext,
+    pub publication_authority_context_digest: Hash,
     /// Server-issued anti-replay challenge the proof transcript MUST bind.
     pub challenge: String,
     /// `pending` | `verified` | `completed` | `rejected` | `expired`.
