@@ -1,6 +1,6 @@
 //! Recovery policy and recovery-session endpoints.
 //!
-//! Mounts recovery policy / receipt endpoints introduced in arkret-spec b47ff6ec:
+//! Mounts recovery policy and durable recovery-transaction endpoints:
 //!
 //! - `GET /_arkret/root/identity/recovery-policy` — read the active recovery policy.
 //! - `POST /_arkret/root/identity/recovery-policy` — persist + advance a recovery policy.
@@ -81,9 +81,9 @@ pub(super) fn recovery_session_proof_kind_and_digest(
 /// Spec-canonical recovery surface mounted under `/_arkret/root/identity`.
 ///
 /// The standard surface exposes recovery policy read/publish plus recovery
-/// session lifecycle operations. Policy history and recovery receipt
-/// write is part of the standard recovery lifecycle. Policy and receipt
-/// history remain product-private on the `/_soland` track.
+/// session lifecycle operations. A recovery receipt has no independent write
+/// endpoint: it is the signed terminal artifact of a durable
+/// `RecoveryTransaction`.
 pub(super) fn protocol_router() -> Router {
     Router::with_path("identity")
         .push(

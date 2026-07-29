@@ -547,18 +547,12 @@ backup/restore of the already-bound key. They do not rotate identity material.
 - **Pre-1.0 schema drift**: protocol field renames listed in `_todos.md` Q2/Q3
   may require client updates between releases.
 
-## R3 migrations
+## Pre-1.0 schema initialization
 
-R3 lands new wire surfaces (agent FSM, recovery policy/receipt, media token
-exchange, and the realm `media_service.foci[]` shape). None of the R3
-migrations drop columns or tables.
-
-Run order (each migration is idempotent):
-
-1. `migrations/20260520_realm_media_service_foci.sql`
-2. `migrations/20260521_recovery_policies.sql`
-3. `migrations/20260522_recovery_receipts.sql`
-4. `migrations/20260523_agent_fsm_cell_upgrade.sql`
+Soland keeps the current pre-1.0 schema in
+`crates/storage-postgres/migrations/00000000000000_initial`. New deployments
+run that migration as a unit; the historical per-feature R3 migration list is
+no longer part of this repository.
 
 ### `ak.realm.media_service.foci[]` shape
 
@@ -626,39 +620,14 @@ Media connectivity is configured in two independent layers:
     deployments (one pair per cluster, keyed by focus `issuer_kid`) is
     follow-up work.
 
-### `recovery_policies` + `recovery_receipts`
+### Recovery persistence
 
-R3 introduces two new tables. Both are append-only event projections, not
-truth tables — the durable record is the canonical event stream; these
-projections accelerate reads.
-
-```sql
-CREATE TABLE recovery_policies (
-    policy_id        UUID PRIMARY KEY,
-    principal_id     TEXT NOT NULL,
-    policy_version   INTEGER NOT NULL,
-    proof_kinds      TEXT[] NOT NULL,
-    body             JSONB NOT NULL,
-    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    UNIQUE (principal_id, policy_version)
-);
-CREATE INDEX recovery_policies_principal_idx
-    ON recovery_policies(principal_id, policy_version DESC);
-
-CREATE TABLE recovery_receipts (
-    receipt_id            UUID PRIMARY KEY,
-    recovery_session_id   TEXT NOT NULL,
-    principal_id          TEXT NOT NULL,
-    proof_summary         JSONB NOT NULL,
-    completion_timestamp  TIMESTAMPTZ NOT NULL,
-    inserted_at           TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX recovery_receipts_principal_idx
-    ON recovery_receipts(principal_id, completion_timestamp DESC);
-```
-
-No backfill is required; pre-R3 deployments have zero rows in either
-table. The reducer materializes new rows as events arrive.
+The initial schema contains `recovery_policies`, `recovery_sessions`,
+`security_transactions`, their step outcomes/attempts, and durable terminal
+artifacts. There is deliberately no standalone `recovery_receipts` table or
+write path: a terminal recovery receipt is accepted only as the signed final
+artifact of its `RecoveryTransaction`, and exact replay is served from that
+transaction's durable first outcome.
 
 ### Agent FSM cell upgrade
 
