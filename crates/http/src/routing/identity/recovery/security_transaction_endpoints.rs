@@ -1892,7 +1892,7 @@ async fn continue_publish_did_entry(
             AppError::internal(format!("DID registry publication failed: {error}"))
                 .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
-    if outcome.status != "accepted"
+    if !did_publication_status_is_success(&outcome.status)
         || outcome.did != transaction.resource.principal_id
         || outcome.seq != Some(seq)
         || outcome.operation_ref.as_deref()
@@ -2562,6 +2562,10 @@ fn did_version_id_from_ref<'a>(principal_id: &Did, reference: &'a str) -> Option
         .then_some(value)
 }
 
+fn did_publication_status_is_success(status: &str) -> bool {
+    matches!(status, "accepted" | "duplicate")
+}
+
 fn security_transaction_service_error(error: soland_services::ServiceError) -> AppError {
     if error.kind() == soland_services::ServiceErrorKind::Conflict
         && error.detail().contains("different canonical bytes")
@@ -2598,5 +2602,12 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn did_publication_exact_replay_is_successful() {
+        assert!(did_publication_status_is_success("accepted"));
+        assert!(did_publication_status_is_success("duplicate"));
+        assert!(!did_publication_status_is_success("rejected"));
     }
 }
