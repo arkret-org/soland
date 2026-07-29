@@ -942,6 +942,7 @@ pub fn describe(
         },
         profile_bindings: Default::default(),
         plaintext_visibility,
+        calendar_tzdb_versions: Vec::new(),
         implemented_features: implemented_features_seed,
         claimed_profiles,
         verified_profiles,

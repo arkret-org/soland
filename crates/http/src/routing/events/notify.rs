@@ -484,25 +484,15 @@ pub(crate) async fn dispatch_assignment_notifications(
     .await;
 }
 
-const SCHEDULE_FIELDS: &[&str] = &[
-    "due_at",
-    "start",
-    "end",
-    "timezone",
-    "all_day",
-    "recurrence",
-    "location",
-    "call_id",
-    "attendees",
-];
-
-fn patch_touches_schedule(payload: &Value) -> bool {
+fn patch_touches_calendar(payload: &Value) -> bool {
     let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
         return false;
     };
     patch.iter().any(|(path, value)| {
-        if let Some(field) = path.strip_prefix("metadata.fields.") {
-            return SCHEDULE_FIELDS.contains(&field);
+        if path == "metadata.fields.calendar"
+            || path.starts_with("metadata.fields.calendar.")
+        {
+            return true;
         }
         if path == "metadata.fields" {
             return value
@@ -512,9 +502,9 @@ fn patch_touches_schedule(payload: &Value) -> bool {
                 .or(Some(value))
                 .and_then(Value::as_object)
                 .is_some_and(|fields| {
-                    fields
-                        .keys()
-                        .any(|field| SCHEDULE_FIELDS.contains(&field.as_str()))
+                    fields.contains_key(
+                        arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE,
+                    )
                 });
         }
         if path == "metadata" {
@@ -524,16 +514,45 @@ fn patch_touches_schedule(payload: &Value) -> bool {
                 .and_then(|metadata| metadata.get("fields"))
                 .and_then(Value::as_object)
                 .is_some_and(|fields| {
-                    fields
-                        .keys()
-                        .any(|field| SCHEDULE_FIELDS.contains(&field.as_str()))
+                    fields.contains_key(
+                        arkret_models_collaboration::objects::productivity::CALENDAR_METADATA_FIELDS_NAMESPACE,
+                    )
                 });
         }
         false
     })
 }
 
-fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
+fn patch_touches_due_schedule(payload: &Value) -> bool {
+    let Some(patch) = payload.get("patch").and_then(Value::as_object) else {
+        return false;
+    };
+    patch.iter().any(|(path, value)| {
+        if path == "metadata.fields.due_at" {
+            return true;
+        }
+        if path == "metadata.fields" {
+            return value
+                .get("value")
+                .or_else(|| value.get("$value"))
+                .or_else(|| value.get("fields"))
+                .or(Some(value))
+                .and_then(Value::as_object)
+                .is_some_and(|fields| fields.contains_key("due_at"));
+        }
+        if path == "metadata" {
+            return value
+                .get("value")
+                .or_else(|| value.get("$value"))
+                .and_then(|metadata| metadata.get("fields"))
+                .and_then(Value::as_object)
+                .is_some_and(|fields| fields.contains_key("due_at"));
+        }
+        false
+    })
+}
+
+fn relation_schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
     let projection = state.projections().snapshot();
     let mut recipients = projection
         .relations
@@ -546,17 +565,6 @@ fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
         .filter_map(|relation| relation.to_ref.clone())
         .filter(|actor| actor.starts_with("did:"))
         .collect::<BTreeSet<_>>();
-    if let Some(strand) = projection.strands.get(strand_id)
-        && let Some(attendees) = strand.fields.get("attendees").and_then(Value::as_array)
-    {
-        recipients.extend(
-            attendees
-                .iter()
-                .filter_map(|attendee| attendee.get("actor_id").and_then(Value::as_str))
-                .filter(|actor| actor.starts_with("did:"))
-                .map(ToOwned::to_owned),
-        );
-    }
     recipients.extend(
         projection
             .strand_watches
@@ -567,13 +575,17 @@ fn schedule_recipients(state: &AppState, strand_id: &str) -> BTreeSet<String> {
     recipients
 }
 
-/// Fan out due-date and calendar schedule notifications for an accepted
-/// `ak.strand.update`.
+/// Fan out due-date notifications for an accepted `ak.strand.update`.
+/// Calendar updates are recognized separately and fail closed below until the
+/// receiver-private policy projection required by their optional server
+/// profile exists.
 pub(crate) async fn dispatch_schedule_notifications(
     state: &AppState,
     operation: &arkret_event_draft::Operation,
 ) {
-    if !patch_touches_schedule(&operation.payload) {
+    let due_schedule = patch_touches_due_schedule(&operation.payload);
+    let calendar_schedule = patch_touches_calendar(&operation.payload);
+    if !due_schedule && !calendar_schedule {
         return;
     }
     let Some(strand_id) = operation
@@ -587,31 +599,39 @@ pub(crate) async fn dispatch_schedule_notifications(
     let realm_id = operation.realm_id.as_str();
     let source_actor_id = operation_source_actor_id(operation);
     let source_event_id = operation_source_event_id(operation);
-    for recipient in schedule_recipients(state, strand_id) {
-        if source_actor_id.as_deref() == Some(recipient.as_str()) {
-            continue;
+    if due_schedule {
+        for recipient in relation_schedule_recipients(state, strand_id) {
+            if source_actor_id.as_deref() == Some(recipient.as_str()) {
+                continue;
+            }
+            if explicit_watch_level(state, strand_id, &recipient).as_deref() == Some("muted") {
+                continue;
+            }
+            if !actor_can_see_strand(state, realm_id, strand_id, &recipient) {
+                continue;
+            }
+            put_notification(
+                state,
+                &recipient,
+                realm_id,
+                &source_event_id,
+                NotificationKind::Schedule,
+                EventKind::StrandUpdate,
+                Some(strand_id),
+                Some(strand_id),
+                None,
+                source_actor_id.as_deref(),
+                None,
+            )
+            .await;
         }
-        if explicit_watch_level(state, strand_id, &recipient).as_deref() == Some("muted") {
-            continue;
-        }
-        if !actor_can_see_strand(state, realm_id, strand_id, &recipient) {
-            continue;
-        }
-        put_notification(
-            state,
-            &recipient,
-            realm_id,
-            &source_event_id,
-            NotificationKind::Schedule,
-            EventKind::StrandUpdate,
-            Some(strand_id),
-            Some(strand_id),
-            None,
-            source_actor_id.as_deref(),
-            None,
-        )
-        .await;
     }
+    // Calendar fanout additionally requires receiver-private blocklist, DND
+    // and push-rule gates before a Notification row or wakeup is generated.
+    // Soland stores those standard account-data cells as holder-encrypted
+    // values and has no holder-authorized readable policy projection. The
+    // conformant behavior is therefore fail-closed; do not infer a verified
+    // schedule notification or blind wakeup from Calendar metadata.
 }
 
 #[cfg(test)]
@@ -905,6 +925,34 @@ mod tests {
         )
     }
 
+    fn rsvp_update(
+        realm_id: &str,
+        seed: &str,
+        sender: &str,
+        strand_id: &str,
+    ) -> arkret_event_draft::Operation {
+        arkret_event_draft::Operation::create(
+            arkret_identifiers::OperationId::new(format!(
+                "ak:operation:01904100-0000-7000-8000-{seed}"
+            ))
+            .unwrap(),
+            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_wire::events::EventKind::RSVP_SET,
+            json!({
+                "sender": sender,
+                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
+                "event_ref": strand_id,
+                "occurrence": null,
+                "entry": {
+                    "schedule_basis_refs": [
+                        "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+                    ],
+                    "response": {"status": "accepted"}
+                }
+            }),
+        )
+    }
+
     fn mention_message(
         realm_id: &str,
         seed: &str,
@@ -1126,6 +1174,65 @@ mod tests {
             );
         }
         assert!(notifications_for(&state, alice).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn calendar_schedule_fanout_fails_closed_without_private_policy_projection() {
+        let state = test_state();
+        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009930";
+        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009931";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        seed_realm_members(&state, realm_id, &[alice, bob]);
+        seed_strand(&state, realm_id, strand_id);
+        let assignment = relation_create(realm_id, "000000009932", alice, strand_id, bob);
+        state.projections().apply(&assignment, state.hlc());
+        let operation = arkret_event_draft::Operation::create(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000009933".to_owned(),
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
+            arkret_wire::events::EventKind::STRAND_UPDATE,
+            json!({
+                "sender": alice,
+                "event_id": "ak:event:01904100-0000-7000-8000-000000009933",
+                "target_ref": strand_id,
+                "patch": {
+                    "metadata.fields.calendar": {
+                        "$op": "set",
+                        "value": {
+                            "start": "2026-07-06T09:00:00",
+                            "end": "2026-07-06T10:00:00",
+                            "timezone": "Etc/UTC",
+                            "tzdb_version": "2025b",
+                            "all_day": false,
+                            "status": "confirmed"
+                        }
+                    }
+                }
+            }),
+        );
+
+        dispatch_schedule_notifications(&state, &operation).await;
+
+        assert!(notifications_for(&state, bob).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn rsvp_change_never_emits_a_schedule_notification() {
+        let state = test_state();
+        let realm_id = "ak:realm:01904100-0000-7000-8000-000000009946";
+        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009947";
+        let alice = "did:web:alice.example";
+        let bob = "did:web:bob.example";
+        seed_realm_members(&state, realm_id, &[alice, bob]);
+        seed_strand(&state, realm_id, strand_id);
+        let operation = rsvp_update(realm_id, "000000009948", alice, strand_id);
+
+        dispatch_schedule_notifications(&state, &operation).await;
+
+        assert!(notifications_for(&state, bob).await.is_empty());
     }
 
     #[tokio::test]

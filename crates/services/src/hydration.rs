@@ -741,7 +741,7 @@ pub async fn hydrate_projections_from_persistence(
     // transitions must be replayed in global acceptance order; querying each
     // kind independently would lose their relative ordering.
     let events = persistence.projection_events().snapshot_all().await?;
-    for event in events {
+    for event in events.iter().cloned() {
         let projection_name = match event.event_kind.as_str() {
             arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
             | arkret_wire::events::EventKind::AGENT_KEY_REVOKE => "agent-key",
@@ -1132,6 +1132,23 @@ pub async fn hydrate_projections_from_persistence(
         .await?
     {
         proj.accepted_mls_commit_refs.insert(event.event_id);
+    }
+    // The Strand mirror intentionally stores only common index fields. Replay
+    // the accepted projection events after mirror hydration so Calendar
+    // fields, schema activation, the schedule revision DAG and RSVP
+    // MV-register heads survive a process restart from their canonical durable
+    // source instead of being replaced by an incomplete mirror row.
+    for event in events.into_iter().filter(|event| {
+        matches!(
+            event.event_kind.as_str(),
+            arkret_wire::events::EventKind::STRAND_CREATE
+                | arkret_wire::events::EventKind::STRAND_UPDATE
+                | arkret_wire::events::EventKind::STRAND_ARCHIVE
+                | arkret_wire::events::EventKind::STRAND_RESTORE
+                | arkret_wire::events::EventKind::RSVP_SET
+        )
+    }) {
+        replay_projection_event(proj, event, &hydration_hlc, "strand-calendar-rsvp")?;
     }
     // Run after object mirrors: sidecar Relation scope validation needs both
     // endpoint projections, and Strand field restoration must not be replaced

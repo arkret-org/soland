@@ -191,6 +191,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
                 .with_base_url(state.config().public_base_url.trim_end_matches('/')),
         ],
         supported_features: supported_features.clone(),
+        calendar_tzdb_versions: Vec::new(),
         auth_metadata: arkret_models_discovery::service_description::AuthMetadata::minimal("public_no_auth"),
         limits: Default::default(),
         plaintext_visibility: arkret_models_discovery::service_description::PlaintextVisibility::none(),
