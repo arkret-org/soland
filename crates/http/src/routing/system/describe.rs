@@ -19,6 +19,7 @@
 use arkret_identity::service_identity::ServiceIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
+use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
@@ -305,14 +306,16 @@ async fn server_describe(
             "service_kind {service_kind:?} is not available on this binding"
         )));
     }
-    json_ok(ServerDescribeOutcome(build_server_description(state)))
+    json_ok(ServerDescribeOutcome(
+        build_server_description_resolved(state).await,
+    ))
 }
 
 #[endpoint(operation_id = "org.arkret.soland.system.describe")]
 #[tracing::instrument(skip_all, fields(op = "org.arkret.soland.system.describe"))]
 async fn soland_describe(depot: &mut Depot) -> JsonResult<SolandServerDescribeOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let service = build_server_description(state);
+    let service = build_server_description_resolved(state).await;
     let unsupported_profiles = unsupported_profiles_from_limits(&service.limits);
     json_ok(SolandServerDescribeOutcome {
         service,
@@ -389,6 +392,60 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
             error = %err,
             "ServiceDescribe validation failed; this is a build-time invariant"
         );
+    }
+    description
+}
+
+async fn build_server_description_resolved(state: &AppState) -> ServiceDescribe {
+    let mut description = build_server_description(state);
+    let configured = state
+        .config()
+        .account_authority_enrollment_did
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty());
+    if configured {
+        return description;
+    }
+    let Some(authority_base) = state
+        .config()
+        .account_authority_url
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return description;
+    };
+    let registration_key = CanonicalServiceUrl::canonicalize(authority_base)
+        .map_err(|error| error.to_string())
+        .and_then(|public_base| {
+            ServiceRegistrationKey::new(arkret_wire::ServiceKind::AuthServer, public_base)
+                .map_err(|error| error.to_string())
+        });
+    let Ok(registration_key) = registration_key else {
+        tracing::warn!(
+            authority_base,
+            "cannot resolve Account Authority service identity for describe"
+        );
+        return description;
+    };
+    match state.dids().service_registration(&registration_key).await {
+        Ok(Some(registration)) => {
+            if let Some(authority) = description.auth_metadata.account_authority.as_mut() {
+                authority.enrollment_authority_did = Some(registration.service_id);
+            }
+        }
+        Ok(None) => {
+            tracing::debug!(
+                authority_base,
+                "Account Authority service registration is not available for describe yet"
+            );
+        }
+        Err(error) => {
+            tracing::warn!(
+                authority_base,
+                error = %error,
+                "failed to resolve Account Authority service identity for describe"
+            );
+        }
     }
     description
 }
