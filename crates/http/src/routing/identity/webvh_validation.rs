@@ -402,7 +402,7 @@ pub(crate) fn decode_ed25519_public_key(value: &str) -> Result<VerifyingKey, Str
 
 #[cfg(test)]
 mod tests {
-    use serde_json::Value;
+    use serde_json::{Value, json};
 
     use super::verify_log_and_witness_bytes;
 
@@ -434,5 +434,42 @@ mod tests {
         assert_eq!(verified.log.entries.len(), 1);
         assert_eq!(verified.witness_sets[0].threshold, 1);
         assert_eq!(verified.witness_sets[0].verified_witnesses.len(), 1);
+    }
+
+    #[test]
+    fn arkret_observation_receipt_cannot_replace_method_witness_proof() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/did-webvh-witness-official.json"
+        ))
+        .expect("official fixture must decode");
+        let did = arkret_wire::Did::new(
+            fixture["did"]
+                .as_str()
+                .expect("official fixture contains the DID"),
+        )
+        .expect("official fixture DID is valid");
+        let did_jsonl = fixture["did_log_entries"]
+            .as_array()
+            .expect("official fixture contains log entries")
+            .iter()
+            .map(|entry| serde_json::to_string(entry).expect("entry serializes"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let observation_only = serde_json::to_vec(&json!([{
+            "schema": "ak.schema.did_webvh_witness_receipt.v1",
+            "did": did,
+            "version_id": fixture["did_witness_json"][0]["versionId"],
+            "threshold_met": true
+        }]))
+        .expect("observation serializes");
+
+        let error =
+            verify_log_and_witness_bytes(&did, did_jsonl.as_bytes(), observation_only.as_slice())
+                .expect_err("Arkret observation cannot replace did-witness.json proofs");
+        assert!(matches!(
+            error,
+            super::WebvhValidationError::WitnessQuorumNotMet { .. }
+                | super::WebvhValidationError::WitnessSignatureInvalid { .. }
+        ));
     }
 }

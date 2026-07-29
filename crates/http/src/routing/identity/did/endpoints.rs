@@ -984,17 +984,15 @@ pub(crate) async fn identity_log(
 #[tracing::instrument(skip_all, fields(op = "ak.root.identity.receipts.query.list"))]
 pub(crate) async fn identity_receipts(
     did: salvo::oapi::extract::QueryParam<String, true>,
-    depot: &mut Depot,
+    _depot: &mut Depot,
 ) -> JsonResult<IdentityReceiptListOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
     let did = did.into_inner();
     if validate_did(&did).is_err() {
         return Err(AppError::invalid_param("invalid did"));
     }
-    let record = state.dids().document(&did).await.ok().flatten();
     json_ok(IdentityReceiptListOutcome {
         receipts: Vec::new(),
-        threshold_met: Some(record.is_none()),
+        threshold_met: None,
     })
 }
 
