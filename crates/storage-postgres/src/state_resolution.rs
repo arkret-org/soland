@@ -10,7 +10,8 @@ use arkret_state::state::{
     SealedControlEventRecord, StoreError, StoreResult, compute_state_root, control_event_digest,
 };
 use arkret_wire::{
-    Bottom, ControlProposalDecision, ControlProposalReceipt, Event, LatticeOp, Seal,
+    Bottom, ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalReceipt, Event,
+    LatticeOp, Seal,
 };
 use diesel::sql_types::{BigInt, Bool, Jsonb, Nullable, Text, Timestamptz};
 use diesel::{OptionalExtension, QueryableByName, sql_query};
@@ -93,6 +94,17 @@ struct MemoryEventSealCommitStore {
     seal_store: Arc<arkret_state::state::MemorySealStore>,
     cell_store: Arc<arkret_state::state::MemoryCellStore>,
     cell_registry: Arc<dyn CellRegistry>,
+}
+
+fn validate_proposal_decision_append(
+    receipt: &ControlProposalReceipt,
+    decisions: &[ControlProposalDecision],
+    decision: &ControlProposalDecision,
+    policy: ControlProposalDecisionPolicy,
+) -> StoreResult<()> {
+    decision
+        .validate_chain(receipt, decisions, policy)
+        .map_err(|error| StoreError::Conflict(error.to_string()))
 }
 
 #[derive(Debug)]
@@ -662,9 +674,7 @@ impl ControlEventStore for PgControlEventStore {
                     ))
                     .into());
                 }
-                decision
-                    .validate_chain(&receipt, &decisions, policy)
-                    .map_err(|error| StoreError::Conflict(error.to_string()))?;
+                validate_proposal_decision_append(&receipt, &decisions, &decision, policy)?;
                 decisions.push(decision);
                 let decisions = serde_json::to_value(decisions).map_err(serde_to_store)?;
                 sql_query(
@@ -1694,6 +1704,104 @@ impl CellStore for PgCellStore {
             }
             Ok(())
         })
+    }
+}
+
+#[cfg(test)]
+mod proposal_decision_tests {
+    use arkret_wire::{
+        ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalReceipt,
+        ControlProposalReceiptKind, ControlProposalRejectReason, PayloadSignature,
+        ProposalMemberReceipt,
+    };
+    use chrono::{DateTime, TimeZone, Utc};
+
+    use super::{Hash, RealmId, validate_proposal_decision_append};
+
+    fn at(seconds: i64) -> DateTime<Utc> {
+        Utc.timestamp_opt(1_775_000_000 + seconds, 0).unwrap()
+    }
+
+    fn hash(marker: char) -> Hash {
+        Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap()
+    }
+
+    fn signature(payload_digest: Hash, created_at: DateTime<Utc>) -> PayloadSignature {
+        PayloadSignature {
+            alg: "EdDSA".to_owned(),
+            verification_method: "did:webvh:z6mkfixture:notary.example#k1".to_owned(),
+            payload_digest,
+            created_at,
+            jws: "e30..c2ln".to_owned(),
+        }
+    }
+
+    fn receipt() -> ControlProposalReceipt {
+        let mut member = ProposalMemberReceipt {
+            realm_id: RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cba1").unwrap(),
+            proposal_digest: hash('a'),
+            received_at: at(0),
+            decision_due_at: at(30),
+            absolute_due_at: at(90),
+            authority_set_ref: hash('b'),
+            signature: signature(hash('0'), at(0)),
+        };
+        member.signature.payload_digest = member.member_receipt_digest().unwrap();
+        ControlProposalReceipt {
+            kind: ControlProposalReceiptKind::ProposalReceipt,
+            realm_id: member.realm_id.clone(),
+            proposal_digest: member.proposal_digest.clone(),
+            received_at: member.received_at,
+            decision_due_at: member.decision_due_at,
+            absolute_due_at: member.absolute_due_at,
+            defer_count: 0,
+            authority_set_ref: member.authority_set_ref.clone(),
+            member_receipts: vec![member],
+        }
+    }
+
+    fn signed_reject(receipt: &ControlProposalReceipt) -> ControlProposalDecision {
+        let mut decision = ControlProposalDecision::SignedReject {
+            realm_id: receipt.realm_id.clone(),
+            proposal_digest: receipt.proposal_digest.clone(),
+            receipt_digest: receipt.receipt_digest().unwrap(),
+            decided_at: at(20),
+            decision_due_at: receipt.decision_due_at,
+            absolute_due_at: receipt.absolute_due_at,
+            defer_count: 0,
+            reason_code: ControlProposalRejectReason::PolicyDenied,
+            authority_set_ref: receipt.authority_set_ref.clone(),
+            proofs: vec![signature(hash('0'), at(20))],
+        };
+        let decision_digest = decision.decision_digest().unwrap();
+        let ControlProposalDecision::SignedReject { proofs, .. } = &mut decision else {
+            unreachable!("constructed a signed reject");
+        };
+        proofs[0].payload_digest = decision_digest;
+        decision
+    }
+
+    #[test]
+    fn postgres_append_validation_uses_the_effective_realm_policy() {
+        let receipt = receipt();
+        let decision = signed_reject(&receipt);
+
+        assert!(
+            validate_proposal_decision_append(
+                &receipt,
+                &[],
+                &decision,
+                ControlProposalDecisionPolicy::protocol_maximum(),
+            )
+            .is_err()
+        );
+        validate_proposal_decision_append(
+            &receipt,
+            &[],
+            &decision,
+            ControlProposalDecisionPolicy::default(),
+        )
+        .unwrap();
     }
 }
 
