@@ -1651,6 +1651,11 @@ pub trait SecurityTransactionPort: Send + Sync {
         transaction_id: &str,
         step: arkret_wire::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepOutcomeState>>;
+    async fn step_attempt(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> ServiceResult<Option<SecurityTransactionStepAttemptState>>;
     async fn begin_step(
         &self,
         attempt: SecurityTransactionStepAttemptState,
@@ -1696,6 +1701,14 @@ impl SecurityTransactionService {
         step: arkret_wire::SecurityTransactionStep,
     ) -> ServiceResult<Option<SecurityTransactionStepOutcomeState>> {
         self.transactions.step_outcome(transaction_id, step).await
+    }
+
+    pub async fn step_attempt(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> ServiceResult<Option<SecurityTransactionStepAttemptState>> {
+        self.transactions.step_attempt(transaction_id, step).await
     }
 
     pub async fn begin_step(

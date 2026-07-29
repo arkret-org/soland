@@ -1,10 +1,11 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_event_commit_unit_of_work_contract,
     assert_idempotency_store_contract, assert_organization_registration_store_contract,
+    assert_proposal_member_receipt_store_contract,
 };
 use soland_storage_postgres::{
     Db, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore, PgIdempotencyStore,
-    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
+    PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore, PgProposalMemberReceiptStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -24,6 +25,16 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
     assert_idempotency_store_contract(&store, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_proposal_member_receipt_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let store = PgProposalMemberReceiptStore { pool };
+    let namespace = format!("postgres-proposal-receipt-{}", uuid::Uuid::now_v7());
+    assert_proposal_member_receipt_store_contract(&store, &namespace).await;
 }
 
 #[tokio::test]

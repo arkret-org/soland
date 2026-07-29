@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use arkret_identifiers::{Hash, RealmId};
 use arkret_wire::{
     AuthoritySetRef, ControlProposalDecision, ControlProposalDecisionPolicy,
@@ -189,6 +191,139 @@ pub(crate) async fn mint_control_proposal_receipts(
             )
         })
         .collect()
+}
+
+pub(crate) async fn verify_control_proposal_receipt(
+    state: &AppState,
+    event: &Event,
+    receipt: &ControlProposalReceipt,
+    policy: ControlProposalDecisionPolicy,
+) -> Result<(), String> {
+    receipt
+        .validate_structural(policy)
+        .map_err(|error| error.to_string())?;
+    let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+    let Some((profile, authority_set_ref)) = worker
+        .current_notary_profile_for_events(state, &receipt.realm_id, std::slice::from_ref(event))
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("current proposal authority profile is unavailable".to_owned());
+    };
+    if receipt.authority_set_ref != authority_set_ref {
+        return Err("proposal receipt does not bind the current authority profile".to_owned());
+    }
+
+    let mut signers = BTreeSet::new();
+    for member in &receipt.member_receipts {
+        let signer =
+            arkret_identity::verification_method_did(&member.signature.verification_method)
+                .map_err(|error| error.to_string())?;
+        if !signers.insert(signer.clone()) {
+            return Err("proposal receipt repeats an authority member".to_owned());
+        }
+        let bytes = member
+            .canonical_bytes_for_signature()
+            .map_err(|error| error.to_string())?;
+        crate::jws_verify::verify_jws_ed25519_async(
+            &bytes,
+            &member.signature.jws,
+            &member.signature.verification_method,
+            signer.as_str(),
+            state,
+        )
+        .await?;
+    }
+
+    if !proposal_quorum_met(&profile, &signers) {
+        return Err("proposal receipt does not satisfy the current notary quorum".to_owned());
+    }
+    Ok(())
+}
+
+fn proposal_quorum_met(
+    profile: &arkret_wire::notary::NotaryValue,
+    signers: &BTreeSet<arkret_wire::Did>,
+) -> bool {
+    match profile {
+        arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
+            signers.len() == 1 && signers.contains(&did)
+        }
+        arkret_wire::notary::NotaryValue::Threshold {
+            threshold, members, ..
+        } => {
+            signers.iter().all(|signer| members.contains(signer))
+                && signers.len() >= usize::try_from(*threshold).unwrap_or(usize::MAX)
+        }
+        arkret_wire::notary::NotaryValue::OpenSet { members } => {
+            signers.len() == 1 && signers.iter().all(|signer| members.contains(signer))
+        }
+        arkret_wire::notary::NotaryValue::Mixed {
+            did,
+            recovery_members,
+        } => {
+            (signers.len() == 1 && signers.contains(&did))
+                || (!recovery_members.is_empty()
+                    && signers.len() == recovery_members.len()
+                    && signers
+                        .iter()
+                        .all(|signer| recovery_members.contains(signer)))
+        }
+    }
+}
+
+#[cfg(test)]
+mod proposal_receipt_quorum_tests {
+    use arkret_wire::notary::{ForensicAttribution, NotaryValue};
+
+    use super::*;
+
+    fn did(name: &str) -> arkret_wire::Did {
+        arkret_wire::Did::new(format!("did:web:{name}.example")).unwrap()
+    }
+
+    fn signers(values: &[&str]) -> BTreeSet<arkret_wire::Did> {
+        values.iter().map(|value| did(value)).collect()
+    }
+
+    #[test]
+    fn threshold_requires_distinct_current_members() {
+        let profile = NotaryValue::Threshold {
+            threshold: 2,
+            members: vec![did("a"), did("b"), did("c")],
+            forensic_attribution: ForensicAttribution::QuorumIntersection,
+        };
+        assert!(proposal_quorum_met(&profile, &signers(&["a", "b"])));
+        assert!(!proposal_quorum_met(&profile, &signers(&["a"])));
+        assert!(!proposal_quorum_met(&profile, &signers(&["a", "outsider"])));
+    }
+
+    #[test]
+    fn open_set_receipt_is_one_signer_slot_not_a_cross_leaf_quorum() {
+        let profile = NotaryValue::OpenSet {
+            members: vec![did("a"), did("b")],
+        };
+        assert!(proposal_quorum_met(&profile, &signers(&["a"])));
+        assert!(!proposal_quorum_met(&profile, &signers(&["a", "b"])));
+        assert!(!proposal_quorum_met(&profile, &signers(&["outsider"])));
+    }
+
+    #[test]
+    fn mixed_accepts_primary_or_complete_recovery_set_only() {
+        let profile = NotaryValue::Mixed {
+            did: did("primary"),
+            recovery_members: vec![did("recovery-a"), did("recovery-b")],
+        };
+        assert!(proposal_quorum_met(&profile, &signers(&["primary"])));
+        assert!(proposal_quorum_met(
+            &profile,
+            &signers(&["recovery-a", "recovery-b"])
+        ));
+        assert!(!proposal_quorum_met(&profile, &signers(&["recovery-a"])));
+        assert!(!proposal_quorum_met(
+            &profile,
+            &signers(&["primary", "recovery-a"])
+        ));
+    }
 }
 
 fn select_proposal_receipt_authority(

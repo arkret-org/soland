@@ -937,6 +937,7 @@ pub(crate) async fn post_recovery_policy(
         )
         .json(&arkret_wire::AuthorizationLeaseIssueRequest {
             events: vec![event.clone()],
+            intents: Vec::new(),
         })
         .send(&app_from_state(state.clone()))
         .await;

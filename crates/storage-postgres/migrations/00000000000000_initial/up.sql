@@ -1412,6 +1412,13 @@ CREATE TABLE public.idempotency_keys (
     expires_at timestamp with time zone NOT NULL
 );
 
+CREATE TABLE public.proposal_member_receipts (
+    receipt_key text PRIMARY KEY,
+    request_hash text NOT NULL,
+    response_body jsonb NOT NULL,
+    created_at timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.webrtc_sessions (
     id uuid NOT NULL,
     realm_id uuid NOT NULL,

@@ -212,6 +212,30 @@ impl NotaryWorker {
         realm_id: &RealmId,
         events: &[Event],
     ) -> Result<Option<Hash>, NotaryError> {
+        let Some((profile, digest)) =
+            self.current_notary_profile_for_events(state, realm_id, events)?
+        else {
+            return Ok(None);
+        };
+        let locally_signable = match &profile {
+            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
+                did.as_str() == self.service_id
+            }
+            arkret_wire::notary::NotaryValue::OpenSet { members } => members
+                .iter()
+                .any(|member| member.as_str() == self.service_id),
+            arkret_wire::notary::NotaryValue::Mixed { did, .. } => did.as_str() == self.service_id,
+            arkret_wire::notary::NotaryValue::Threshold { .. } => false,
+        };
+        Ok(locally_signable.then_some(digest))
+    }
+
+    pub(crate) fn current_notary_profile_for_events(
+        &self,
+        state: &AppState,
+        realm_id: &RealmId,
+        events: &[Event],
+    ) -> Result<Option<(arkret_wire::notary::NotaryValue, Hash)>, NotaryError> {
         let notary_cell = notary_cell_ref(realm_id)
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         let sealed = state
@@ -254,23 +278,10 @@ impl NotaryWorker {
         else {
             return Ok(None);
         };
-        let locally_signable = match &profile {
-            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-                did.as_str() == self.service_id
-            }
-            arkret_wire::notary::NotaryValue::OpenSet { members } => members
-                .iter()
-                .any(|member| member.as_str() == self.service_id),
-            arkret_wire::notary::NotaryValue::Mixed { did, .. } => did.as_str() == self.service_id,
-            arkret_wire::notary::NotaryValue::Threshold { .. } => false,
-        };
-        if !locally_signable {
-            return Ok(None);
-        }
         let digest = arkret_canonical::canonical_sha256(&notary_profile_wire(&envelope))
             .map_err(|error| NotaryError::Construction(error.to_string()))?;
         Hash::new(digest)
-            .map(Some)
+            .map(|digest| Some((profile, digest)))
             .map_err(|error| NotaryError::Construction(error.to_string()))
     }
 

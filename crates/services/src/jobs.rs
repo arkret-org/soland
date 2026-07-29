@@ -15,6 +15,14 @@ pub trait MaintenancePort: Send + Sync {
         key: &str,
     ) -> ServiceResult<Option<IdempotencyState>>;
     async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()>;
+    async fn proposal_member_receipt(
+        &self,
+        receipt_key: &str,
+    ) -> ServiceResult<Option<ProposalMemberReceiptState>>;
+    async fn store_proposal_member_receipt(
+        &self,
+        record: ProposalMemberReceiptState,
+    ) -> ServiceResult<()>;
 }
 
 #[async_trait]
@@ -36,6 +44,14 @@ pub struct IdempotencyState {
     pub response_body: Value,
     pub created_at: DateTime<Utc>,
     pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ProposalMemberReceiptState {
+    pub receipt_key: String,
+    pub request_hash: String,
+    pub response_body: Value,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -89,6 +105,20 @@ impl JobsService {
     pub async fn store_idempotency_record(&self, record: IdempotencyState) -> ServiceResult<()> {
         self.maintenance.store_idempotency_record(record).await
     }
+
+    pub async fn proposal_member_receipt(
+        &self,
+        receipt_key: &str,
+    ) -> ServiceResult<Option<ProposalMemberReceiptState>> {
+        self.maintenance.proposal_member_receipt(receipt_key).await
+    }
+
+    pub async fn store_proposal_member_receipt(
+        &self,
+        record: ProposalMemberReceiptState,
+    ) -> ServiceResult<()> {
+        self.maintenance.store_proposal_member_receipt(record).await
+    }
 }
 
 #[cfg(test)]
@@ -135,6 +165,20 @@ mod tests {
             Ok(None)
         }
         async fn store_idempotency_record(&self, _record: IdempotencyState) -> ServiceResult<()> {
+            Ok(())
+        }
+
+        async fn proposal_member_receipt(
+            &self,
+            _receipt_key: &str,
+        ) -> ServiceResult<Option<ProposalMemberReceiptState>> {
+            Ok(None)
+        }
+
+        async fn store_proposal_member_receipt(
+            &self,
+            _record: ProposalMemberReceiptState,
+        ) -> ServiceResult<()> {
             Ok(())
         }
     }

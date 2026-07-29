@@ -246,6 +246,21 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
             .cloned())
     }
 
+    async fn step_attempt(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> PersistenceResult<Option<SecurityTransactionStepAttemptRecord>> {
+        Ok(self
+            .step_attempts
+            .lock()
+            .get(&(
+                transaction_id.to_owned(),
+                security_transaction_step_key(step),
+            ))
+            .cloned())
+    }
+
     async fn begin_step(
         &self,
         attempt: SecurityTransactionStepAttemptRecord,
@@ -355,9 +370,9 @@ mod tests {
     use arkret_wire::{
         AcceptedStep, BackupId, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
         BackupRotationPlan, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, Did,
-        EventId, Hash, PreparedEventUnit, SecurityRotationBinding, SecurityRotationPlan,
-        SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
-        SecurityTransactionKind, SecurityTransactionState, SecurityTransactionStep, TransactionId,
+        EventId, Hash, PreparedEventUnit, SecurityRotationTransactionCreateRequest,
+        SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
+        TransactionId,
     };
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -452,55 +467,34 @@ mod tests {
                 ciphertext_digest: hash('8'),
             }],
         };
-        let erase_confirmation_digest = hash('2');
-        let plan = SecurityRotationPlan {
-            revoke_unit: event_unit(&service_id, "revoke"),
-            new_secret_commitment: hash('1'),
-            backup_rotations: vec![
-                BackupRotationPlan {
-                    binding: secret_binding.clone(),
-                    encrypted_backup_material: canonical_material(
-                        json!({"ciphertext": "secret-public"}),
-                    ),
-                    active_series_unit: event_unit(&service_id, "activate-secret"),
-                },
-                BackupRotationPlan {
-                    binding: mls_binding.clone(),
-                    encrypted_backup_material: canonical_material(
-                        json!({"ciphertext": "mls-public"}),
-                    ),
-                    active_series_unit: event_unit(&service_id, "activate-mls"),
-                },
-            ],
-            erase_confirmation_digest: erase_confirmation_digest.clone(),
-            local_commit_digest: hash('3'),
-        };
-        let prepared_plan_digest = {
-            let prepared =
-                arkret_wire::SecurityTransactionPreparedPlan::SecurityRotation(plan.clone());
-            let bytes = arkret_canonical::canonical_json_bytes(&prepared).unwrap();
-            Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap()
-        };
+        let transaction_id =
+            TransactionId::new("ak:transaction:019a7360-0000-7000-8000-000000000101").unwrap();
         let request = SecurityTransactionCreateRequest::SecurityRotation(
-            SecurityRotationTransactionCreateRequest {
-                transaction_id: TransactionId::new(
-                    "ak:transaction:019a7360-0000-7000-8000-000000000101",
-                )
-                .unwrap(),
-                kind: SecurityTransactionKind::SecurityRotation,
-                principal_id: Did::new("did:web:alice.example").unwrap(),
-                expires_at: Utc::now() + Duration::hours(1),
-                binding: SecurityRotationBinding {
-                    revoke_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000102")
-                        .unwrap(),
-                    new_secret_commitment: hash('1'),
-                    backup_rotations: vec![secret_binding, mls_binding],
-                    erase_confirmation_digest,
-                    local_commit_digest: hash('3'),
-                },
-                prepared_plan: plan,
-                prepared_plan_digest,
-            },
+            SecurityRotationTransactionCreateRequest::from_prepared_rotations(
+                transaction_id,
+                Did::new("did:web:alice.example").unwrap(),
+                Utc::now() + Duration::hours(1),
+                EventId::new("ak:event:019a7360-0000-7000-8000-000000000102").unwrap(),
+                event_unit(&service_id, "revoke"),
+                hash('1'),
+                vec![
+                    BackupRotationPlan {
+                        binding: secret_binding,
+                        encrypted_backup_material: canonical_material(
+                            json!({"ciphertext": "secret-public"}),
+                        ),
+                        active_series_unit: event_unit(&service_id, "activate-secret"),
+                    },
+                    BackupRotationPlan {
+                        binding: mls_binding,
+                        encrypted_backup_material: canonical_material(
+                            json!({"ciphertext": "mls-public"}),
+                        ),
+                        active_series_unit: event_unit(&service_id, "activate-mls"),
+                    },
+                ],
+            )
+            .unwrap(),
         );
         let (resource, canonical_request) = request
             .into_initial_resource(service_id, Utc::now())

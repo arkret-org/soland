@@ -199,11 +199,734 @@ pub(super) async fn security_transaction_continue(
             )
             .await
         }
+        SecurityTransactionStep::Revoke => {
+            continue_rotation_revoke(state, &session, transaction, canonical_request, res).await
+        }
+        SecurityTransactionStep::UploadNewMaterial => {
+            continue_rotation_upload(state, transaction, canonical_request, res).await
+        }
+        SecurityTransactionStep::SwitchAuthoritativePointer => {
+            continue_rotation_switch(state, &session, transaction, canonical_request, res).await
+        }
+        SecurityTransactionStep::EraseOldMaterial => Err(AppError::conflict(
+            "erase_old_material advances only through ak.self.keys.backup_series.command.erase",
+        )
+        .with_wire_code("security_transaction_failed_precondition")),
+        SecurityTransactionStep::LocalCommit => {
+            continue_rotation_local_commit(
+                state,
+                &session,
+                transaction,
+                request,
+                canonical_request,
+                res,
+            )
+            .await
+        }
         _ => Err(
             AppError::conflict("security transaction step executor is not available")
                 .with_wire_code("security_transaction_failed_precondition"),
         ),
     }
+}
+
+fn rotation_parts(
+    transaction: &SecurityTransactionRecord,
+) -> Result<
+    (
+        arkret_wire::SecurityRotationBinding,
+        arkret_wire::SecurityRotationPlan,
+    ),
+    AppError,
+> {
+    match (
+        &transaction.resource.binding,
+        &transaction.resource.prepared_plan,
+    ) {
+        (
+            SecurityTransactionBinding::SecurityRotation(binding),
+            SecurityTransactionPreparedPlan::SecurityRotation(plan),
+        ) => Ok((binding.clone(), plan.clone())),
+        _ => Err(
+            AppError::conflict("rotation step requires a SecurityRotationTransaction")
+                .with_wire_code("security_transaction_failed_precondition"),
+        ),
+    }
+}
+
+async fn begin_rotation_step(
+    state: &AppState,
+    transaction_id: &str,
+    step: SecurityTransactionStep,
+    canonical_request: &[u8],
+) -> Result<(), AppError> {
+    state
+        .security_transactions()
+        .begin_step(SecurityTransactionStepAttemptState {
+            transaction_id: transaction_id.to_owned(),
+            step,
+            canonical_request: canonical_request.to_vec(),
+        })
+        .await
+        .map_err(security_transaction_service_error)?;
+    Ok(())
+}
+
+async fn accept_rotation_step(
+    state: &AppState,
+    mut transaction: SecurityTransactionRecord,
+    step: SecurityTransactionStep,
+    canonical_request: Vec<u8>,
+    prepared_material_digest: Hash,
+    output_ref: String,
+    output_digest: Hash,
+    participant_outcome: Option<Value>,
+    res: &mut Response,
+) -> JsonResult<SecurityTransaction> {
+    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
+    transaction.resource.accepted_steps.push(AcceptedStep {
+        step,
+        prepared_material_digest,
+        acceptor_id: state.service_id().clone(),
+        output_ref,
+        output_digest,
+        accepted_at: chrono::Utc::now(),
+    });
+    let next = arkret_wire::SECURITY_ROTATION_STEP_ORDER
+        .get(transaction.resource.accepted_steps.len())
+        .copied();
+    transaction.resource.next_required_step = next;
+    if next == Some(SecurityTransactionStep::LocalCommit) {
+        transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
+    } else if next.is_some() {
+        transaction.resource.state = SecurityTransactionState::Running;
+    } else {
+        transaction.resource.state = SecurityTransactionState::Completed;
+        transaction.resource.terminal_result =
+            Some(arkret_wire::SecurityTransactionTerminalResult {
+                result: arkret_wire::SecurityTransactionResultKind::Completed,
+                completed_at: chrono::Utc::now(),
+                receipt_id: None,
+                reason_code: None,
+                completion_attestation: None,
+            });
+    }
+    transaction
+        .resource
+        .validate_structural()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let response = serde_json::to_value(&transaction.resource)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let stored = state
+        .security_transactions()
+        .accept_step(
+            transaction,
+            SecurityTransactionStepOutcomeState {
+                transaction_id,
+                step,
+                canonical_request,
+                response,
+                participant_outcome,
+            },
+        )
+        .await
+        .map_err(security_transaction_service_error)?;
+    let resource = serde_json::from_value(stored.response)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    res.status_code(StatusCode::OK);
+    json_ok(resource)
+}
+
+async fn submit_rotation_event_unit(
+    state: &AppState,
+    session: &SessionRecord,
+    unit: &arkret_wire::PreparedEventUnit,
+    expected_event_ids: &[&arkret_wire::EventId],
+) -> Result<Value, AppError> {
+    let request: arkret_wire::EventsSubmitBatchRequestBody =
+        serde_json::from_value(unit.request.clone()).map_err(|error| {
+            AppError::invalid_param(format!("prepared rotation Event unit is invalid: {error}"))
+                .with_wire_code("schema_violation")
+        })?;
+    let outcome = crate::routing::events::event_log::submit_initial_identity_anchor_batch(
+        state,
+        session,
+        request.events,
+    )
+    .await
+    .map_err(|error| {
+        AppError::conflict(format!(
+            "prepared rotation Event unit was rejected: {}",
+            error.message
+        ))
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+    if !outcome.rejected.is_empty()
+        || !outcome.quarantine.is_empty()
+        || outcome.accepted.len() != expected_event_ids.len()
+        || outcome
+            .accepted
+            .iter()
+            .map(|event_id| event_id.as_str())
+            .ne(expected_event_ids.iter().map(|event_id| event_id.as_str()))
+    {
+        return Err(
+            AppError::conflict("prepared rotation Event unit was not fully accepted")
+                .with_wire_code("security_transaction_failed_precondition"),
+        );
+    }
+    serde_json::to_value(outcome).map_err(|error| AppError::internal(error.to_string()))
+}
+
+async fn continue_rotation_revoke(
+    state: &AppState,
+    session: &SessionRecord,
+    transaction: SecurityTransactionRecord,
+    canonical_request: Vec<u8>,
+    res: &mut Response,
+) -> JsonResult<SecurityTransaction> {
+    let (binding, plan) = rotation_parts(&transaction)?;
+    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
+    begin_rotation_step(
+        state,
+        &transaction_id,
+        SecurityTransactionStep::Revoke,
+        &canonical_request,
+    )
+    .await?;
+    let outcome = submit_rotation_event_unit(
+        state,
+        session,
+        &plan.revoke_unit,
+        &[&binding.revoke_event_id],
+    )
+    .await?;
+    let digest = canonical_digest(&outcome)?;
+    accept_rotation_step(
+        state,
+        transaction,
+        SecurityTransactionStep::Revoke,
+        canonical_request,
+        plan.revoke_unit.request_digest,
+        binding.revoke_event_id.as_str().to_owned(),
+        digest,
+        Some(outcome),
+        res,
+    )
+    .await
+}
+
+fn public_backup_values(material: &arkret_wire::CanonicalPublicMaterial) -> Vec<Value> {
+    material
+        .value
+        .as_array()
+        .cloned()
+        .unwrap_or_else(|| vec![material.value.clone()])
+}
+
+async fn continue_rotation_upload(
+    state: &AppState,
+    transaction: SecurityTransactionRecord,
+    canonical_request: Vec<u8>,
+    res: &mut Response,
+) -> JsonResult<SecurityTransaction> {
+    let (binding, plan) = rotation_parts(&transaction)?;
+    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
+    begin_rotation_step(
+        state,
+        &transaction_id,
+        SecurityTransactionStep::UploadNewMaterial,
+        &canonical_request,
+    )
+    .await?;
+    for (rotation, prepared) in binding.backup_rotations.iter().zip(&plan.backup_rotations) {
+        let values = public_backup_values(&prepared.encrypted_backup_material);
+        if values.len() != rotation.new_backups.len() {
+            return Err(
+                AppError::conflict("prepared backup material has unreserved entries")
+                    .with_wire_code("security_transaction_failed_precondition"),
+            );
+        }
+        for expected in &rotation.new_backups {
+            let value = values
+                .iter()
+                .find(|value| {
+                    value.get("backup_id").and_then(Value::as_str)
+                        == Some(expected.backup_id.as_str())
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    AppError::conflict("prepared backup material omits a reserved backup")
+                        .with_wire_code("security_transaction_failed_precondition")
+                })?;
+            if value.get("ciphertext_digest").and_then(Value::as_str)
+                != Some(expected.ciphertext_digest.as_str())
+                || value.get("actor_id").and_then(Value::as_str)
+                    != Some(transaction.resource.principal_id.as_str())
+                || value.get("series_id").and_then(Value::as_str)
+                    != Some(rotation.new_series_id.as_str())
+                || value.get("backup_kind").and_then(Value::as_str)
+                    != Some(match rotation.backup_kind {
+                        arkret_wire::BackupRotationKind::SecretStorage => "secret_storage",
+                        arkret_wire::BackupRotationKind::MlsHistory => "mls_history",
+                    })
+            {
+                return Err(
+                    AppError::conflict("prepared backup ciphertext digest changed")
+                        .with_wire_code("security_transaction_failed_precondition"),
+                );
+            }
+            if let Some(existing) = state
+                .key_backups()
+                .backup(expected.backup_id.as_str())
+                .await
+                .map_err(recovery_service_error)?
+            {
+                if existing != value {
+                    return Err(AppError::conflict(
+                        "reserved backup id already stores different bytes",
+                    )
+                    .with_wire_code("duplicate_conflict"));
+                }
+            } else {
+                state
+                    .key_backups()
+                    .store_backup(expected.backup_id.as_str().to_owned(), value)
+                    .await
+                    .map_err(recovery_service_error)?;
+            }
+        }
+    }
+    let digest = canonical_digest(&plan.backup_rotations)?;
+    accept_rotation_step(
+        state,
+        transaction,
+        SecurityTransactionStep::UploadNewMaterial,
+        canonical_request,
+        digest.clone(),
+        digest.as_str().to_owned(),
+        digest,
+        None,
+        res,
+    )
+    .await
+}
+
+async fn continue_rotation_switch(
+    state: &AppState,
+    session: &SessionRecord,
+    transaction: SecurityTransactionRecord,
+    canonical_request: Vec<u8>,
+    res: &mut Response,
+) -> JsonResult<SecurityTransaction> {
+    let (binding, plan) = rotation_parts(&transaction)?;
+    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
+    begin_rotation_step(
+        state,
+        &transaction_id,
+        SecurityTransactionStep::SwitchAuthoritativePointer,
+        &canonical_request,
+    )
+    .await?;
+    let mut outcomes = Vec::new();
+    for (rotation, prepared) in binding.backup_rotations.iter().zip(&plan.backup_rotations) {
+        let outcome = submit_rotation_event_unit(
+            state,
+            session,
+            &prepared.active_series_unit,
+            &[&rotation.active_series_event_id],
+        )
+        .await?;
+        outcomes.push(outcome);
+    }
+    let digest = canonical_digest(&outcomes)?;
+    accept_rotation_step(
+        state,
+        transaction,
+        SecurityTransactionStep::SwitchAuthoritativePointer,
+        canonical_request,
+        digest.clone(),
+        digest.as_str().to_owned(),
+        digest,
+        Some(Value::Array(outcomes)),
+        res,
+    )
+    .await
+}
+
+#[salvo::oapi::endpoint(
+    operation_id = "ak.self.keys.backup_series.command.erase",
+    tags("identity")
+)]
+#[tracing::instrument(skip_all, fields(op = "ak.self.keys.backup_series.command.erase"))]
+pub(crate) async fn backup_series_erase_command(
+    aa: AuthArgs,
+    body: JsonBody<arkret_models_crypto::BackupSeriesEraseRequestBody>,
+    depot: &mut Depot,
+    res: &mut Response,
+    req: &mut Request,
+) -> JsonResult<arkret_models_crypto::BackupSeriesEraseOutcome> {
+    use arkret_models_crypto::{
+        BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA, BackupSeriesEraseConfirmation,
+        BackupSeriesEraseOutcome, BackupSeriesEraseResult, BackupSeriesEraseResultStatus,
+        BackupSeriesEraseStatus,
+    };
+
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    let request = body.into_inner();
+    request.validate_structural().map_err(|error| {
+        AppError::invalid_param(error.to_string()).with_wire_code("schema_violation")
+    })?;
+    let canonical_request = arkret_canonical::canonical_json_bytes(&request)
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    let transaction_id = request.transaction_id.as_str().to_owned();
+    let mut transaction = load_owned_security_transaction(state, &session, &transaction_id).await?;
+
+    if let Some(stored) = state
+        .security_transactions()
+        .step_outcome(&transaction_id, SecurityTransactionStep::EraseOldMaterial)
+        .await
+        .map_err(recovery_service_error)?
+    {
+        if stored.canonical_request != canonical_request {
+            return Err(AppError::conflict(
+                "backup-series erase already accepted different canonical bytes",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        let outcome = stored.participant_outcome.ok_or_else(|| {
+            AppError::internal("stored backup-series erase outcome is unavailable")
+        })?;
+        let outcome: BackupSeriesEraseOutcome = serde_json::from_value(outcome)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        outcome
+            .validate_for_request(&request)
+            .map_err(|error| AppError::internal(error.to_string()))?;
+        res.status_code(StatusCode::OK);
+        return json_ok(outcome);
+    }
+
+    let (binding, _) = rotation_parts(&transaction)?;
+    if transaction.resource.next_required_step != Some(SecurityTransactionStep::EraseOldMaterial)
+        || transaction.resource.request_digest != request.transaction_request_digest
+        || transaction.resource.prepared_plan_digest != request.prepared_plan_digest
+        || binding.erase_confirmation_digest != request.erase_confirmation_digest
+        || binding.backup_rotations != request.series
+        || request.authorization_lease.actor_id != transaction.resource.principal_id
+        || request.authorization_lease.device_id.as_str() != session.device_id
+        || request.authorization_lease.action != "ak.keys.backup_series.erase"
+        || request.authorization_lease.authorization_rule_id != "realm_admission"
+        || request.authorization_lease.risk_tier != arkret_wire::RiskTier::High
+        || request.authorization_lease.expires_at <= chrono::Utc::now()
+    {
+        return Err(AppError::conflict(
+            "backup-series erase request is not authorized for this transaction",
+        )
+        .with_wire_code("security_transaction_failed_precondition"));
+    }
+    let expected_control_realm = soland_services::identity::principal_control_realm_for_did(
+        transaction.resource.principal_id.as_str(),
+    );
+    if request.authorization_lease.scope_ref.realm_id().as_str() != expected_control_realm.as_str()
+    {
+        return Err(AppError::conflict(
+            "backup-series erase lease is scoped outside principal control",
+        )
+        .with_wire_code("security_transaction_failed_precondition"));
+    }
+    let (expected_authority_ref, expected_authority_policy) =
+        crate::routing::events::event_log::lease_issue::authority_for_scope(
+            state,
+            &request.authorization_lease.scope_ref,
+            &request.authorization_lease.basis_ref,
+            &request.authorization_lease.action,
+            &request.authorization_lease.authorization_rule_id,
+        )?;
+    if request.authorization_lease.authority_set_ref != expected_authority_ref
+        || request.authorization_lease.authority_set_policy != expected_authority_policy
+    {
+        return Err(AppError::new(
+            ErrorCode::CapabilityDenied,
+            "backup-series erase lease authority policy is not current for its basis",
+        )
+        .with_status(StatusCode::FORBIDDEN)
+        .with_wire_code("authorization_lease_basis_mismatch"));
+    }
+    for proof in &request.authorization_lease.proofs {
+        let issuer = arkret_identity::verification_method_did(&proof.verification_method)
+            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        let binding_bytes = request
+            .authorization_lease
+            .proof_binding_bytes(proof)
+            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        crate::jws_verify::verify_jws_ed25519_async(
+            &binding_bytes,
+            &proof.jws,
+            &proof.verification_method,
+            issuer.as_str(),
+            state,
+        )
+        .await
+        .map_err(|error| {
+            AppError::new(ErrorCode::CapabilityDenied, error)
+                .with_status(StatusCode::FORBIDDEN)
+                .with_wire_code("invalid_proof")
+        })?;
+    }
+    for rotation in &binding.backup_rotations {
+        for expected in &rotation.new_backups {
+            let Some(stored) = state
+                .key_backups()
+                .backup(expected.backup_id.as_str())
+                .await
+                .map_err(recovery_service_error)?
+            else {
+                return Err(AppError::conflict(
+                    "replacement backup is missing before old-series erasure",
+                )
+                .with_wire_code("security_transaction_failed_precondition"));
+            };
+            if stored.get("ciphertext_digest").and_then(Value::as_str)
+                != Some(expected.ciphertext_digest.as_str())
+            {
+                return Err(
+                    AppError::conflict("replacement backup digest changed before erasure")
+                        .with_wire_code("security_transaction_failed_precondition"),
+                );
+            }
+        }
+        let active = state
+            .event_queries()
+            .accepted_event(rotation.active_series_event_id.as_str())
+            .await
+            .map_err(recovery_service_error)?;
+        if active.is_none_or(|event| {
+            event.kind != arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
+        }) {
+            return Err(
+                AppError::conflict("replacement active-series Event is not accepted")
+                    .with_wire_code("security_transaction_failed_precondition"),
+            );
+        }
+    }
+
+    let prior_attempt = state
+        .security_transactions()
+        .step_attempt(&transaction_id, SecurityTransactionStep::EraseOldMaterial)
+        .await
+        .map_err(security_transaction_service_error)?
+        .is_some();
+    if !prior_attempt {
+        for rotation in &binding.backup_rotations {
+            for old in &rotation.old_backups {
+                let existing = state
+                    .key_backups()
+                    .backup(old.backup_id.as_str())
+                    .await
+                    .map_err(recovery_service_error)?
+                    .ok_or_else(|| {
+                        AppError::conflict("planned old backup is missing before erasure begins")
+                            .with_wire_code("security_transaction_failed_precondition")
+                    })?;
+                if existing.get("ciphertext_digest").and_then(Value::as_str)
+                    != Some(old.ciphertext_digest.as_str())
+                {
+                    return Err(AppError::conflict(
+                        "planned old backup digest changed before erasure",
+                    )
+                    .with_wire_code("security_transaction_failed_precondition"));
+                }
+            }
+        }
+    }
+    begin_rotation_step(
+        state,
+        &transaction_id,
+        SecurityTransactionStep::EraseOldMaterial,
+        &canonical_request,
+    )
+    .await?;
+
+    let mut series_results = Vec::with_capacity(2);
+    for rotation in &binding.backup_rotations {
+        let mut erased_backups = Vec::new();
+        let mut remaining_backups = Vec::new();
+        for old in &rotation.old_backups {
+            match state
+                .key_backups()
+                .delete_backup(old.backup_id.as_str())
+                .await
+            {
+                Ok(_) => erased_backups.push(old.clone()),
+                Err(_) => remaining_backups.push(old.clone()),
+            }
+        }
+        erased_backups.sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
+        remaining_backups
+            .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
+        let status = if remaining_backups.is_empty() {
+            BackupSeriesEraseResultStatus::Erased
+        } else {
+            BackupSeriesEraseResultStatus::FailedRetryable
+        };
+        series_results.push(BackupSeriesEraseResult {
+            backup_kind: rotation.backup_kind,
+            previous_series_id: rotation.previous_series_id.clone(),
+            new_series_id: rotation.new_series_id.clone(),
+            status,
+            erased_backups,
+            remaining_backups,
+            reason_code: (status == BackupSeriesEraseResultStatus::FailedRetryable)
+                .then_some("storage_temporarily_unavailable".to_owned()),
+        });
+    }
+    let complete = series_results
+        .iter()
+        .all(|result| result.status == BackupSeriesEraseResultStatus::Erased);
+    let confirmation = complete.then(|| BackupSeriesEraseConfirmation {
+        schema: BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA.to_owned(),
+        transaction_id: request.transaction_id.clone(),
+        transaction_request_digest: request.transaction_request_digest.clone(),
+        prepared_plan_digest: request.prepared_plan_digest.clone(),
+        series: request.series.clone(),
+    });
+    let outcome = BackupSeriesEraseOutcome {
+        transaction_id: request.transaction_id.clone(),
+        request_digest: Hash::new(arkret_canonical::canonical_sha256(&request).map_err(
+            |error| AppError::internal(format!("erase request digest failed: {error}")),
+        )?)
+        .map_err(|error| AppError::internal(error.to_string()))?,
+        status: if complete {
+            BackupSeriesEraseStatus::Complete
+        } else {
+            BackupSeriesEraseStatus::Partial
+        },
+        series_results,
+        confirmation,
+    };
+    outcome.validate_for_request(&request).map_err(|error| {
+        AppError::internal(format!("backup-series erase outcome is invalid: {error}"))
+    })?;
+    if !complete {
+        res.status_code(StatusCode::OK);
+        return json_ok(outcome);
+    }
+
+    transaction.resource.accepted_steps.push(AcceptedStep {
+        step: SecurityTransactionStep::EraseOldMaterial,
+        prepared_material_digest: binding.erase_confirmation_digest.clone(),
+        acceptor_id: state.service_id().clone(),
+        output_ref: binding.erase_confirmation_digest.as_str().to_owned(),
+        output_digest: binding.erase_confirmation_digest,
+        accepted_at: chrono::Utc::now(),
+    });
+    transaction.resource.state = SecurityTransactionState::AwaitingDeviceAttestation;
+    transaction.resource.next_required_step = Some(SecurityTransactionStep::LocalCommit);
+    transaction
+        .resource
+        .validate_structural()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let response = serde_json::to_value(&transaction.resource)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let participant_outcome =
+        serde_json::to_value(&outcome).map_err(|error| AppError::internal(error.to_string()))?;
+    state
+        .security_transactions()
+        .accept_step(
+            transaction,
+            SecurityTransactionStepOutcomeState {
+                transaction_id,
+                step: SecurityTransactionStep::EraseOldMaterial,
+                canonical_request,
+                response,
+                participant_outcome: Some(participant_outcome),
+            },
+        )
+        .await
+        .map_err(security_transaction_service_error)?;
+    res.status_code(StatusCode::OK);
+    json_ok(outcome)
+}
+
+async fn continue_rotation_local_commit(
+    state: &AppState,
+    session: &SessionRecord,
+    transaction: SecurityTransactionRecord,
+    request: TypedSecurityTransactionContinueRequest,
+    canonical_request: Vec<u8>,
+    res: &mut Response,
+) -> JsonResult<SecurityTransaction> {
+    let (binding, _) = rotation_parts(&transaction)?;
+    let attestation = request.client_attestation.ok_or_else(|| {
+        AppError::invalid_param("local commit requires client_attestation")
+            .with_wire_code("schema_violation")
+    })?;
+    let arkret_models_crypto::ClientStepAttestationArtifact::SecurityRotationLocalCommit(commit) =
+        &attestation.artifact
+    else {
+        return Err(
+            AppError::invalid_param("local commit requires SecurityRotationLocalCommit")
+                .with_wire_code("schema_violation"),
+        );
+    };
+    if commit.transaction_id != transaction.resource.transaction_id
+        || commit.transaction_request_digest != transaction.resource.request_digest
+        || commit.prepared_plan_digest != transaction.resource.prepared_plan_digest
+        || commit.local_commit_digest != binding.local_commit_digest
+        || commit.erase_confirmation_digest != binding.erase_confirmation_digest
+        || commit.device_id.as_str() != session.device_id
+        || attestation.attestation_digest != canonical_digest(commit)?
+    {
+        return Err(AppError::conflict(
+            "local commit artifact changed the durable rotation binding",
+        )
+        .with_wire_code("security_transaction_failed_precondition"));
+    }
+    let expected_verification_method = format!(
+        "{}#{}",
+        transaction.resource.principal_id, session.device_id
+    );
+    if attestation.auth_data.verification_method != expected_verification_method {
+        return Err(AppError::conflict(
+            "local commit signature is not bound to the session device",
+        )
+        .with_wire_code("security_transaction_failed_precondition"));
+    }
+    let device_key = resolve_session_device_key_for_genesis_policy(
+        state,
+        transaction.resource.principal_id.as_str(),
+        session,
+    )
+    .await?;
+    verify_recovery_device_signature(
+        &device_key,
+        &attestation.auth_data.signature,
+        &attestation
+            .signing_bytes()
+            .map_err(|error| AppError::invalid_param(error.to_string()))?,
+    )?;
+    let transaction_id = transaction.resource.transaction_id.as_str().to_owned();
+    begin_rotation_step(
+        state,
+        &transaction_id,
+        SecurityTransactionStep::LocalCommit,
+        &canonical_request,
+    )
+    .await?;
+    accept_rotation_step(
+        state,
+        transaction,
+        SecurityTransactionStep::LocalCommit,
+        canonical_request,
+        attestation.attestation_digest.clone(),
+        binding.local_commit_digest.as_str().to_owned(),
+        attestation.attestation_digest,
+        Some(serde_json::to_value(commit).map_err(|error| AppError::internal(error.to_string()))?),
+        res,
+    )
+    .await
 }
 
 async fn continue_issue_terminal_receipt(

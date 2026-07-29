@@ -59,6 +59,11 @@ pub trait SecurityTransactionStore: Send + Sync {
         transaction_id: &str,
         step: arkret_wire::SecurityTransactionStep,
     ) -> PersistenceResult<Option<SecurityTransactionStepOutcomeRecord>>;
+    async fn step_attempt(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> PersistenceResult<Option<SecurityTransactionStepAttemptRecord>>;
     /// Durably fixes the first canonical request bytes before a participant
     /// side effect. Identical retries return the first attempt; different
     /// bytes conflict.

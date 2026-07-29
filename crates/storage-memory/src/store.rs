@@ -1,5 +1,7 @@
 //! In-memory implementation of [`PersistenceStore`].
 
+use soland_storage::ProposalMemberReceiptStore;
+
 use super::{
     AccountDataStore, AccountLifecycleStore, AccountLocalpartStore, AccountRecord, AccountStore,
     AgentParticipationStore, AgentStore, AppletStore, Arc, AuditStore, BTreeMap, BlobStore,
@@ -39,6 +41,7 @@ use super::{
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
+use crate::MemoryProposalMemberReceiptStore;
 
 /// In-memory implementation of persistence store.
 pub struct SolandMemoryPersistenceStore {
@@ -106,6 +109,7 @@ pub struct SolandMemoryPersistenceStore {
     notifications: MemoryNotificationStore,
     sync_cursors: MemorySyncCursorStore,
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
+    proposal_member_receipts: MemoryProposalMemberReceiptStore,
 }
 
 impl SolandMemoryPersistenceStore {
@@ -217,6 +221,7 @@ impl SolandMemoryPersistenceStore {
                     MemoryIdempotencyStore::new()
                 }
             },
+            proposal_member_receipts: MemoryProposalMemberReceiptStore::new(),
         }
     }
 
@@ -555,6 +560,10 @@ impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
 
     fn idempotency_keys(&self) -> &dyn IdempotencyStore {
         &self.idempotency_keys
+    }
+
+    fn proposal_member_receipts(&self) -> &dyn ProposalMemberReceiptStore {
+        &self.proposal_member_receipts
     }
 }
 

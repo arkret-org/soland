@@ -39,12 +39,13 @@ pub(crate) use soland_storage::{
     PeerEventsPageQuery, PeerKeyPackageClaimAttempt, PeerKeyPackageClaimAttemptResult,
     PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, PersistenceError,
     PersistenceResult, PolicyDocumentRecord, PolicyDocumentStore, ProjectionEventAppendOutcome,
-    ProjectionEventRecord, ProjectionEventStore, PublicationEvidenceRecord,
-    PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore, RealmEventStats,
-    RealmInviteRecord, RealmInviteStore, RealmModerationPolicyRecord, RealmModerationPolicyStore,
-    RealmOrganizationStatementRecord, RealmOrganizationStatementStore, RealmOrganizationStore,
-    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
-    RetentionPolicyRecord, RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
+    ProjectionEventRecord, ProjectionEventStore, ProposalMemberReceiptRecord,
+    ProposalMemberReceiptStore, PublicationEvidenceRecord, PublicationEvidenceStore,
+    PushBridgeCacheStore, PushDeviceStore, RealmEventStats, RealmInviteRecord, RealmInviteStore,
+    RealmModerationPolicyRecord, RealmModerationPolicyStore, RealmOrganizationStatementRecord,
+    RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyRecord,
+    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, RetentionPolicyRecord,
+    RetentionPolicyStore, RetentionTombstoneRecord, RetentionTombstoneStore,
     SIGNAL_RELAY_MAX_PER_REALM, SINGLETON_ID, SecurityTransactionRecord,
     SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
     SecurityTransactionStore, ServiceIdentityStore, ServiceRegistrationCommitOutcome,
@@ -98,6 +99,7 @@ mod notifications;
 mod organization_registration;
 mod policy;
 mod projection;
+mod proposal_receipts;
 mod publication_evidence;
 mod push;
 mod realm_invites;
@@ -138,6 +140,7 @@ pub use notifications::*;
 pub use organization_registration::*;
 pub use policy::*;
 pub use projection::*;
+pub use proposal_receipts::*;
 pub use publication_evidence::*;
 pub use push::*;
 pub use realm_invites::*;

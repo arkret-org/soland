@@ -1302,13 +1302,15 @@ pub(super) async fn submit_event_value_with_context(
                     "submitted Control Proposal receipt does not bind the Event basis authority",
                 ));
             }
-            receipt.validate_structural(policy).map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_precondition",
-                    format!("submitted Control Proposal receipt is invalid: {error}"),
-                )
-            })?;
+            crate::control_proposal::verify_control_proposal_receipt(state, event, receipt, policy)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        format!("submitted Control Proposal receipt is invalid: {error}"),
+                    )
+                })?;
             Some(receipt.clone())
         } else {
             Some(

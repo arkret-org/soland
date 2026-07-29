@@ -76,7 +76,7 @@ pub(super) async fn issue_control_proposal_receipt(
             .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
     let verification_method = format!("{}#notary-key", state.service_id());
-    let idempotency_key = format!(
+    let receipt_key = format!(
         "proposal-receipt:{}:{}:{}",
         proposal_digest.as_str(),
         authority_set_ref.as_str(),
@@ -91,7 +91,7 @@ pub(super) async fn issue_control_proposal_receipt(
     })?;
     match state
         .jobs()
-        .idempotency_record(&session.actor, &idempotency_key)
+        .proposal_member_receipt(&receipt_key)
         .await
         .map_err(|error| {
             AppError::new(
@@ -156,15 +156,11 @@ pub(super) async fn issue_control_proposal_receipt(
     let created_at = now();
     state
         .jobs()
-        .store_idempotency_record(soland_services::jobs::IdempotencyState {
-            principal_id: session.actor,
-            idempotency_key,
-            service_id: state.service_id().clone(),
-            request_hash,
-            response_status: StatusCode::OK.as_u16() as i32,
+        .store_proposal_member_receipt(soland_services::jobs::ProposalMemberReceiptState {
+            receipt_key: receipt_key.clone(),
+            request_hash: request_hash.clone(),
             response_body,
             created_at,
-            expires_at: created_at + chrono::Duration::hours(72),
         })
         .await
         .map_err(|error| {
@@ -173,5 +169,29 @@ pub(super) async fn issue_control_proposal_receipt(
                 format!("proposal receipt replay persist failed: {error}"),
             )
         })?;
-    json_ok(outcome)
+    let accepted = state
+        .jobs()
+        .proposal_member_receipt(&receipt_key)
+        .await
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("proposal receipt replay verification failed: {error}"),
+            )
+        })?
+        .ok_or_else(|| AppError::internal("proposal receipt first outcome was not persisted"))?;
+    if accepted.request_hash != request_hash {
+        return Err(AppError::new(
+            ErrorCode::DuplicateConflict,
+            "proposal receipt identity was concurrently used with different request bytes",
+        )
+        .with_status(StatusCode::CONFLICT));
+    }
+    json_ok(
+        serde_json::from_value(accepted.response_body).map_err(|error| {
+            AppError::internal(format!(
+                "stored proposal receipt outcome is invalid: {error}"
+            ))
+        })?,
+    )
 }

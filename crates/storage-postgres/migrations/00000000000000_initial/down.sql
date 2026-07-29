@@ -93,6 +93,7 @@ DROP TABLE IF EXISTS spaces CASCADE;
 DROP TABLE IF EXISTS sync_cursor_handles CASCADE;
 DROP TABLE IF EXISTS sync_cursor_revocations CASCADE;
 DROP TABLE IF EXISTS idempotency_keys CASCADE;
+DROP TABLE IF EXISTS proposal_member_receipts CASCADE;
 DROP TABLE IF EXISTS webrtc_sessions CASCADE;
 DROP TABLE IF EXISTS service_identity_registrations CASCADE;
 DROP TABLE IF EXISTS service_identity CASCADE;

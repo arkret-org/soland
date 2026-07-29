@@ -541,6 +541,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    proposal_member_receipts (receipt_key) {
+        receipt_key -> Text,
+        request_hash -> Text,
+        response_body -> Jsonb,
+        created_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     invite_locators (locator_id) {
         locator_id -> Text,
         token_digest -> Text,

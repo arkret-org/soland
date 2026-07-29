@@ -56,6 +56,7 @@ use policy_endpoints::*;
 mod session_endpoints;
 use session_endpoints::*;
 mod security_transaction_endpoints;
+pub(super) use security_transaction_endpoints::backup_series_erase_command;
 use security_transaction_endpoints::*;
 mod signatures;
 use signatures::*;

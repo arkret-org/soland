@@ -890,6 +890,39 @@ impl crate::jobs::MaintenancePort for PersistenceMaintenance {
             .await?;
         Ok(())
     }
+
+    async fn proposal_member_receipt(
+        &self,
+        receipt_key: &str,
+    ) -> crate::ServiceResult<Option<crate::jobs::ProposalMemberReceiptState>> {
+        Ok(self
+            .0
+            .proposal_member_receipts()
+            .get(receipt_key)
+            .await?
+            .map(|record| crate::jobs::ProposalMemberReceiptState {
+                receipt_key: record.receipt_key,
+                request_hash: record.request_hash,
+                response_body: record.response_body,
+                created_at: record.created_at,
+            }))
+    }
+
+    async fn store_proposal_member_receipt(
+        &self,
+        record: crate::jobs::ProposalMemberReceiptState,
+    ) -> crate::ServiceResult<()> {
+        self.0
+            .proposal_member_receipts()
+            .record(&soland_storage::ProposalMemberReceiptRecord {
+                receipt_key: record.receipt_key,
+                request_hash: record.request_hash,
+                response_body: record.response_body,
+                created_at: record.created_at,
+            })
+            .await?;
+        Ok(())
+    }
 }
 
 fn application_idempotency(

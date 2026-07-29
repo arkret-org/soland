@@ -12,6 +12,7 @@ use super::{
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
     OrganizationRegistrationTerminalReason, ProjectionEventRecord, ProjectionEventStore,
+    ProposalMemberReceiptRecord, ProposalMemberReceiptStore,
 };
 
 fn database_timestamp_now() -> chrono::DateTime<Utc> {
@@ -636,6 +637,45 @@ pub async fn assert_idempotency_store_contract(store: &dyn IdempotencyStore, nam
             .expect("read first-writer response"),
         Some(first),
         "the first response must win a duplicate-key race"
+    );
+}
+
+pub async fn assert_proposal_member_receipt_store_contract(
+    store: &dyn ProposalMemberReceiptStore,
+    namespace: &str,
+) {
+    let first = ProposalMemberReceiptRecord {
+        receipt_key: format!("proposal-member-receipt:{namespace}"),
+        request_hash: "sha256:first".to_owned(),
+        response_body: serde_json::json!({"member_receipt": "first"}),
+        created_at: database_timestamp_now(),
+    };
+    store
+        .record(&first)
+        .await
+        .expect("record first member receipt");
+    assert_eq!(
+        store
+            .get(&first.receipt_key)
+            .await
+            .expect("read first member receipt"),
+        Some(first.clone())
+    );
+
+    let mut competing = first.clone();
+    competing.request_hash = "sha256:competing".to_owned();
+    competing.response_body = serde_json::json!({"member_receipt": "competing"});
+    store
+        .record(&competing)
+        .await
+        .expect("record competing member receipt");
+    assert_eq!(
+        store
+            .get(&first.receipt_key)
+            .await
+            .expect("read winning member receipt"),
+        Some(first),
+        "proposal member receipts are permanent first-writer-wins evidence"
     );
 }
 

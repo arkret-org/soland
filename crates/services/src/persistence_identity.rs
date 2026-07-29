@@ -1694,6 +1694,19 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
             .map(application_security_transaction_step_outcome))
     }
 
+    async fn step_attempt(
+        &self,
+        transaction_id: &str,
+        step: arkret_wire::SecurityTransactionStep,
+    ) -> crate::ServiceResult<Option<crate::identity::SecurityTransactionStepAttemptState>> {
+        Ok(self
+            .0
+            .security_transactions()
+            .step_attempt(transaction_id, step)
+            .await?
+            .map(application_security_transaction_step_attempt))
+    }
+
     async fn begin_step(
         &self,
         attempt: crate::identity::SecurityTransactionStepAttemptState,

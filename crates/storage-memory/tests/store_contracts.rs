@@ -1,6 +1,6 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_event_commit_unit_of_work_contract,
-    assert_idempotency_store_contract,
+    assert_idempotency_store_contract, assert_proposal_member_receipt_store_contract,
 };
 use soland_storage::{
     EventProjectionStoreRegistry, FederationGovernanceStoreRegistry, SyncStoreRegistry,
@@ -11,6 +11,16 @@ use soland_storage_memory::SolandMemoryPersistenceStore;
 async fn memory_adapter_satisfies_shared_idempotency_contract() {
     let store = SolandMemoryPersistenceStore::new();
     assert_idempotency_store_contract(store.idempotency_keys(), "memory-contract").await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_proposal_member_receipt_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_proposal_member_receipt_store_contract(
+        store.proposal_member_receipts(),
+        "memory-contract",
+    )
+    .await;
 }
 
 #[tokio::test]

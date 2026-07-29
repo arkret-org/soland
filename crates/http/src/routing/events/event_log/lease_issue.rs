@@ -81,61 +81,27 @@ pub(super) async fn issue_authorization_leases(
         }
         None => {}
     }
-    if request.events.is_empty() || request.events.len() > MAX_EVENT_SUBMIT_BATCH {
+    let target_count = request.events.len() + request.intents.len();
+    if target_count == 0
+        || target_count > MAX_EVENT_SUBMIT_BATCH
+        || (!request.events.is_empty() && !request.intents.is_empty())
+    {
         return Err(AppError::new(
             ErrorCode::SchemaViolation,
-            format!("authorization lease issuance requires 1..={MAX_EVENT_SUBMIT_BATCH} Events"),
+            format!(
+                "authorization lease issuance requires exactly one non-empty events or intents array with at most {MAX_EVENT_SUBMIT_BATCH} entries"
+            ),
         )
         .with_status(StatusCode::BAD_REQUEST));
     }
 
-    let context = anchor_context(&request.events)?;
-    let bootstrap_contexts = context
-        .as_ref()
-        .map(|value| vec![value.bootstrap_context.clone()])
-        .unwrap_or_default();
-    for event in &request.events {
-        let envelope = serde_json::to_value(event).map_err(|error| {
-            AppError::new(
-                ErrorCode::SchemaViolation,
-                format!("authorization lease Event cannot be encoded: {error}"),
-            )
-            .with_status(StatusCode::BAD_REQUEST)
-        })?;
-        validate_event_envelope_with_context(state, &session, &envelope, &bootstrap_contexts, None)
-            .await
-            .map_err(|error| {
-                AppError::new(ErrorCode::PolicyViolation, error.message).with_status(error.status)
-            })?;
-    }
-
-    let anchor_basis = context.map(|value| value.basis);
     let issued_at = now();
     let expires_at = issued_at + chrono::Duration::minutes(LEASE_TTL_MINUTES);
-    let mut leases = Vec::with_capacity(request.events.len());
-    for event in &request.events {
-        let basis_ref = match &anchor_basis {
-            Some(basis) => LeaseBasisRef::AnchorUnit(AnchorUnitLeaseBasisRef {
-                anchor_unit: basis.clone(),
-            }),
-            None => event_basis(event)?,
-        };
-        let (action, risk_tier) = publication_action(event.kind.as_str());
-        let (authority_set_ref, authority_set_policy) =
-            realm_admission_authority(state, event, &basis_ref, &action)?;
-        leases.push(sign_lease(
-            state,
-            &session,
-            event,
-            basis_ref,
-            action,
-            risk_tier,
-            authority_set_ref,
-            authority_set_policy,
-            issued_at,
-            expires_at,
-        )?);
-    }
+    let leases = if request.intents.is_empty() {
+        issue_event_leases(state, &session, &request.events, issued_at, expires_at).await?
+    } else {
+        issue_intent_leases(state, &session, &request.intents, issued_at, expires_at).await?
+    };
     let outcome = arkret_wire::AuthorizationLeaseIssueOutcome {
         authorization_leases: leases,
     };
@@ -166,6 +132,158 @@ pub(super) async fn issue_authorization_leases(
             )
         })?;
     json_ok(outcome)
+}
+
+async fn issue_event_leases(
+    state: &AppState,
+    session: &SessionRecord,
+    events: &[Event],
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<AuthorizationLease>, AppError> {
+    let context = anchor_context(events)?;
+    let bootstrap_contexts = context
+        .as_ref()
+        .map(|value| vec![value.bootstrap_context.clone()])
+        .unwrap_or_default();
+    for event in events {
+        let envelope = serde_json::to_value(event).map_err(|error| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("authorization lease Event cannot be encoded: {error}"),
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+        validate_event_envelope_with_context(state, session, &envelope, &bootstrap_contexts, None)
+            .await
+            .map_err(|error| {
+                AppError::new(ErrorCode::PolicyViolation, error.message).with_status(error.status)
+            })?;
+    }
+    let anchor_basis = context.map(|value| value.basis);
+    let mut leases = Vec::with_capacity(events.len());
+    for event in events {
+        let basis_ref = match &anchor_basis {
+            Some(basis) => LeaseBasisRef::AnchorUnit(AnchorUnitLeaseBasisRef {
+                anchor_unit: basis.clone(),
+            }),
+            None => event_basis(event)?,
+        };
+        let (action, risk_tier) = publication_action(event.kind.as_str());
+        let (authority_set_ref, authority_set_policy) =
+            realm_admission_authority(state, event, &basis_ref, &action)?;
+        leases.push(sign_lease(
+            state,
+            session,
+            event,
+            basis_ref,
+            action,
+            risk_tier,
+            authority_set_ref,
+            authority_set_policy,
+            issued_at,
+            expires_at,
+        )?);
+    }
+    Ok(leases)
+}
+
+async fn issue_intent_leases(
+    state: &AppState,
+    session: &SessionRecord,
+    intents: &[arkret_wire::AuthorizationLeaseIssueIntent],
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<AuthorizationLease>, AppError> {
+    let actor_id = arkret_wire::Did::new(session.actor.clone()).map_err(|error| {
+        AppError::new(
+            ErrorCode::PolicyViolation,
+            format!("session actor DID is invalid: {error}"),
+        )
+        .with_status(StatusCode::FORBIDDEN)
+    })?;
+    let device_id = arkret_wire::DeviceId::new(session.device_id.clone()).map_err(|error| {
+        AppError::new(
+            ErrorCode::PolicyViolation,
+            format!("session device id is invalid: {error}"),
+        )
+        .with_status(StatusCode::FORBIDDEN)
+    })?;
+    let expected_realm =
+        soland_services::identity::principal_control_realm_for_did(actor_id.as_str());
+    let mut leases = Vec::with_capacity(intents.len());
+    for intent in intents {
+        let descriptor = arkret_schema::capability_action(&intent.action).ok_or_else(|| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                "authorization lease intent action is not registered",
+            )
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+        let expected_risk = match descriptor.risk_tier {
+            arkret_schema::CapabilityRiskTier::Low => RiskTier::Low,
+            arkret_schema::CapabilityRiskTier::Medium => RiskTier::Medium,
+            arkret_schema::CapabilityRiskTier::High => RiskTier::High,
+        };
+        if !descriptor.target_event_kinds.is_empty()
+            || intent.risk_tier != expected_risk
+            || intent.authorization_rule_id != "realm_admission"
+            || intent.scope_ref.realm_id().as_str() != expected_realm
+        {
+            return Err(AppError::new(
+                ErrorCode::CapabilityDenied,
+                "authorization lease intent is not a matching principal-control non-Event action",
+            )
+            .with_status(StatusCode::FORBIDDEN));
+        }
+        match &intent.basis_ref {
+            LeaseBasisRef::Seal(seal_id) => {
+                let seal = state
+                    .projections()
+                    .seal_by_id(seal_id)
+                    .map_err(|error| AppError::internal(error.to_string()))?
+                    .ok_or_else(|| {
+                        AppError::conflict("authorization lease intent basis is not accepted")
+                            .with_wire_code("authorization_lease_basis_mismatch")
+                    })?;
+                if seal.realm_id != *intent.scope_ref.realm_id() {
+                    return Err(AppError::conflict(
+                        "authorization lease intent basis is in another Realm",
+                    )
+                    .with_wire_code("authorization_lease_basis_mismatch"));
+                }
+            }
+            _ => {
+                return Err(AppError::new(
+                    ErrorCode::SchemaViolation,
+                    "non-Event authorization lease intent requires an accepted Seal basis",
+                )
+                .with_status(StatusCode::BAD_REQUEST));
+            }
+        }
+        let (authority_set_ref, authority_set_policy) = authority_for_scope(
+            state,
+            &intent.scope_ref,
+            &intent.basis_ref,
+            &intent.action,
+            &intent.authorization_rule_id,
+        )?;
+        leases.push(sign_lease_fields(
+            state,
+            actor_id.clone(),
+            device_id.clone(),
+            intent.scope_ref.clone(),
+            intent.basis_ref.clone(),
+            intent.action.clone(),
+            intent.authorization_rule_id.clone(),
+            intent.risk_tier,
+            authority_set_ref,
+            authority_set_policy,
+            issued_at,
+            expires_at,
+        )?);
+    }
+    Ok(leases)
 }
 
 struct AnchorIssueContext {
@@ -332,6 +450,22 @@ fn realm_admission_authority(
     basis_ref: &LeaseBasisRef,
     action: &str,
 ) -> Result<(AuthoritySetRef, AuthoritySetPolicy), AppError> {
+    authority_for_scope(
+        state,
+        &event.scope_ref,
+        basis_ref,
+        action,
+        "realm_admission",
+    )
+}
+
+pub(crate) fn authority_for_scope(
+    state: &AppState,
+    scope_ref: &arkret_wire::ScopeRef,
+    basis_ref: &LeaseBasisRef,
+    action: &str,
+    authorization_rule_id: &str,
+) -> Result<(AuthoritySetRef, AuthoritySetPolicy), AppError> {
     // Publication admission and Seal notarization are distinct authorities.
     // The concrete policy freezes the exact accepted basis, scope, action and
     // service verification method that performed the full pre-admission pass.
@@ -362,7 +496,7 @@ fn realm_admission_authority(
         schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
         policy_kind: AuthoritySetPolicyKind::RealmAdmission,
-        scope_ref: event.scope_ref.clone(),
+        scope_ref: scope_ref.clone(),
         source: AuthoritySetPolicySource {
             source_kind: AuthoritySetSourceKind::RealmControl,
             source_ref: format!("basis:{}", source_digest.as_str()),
@@ -370,7 +504,7 @@ fn realm_admission_authority(
             generation_ref: format!("basis:{}", basis_generation_ref(basis_ref)),
         },
         authorization_rules: vec![AuthoritySetAuthorizationRule {
-            rule_id: "realm_admission".to_owned(),
+            rule_id: authorization_rule_id.to_owned(),
             issuer_role: AuthoritySetIssuerRole::RealmAdmission,
             allowed_actions: vec![action.to_owned()],
             issuers: vec![AuthoritySetIssuer {
@@ -410,6 +544,43 @@ fn sign_lease(
     issued_at: chrono::DateTime<chrono::Utc>,
     expires_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<AuthorizationLease, AppError> {
+    sign_lease_fields(
+        state,
+        event.actor_id.clone(),
+        arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(|error| {
+            AppError::new(
+                ErrorCode::PolicyViolation,
+                format!("session device id is invalid: {error}"),
+            )
+            .with_status(StatusCode::FORBIDDEN)
+        })?,
+        event.scope_ref.clone(),
+        basis_ref,
+        action,
+        "realm_admission".to_owned(),
+        risk_tier,
+        authority_set_ref,
+        authority_set_policy,
+        issued_at,
+        expires_at,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn sign_lease_fields(
+    state: &AppState,
+    actor_id: arkret_wire::Did,
+    device_id: arkret_wire::DeviceId,
+    scope_ref: arkret_wire::ScopeRef,
+    basis_ref: LeaseBasisRef,
+    action: String,
+    authorization_rule_id: String,
+    risk_tier: RiskTier,
+    authority_set_ref: AuthoritySetRef,
+    authority_set_policy: AuthoritySetPolicy,
+    issued_at: chrono::DateTime<chrono::Utc>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+) -> Result<AuthorizationLease, AppError> {
     let mut lease = AuthorizationLease {
         authorization_lease_id: arkret_identifiers::AuthorizationLeaseId::new(
             crate::ids::generate("authorization_lease"),
@@ -421,19 +592,11 @@ fn sign_lease(
             )
         })?,
         basis_ref,
-        actor_id: event.actor_id.clone(),
-        device_id: arkret_identifiers::DeviceId::new(session.device_id.clone()).map_err(
-            |error| {
-                AppError::new(
-                    ErrorCode::PolicyViolation,
-                    format!("session device id is invalid: {error}"),
-                )
-                .with_status(StatusCode::FORBIDDEN)
-            },
-        )?,
-        scope_ref: event.scope_ref.clone(),
+        actor_id,
+        device_id,
+        scope_ref,
         action,
-        authorization_rule_id: "realm_admission".to_owned(),
+        authorization_rule_id,
         risk_tier,
         issued_at,
         expires_at,

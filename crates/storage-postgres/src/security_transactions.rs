@@ -487,6 +487,15 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
         load_step_outcome(&mut conn, transaction_id, step).await
     }
 
+    async fn step_attempt(
+        &self,
+        transaction_id: &str,
+        step: SecurityTransactionStep,
+    ) -> PersistenceResult<Option<SecurityTransactionStepAttemptRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        load_step_attempt(&mut conn, transaction_id, step).await
+    }
+
     async fn begin_step(
         &self,
         attempt: SecurityTransactionStepAttemptRecord,
