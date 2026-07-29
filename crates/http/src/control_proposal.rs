@@ -2,7 +2,7 @@ use arkret_identifiers::{Hash, RealmId};
 use arkret_wire::{
     AuthoritySetRef, ControlProposalDecision, ControlProposalDecisionPolicy,
     ControlProposalDeferReason, ControlProposalReceipt, ControlProposalReceiptKind,
-    ControlProposalRejectReason, Event, PayloadSignature,
+    ControlProposalRejectReason, Event, PayloadSignature, ProposalMemberReceipt,
 };
 use chrono::Duration;
 use serde::Deserialize;
@@ -17,6 +17,8 @@ struct RealmCreateProposalPolicyPayload {
 #[derive(Deserialize)]
 struct RealmCreateProposalPolicy {
     id: RealmId,
+    #[serde(default)]
+    receipt_sla_ms: Option<u64>,
     #[serde(default)]
     proposal_decision_window_ms: Option<u64>,
     #[serde(default)]
@@ -49,6 +51,10 @@ fn policy_from_realm_create(
             .map_err(|_| format!("{field} exceeds the signed duration range"))
     };
     let policy = ControlProposalDecisionPolicy {
+        receipt_sla: Some(duration_from_ms(
+            payload.object.receipt_sla_ms.unwrap_or(86_400_000),
+            "receipt_sla_ms",
+        )?),
         decision_window: duration_from_ms(
             payload.object.proposal_decision_window_ms.unwrap_or(30_000),
             "proposal_decision_window_ms",
@@ -105,35 +111,42 @@ pub(crate) fn mint_control_proposal_receipt(
     policy: ControlProposalDecisionPolicy,
 ) -> Result<ControlProposalReceipt, String> {
     policy.validate().map_err(|error| error.to_string())?;
-    let mut receipt = ControlProposalReceipt {
-        kind: ControlProposalReceiptKind::ProposalReceipt,
+    let mut member_receipt = ProposalMemberReceipt {
         realm_id,
         proposal_digest,
         received_at,
         decision_due_at: received_at + policy.decision_window,
         absolute_due_at: received_at + policy.absolute_horizon,
-        defer_count: 0,
-        authority_set_ref,
-        receipt_coordinator: arkret_identifiers::Did::new(state.service_id().to_owned())
-            .map_err(|error| error.to_string())?,
-        signatures: vec![PayloadSignature {
+        authority_set_ref: authority_set_ref.authority_set_digest,
+        signature: PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: format!("{}#notary-key", state.service_id()),
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: received_at,
             jws: String::new(),
-        }],
+        },
     };
-    let bytes = receipt
+    let bytes = member_receipt
         .canonical_bytes_for_signature()
         .map_err(|error| error.to_string())?;
-    receipt.signatures[0].payload_digest = receipt
-        .receipt_digest()
+    member_receipt.signature.payload_digest = member_receipt
+        .member_digest()
         .map_err(|error| error.to_string())?;
-    receipt.signatures[0].jws =
+    member_receipt.signature.jws =
         arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
             .map_err(|error| error.to_string())?;
+    let receipt = ControlProposalReceipt {
+        kind: ControlProposalReceiptKind::ProposalReceipt,
+        realm_id: member_receipt.realm_id.clone(),
+        proposal_digest: member_receipt.proposal_digest.clone(),
+        received_at: member_receipt.received_at,
+        decision_due_at: member_receipt.decision_due_at,
+        absolute_due_at: member_receipt.absolute_due_at,
+        defer_count: 0,
+        authority_set_ref: member_receipt.authority_set_ref.clone(),
+        member_receipts: vec![member_receipt],
+    };
     receipt
         .validate_structural(policy)
         .map_err(|error| error.to_string())?;
@@ -218,7 +231,7 @@ pub(crate) fn sign_control_proposal_reject(
             .map_err(|_| "proposal defer count overflow".to_owned())?,
         reason_code,
         authority_set_ref: receipt.authority_set_ref.clone(),
-        signatures: vec![PayloadSignature {
+        proofs: vec![PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: format!("{}#notary-key", state.service_id()),
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
@@ -233,9 +246,9 @@ pub(crate) fn sign_control_proposal_reject(
     let digest = decision
         .decision_digest()
         .map_err(|error| error.to_string())?;
-    if let ControlProposalDecision::SignedReject { signatures, .. } = &mut decision {
-        signatures[0].payload_digest = digest;
-        signatures[0].jws =
+    if let ControlProposalDecision::SignedReject { proofs, .. } = &mut decision {
+        proofs[0].payload_digest = digest;
+        proofs[0].jws =
             arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
                 .map_err(|error| error.to_string())?;
     }
@@ -275,7 +288,7 @@ pub(crate) fn sign_control_proposal_defer(
         defer_count,
         reason_code,
         authority_set_ref: receipt.authority_set_ref.clone(),
-        signatures: vec![PayloadSignature {
+        proofs: vec![PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: format!("{}#notary-key", state.service_id()),
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
@@ -290,9 +303,9 @@ pub(crate) fn sign_control_proposal_defer(
     let digest = decision
         .decision_digest()
         .map_err(|error| error.to_string())?;
-    if let ControlProposalDecision::SignedDefer { signatures, .. } = &mut decision {
-        signatures[0].payload_digest = digest;
-        signatures[0].jws =
+    if let ControlProposalDecision::SignedDefer { proofs, .. } = &mut decision {
+        proofs[0].payload_digest = digest;
+        proofs[0].jws =
             arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())
                 .map_err(|error| error.to_string())?;
     }

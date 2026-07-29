@@ -1084,31 +1084,14 @@ async fn continue_submit_reanchor_unit(
             "prepared re-anchor publication changed a reserved Event id or digest",
         ));
     }
-    authority_outcome
-        .control_proposal_receipt
-        .validate_structural(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
-        .map_err(|error| {
-            AppError::internal(format!(
-                "recovery authority proposal receipt is invalid: {error}"
-            ))
-        })?;
-    if authority_outcome.control_proposal_receipt.realm_id != authorized_event.realm_id
-        || authority_outcome.control_proposal_receipt.proposal_digest != authorized_event_digest
-        || authority_outcome.control_proposal_receipt.authority_set_ref
-            != plan.authorize_event_publication_intent.authority_set_ref
-    {
-        return Err(AppError::internal(
-            "recovery authority proposal receipt changed the Event or authority binding",
-        ));
-    }
     let authorize_submission = arkret_wire::EventInitialSubmission {
         event: authorized_event,
         authorization_lease: authority_outcome.authorization_lease,
         cba_proof_bundles: authority_outcome.cba_proof_bundles,
-        control_proposal_receipt: Some(authority_outcome.control_proposal_receipt),
+        control_proposal_receipt: None,
     };
     authorize_submission
-        .validate_structural()
+        .validate_structural_in_context(arkret_wire::EventSubmitContext::AnchorUnit)
         .map_err(|error| {
             AppError::internal(format!(
                 "prepared authorize Event publication evidence is invalid: {error}"
