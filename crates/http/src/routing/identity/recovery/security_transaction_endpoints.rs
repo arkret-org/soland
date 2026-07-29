@@ -1240,6 +1240,12 @@ async fn continue_issue_terminal_receipt(
             AppError::conflict("bound recovery session has no verified proof summary")
                 .with_wire_code("security_transaction_failed_precondition")
         })?;
+    if recovery_session.created_at != receipt.started_at {
+        return Err(AppError::conflict(
+            "terminal recovery receipt started_at does not match the verified recovery session",
+        )
+        .with_wire_code("security_transaction_failed_precondition"));
+    }
     if recovery_session.state != "verified"
         || recovery_session.transaction_id.as_deref()
             != Some(transaction.resource.transaction_id.as_str())
@@ -1248,7 +1254,6 @@ async fn continue_issue_terminal_receipt(
         || recovery_session.policy_id != receipt.policy_id.as_str()
         || u64::from(recovery_session.policy_version) != receipt.policy_version
         || recovery_session.trust_domain != receipt.trust_domain.as_str()
-        || recovery_session.created_at != receipt.started_at
         || recovery_proof_summary.kind != receipt.proof_summary.kind
         || recovery_proof_summary.proof_digest != receipt.proof_summary.proof_digest
     {

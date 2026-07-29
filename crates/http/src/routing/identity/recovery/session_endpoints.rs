@@ -662,7 +662,7 @@ pub(super) async fn recovery_session_create(
             ))
         })?;
 
-    let now = chrono::Utc::now();
+    let now = arkret_canonical::normalize_timestamp_canonical(chrono::Utc::now());
     let record = RecoverySessionServiceState {
         recovery_session_id: crate::ids::generate("recovery_session"),
         principal_id: principal.clone(),
