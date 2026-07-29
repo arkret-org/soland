@@ -1,4 +1,5 @@
 use arkret_event_draft::Operation;
+use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use serde_json::{Value, json};
 use soland_services::identity::{AccountDataCasOutcome, AccountDataState};
 use soland_services::operation_semantics as kinds;
@@ -86,6 +87,63 @@ pub(super) fn actor_private_read_cursor_matches_origin(
         return false;
     }
     true
+}
+
+pub(super) async fn read_cursor_reducer_context_operation(
+    state: &AppState,
+    operation: &Operation,
+) -> Option<Operation> {
+    if kinds::canonical_kind_string(operation)
+        != arkret_wire::events::EventKind::READ_CURSOR_ADVANCE
+    {
+        return None;
+    }
+    let actor_id = operation.payload.get("actor_id")?.as_str()?;
+    let read_scope: arkret_wire::ReadCursorScope =
+        serde_json::from_value(operation.payload.get("read_scope")?.clone()).ok()?;
+    let candidate_event_id = operation
+        .payload
+        .get("position")?
+        .get("event_id")?
+        .as_str()?;
+    let current_event_id = {
+        let projection = state.projections().snapshot();
+        projection
+            .read_cursors
+            .values()
+            .find(|marker| {
+                marker.actor_id == actor_id
+                    && marker.realm_id == operation.realm_id.as_str()
+                    && marker.read_scope == read_scope
+            })
+            .map(|marker| marker.position.event_id.to_string())
+    }?;
+    let relation = match state.event_queries().canonical_events().await {
+        Ok(records) => soland_services::events::read_cursor_causal_relation(
+            &records,
+            &current_event_id,
+            candidate_event_id,
+        ),
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                current_event_id,
+                candidate_event_id,
+                "read cursor causal closure lookup failed; preserving current projection"
+            );
+            ReadCursorCausalRelation::Undecidable
+        }
+    };
+    let relation = match relation {
+        ReadCursorCausalRelation::CandidateDominatesCurrent => "candidate_dominates_current",
+        ReadCursorCausalRelation::CurrentDominatesCandidate => "current_dominates_candidate",
+        ReadCursorCausalRelation::Concurrent => "concurrent",
+        ReadCursorCausalRelation::Undecidable => "undecidable",
+    };
+    let mut contextual = operation.clone();
+    contextual.payload[crate::routing::events::READ_CURSOR_CAUSAL_RELATION_CONTEXT] =
+        Value::String(relation.to_owned());
+    Some(contextual)
 }
 
 pub(super) async fn project_account_data_set(

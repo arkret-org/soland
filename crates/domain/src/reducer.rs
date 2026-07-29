@@ -66,7 +66,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use arkret_event_draft::Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
-use arkret_models_collaboration::objects::read_receipts::ReadCursorPosition as ReadCursorPositionWire;
+use arkret_models_collaboration::objects::read_receipts::{
+    ReadCursorCausalRelation, ReadCursorPosition as ReadCursorPositionWire,
+};
 use arkret_state::lattice::CellState;
 use arkret_wire::ReadCursorScope as ReadScopeWire;
 use arkret_wire::cba::ProjectedCellWrite;
@@ -75,6 +77,7 @@ use serde_json::Value;
 use crate::hlc::ServerHlc;
 
 pub const CHILD_ORDER_CELL_FAMILY: &str = "ak.component.child_order.v1";
+pub const READ_CURSOR_CAUSAL_RELATION_CONTEXT: &str = "read_cursor_causal_relation";
 
 fn projection_context_stripped_payload(payload: &Value) -> Value {
     let mut wire_payload = payload.clone();
@@ -89,6 +92,7 @@ fn projection_context_stripped_payload(payload: &Value) -> Value {
             "seal_basis",
             "preconditions",
             "accepted_event_id",
+            READ_CURSOR_CAUSAL_RELATION_CONTEXT,
         ] {
             object.remove(field);
         }

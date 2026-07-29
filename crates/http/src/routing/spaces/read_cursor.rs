@@ -73,29 +73,50 @@ pub(super) async fn set_read_cursor(
         .map_err(|error| {
             AppError::new(ErrorCode::Conflict, error.to_string()).with_status(StatusCode::CONFLICT)
         })?;
-    fanout_actor_private_update(
-        state,
-        &session.actor,
-        &session.device_id,
-        READ_MARKER_UPDATE_TYPE,
-        json!({
-            "schema": "ak.schema.read_cursor.v1",
-            "actor_id": actor_id,
-            "device_id": device_id,
-            "realm_id": realm_id,
-            "read_scope": body.read_scope.clone(),
-            "position": body.position.clone(),
-            "updated_at": read_at_wire,
-        }),
-    )
-    .await;
+    let marker = {
+        let projection = state.projections().snapshot();
+        projection
+            .read_cursors
+            .values()
+            .find(|marker| {
+                marker.actor_id == session.actor
+                    && marker.realm_id == realm_id.as_str()
+                    && marker.read_scope == body.read_scope
+            })
+            .cloned()
+    }
+    .ok_or_else(|| AppError::internal("accepted read cursor was not projected"))?;
+    let candidate_won = marker.device_id == session.device_id
+        && marker.position == body.position
+        && marker.updated_at == read_at;
+    if candidate_won {
+        fanout_actor_private_update(
+            state,
+            &session.actor,
+            &session.device_id,
+            READ_MARKER_UPDATE_TYPE,
+            json!({
+                "schema": "ak.schema.read_cursor.v1",
+                "actor_id": marker.actor_id,
+                "device_id": marker.device_id,
+                "realm_id": marker.realm_id,
+                "read_scope": marker.read_scope,
+                "position": marker.position,
+                "updated_at": marker.updated_at,
+            }),
+        )
+        .await;
+    }
     json_ok(ReadMarkerOutcome {
-        realm_id: realm_id.clone(),
-        actor_id,
-        device_id,
-        read_scope: body.read_scope,
-        position: body.position,
-        updated_at: read_at,
+        realm_id: RealmId::new(marker.realm_id)
+            .map_err(|e| AppError::invalid_param(format!("stored realm_id: {e}")))?,
+        actor_id: Did::new(marker.actor_id)
+            .map_err(|e| AppError::invalid_param(format!("stored actor_id: {e}")))?,
+        device_id: DeviceId::new(marker.device_id)
+            .map_err(|e| AppError::invalid_param(format!("stored device_id: {e}")))?,
+        read_scope: marker.read_scope,
+        position: marker.position,
+        updated_at: marker.updated_at,
     })
 }
 

@@ -7,6 +7,7 @@ use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScopeKind,
 };
 use arkret_models_collaboration::governance::invite_addressing::PrincipalLocatorDisplayHint;
+use arkret_models_collaboration::objects::read_receipts::ReadCursorCausalRelation;
 use arkret_wire::EventBatchReceipt;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -373,6 +374,251 @@ pub struct AcceptedEvent {
 }
 
 pub type CanonicalEventRecord = AcceptedEvent;
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CausalReachability {
+    Reachable,
+    CompleteUnreachable,
+    Incomplete,
+}
+
+/// Determine the Decision 0017 causal relation between two read-cursor
+/// position Events from the receiver's canonical Event closure.
+///
+/// `Concurrent` is returned only when both reverse reachability walks are
+/// complete. Any missing Event, digest edge, explicit `after` reference, or
+/// materialized message reference keeps the relation `Undecidable`.
+pub fn read_cursor_causal_relation(
+    records: &[CanonicalEventRecord],
+    current_event_id: &str,
+    candidate_event_id: &str,
+) -> ReadCursorCausalRelation {
+    if current_event_id == candidate_event_id {
+        return ReadCursorCausalRelation::Concurrent;
+    }
+    let graph = CanonicalCausalGraph::new(records);
+    let candidate_to_current = graph.reaches(candidate_event_id, current_event_id);
+    let current_to_candidate = graph.reaches(current_event_id, candidate_event_id);
+    match (candidate_to_current, current_to_candidate) {
+        (CausalReachability::Reachable, CausalReachability::Reachable) => {
+            ReadCursorCausalRelation::Undecidable
+        }
+        (CausalReachability::Reachable, _) => ReadCursorCausalRelation::CandidateDominatesCurrent,
+        (_, CausalReachability::Reachable) => ReadCursorCausalRelation::CurrentDominatesCandidate,
+        (CausalReachability::CompleteUnreachable, CausalReachability::CompleteUnreachable) => {
+            ReadCursorCausalRelation::Concurrent
+        }
+        _ => ReadCursorCausalRelation::Undecidable,
+    }
+}
+
+struct CanonicalCausalGraph<'a> {
+    by_event_id: BTreeMap<&'a str, &'a CanonicalEventRecord>,
+    event_id_by_digest: BTreeMap<&'a str, &'a str>,
+    event_id_by_message_id: BTreeMap<String, &'a str>,
+}
+
+impl<'a> CanonicalCausalGraph<'a> {
+    fn new(records: &'a [CanonicalEventRecord]) -> Self {
+        let by_event_id = records
+            .iter()
+            .map(|record| (record.event_id.as_str(), record))
+            .collect();
+        let event_id_by_digest = records
+            .iter()
+            .map(|record| (record.canonical_digest.as_str(), record.event_id.as_str()))
+            .collect();
+        let event_id_by_message_id = records
+            .iter()
+            .filter(|record| record.kind == arkret_wire::events::EventKind::MESSAGE_CREATE)
+            .map(|record| {
+                let message_id = record
+                    .envelope
+                    .get("payload")
+                    .and_then(|payload| payload.get("message_id"))
+                    .and_then(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .unwrap_or_else(|| record.event_id.replacen("ak:event:", "ak:message:", 1));
+                (message_id, record.event_id.as_str())
+            })
+            .collect();
+        Self {
+            by_event_id,
+            event_id_by_digest,
+            event_id_by_message_id,
+        }
+    }
+
+    fn reaches(&self, start: &str, target: &str) -> CausalReachability {
+        let mut pending = vec![start.to_owned()];
+        let mut visited = BTreeSet::new();
+        let mut complete = true;
+        while let Some(event_id) = pending.pop() {
+            if !visited.insert(event_id.clone()) {
+                continue;
+            }
+            let Some(record) = self.by_event_id.get(event_id.as_str()).copied() else {
+                complete = false;
+                continue;
+            };
+            let (predecessors, record_complete) = self.predecessors(record);
+            complete &= record_complete;
+            for predecessor in predecessors {
+                if predecessor == target {
+                    return CausalReachability::Reachable;
+                }
+                if !visited.contains(&predecessor) {
+                    pending.push(predecessor);
+                }
+            }
+        }
+        if complete {
+            CausalReachability::CompleteUnreachable
+        } else {
+            CausalReachability::Incomplete
+        }
+    }
+
+    fn predecessors(&self, record: &CanonicalEventRecord) -> (BTreeSet<String>, bool) {
+        let mut predecessors = BTreeSet::new();
+        let mut complete = true;
+        collect_string_array(
+            record.envelope.get("prev_refs"),
+            &mut predecessors,
+            &mut complete,
+        );
+        if let Some(refs) = record.envelope.get("refs") {
+            let Some(refs) = refs.as_array() else {
+                return (predecessors, false);
+            };
+            for event_ref in refs {
+                if event_ref.get("role").and_then(Value::as_str) != Some("after") {
+                    continue;
+                }
+                let Some(id) = event_ref.get("id").and_then(Value::as_str) else {
+                    complete = false;
+                    continue;
+                };
+                if let Some(event_id) = self.resolve_event_reference(id) {
+                    predecessors.insert(event_id);
+                } else {
+                    complete = false;
+                }
+            }
+        }
+        if let Some(causal_refs) = record.envelope.get("causal_refs") {
+            let Some(causal_refs) = causal_refs.as_array() else {
+                return (predecessors, false);
+            };
+            for digest in causal_refs {
+                let Some(digest) = digest.as_str() else {
+                    complete = false;
+                    continue;
+                };
+                if let Some(event_id) = self.event_id_by_digest.get(digest) {
+                    predecessors.insert((*event_id).to_owned());
+                } else {
+                    complete = false;
+                }
+            }
+        }
+        if let Some(payload) = record.envelope.get("payload") {
+            self.collect_materialized_payload_edges(payload, &mut predecessors, &mut complete);
+        }
+        predecessors.remove(record.event_id.as_str());
+        (predecessors, complete)
+    }
+
+    fn collect_materialized_payload_edges(
+        &self,
+        value: &Value,
+        predecessors: &mut BTreeSet<String>,
+        complete: &mut bool,
+    ) {
+        let Some(object) = value.as_object() else {
+            return;
+        };
+        for (field, field_value) in object {
+            if matches!(
+                field.as_str(),
+                "replies_to"
+                    | "revision_of"
+                    | "target_event_id"
+                    | "target_message_id"
+                    | "in_reply_to"
+            ) || (field == "target_ref"
+                && field_value
+                    .as_str()
+                    .is_some_and(|id| id.starts_with("ak:event:") || id.starts_with("ak:message:")))
+            {
+                self.collect_resolved_references(field_value, predecessors, complete);
+            } else if field == "basis_event_ids" {
+                collect_string_array(Some(field_value), predecessors, complete);
+            }
+            if field_value.is_object() {
+                self.collect_materialized_payload_edges(field_value, predecessors, complete);
+            }
+        }
+    }
+
+    fn collect_resolved_references(
+        &self,
+        value: &Value,
+        predecessors: &mut BTreeSet<String>,
+        complete: &mut bool,
+    ) {
+        let references = match value {
+            Value::String(value) => vec![value.as_str()],
+            Value::Array(values) => values.iter().filter_map(Value::as_str).collect(),
+            Value::Object(object) => object
+                .get("id")
+                .and_then(Value::as_str)
+                .into_iter()
+                .collect(),
+            _ => Vec::new(),
+        };
+        if references.is_empty() {
+            *complete = false;
+        }
+        for reference in references {
+            if let Some(event_id) = self.resolve_event_reference(reference) {
+                predecessors.insert(event_id);
+            } else {
+                *complete = false;
+            }
+        }
+    }
+
+    fn resolve_event_reference(&self, reference: &str) -> Option<String> {
+        if reference.starts_with("ak:event:") {
+            Some(reference.to_owned())
+        } else if reference.starts_with("ak:message:") {
+            self.event_id_by_message_id
+                .get(reference)
+                .map(|event_id| (*event_id).to_owned())
+        } else {
+            None
+        }
+    }
+}
+
+fn collect_string_array(value: Option<&Value>, output: &mut BTreeSet<String>, complete: &mut bool) {
+    let Some(value) = value else {
+        return;
+    };
+    let Some(values) = value.as_array() else {
+        *complete = false;
+        return;
+    };
+    for value in values {
+        if let Some(value) = value.as_str() {
+            output.insert(value.to_owned());
+        } else {
+            *complete = false;
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct ProjectedEvent {
     pub event_id: String,
@@ -1663,6 +1909,123 @@ mod tests {
     use async_trait::async_trait;
 
     use super::*;
+
+    fn causal_record(
+        suffix: u32,
+        digest_suffix: u32,
+        prev_refs: &[u32],
+        causal_refs: &[u32],
+        payload: Value,
+    ) -> AcceptedEvent {
+        let event_id = |value: u32| format!("ak:event:01964137-0000-7000-8000-{value:012x}");
+        AcceptedEvent {
+            event_id: event_id(suffix),
+            actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),
+            actor_seq: u64::from(suffix),
+            realm_id: Some("ak:realm:01964137-0000-7000-8000-000000000001".to_owned()),
+            kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
+            schema_id: "ak.schema.message.v1".to_owned(),
+            canonical_digest: format!("sha256:{digest_suffix:064x}"),
+            canonical_bytes: Vec::new(),
+            envelope: serde_json::json!({
+                "prev_refs": prev_refs.iter().map(|value| event_id(*value)).collect::<Vec<_>>(),
+                "causal_refs": causal_refs
+                    .iter()
+                    .map(|value| format!("sha256:{value:064x}"))
+                    .collect::<Vec<_>>(),
+                "refs": [],
+                "payload": payload,
+            }),
+            received_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn read_cursor_relation_follows_event_edges_not_hlc() {
+        let records = vec![
+            causal_record(1, 1, &[], &[], serde_json::json!({})),
+            causal_record(2, 2, &[1], &[], serde_json::json!({})),
+        ];
+        assert_eq!(
+            read_cursor_causal_relation(
+                &records,
+                records[0].event_id.as_str(),
+                records[1].event_id.as_str(),
+            ),
+            ReadCursorCausalRelation::CandidateDominatesCurrent
+        );
+        assert_eq!(
+            read_cursor_causal_relation(
+                &records,
+                records[1].event_id.as_str(),
+                records[0].event_id.as_str(),
+            ),
+            ReadCursorCausalRelation::CurrentDominatesCandidate
+        );
+    }
+
+    #[test]
+    fn read_cursor_relation_resolves_digest_and_message_edges() {
+        let first = causal_record(
+            1,
+            1,
+            &[],
+            &[],
+            serde_json::json!({
+                "message_id": "ak:message:01964137-0000-7000-8000-000000000001"
+            }),
+        );
+        let by_digest = causal_record(2, 2, &[], &[1], serde_json::json!({}));
+        let reply = causal_record(
+            3,
+            3,
+            &[],
+            &[],
+            serde_json::json!({
+                "replies_to": "ak:message:01964137-0000-7000-8000-000000000001"
+            }),
+        );
+        let records = vec![first, by_digest, reply];
+        for candidate in [&records[1], &records[2]] {
+            assert_eq!(
+                read_cursor_causal_relation(
+                    &records,
+                    records[0].event_id.as_str(),
+                    candidate.event_id.as_str(),
+                ),
+                ReadCursorCausalRelation::CandidateDominatesCurrent
+            );
+        }
+    }
+
+    #[test]
+    fn read_cursor_relation_requires_complete_closure_for_concurrency() {
+        let complete = vec![
+            causal_record(1, 1, &[], &[], serde_json::json!({})),
+            causal_record(2, 2, &[], &[], serde_json::json!({})),
+        ];
+        assert_eq!(
+            read_cursor_causal_relation(
+                &complete,
+                complete[0].event_id.as_str(),
+                complete[1].event_id.as_str(),
+            ),
+            ReadCursorCausalRelation::Concurrent
+        );
+
+        let incomplete = vec![
+            causal_record(1, 1, &[99], &[], serde_json::json!({})),
+            causal_record(2, 2, &[], &[], serde_json::json!({})),
+        ];
+        assert_eq!(
+            read_cursor_causal_relation(
+                &incomplete,
+                incomplete[0].event_id.as_str(),
+                incomplete[1].event_id.as_str(),
+            ),
+            ReadCursorCausalRelation::Undecidable
+        );
+    }
 
     struct RecordingCommitter;
 

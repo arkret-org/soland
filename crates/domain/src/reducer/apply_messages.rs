@@ -886,23 +886,19 @@ impl ProjectionState {
             updated_at: now,
         };
         let key = (realm_id, actor_id, read_scope_key(&read_scope));
-        // Convergence per read-receipts.md §3.2 / §6.5: same actor/scope across
-        // devices merges by HLC-max, with device_id as the lexicographic
-        // tiebreaker on equal HLC. position.hlc is a required, schema-validated
-        // field, so the merge never falls back to the server-receive clock.
-        let dominated = self
-            .read_cursors
-            .get(&key)
-            .is_some_and(|existing| read_cursor_dominates(existing, &marker));
-        if !dominated {
-            self.read_cursors.insert(key, marker.clone());
-            self.observe_message_read_for_expiry(
-                &marker.actor_id,
-                marker.position.event_id.as_str(),
-                marker.position.hlc.as_str(),
-                now,
-            );
+        if let Some(existing) = self.read_cursors.get(&key) {
+            let relation = read_cursor_causal_relation(operation);
+            if !read_cursor_candidate_wins(existing, &marker, relation) {
+                return ProjectionEffect::Ignored;
+            }
         }
+        self.read_cursors.insert(key, marker.clone());
+        self.observe_message_read_for_expiry(
+            &marker.actor_id,
+            marker.position.event_id.as_str(),
+            marker.position.hlc.as_str(),
+            now,
+        );
         ProjectionEffect::ReadMarkerUpdated(marker)
     }
 
@@ -989,20 +985,37 @@ impl ProjectionState {
     }
 }
 
-/// Whether the already-stored read marker dominates the incoming one for the
-/// same `(realm_id, actor_id, scope)` key. Convergence follows
-/// read-receipts.md §3.2 / §6.5: HLC-max wins; on equal HLC the larger
-/// `device_id` (lexicographic) wins as the actor-internal tiebreaker. The HLC
-/// string format (`<ts>-<counter>-<node>`, fixed-width lowercase hex) is
-/// monotonic under lexicographic comparison, so byte ordering matches HLC
-/// ordering.
-fn read_cursor_dominates(existing: &ReadMarkerState, incoming: &ReadMarkerState) -> bool {
-    let existing_hlc = existing.position.hlc.as_str();
-    let incoming_hlc = incoming.position.hlc.as_str();
-    match existing_hlc.cmp(incoming_hlc) {
-        std::cmp::Ordering::Greater => true,
-        std::cmp::Ordering::Less => false,
-        std::cmp::Ordering::Equal => existing.device_id >= incoming.device_id,
+fn read_cursor_causal_relation(operation: &Operation) -> ReadCursorCausalRelation {
+    match operation
+        .payload
+        .get(READ_CURSOR_CAUSAL_RELATION_CONTEXT)
+        .and_then(Value::as_str)
+    {
+        Some("candidate_dominates_current") => ReadCursorCausalRelation::CandidateDominatesCurrent,
+        Some("current_dominates_candidate") => ReadCursorCausalRelation::CurrentDominatesCandidate,
+        Some("concurrent") => ReadCursorCausalRelation::Concurrent,
+        _ => ReadCursorCausalRelation::Undecidable,
+    }
+}
+
+/// Decision 0017 / read-receipts.md §6.5. Missing relation context is
+/// deliberately undecidable and preserves the current durable projection.
+fn read_cursor_candidate_wins(
+    current: &ReadMarkerState,
+    candidate: &ReadMarkerState,
+    relation: ReadCursorCausalRelation,
+) -> bool {
+    match relation {
+        ReadCursorCausalRelation::CandidateDominatesCurrent => true,
+        ReadCursorCausalRelation::CurrentDominatesCandidate
+        | ReadCursorCausalRelation::Undecidable => false,
+        ReadCursorCausalRelation::Concurrent => {
+            match candidate.position.hlc.cmp(&current.position.hlc) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => candidate.device_id > current.device_id,
+            }
+        }
     }
 }
 

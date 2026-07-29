@@ -38,7 +38,8 @@ pub struct ProjectionState {
     /// Saved items remain holder-private account-data and never enter this
     /// shared Realm cache.
     pub pins: BTreeMap<(String, String), PinProjection>,
-    /// Read markers keyed by (realm_id, actor, scope_id). LWW.
+    /// Read markers keyed by (realm_id, actor, scope_id). Causal-first merge;
+    /// HLC/device ordering applies only to causally concurrent positions.
     pub read_cursors: BTreeMap<(String, String, String), ReadMarkerState>,
     /// Disappearing-message read-trigger anchors keyed by message event_id.
     /// The projection stores only the accepted aggregate anchor, never the
