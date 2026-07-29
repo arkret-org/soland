@@ -98,6 +98,7 @@ diesel::table! {
         pairing_request_id -> Nullable<Text>,
         paired_pairing_request_id -> Nullable<Text>,
         paired_request_digest -> Nullable<Text>,
+        pending_pairing_commit_intent -> Nullable<Jsonb>,
         pairing_code -> Nullable<Text>,
         pairing_expires_at -> Nullable<Timestamptz>,
         approval_request_id -> Nullable<Text>,

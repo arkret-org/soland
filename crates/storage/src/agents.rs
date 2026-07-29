@@ -52,6 +52,15 @@ pub struct AgentRuntimeActivation {
     pub authorized_at: chrono::DateTime<chrono::Utc>,
 }
 #[derive(Clone, Debug)]
+pub struct AgentPairingCommitIntent {
+    pub agent_id: String,
+    pub approval_request_id: OpaqueLocalId,
+    pub runtime_key_binding_digest: String,
+    pub pairing_request_id: OpaqueLocalId,
+    pub request_digest: String,
+    pub authorize_event_id: String,
+}
+#[derive(Clone, Debug)]
 pub struct AgentRuntimeApprovalWrite {
     pub agent_id: String,
     pub pairing_request_id: OpaqueLocalId,
@@ -88,6 +97,13 @@ pub trait AgentStore: Send + Sync {
         &self,
         activation: &AgentRuntimeActivation,
     ) -> PersistenceResult<bool>;
+    /// Durably bind the one open pairing handle to the exact final request
+    /// before Event admission. Exact retries are idempotent; a different
+    /// request or Event id cannot replace an existing intent.
+    async fn put_pairing_commit_intent_if_compatible(
+        &self,
+        intent: &AgentPairingCommitIntent,
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>>;
     /// Clear the retained approval/notification correlation only after the
     /// terminal account-notification delta is durable. Retaining it across the
     /// activation write makes a crash between those writes reconcilable.

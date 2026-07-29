@@ -32,6 +32,7 @@ pub(crate) struct AgentPrincipalRow {
     pub pairing_request_id: Option<String>,
     pub paired_pairing_request_id: Option<String>,
     pub paired_request_digest: Option<String>,
+    pub pending_pairing_commit_intent: Option<Value>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<String>,
@@ -83,6 +84,15 @@ impl TryFrom<AgentPrincipalRecord> for AgentPrincipalRow {
                 .paired_pairing_request_id
                 .map(OpaqueLocalId::into_string),
             paired_request_digest: record.paired_request_digest,
+            pending_pairing_commit_intent: record
+                .pending_pairing_commit_intent
+                .map(serde_json::to_value)
+                .transpose()
+                .map_err(|error| {
+                    PersistenceError::Internal(format!(
+                        "encode pending Agent pairing commit intent: {error}"
+                    ))
+                })?,
             pairing_code: record.pairing_code,
             pairing_expires_at: record.pairing_expires_at,
             approval_request_id: record.approval_request_id.map(OpaqueLocalId::into_string),
@@ -157,6 +167,15 @@ impl TryFrom<AgentPrincipalRow> for AgentPrincipalRecord {
                 "paired_pairing_request_id",
             )?,
             paired_request_digest: row.paired_request_digest,
+            pending_pairing_commit_intent: row
+                .pending_pairing_commit_intent
+                .map(serde_json::from_value)
+                .transpose()
+                .map_err(|error| {
+                    PersistenceError::SchemaViolation(format!(
+                        "stored pending Agent pairing commit intent is invalid: {error}"
+                    ))
+                })?,
             pairing_code: row.pairing_code,
             pairing_expires_at: row.pairing_expires_at,
             approval_request_id: parse_opaque_local_id(

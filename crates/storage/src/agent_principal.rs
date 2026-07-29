@@ -7,6 +7,12 @@ use chrono::{DateTime, Utc};
 use serde_json::Value;
 use uuid::Uuid;
 
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PendingAgentPairingCommitIntent {
+    pub request_digest: String,
+    pub authorize_event_id: String,
+}
+
 /// Durable projection of a managed Agent principal.
 ///
 /// The controller, PCR, and controller-authorization fields form the immutable
@@ -27,6 +33,7 @@ pub struct AgentPrincipalRecord {
     pub pairing_request_id: Option<OpaqueLocalId>,
     pub paired_pairing_request_id: Option<OpaqueLocalId>,
     pub paired_request_digest: Option<String>,
+    pub pending_pairing_commit_intent: Option<PendingAgentPairingCommitIntent>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<OpaqueLocalId>,
@@ -71,6 +78,7 @@ impl AgentPrincipalRecord {
             pairing_request_id: None,
             paired_pairing_request_id: None,
             paired_request_digest: None,
+            pending_pairing_commit_intent: None,
             pairing_code: None,
             pairing_expires_at: None,
             approval_request_id: None,

@@ -347,6 +347,11 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(public_key_digest) = agent_record.runtime_public_key_digest.clone() else {
         return Ok(agent_record);
     };
+    let Some(pending_commit_intent) = agent_record.pending_pairing_commit_intent.clone() else {
+        return Ok(agent_record);
+    };
+    let paired_request_digest = pending_commit_intent.request_digest;
+    let pending_authorize_event_id = pending_commit_intent.authorize_event_id;
     let expected_realm_id = agent_record.principal_control_realm_id.clone();
     let expected_authorization_ref = agent_record.controller_authorization_ref.clone();
     let expected_request_digest = pairing_request_binding_digest(
@@ -365,7 +370,10 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             AppError::internal(format!("authorization reconciliation failed: {error}"))
         })?;
     let accepted = events.into_iter().find(|event| {
-        if event.kind != "ak.agent.key.authorize" || event.actor_id != agent_id {
+        if event.event_id != pending_authorize_event_id
+            || event.kind != "ak.agent.key.authorize"
+            || event.actor_id != agent_id
+        {
             return false;
         }
         let envelope = &event.envelope;
@@ -407,8 +415,6 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(accepted) = accepted else {
         return Ok(agent_record);
     };
-    let paired_request_digest =
-        paired_request_digest_from_record_event(&agent_record, &accepted.envelope)?;
     let signing_key_binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding =
         accepted
             .envelope
@@ -697,6 +703,55 @@ pub(super) async fn agent_key_pair(
         chrono::Utc::now(),
     )
     .await?;
+    let commit_intent = soland_services::identity::RecordAgentPairingCommitIntentCommand {
+        agent_id: agent_id.to_owned(),
+        approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
+            pairing_failed_precondition("agent pairing approval metadata is incomplete")
+        })?,
+        runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().ok_or_else(
+            || pairing_failed_precondition("agent runtime key binding metadata is incomplete"),
+        )?,
+        pairing_request_id: body.pairing_request_id.clone(),
+        request_digest: paired_request_digest.clone(),
+        authorize_event_id: event_id.to_owned(),
+    };
+    let committed = state
+        .agent_pairings()
+        .record_pairing_commit_intent(&commit_intent)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "agent pairing commit intent persist failed: {error}"
+            ))
+        })?;
+    if committed.is_none() {
+        let current = state
+            .agent_pairings()
+            .agent(agent_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "agent pairing commit intent reload failed: {error}"
+                ))
+            })?;
+        if current.as_ref().is_some_and(|record| {
+            record
+                .pending_pairing_commit_intent
+                .as_ref()
+                .is_some_and(|intent| {
+                    intent.request_digest != paired_request_digest
+                        || intent.authorize_event_id != event_id
+                })
+        }) {
+            return Err(AppError::conflict(
+                "pairing handle is already bound to a different final request",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        return Err(pairing_failed_precondition(
+            "runtime approval was already consumed or changed",
+        ));
+    }
     let authorize_event_value = serde_json::to_value(&body.authorize_event.event)
         .map_err(|error| AppError::invalid_param(format!("authorize_event invalid: {error}")))?;
     let authorized_at = chrono::Utc::now();
@@ -1366,30 +1421,6 @@ fn agent_key_pair_request_digest(body: &AgentKeyPairRequestBody) -> Result<Strin
     let canonical = arkret_canonical::canonical_json_bytes(&value).map_err(|error| {
         AppError::invalid_param(format!("pairing request canonicalization failed: {error}"))
     })?;
-    Ok(arkret_canonical::sha256_digest(&canonical))
-}
-
-fn paired_request_digest_from_record_event(
-    agent_record: &AgentPrincipalRecord,
-    authorize_event: &Value,
-) -> Result<String, AppError> {
-    let request = agent_record.runtime_key_request.as_ref().ok_or_else(|| {
-        AppError::internal("accepted Agent authorization has no persisted runtime request")
-    })?;
-    let mut request = serde_json::to_value(request)
-        .map_err(|error| {
-            AppError::internal(format!("persisted runtime request encode failed: {error}"))
-        })?
-        .as_object()
-        .cloned()
-        .ok_or_else(|| AppError::internal("typed runtime request did not encode as an object"))?;
-    request.insert("authorize_event".to_owned(), authorize_event.clone());
-    let canonical =
-        arkret_canonical::canonical_json_bytes(&Value::Object(request)).map_err(|error| {
-            AppError::internal(format!(
-                "accepted pairing request canonicalization failed: {error}"
-            ))
-        })?;
     Ok(arkret_canonical::sha256_digest(&canonical))
 }
 

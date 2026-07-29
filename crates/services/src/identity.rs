@@ -1042,6 +1042,22 @@ pub struct ActivateAgentRuntimeCommand {
     pub authorized_at: DateTime<Utc>,
 }
 
+#[derive(Clone, Debug)]
+pub struct RecordAgentPairingCommitIntentCommand {
+    pub agent_id: String,
+    pub approval_request_id: OpaqueLocalId,
+    pub runtime_key_binding_digest: String,
+    pub pairing_request_id: OpaqueLocalId,
+    pub request_digest: String,
+    pub authorize_event_id: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentPairingCommitIntentState {
+    pub request_digest: String,
+    pub authorize_event_id: String,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentPairingState {
     pub id: String,
@@ -1058,6 +1074,7 @@ pub struct AgentPairingState {
     pub pairing_request_id: Option<OpaqueLocalId>,
     pub paired_pairing_request_id: Option<OpaqueLocalId>,
     pub paired_request_digest: Option<String>,
+    pub pending_pairing_commit_intent: Option<AgentPairingCommitIntentState>,
     pub pairing_code: Option<String>,
     pub pairing_expires_at: Option<DateTime<Utc>>,
     pub approval_request_id: Option<OpaqueLocalId>,
@@ -1137,6 +1154,7 @@ impl AgentPairingState {
             pairing_request_id: None,
             paired_pairing_request_id: None,
             paired_request_digest: None,
+            pending_pairing_commit_intent: None,
             pairing_code: None,
             pairing_expires_at: None,
             approval_request_id: None,
@@ -1404,6 +1422,10 @@ pub trait AgentPairingPort: Send + Sync {
         &self,
         command: &ActivateAgentRuntimeCommand,
     ) -> ServiceResult<bool>;
+    async fn record_pairing_commit_intent(
+        &self,
+        command: &RecordAgentPairingCommitIntentCommand,
+    ) -> ServiceResult<Option<AgentPairingState>>;
     async fn clear_approval_notification_if_current(
         &self,
         agent_id: &str,
@@ -2087,6 +2109,13 @@ impl AgentPairingService {
         command: &ActivateAgentRuntimeCommand,
     ) -> ServiceResult<bool> {
         self.pairing.activate_runtime_if_current(command).await
+    }
+
+    pub async fn record_pairing_commit_intent(
+        &self,
+        command: &RecordAgentPairingCommitIntentCommand,
+    ) -> ServiceResult<Option<AgentPairingState>> {
+        self.pairing.record_pairing_commit_intent(command).await
     }
 
     pub async fn clear_approval_notification(
@@ -3304,6 +3333,13 @@ mod tests {
             command: &ActivateAgentRuntimeCommand,
         ) -> ServiceResult<bool> {
             Ok(command.pairing_request_id.as_str() == "pairing-1")
+        }
+
+        async fn record_pairing_commit_intent(
+            &self,
+            _command: &RecordAgentPairingCommitIntentCommand,
+        ) -> ServiceResult<Option<AgentPairingState>> {
+            Ok(None)
         }
 
         async fn clear_approval_notification_if_current(

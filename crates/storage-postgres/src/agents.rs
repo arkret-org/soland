@@ -4,10 +4,10 @@ use diesel::{
 };
 
 use super::{
-    AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow, AgentRuntimeActivation,
-    AgentRuntimeApprovalWrite, AgentStore, Array, Bool, Jsonb, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text,
-    Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow,
+    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentStore, Array, Bool, Jsonb, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
+    SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn, sql_query,
 };
 use crate::schema::agent_principals;
 #[derive(QueryableByName)]
@@ -323,6 +323,10 @@ impl AgentStore for PgAgentStore {
                     "encode typed Agent signing-key binding: {error}"
                 ))
             })?;
+        let pending_intent = serde_json::json!({
+            "request_digest": activation.paired_request_digest,
+            "authorize_event_id": activation.authorized_event_ref,
+        });
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&activation.agent_id))
@@ -337,7 +341,8 @@ impl AgentStore for PgAgentStore {
                 )
                 .filter(
                     agent_principals::pairing_request_id.eq(activation.pairing_request_id.as_str()),
-                ),
+                )
+                .filter(agent_principals::pending_pairing_commit_intent.eq(&pending_intent)),
         )
         .set((
             // Runtime key activation records the authorization; it is not a
@@ -352,6 +357,7 @@ impl AgentStore for PgAgentStore {
             agent_principals::authorized_signing_key_binding.eq(&authorized_signing_key_binding),
             agent_principals::paired_pairing_request_id.eq(activation.pairing_request_id.as_str()),
             agent_principals::paired_request_digest.eq(&activation.paired_request_digest),
+            agent_principals::pending_pairing_commit_intent.eq(None::<Value>),
             agent_principals::runtime_key_request.eq(None::<Value>),
             agent_principals::approval_requested_at.eq(None::<chrono::DateTime<chrono::Utc>>),
             agent_principals::runtime_key_binding_digest.eq(None::<String>),
@@ -362,6 +368,51 @@ impl AgentStore for PgAgentStore {
         .await
         .map(|rows| rows == 1)
         .map_err(PersistenceError::database)
+    }
+
+    async fn put_pairing_commit_intent_if_compatible(
+        &self,
+        intent: &AgentPairingCommitIntent,
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        let intent_value = serde_json::json!({
+            "request_digest": intent.request_digest,
+            "authorize_event_id": intent.authorize_event_id,
+        });
+        let record = diesel::update(
+            agent_principals::table
+                .filter(agent_principals::id.eq(&intent.agent_id))
+                .filter(agent_principals::state.eq_any(["active", "paused"]))
+                .filter(
+                    agent_principals::approval_request_id.eq(intent.approval_request_id.as_str()),
+                )
+                .filter(
+                    agent_principals::runtime_key_binding_digest
+                        .eq(&intent.runtime_key_binding_digest),
+                )
+                .filter(agent_principals::pairing_request_id.eq(intent.pairing_request_id.as_str()))
+                .filter(
+                    agent_principals::paired_pairing_request_id
+                        .is_distinct_from(intent.pairing_request_id.as_str()),
+                )
+                .filter(
+                    agent_principals::pending_pairing_commit_intent
+                        .is_null()
+                        .or(agent_principals::pending_pairing_commit_intent.eq(&intent_value)),
+                ),
+        )
+        .set((
+            agent_principals::pending_pairing_commit_intent.eq(&intent_value),
+            agent_principals::updated_at.eq(Utc::now()),
+        ))
+        .returning(AgentPrincipalRow::as_returning())
+        .get_result::<AgentPrincipalRow>(&mut *conn)
+        .await
+        .optional()
+        .map_err(PersistenceError::database)?;
+        record.map(TryInto::try_into).transpose()
     }
 
     async fn clear_runtime_approval_notification_if_current(

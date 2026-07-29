@@ -1,8 +1,9 @@
 #[cfg(feature = "fault-injection")]
 use super::Arc;
 use super::{
-    AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
-    AgentRuntimeApprovalWrite, AgentStore, Mutex, PersistenceError, PersistenceResult, Utc, Value,
+    AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord,
+    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentStore, Mutex,
+    PendingAgentPairingCommitIntent, PersistenceError, PersistenceResult, Utc, Value,
     agent_participation_record_key, async_trait, ids,
 };
 #[derive(Default)]
@@ -177,6 +178,13 @@ impl AgentStore for MemoryAgentStore {
             || record.runtime_key_binding_digest.as_deref()
                 != Some(&activation.runtime_key_binding_digest)
             || record.pairing_request_id.as_deref() != Some(&activation.pairing_request_id)
+            || record
+                .pending_pairing_commit_intent
+                .as_ref()
+                .is_none_or(|intent| {
+                    intent.request_digest != activation.paired_request_digest
+                        || intent.authorize_event_id != activation.authorized_event_ref
+                })
         {
             return Ok(false);
         }
@@ -192,6 +200,7 @@ impl AgentStore for MemoryAgentStore {
             Some(activation.authorized_signing_key_binding.clone());
         record.paired_pairing_request_id = Some(activation.pairing_request_id.clone());
         record.paired_request_digest = Some(activation.paired_request_digest.clone());
+        record.pending_pairing_commit_intent = None;
         // Keep the approval and notification ids until the terminal account
         // delta is durable. They are internal correlation state and are not
         // exposed for an active/paused Agent. A retry can therefore finish the
@@ -202,6 +211,42 @@ impl AgentStore for MemoryAgentStore {
         record.runtime_public_key_digest = None;
         record.runtime_attestation_digest = None;
         Ok(true)
+    }
+
+    async fn put_pairing_commit_intent_if_compatible(
+        &self,
+        intent: &AgentPairingCommitIntent,
+    ) -> PersistenceResult<Option<AgentPrincipalRecord>> {
+        let mut guard = self.data.lock();
+        let Some(record) = guard.get_mut(&intent.agent_id) else {
+            return Ok(None);
+        };
+        if record.approval_request_id.as_deref() != Some(&intent.approval_request_id)
+            || !matches!(
+                record.state,
+                arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+                    | arkret_models_collaboration::agent_operations::AgentLifecycleState::Paused
+            )
+            || record.runtime_key_binding_digest.as_deref()
+                != Some(&intent.runtime_key_binding_digest)
+            || record.pairing_request_id.as_deref() != Some(&intent.pairing_request_id)
+            || record.paired_pairing_request_id.as_deref() == Some(&intent.pairing_request_id)
+            || record
+                .pending_pairing_commit_intent
+                .as_ref()
+                .is_some_and(|existing| {
+                    existing.request_digest != intent.request_digest
+                        || existing.authorize_event_id != intent.authorize_event_id
+                })
+        {
+            return Ok(None);
+        }
+        record.pending_pairing_commit_intent = Some(PendingAgentPairingCommitIntent {
+            request_digest: intent.request_digest.clone(),
+            authorize_event_id: intent.authorize_event_id.clone(),
+        });
+        record.updated_at = Utc::now();
+        Ok(Some(record.clone()))
     }
 
     async fn clear_runtime_approval_notification_if_current(
@@ -267,5 +312,151 @@ impl AgentStore for MemoryAgentStore {
         record.runtime_key_request = Some(write.runtime_key_request.clone());
         record.updated_at = Utc::now();
         Ok(Some(record.clone()))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+    use arkret_wire::{DidUrl, OpaqueLocalId};
+
+    fn pending_agent() -> AgentPrincipalRecord {
+        let now = Utc::now();
+        let mut record = AgentPrincipalRecord::new(
+            "did:web:agent.example".to_owned(),
+            "did:web:controller.example".to_owned(),
+            "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+            DidUrl::new("did:web:agent.example#controller").unwrap(),
+            AgentLifecycleState::Active,
+            now,
+        );
+        record.pairing_request_id = Some(OpaqueLocalId::new("pairing-1").unwrap());
+        record.approval_request_id = Some(OpaqueLocalId::new("approval-1").unwrap());
+        record.runtime_key_binding_digest = Some("sha256:binding".to_owned());
+        record
+    }
+
+    #[tokio::test]
+    async fn pairing_commit_intent_is_immutable_and_exact_retry_is_idempotent() {
+        let store = MemoryAgentStore::new();
+        store.put(pending_agent()).await.unwrap();
+        let intent = AgentPairingCommitIntent {
+            agent_id: "did:web:agent.example".to_owned(),
+            approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
+            runtime_key_binding_digest: "sha256:binding".to_owned(),
+            pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
+            request_digest: "sha256:request-a".to_owned(),
+            authorize_event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+        };
+
+        assert!(
+            store
+                .put_pairing_commit_intent_if_compatible(&intent)
+                .await
+                .unwrap()
+                .is_some()
+        );
+        assert!(
+            store
+                .put_pairing_commit_intent_if_compatible(&intent)
+                .await
+                .unwrap()
+                .is_some()
+        );
+
+        let conflicting = AgentPairingCommitIntent {
+            request_digest: "sha256:request-b".to_owned(),
+            authorize_event_id: "ak:event:01904100-0000-7000-8000-000000000002".to_owned(),
+            ..intent
+        };
+        assert!(
+            store
+                .put_pairing_commit_intent_if_compatible(&conflicting)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        let stored = store
+            .get("did:web:agent.example")
+            .await
+            .unwrap()
+            .unwrap()
+            .pending_pairing_commit_intent
+            .unwrap();
+        assert_eq!(stored.request_digest, "sha256:request-a");
+        assert_eq!(
+            stored.authorize_event_id,
+            "ak:event:01904100-0000-7000-8000-000000000001"
+        );
+    }
+
+    #[tokio::test]
+    async fn activation_requires_and_consumes_the_exact_commit_intent() {
+        let store = MemoryAgentStore::new();
+        store.put(pending_agent()).await.unwrap();
+        let activation = AgentRuntimeActivation {
+            agent_id: "did:web:agent.example".to_owned(),
+            approval_request_id: OpaqueLocalId::new("approval-1").unwrap(),
+            runtime_key_binding_digest: "sha256:binding".to_owned(),
+            pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
+            paired_request_digest: "sha256:request-a".to_owned(),
+            authorized_event_ref: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
+            authorized_public_key_digest: format!("sha256:{}", "00".repeat(32)),
+            authorized_signing_key_binding: serde_json::from_value(serde_json::json!({
+                "schema": "ak.schema.agent_signing_key_binding.v1",
+                "agent_id": "did:web:agent.example",
+                "agent_key_id": "runtime-1",
+                "verification_method": "did:web:agent.example#key-1",
+                "public_key": {
+                    "kty": "OKP",
+                    "alg": "Ed25519",
+                    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                },
+                "public_key_digest": format!("sha256:{}", "00".repeat(32)),
+                "agent_key_authorize_event_id":
+                    "ak:event:01904100-0000-7000-8000-000000000001",
+                "issued_at": "2026-07-27T00:00:00.000Z",
+                "controller_id": "did:web:controller.example",
+                "controller_proof": {
+                    "kind": "controller_signature",
+                    "verification_method": "did:web:controller.example#key-1",
+                    "jws": "proof"
+                }
+            }))
+            .unwrap(),
+            authorized_at: Utc::now(),
+        };
+
+        assert!(!store.activate_runtime_if_current(&activation).await.unwrap());
+        store
+            .put_pairing_commit_intent_if_compatible(&AgentPairingCommitIntent {
+                agent_id: activation.agent_id.clone(),
+                approval_request_id: activation.approval_request_id.clone(),
+                runtime_key_binding_digest: activation.runtime_key_binding_digest.clone(),
+                pairing_request_id: activation.pairing_request_id.clone(),
+                request_digest: activation.paired_request_digest.clone(),
+                authorize_event_id: activation.authorized_event_ref.clone(),
+            })
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(store.activate_runtime_if_current(&activation).await.unwrap());
+
+        let stored = store
+            .get("did:web:agent.example")
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(stored.pending_pairing_commit_intent.is_none());
+        assert_eq!(
+            stored.paired_request_digest.as_deref(),
+            Some("sha256:request-a")
+        );
+        assert_eq!(
+            stored.authorized_event_ref.as_deref(),
+            Some("ak:event:01904100-0000-7000-8000-000000000001")
+        );
     }
 }

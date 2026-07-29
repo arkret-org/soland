@@ -572,6 +572,7 @@ pub(super) async fn renew_agent_pairing(
     record.runtime_key_binding_digest = None;
     record.runtime_public_key_digest = None;
     record.runtime_attestation_digest = None;
+    record.pending_pairing_commit_intent = None;
     record.approval_notification_id = None;
     record.updated_at = now_utc;
     state

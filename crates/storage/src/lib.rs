@@ -19,7 +19,7 @@ pub(crate) use uuid::Uuid;
 
 mod agent_principal;
 mod records;
-pub use agent_principal::AgentPrincipalRecord;
+pub use agent_principal::{AgentPrincipalRecord, PendingAgentPairingCommitIntent};
 pub use records::*;
 
 mod accounts;

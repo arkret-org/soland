@@ -888,6 +888,26 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             .await?)
     }
 
+    async fn record_pairing_commit_intent(
+        &self,
+        command: &crate::identity::RecordAgentPairingCommitIntentCommand,
+    ) -> crate::ServiceResult<Option<crate::identity::AgentPairingState>> {
+        let intent = soland_storage::AgentPairingCommitIntent {
+            agent_id: command.agent_id.clone(),
+            approval_request_id: command.approval_request_id.clone(),
+            runtime_key_binding_digest: command.runtime_key_binding_digest.clone(),
+            pairing_request_id: command.pairing_request_id.clone(),
+            request_digest: command.request_digest.clone(),
+            authorize_event_id: command.authorize_event_id.clone(),
+        };
+        Ok(self
+            .0
+            .agents()
+            .put_pairing_commit_intent_if_compatible(&intent)
+            .await?
+            .map(application_agent_pairing))
+    }
+
     async fn clear_approval_notification_if_current(
         &self,
         agent_id: &str,
@@ -1027,6 +1047,12 @@ fn application_agent_pairing(
         pairing_request_id: record.pairing_request_id,
         paired_pairing_request_id: record.paired_pairing_request_id,
         paired_request_digest: record.paired_request_digest,
+        pending_pairing_commit_intent: record.pending_pairing_commit_intent.map(|intent| {
+            crate::identity::AgentPairingCommitIntentState {
+                request_digest: intent.request_digest,
+                authorize_event_id: intent.authorize_event_id,
+            }
+        }),
         pairing_code: record.pairing_code,
         pairing_expires_at: record.pairing_expires_at,
         approval_request_id: record.approval_request_id,
@@ -1066,6 +1092,12 @@ fn persistence_agent_pairing(
         pairing_request_id: record.pairing_request_id,
         paired_pairing_request_id: record.paired_pairing_request_id,
         paired_request_digest: record.paired_request_digest,
+        pending_pairing_commit_intent: record.pending_pairing_commit_intent.map(|intent| {
+            soland_storage::PendingAgentPairingCommitIntent {
+                request_digest: intent.request_digest,
+                authorize_event_id: intent.authorize_event_id,
+            }
+        }),
         pairing_code: record.pairing_code,
         pairing_expires_at: record.pairing_expires_at,
         approval_request_id: record.approval_request_id,
