@@ -2017,7 +2017,7 @@ async fn continue_submit_reanchor_unit(
         || plan
             .authorize_event_publication_intent
             .event_preimage_digest
-            != authorized_event_digest
+            != plan.authorization_preimage.authorize_event_preimage.digest
         || plan.reanchor_event_submission.event.event_id != binding.reanchor_event_id
     {
         return Err(AppError::internal(
@@ -2090,7 +2090,15 @@ async fn continue_submit_reanchor_unit(
         .batch_receipts_for_event(binding.reanchor_event_id.as_str())
         .await
         .map_err(recovery_service_error)?;
-    let reanchor_event_digest = canonical_digest(&plan.reanchor_event_submission.event)?;
+    let reanchor_event_digest = Hash::new(
+        plan.reanchor_event_submission
+            .event
+            .event_digest()
+            .map_err(|error| {
+                AppError::internal(format!("prepared re-anchor Event digest failed: {error}"))
+            })?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
     let batch_receipt = batch_receipts
         .into_iter()
         .map(|record| {
@@ -2301,17 +2309,21 @@ async fn continue_authorize_recovery_device(
             ))
             .with_wire_code("recovery_authority_binding_mismatch")
         })?;
-    let authorized_event_bytes = arkret_canonical::canonical_json_bytes(&outcome.authorized_event)
-        .map_err(|error| AppError::internal(error.to_string()))?;
-    arkret_canonical::verify_digest(
-        &authorized_event_bytes,
-        outcome.authorized_event_digest.as_str(),
-    )
-    .map_err(|error| {
-        AppError::internal(format!(
-            "Account Authority outcome event digest is invalid: {error}"
-        ))
-    })?;
+    let authorized_event: arkret_wire::Event =
+        serde_json::from_value(outcome.authorized_event.clone()).map_err(|error| {
+            AppError::internal(format!(
+                "Account Authority outcome event is invalid: {error}"
+            ))
+        })?;
+    if authorized_event
+        .event_digest()
+        .map_err(|error| AppError::internal(error.to_string()))?
+        != outcome.authorized_event_digest.as_str()
+    {
+        return Err(AppError::internal(
+            "Account Authority outcome event digest is invalid",
+        ));
+    }
     if outcome
         .authorized_event
         .get("event_id")

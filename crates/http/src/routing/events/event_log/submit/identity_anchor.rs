@@ -104,18 +104,24 @@ pub(super) async fn submit_identity_anchor_batch(
         }
         return Ok(outcome);
     }
-    let self_principal_pcr_context = if is_bootstrap {
+    let identity_anchor_head_context = if is_bootstrap {
         Some(validate_self_principal_pcr_bootstrap_context(&envelopes)?)
     } else {
-        None
+        Some(RealmBootstrapBatchContext {
+            realm_id: lock_realm.clone(),
+            actor_id: lock_actor.clone(),
+            identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
+            self_principal_pcr_bootstrap: false,
+            ordinary_realm_bootstrap: false,
+        })
     };
 
-    let first_contexts = self_principal_pcr_context.as_slice();
+    let first_contexts = identity_anchor_head_context.as_slice();
     let first =
         validate_event_envelope_with_context(state, session, &envelopes[0], first_contexts, None)
             .await?;
     let identity_anchor_context =
-        self_principal_pcr_context.unwrap_or(RealmBootstrapBatchContext {
+        identity_anchor_head_context.unwrap_or(RealmBootstrapBatchContext {
             realm_id: first.realm_id.clone(),
             actor_id: first.actor_id.clone(),
             identity_anchor_event_id: Some(first.event_id.clone()),
@@ -191,6 +197,12 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?;
     let proposal_receipts = if reanchor_conflict {
+        Vec::new()
+    } else if is_bootstrap || is_reanchor {
+        // Closed anchor units have no accepted Seal basis and wire validation
+        // therefore forbids proposal receipts. Their two Events and ingress
+        // evidence commit atomically; the later client-signed Seal supplies
+        // control-plane finality.
         Vec::new()
     } else {
         // A self-principal PCR names the newly authorized device as founding

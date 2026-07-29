@@ -283,11 +283,14 @@ fn verify_with_current_recovery_ssk(
 ) -> Result<bool, EventValidationError> {
     let kind = object.get("kind").and_then(Value::as_str);
     let is_recovery_authorize = kind == Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE)
-        && object
-            .get("payload")
-            .and_then(|payload| payload.get("recovery_session_id"))
-            .and_then(Value::as_str)
-            .is_some();
+        && object.get("payload").is_some_and(|payload| {
+            payload
+                .get("recovery_session_id")
+                .and_then(Value::as_str)
+                .is_some()
+                && payload.get("cross_signing_binding").is_some()
+                && payload.get("enrollment_authority_binding").is_none()
+        });
     if !is_recovery_authorize && kind != Some(arkret_wire::events::EventKind::DEVICE_LIST_UPDATE) {
         return Ok(false);
     }

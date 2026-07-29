@@ -810,11 +810,16 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     session: &SessionRecord,
     submissions: Vec<arkret_wire::EventInitialSubmission>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
+    let submit_context = if submissions.len() == 2
+        && submissions[0].event.kind == arkret_wire::events::EventKind::DEVICE_REANCHOR
+        && submissions[1].event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+    {
+        arkret_wire::EventSubmitContext::AnchorUnit
+    } else {
+        arkret_wire::EventSubmitContext::Standard
+    };
     for submission in &submissions {
-        validate_initial_submission_in_context(
-            submission,
-            arkret_wire::EventSubmitContext::Standard,
-        )?;
+        validate_initial_submission_in_context(submission, submit_context)?;
     }
     if submissions.len() == 2
         && submissions[0].event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE

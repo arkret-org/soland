@@ -311,6 +311,12 @@ async fn validate_event_envelope_with_ingress(
                             .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
                     })
         });
+    let is_identity_anchor_reanchor = kind == arkret_wire::events::EventKind::DEVICE_REANCHOR
+        && realm_bootstrap_contexts.iter().any(|context| {
+            context.realm_id == realm_id
+                && context.actor_id == actor_id
+                && context.identity_anchor_event_id.as_deref() == Some(event_id.as_str())
+        });
     // join-policy.md §7.1 — a not-yet-member applicant MUST be able to submit
     // their own `ak.member.state{membership=knock}` (and the profile-private
     // application sub-payload it carries). Gate / review enforcement happens at
@@ -329,6 +335,7 @@ async fn validate_event_envelope_with_ingress(
         && !is_realm_bootstrap_followup
         && !is_realm_founding_grant
         && !is_identity_anchor_authorize
+        && !is_identity_anchor_reanchor
         && !is_authorized_internal_adapter
         && !realm_has_member(state, &realm_id, &session.actor).await
     {
@@ -527,6 +534,7 @@ async fn validate_event_envelope_with_ingress(
         is_realm_bootstrap_followup,
         is_realm_founding_grant,
         is_identity_anchor_authorize,
+        is_identity_anchor_reanchor,
         realm_bootstrap_contexts,
     ) {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
@@ -704,9 +712,14 @@ fn is_realm_bootstrap_unit_member(
     is_realm_bootstrap_followup: bool,
     is_realm_founding_grant: bool,
     is_identity_anchor_authorize: bool,
+    is_identity_anchor_reanchor: bool,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> bool {
-    if is_realm_bootstrap_followup || is_realm_founding_grant || is_identity_anchor_authorize {
+    if is_realm_bootstrap_followup
+        || is_realm_founding_grant
+        || is_identity_anchor_authorize
+        || is_identity_anchor_reanchor
+    {
         return true;
     }
     kind == arkret_wire::events::EventKind::REALM_CREATE
