@@ -596,7 +596,7 @@ pub(super) async fn agent_key_pair(
 ) -> JsonResult<AgentKeyPairOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let event_id = body.authorize_event.event_id.as_str();
+    let event_id = body.authorize_event.event.event_id.as_str();
     let idempotency_key = req
         .headers()
         .get("idempotency-key")
@@ -604,18 +604,23 @@ pub(super) async fn agent_key_pair(
         .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| AppError::missing_param("Idempotency-Key header is required"))?;
     if idempotency_key != event_id {
-        return Err(
-            AppError::conflict("Idempotency-Key must equal authorize_event.event_id")
-                .with_wire_code("duplicate_conflict"),
-        );
+        return Err(AppError::conflict(
+            "Idempotency-Key must equal authorize_event.event.event_id",
+        )
+        .with_wire_code("duplicate_conflict"));
     }
     let service_authorized = agent_projection_service_authorized(state, req);
     let session = if service_authorized {
-        let controller_id = body.authorize_event.executed_by.as_ref().ok_or_else(|| {
-            AppError::capability_denied(
-                "authorize_event.executed_by is required for delegated pairing",
-            )
-        })?;
+        let controller_id = body
+            .authorize_event
+            .event
+            .executed_by
+            .as_ref()
+            .ok_or_else(|| {
+                AppError::capability_denied(
+                    "authorize_event.executed_by is required for delegated pairing",
+                )
+            })?;
         controller_service_session(controller_id.as_str(), state)
     } else {
         aa.authenticated_session(state, req).await?
@@ -632,7 +637,7 @@ pub(super) async fn agent_key_pair(
     }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
     validate_requested_scope_disclosure(&body, &agent_record, state).await?;
-    validate_agent_key_authorize_effects(&body.authorize_event)?;
+    validate_agent_key_authorize_effects(&body.authorize_event.event)?;
     let paired_request_digest = agent_key_pair_request_digest(&body)?;
     if agent_record.authorized_event_ref.as_deref() == Some(event_id) {
         let same_request = agent_record.paired_pairing_request_id.as_deref()
@@ -656,7 +661,7 @@ pub(super) async fn agent_key_pair(
         }
         return json_ok(AgentKeyPairOutcome {
             ok: true,
-            authorized_event_ref: body.authorize_event.event_id.clone(),
+            authorized_event_ref: body.authorize_event.event.event_id.clone(),
             signing_key_binding: body.signing_key_binding,
         });
     }
@@ -692,7 +697,7 @@ pub(super) async fn agent_key_pair(
         chrono::Utc::now(),
     )
     .await?;
-    let authorize_event_value = serde_json::to_value(&body.authorize_event)
+    let authorize_event_value = serde_json::to_value(&body.authorize_event.event)
         .map_err(|error| AppError::invalid_param(format!("authorize_event invalid: {error}")))?;
     let authorized_at = chrono::Utc::now();
     // Development and production consume the exact controller-signed Event
@@ -706,6 +711,7 @@ pub(super) async fn agent_key_pair(
         agent_id,
         &body.verification_method,
         &runtime_public_key_digest,
+        body.authorize_event.clone(),
     )
     .await?;
     let authorized_event_ref = EventId::new(event_id)
@@ -812,7 +818,7 @@ async fn validate_agent_signing_key_binding(
 ) -> Result<(), AppError> {
     validate_agent_signing_key_binding_parts(
         &body.signing_key_binding,
-        &body.authorize_event,
+        &body.authorize_event.event,
         &body.agent_id,
         &body.verification_method,
         controller_id,
@@ -1177,6 +1183,7 @@ pub(super) async fn submit_production_key_authorize_event(
     agent_id: &str,
     verification_method: &str,
     runtime_public_key_digest: &str,
+    submission: arkret_wire::EventInitialSubmission,
 ) -> Result<String, AppError> {
     ensure_key_authorize_event_matches_request(
         envelope,
@@ -1188,16 +1195,20 @@ pub(super) async fn submit_production_key_authorize_event(
         state.service_id(),
     )?;
     let delegated_session = delegated_agent_session(session, agent_id);
-    let outcome = submit_event_value(state, &delegated_session, envelope.clone())
-        .await
-        .map_err(|error| {
-            AppError::invalid_param(format!(
-                "ak.agent.key.authorize submit failed: {}",
-                error.message
-            ))
-            .with_status(error.status)
-            .with_wire_code(error.code)
-        })?;
+    let outcome = crate::routing::events::event_log::submit_initial_event_submission(
+        state,
+        &delegated_session,
+        submission,
+    )
+    .await
+    .map_err(|error| {
+        AppError::invalid_param(format!(
+            "ak.agent.key.authorize submit failed: {}",
+            error.message
+        ))
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
     Ok(outcome.event_id)
 }
 

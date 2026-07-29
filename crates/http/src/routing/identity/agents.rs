@@ -73,7 +73,6 @@ use subtle::ConstantTimeEq as _;
 use super::{AuthArgs, append_audit_log, now, validate_did};
 use crate::ids;
 use crate::routing::accept_local_operations;
-use crate::routing::events::event_log::submit_event_value;
 use crate::state::AppState;
 
 mod dev_fanout;
