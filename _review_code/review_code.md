@@ -73,3 +73,20 @@
   re-anchor unit.
 - Prevention dimension: consumers must never recreate Event digests by hashing serialized Event
   values; only the SDK Event digest transcript is authoritative.
+
+## 2026-07-29 — relation query visibility depended on a redundant payload scope
+
+- Surface: Realm-scoped `ak.self.events.query.scan` visibility for Circle-scoped structural
+  `ak.relation.create` Events.
+- Regression: projection visibility read `scope_circle_id` only when it was redundantly present in
+  the Relation payload. A conforming typed Relation payload can express the same signed Circle
+  scope through the Event Envelope and scoped endpoint, so omitting the redundant field could make
+  a private `agent_sidecar_of` Relation look Realm-scoped to the projection filter.
+- Detection: Sidecar new-device locator recovery conformance review with controller, ordinary
+  Realm member, and anonymous visibility identities.
+- Correction: when a Relation row has no explicit payload scope, resolve the effective Circle from
+  its projected `from_ref`/`to_ref` endpoint; retain the durable accepted Event Envelope on output
+  so the controller can recompute `Event::event_digest()`.
+- Prevention dimension: projection-only visibility indexes must derive the same effective scope as
+  admission and must have negative tests for every private structural Event kind.
+- Status: fixed; 17 focused Sidecar HTTP tests pass.

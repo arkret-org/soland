@@ -1205,6 +1205,81 @@ mod tests {
         assert_eq!(EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS, 30_000);
     }
 
+    #[tokio::test]
+    async fn sidecar_recovery_query_retains_the_complete_digestible_event_envelope() {
+        let state = test_state();
+        let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let circle_id = "ak:circle:01904100-0000-7000-8000-00000000aa41";
+        let strand_id = "ak:strand:01904100-0000-7000-8000-00000000aa42";
+        let event = arkret_wire::Event::new_with_id_at(
+            arkret_identifiers::EventId::new(
+                "ak:event:01904100-0000-7000-8000-00000000aa43".to_owned(),
+            )
+            .unwrap(),
+            arkret_wire::events::EventKind::STRAND_CREATE,
+            arkret_wire::ScopeRef::Circle {
+                realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
+                circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
+            },
+            arkret_identifiers::Did::new(TEST_ACTOR.to_owned()).unwrap(),
+            41,
+            arkret_identifiers::Hlc::new("01970e589d21-0041-a13f9c2e").unwrap(),
+            json!({
+                "object": {
+                    "id": strand_id,
+                    "schema": "ak.schema.strand.v1",
+                    "realm_id": TEST_REALM,
+                    "scope_circle_id": circle_id,
+                    "created_by": TEST_ACTOR,
+                    "created_at": arkret_canonical::format_timestamp_canonical(created_at)
+                }
+            }),
+            created_at,
+        )
+        .unwrap();
+        let expected_digest = event.event_digest().unwrap();
+        let event_envelope = serde_json::to_value(&event).unwrap();
+        assert_eq!(event_envelope["scope_ref"]["kind"], json!("circle"));
+        put_durable_event(
+            &state,
+            event.event_id.as_str(),
+            arkret_wire::events::EventKind::STRAND_CREATE,
+            event_envelope,
+            created_at,
+        )
+        .await;
+        let stored = state
+            .event_queries()
+            .canonical_event(event.event_id.as_str())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.envelope["scope_ref"]["kind"], json!("circle"));
+        let direct = crate::routing::events::event_log::sdk_event_for_state(&state, &stored)
+            .expect("full envelope");
+        assert_eq!(direct.scope_ref, event.scope_ref);
+        let row = soland_services::events::ProjectedEvent {
+            event_id: event.event_id.to_string(),
+            realm_id: TEST_REALM.to_owned(),
+            event_kind: arkret_wire::events::EventKind::STRAND_CREATE.to_owned(),
+            operation_kind: "event".to_owned(),
+            operation_id: Some("ak:operation:01904100-0000-7000-8000-00000000aa43".to_owned()),
+            sender: Some(TEST_ACTOR.to_owned()),
+            payload: serde_json::to_value(&event.payload).unwrap(),
+            created_at,
+            received_at: created_at,
+        };
+        let enriched =
+            full_events_from_projection_json(&state, &[projection_event_json(&row)]).await;
+        assert_eq!(enriched.len(), 1);
+        assert_eq!(enriched[0].event_id, event.event_id);
+        assert_eq!(enriched[0].scope_ref, event.scope_ref);
+        assert_eq!(enriched[0].payload, event.payload);
+        assert_eq!(enriched[0].event_digest().unwrap(), expected_digest);
+    }
+
     fn operation_at(
         operation_id: &str,
         kind: &str,
@@ -1229,16 +1304,34 @@ mod tests {
         created_at: DateTime<Utc>,
     ) {
         let canonical_bytes = serde_json::to_vec(&envelope).unwrap();
+        let canonical_digest = serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+            .ok()
+            .and_then(|event| event.event_digest().ok())
+            .unwrap_or_else(|| format!("sha256:test-{}", event_id.rsplit(':').next().unwrap()));
+        let actor_id = envelope
+            .get("actor_id")
+            .and_then(Value::as_str)
+            .unwrap_or(TEST_ACTOR)
+            .to_owned();
+        let actor_seq = envelope
+            .get("actor_seq")
+            .and_then(Value::as_u64)
+            .unwrap_or(1);
+        let realm_id = envelope
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .unwrap_or(TEST_REALM)
+            .to_owned();
         state
             .event_queries()
             .store_canonical_event(CanonicalEventRecord {
                 event_id: event_id.to_owned(),
-                actor_id: TEST_ACTOR.to_owned(),
-                actor_seq: 1,
-                realm_id: Some(TEST_REALM.to_owned()),
+                actor_id,
+                actor_seq,
+                realm_id: Some(realm_id),
                 kind: kind.to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
-                canonical_digest: format!("sha256:test-{}", event_id.rsplit(':').next().unwrap()),
+                canonical_digest,
                 canonical_bytes,
                 envelope,
                 received_at: created_at,

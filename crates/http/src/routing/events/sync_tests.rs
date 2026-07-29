@@ -690,6 +690,139 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
     );
 }
 
+#[tokio::test]
+async fn sidecar_structural_events_are_visible_only_inside_the_backing_circle() {
+    const CIRCLE_ID: &str = "ak:circle:01904100-0000-7000-8000-00000000a011";
+    const PRIVATE_STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-00000000a012";
+    const SOURCE_STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-00000000a013";
+    let mut config = test_config();
+    config.seed_demo_data = false;
+    let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
+    state.realm_directory().upsert(roster_realm(false, true));
+    insert_projected_membership(&state, ROSTER_ACTOR, "join");
+    insert_projected_membership(&state, ROSTER_CALLER, "join");
+    let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
+        .unwrap()
+        .with_timezone(&Utc);
+    let apply = |operation_id: &str, kind: &str, payload: Value| {
+        state.test_projection().lock().apply(
+            &sync_test_operation_at(operation_id, kind, payload, created_at),
+            state.hlc(),
+        );
+    };
+    apply(
+        "ak:operation:01904100-0000-7000-8000-00000000a001",
+        arkret_wire::events::EventKind::REALM_CREATE,
+        json!({
+            "object": {
+                "id": ROSTER_REALM,
+                "schema": "ak.schema.realm.v1",
+                "title": "Sidecar recovery",
+                "created_by": ROSTER_ACTOR,
+                "encryption_profile": "mls_rfc9420"
+            }
+        }),
+    );
+    apply(
+        "ak:operation:01904100-0000-7000-8000-00000000a002",
+        arkret_wire::events::EventKind::CIRCLE_CREATE,
+        json!({
+            "object": {
+                "id": CIRCLE_ID,
+                "schema": "ak.schema.circle.v1",
+                "realm_id": ROSTER_REALM,
+                "title": "SC-private",
+                "directory_visibility": "members",
+                "join_rule": "invite",
+                "history_visibility": "restricted",
+                "content_encryption_floor": "e2ee_required",
+                "metadata_encryption_floor": "e2ee_required",
+                "encryption_profile": "mls_rfc9420",
+                "created_by": ROSTER_ACTOR,
+                "created_at": arkret_canonical::format_timestamp_canonical(created_at)
+            }
+        }),
+    );
+    apply(
+        "ak:operation:01904100-0000-7000-8000-00000000a003",
+        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+        json!({
+            "circle_id": CIRCLE_ID,
+            "actor_id": ROSTER_ACTOR,
+            "membership": "join",
+            "sender": ROSTER_ACTOR
+        }),
+    );
+    apply(
+        "ak:operation:01904100-0000-7000-8000-00000000a004",
+        arkret_wire::events::EventKind::STRAND_CREATE,
+        json!({
+            "object": {
+                "id": PRIVATE_STRAND_ID,
+                "schema": "ak.schema.strand.v1",
+                "realm_id": ROSTER_REALM,
+                "scope_circle_id": CIRCLE_ID,
+                "created_by": ROSTER_ACTOR,
+                "created_at": arkret_canonical::format_timestamp_canonical(created_at)
+            }
+        }),
+    );
+
+    let structural_event = |event_id: &str, kind: &str, payload: Value| ProjectionEventRecord {
+        event_id: event_id.to_owned(),
+        realm_id: ROSTER_REALM.to_owned(),
+        event_kind: kind.to_owned(),
+        operation_kind: "event".to_owned(),
+        operation_id: Some(event_id.replace("ak:event:", "ak:operation:")),
+        sender: Some(ROSTER_ACTOR.to_owned()),
+        payload,
+        created_at,
+        received_at: created_at,
+    };
+    let strand_event = structural_event(
+        "ak:event:01904100-0000-7000-8000-00000000a021",
+        arkret_wire::events::EventKind::STRAND_CREATE,
+        json!({
+            "object": {
+                "id": PRIVATE_STRAND_ID,
+                "realm_id": ROSTER_REALM,
+                "scope_circle_id": CIRCLE_ID,
+                "created_by": ROSTER_ACTOR
+            }
+        }),
+    );
+    let relation_event = structural_event(
+        "ak:event:01904100-0000-7000-8000-00000000a022",
+        arkret_wire::events::EventKind::RELATION_CREATE,
+        json!({
+            "relation": {
+                "id": "ak:relation:01904100-0000-7000-8000-00000000a022",
+                "kind": "agent_sidecar_of",
+                "from_ref": PRIVATE_STRAND_ID,
+                "to_ref": SOURCE_STRAND_ID,
+                "created_by": ROSTER_ACTOR
+            }
+        }),
+    );
+    let controller = roster_session(&state, ROSTER_ACTOR);
+    let ordinary_realm_member = roster_session(&state, ROSTER_CALLER);
+    for event in [&strand_event, &relation_event] {
+        assert!(
+            projection_record_visible_to_session(&state, event, Some(&controller)).await,
+            "the controller must recover its own Sidecar structural history"
+        );
+        assert!(
+            !projection_record_visible_to_session(&state, event, Some(&ordinary_realm_member))
+                .await,
+            "ordinary Realm membership must not disclose backing-Circle structural history"
+        );
+        assert!(
+            !projection_record_visible_to_session(&state, event, None).await,
+            "anonymous query must be indistinguishable from a missing private object"
+        );
+    }
+}
+
 async fn put_canonical_event_received_at(
     state: &AppState,
     event_id: &str,

@@ -1599,7 +1599,7 @@ fn projection_event_scope_circle_id(
             })
             .and_then(|strand_id| projection.strand_scope_circle_id(strand_id));
     }
-    event
+    let explicit_scope = event
         .payload
         .get("scope_circle_id")
         .and_then(Value::as_str)
@@ -1620,7 +1620,29 @@ fn projection_event_scope_circle_id(
                 .and_then(Value::as_str)
         })
         .filter(|value| value.starts_with("ak:circle:"))
-        .map(ToOwned::to_owned)
+        .map(ToOwned::to_owned);
+    if explicit_scope.is_some() {
+        return explicit_scope;
+    }
+    if event.event_kind == arkret_wire::events::EventKind::RELATION_CREATE {
+        let relation = event.payload.get("relation").and_then(Value::as_object);
+        return relation
+            .and_then(|value| value.get("from_ref"))
+            .and_then(Value::as_str)
+            .or_else(|| {
+                relation
+                    .and_then(|value| value.get("to_ref"))
+                    .and_then(Value::as_str)
+            })
+            .and_then(|object_ref| {
+                projection
+                    .strand_scope_circle_id(object_ref)
+                    .or_else(|| projection.relation_scope_circle_id(object_ref))
+                    .or_else(|| projection.morph_scope_circle_id(object_ref))
+                    .or_else(|| projection.space_container_scope_circle_id(object_ref))
+            });
+    }
+    None
 }
 
 fn circle_scope_visible_to_session(
