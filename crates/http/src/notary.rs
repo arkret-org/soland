@@ -33,7 +33,7 @@ use anyhow::Result;
 use arkret_identifiers::{CellRef, Hash, Hlc, RealmId, SealId};
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
-use arkret_state::state::{StoreError, compute_state_root, control_event_set_root};
+use arkret_state::state::{StoreError, compute_state_root, control_event_set_root, join_cell};
 use arkret_wire::{
     ControlProposalDecision, ControlProposalRejectReason, Event, NotarySig, PayloadSignature, Seal,
 };
@@ -392,6 +392,8 @@ impl NotaryWorker {
         }
         let mut accepted: Vec<AcceptedControlMove> = Vec::with_capacity(ordered.len());
         let mut rejected: Vec<(Hash, String)> = Vec::new();
+        let mut staged_anchor_state = pre_state.clone();
+        let mut staged_anchor_ops = BTreeMap::<CellRef, Vec<IssuedOp>>::new();
         for (digest, event) in ordered {
             let receipt = state
                 .projections()
@@ -442,15 +444,47 @@ impl NotaryWorker {
             } else {
                 arkret_wire::event_envelope::EventSubmitContext::Standard
             };
-            match state
-                .projections()
-                .verify_control_move_in_context(&event, realm_id, &pre_state, verifier, context)
-            {
-                Ok(effects) => accepted.push(AcceptedControlMove {
-                    event_digest: digest,
-                    actor_id: event.actor_id.clone(),
-                    effects,
-                }),
+            match state.projections().verify_control_move_in_context(
+                &event,
+                realm_id,
+                if leaves.is_empty() {
+                    &staged_anchor_state
+                } else {
+                    &pre_state
+                },
+                verifier,
+                context,
+            ) {
+                Ok(effects) => {
+                    if leaves.is_empty() {
+                        for effect in &effects {
+                            let cell_ops =
+                                staged_anchor_ops.entry(effect.cell.clone()).or_default();
+                            cell_ops.push(IssuedOp {
+                                issuer: event.actor_id.clone(),
+                                op: SealedOp::new(digest.clone(), effect.op.clone()),
+                            });
+                            let binding = state
+                                .projections()
+                                .resolve_cell(realm_id, &effect.cell)
+                                .map_err(|error| {
+                                    NotaryError::Store(format!(
+                                        "resolve staged bootstrap cell {}: {error}",
+                                        effect.cell
+                                    ))
+                                })?;
+                            staged_anchor_state.insert(
+                                effect.cell.clone(),
+                                join_cell(binding.lattice.as_ref(), &effect.cell, cell_ops),
+                            );
+                        }
+                    }
+                    accepted.push(AcceptedControlMove {
+                        event_digest: digest,
+                        actor_id: event.actor_id.clone(),
+                        effects,
+                    });
+                }
                 Err(reject) => rejected.push((digest, reject.to_string())),
             }
         }
