@@ -204,6 +204,16 @@ pub(crate) async fn validate_event_proofs(
             )? {
                 continue;
             }
+            if verify_with_current_recovery_ssk(
+                state,
+                object,
+                actor_id,
+                &verification_method,
+                &proof_binding_bytes,
+                &jws,
+            )? {
+                continue;
+            }
             if object
                 .get("unsigned")
                 .and_then(|unsigned| unsigned.get("agent_authorization_admission"))
@@ -261,6 +271,73 @@ pub(crate) async fn validate_event_proofs(
         }
     }
     Ok(())
+}
+
+fn verify_with_current_recovery_ssk(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    actor_id: &str,
+    verification_method: &str,
+    canonical_bytes: &[u8],
+    jws: &str,
+) -> Result<bool, EventValidationError> {
+    let kind = object.get("kind").and_then(Value::as_str);
+    let is_recovery_authorize = kind == Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE)
+        && object
+            .get("payload")
+            .and_then(|payload| payload.get("recovery_session_id"))
+            .and_then(Value::as_str)
+            .is_some();
+    if !is_recovery_authorize && kind != Some(arkret_wire::events::EventKind::DEVICE_LIST_UPDATE) {
+        return Ok(false);
+    }
+    let principal = arkret_identifiers::Did::new(actor_id.to_owned()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "recovery Event actor_id is not a valid DID",
+        )
+    })?;
+    let Some(publish) = state.identities().current_cross_signing(&principal) else {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "recovery Event has no accepted cross-signing authority",
+        ));
+    };
+    if publish.self_signing_key.kid.as_str() != verification_method {
+        return Err(event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "recovery Event proof does not use the accepted self-signing key",
+        ));
+    }
+    let key = crate::routing::identity::cross_signing::decode_ed25519_key(
+        publish.self_signing_key.public_key.as_str(),
+        publish.self_signing_key.key_format.as_str(),
+    )
+    .map_err(|reason| {
+        tracing::debug!(%reason, "recovery SSK key decode failed");
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "recovery Event SSK is unavailable for verification",
+        )
+    })?;
+    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: key.to_bytes().to_vec(),
+    };
+    arkret_signatures::Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(jws, canonical_bytes, &material)
+        .map_err(|error| {
+            tracing::debug!(%error, "recovery Event SSK proof verification failed");
+            event_validation_error(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                "recovery Event SSK proof verification failed",
+            )
+        })?;
+    Ok(true)
 }
 
 fn verify_with_federated_agent_signer_evidence(

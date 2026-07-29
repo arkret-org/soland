@@ -813,7 +813,7 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     for submission in &submissions {
         validate_initial_submission_in_context(
             submission,
-            arkret_wire::EventSubmitContext::AnchorUnit,
+            arkret_wire::EventSubmitContext::Standard,
         )?;
     }
     if submissions.len() == 2
