@@ -394,27 +394,6 @@ mod tests {
 
     fn initial_rotation() -> SecurityTransactionRecord {
         let service_id = Did::new("did:web:principal.example").unwrap();
-        let mls_binding = BackupRotationBinding {
-            backup_kind: BackupRotationKind::MlsHistory,
-            previous_series_id: BackupSeriesId::new(
-                "ak:backup_series:019a7360-0000-7000-8000-000000000103",
-            )
-            .unwrap(),
-            new_series_id: BackupSeriesId::new(
-                "ak:backup_series:019a7360-0000-7000-8000-000000000104",
-            )
-            .unwrap(),
-            new_backups: vec![BackupObjectRef {
-                backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000105").unwrap(),
-                ciphertext_digest: hash('5'),
-            }],
-            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000107")
-                .unwrap(),
-            old_backups: vec![BackupObjectRef {
-                backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000108").unwrap(),
-                ciphertext_digest: hash('8'),
-            }],
-        };
         let secret_binding = BackupRotationBinding {
             backup_kind: BackupRotationKind::SecretStorage,
             previous_series_id: BackupSeriesId::new(
@@ -425,15 +404,52 @@ mod tests {
                 "ak:backup_series:019a7360-0000-7000-8000-00000000010a",
             )
             .unwrap(),
-            new_backups: vec![BackupObjectRef {
-                backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010b").unwrap(),
-                ciphertext_digest: hash('b'),
-            }],
+            new_backups: vec![
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010b")
+                        .unwrap(),
+                    ciphertext_digest: hash('b'),
+                },
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010c")
+                        .unwrap(),
+                    ciphertext_digest: hash('c'),
+                },
+            ],
             active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-00000000010d")
                 .unwrap(),
             old_backups: vec![BackupObjectRef {
                 backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010e").unwrap(),
                 ciphertext_digest: hash('9'),
+            }],
+        };
+        let mls_binding = BackupRotationBinding {
+            backup_kind: BackupRotationKind::MlsHistory,
+            previous_series_id: BackupSeriesId::new(
+                "ak:backup_series:019a7360-0000-7000-8000-000000000103",
+            )
+            .unwrap(),
+            new_series_id: BackupSeriesId::new(
+                "ak:backup_series:019a7360-0000-7000-8000-000000000104",
+            )
+            .unwrap(),
+            new_backups: vec![
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000105")
+                        .unwrap(),
+                    ciphertext_digest: hash('5'),
+                },
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000106")
+                        .unwrap(),
+                    ciphertext_digest: hash('6'),
+                },
+            ],
+            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000107")
+                .unwrap(),
+            old_backups: vec![BackupObjectRef {
+                backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000108").unwrap(),
+                ciphertext_digest: hash('8'),
             }],
         };
         let erase_confirmation_digest = hash('2');

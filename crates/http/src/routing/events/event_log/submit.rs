@@ -1129,7 +1129,7 @@ pub(crate) async fn submit_federation_events(
             res,
             StatusCode::BAD_REQUEST,
             "schema_violation",
-            "invalid federation transport contract",
+            &format!("invalid federation transport contract: {error}"),
         );
         return;
     }

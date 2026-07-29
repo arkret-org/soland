@@ -1294,7 +1294,7 @@ pub(super) async fn submit_event_value_with_context(
         if let Some(receipt) = submitted_control_proposal_receipt {
             if receipt.realm_id != realm_id
                 || receipt.proposal_digest != proposal_digest
-                || receipt.authority_set_ref != authority_set_ref.authority_set_digest
+                || receipt.authority_set_ref != authority_set_ref
             {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,

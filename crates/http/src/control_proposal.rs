@@ -106,18 +106,18 @@ pub(crate) fn mint_control_proposal_receipt(
     state: &AppState,
     realm_id: RealmId,
     proposal_digest: Hash,
-    authority_set_ref: AuthoritySetRef,
+    authority_set_ref: Hash,
     received_at: chrono::DateTime<chrono::Utc>,
     policy: ControlProposalDecisionPolicy,
 ) -> Result<ControlProposalReceipt, String> {
     policy.validate().map_err(|error| error.to_string())?;
     let mut member_receipt = ProposalMemberReceipt {
-        realm_id,
-        proposal_digest,
+        realm_id: realm_id.clone(),
+        proposal_digest: proposal_digest.clone(),
         received_at,
         decision_due_at: received_at + policy.decision_window,
         absolute_due_at: received_at + policy.absolute_horizon,
-        authority_set_ref: authority_set_ref.authority_set_digest,
+        authority_set_ref: authority_set_ref.clone(),
         signature: PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: format!("{}#notary-key", state.service_id()),
@@ -138,13 +138,13 @@ pub(crate) fn mint_control_proposal_receipt(
             .map_err(|error| error.to_string())?;
     let receipt = ControlProposalReceipt {
         kind: ControlProposalReceiptKind::ProposalReceipt,
-        realm_id: member_receipt.realm_id.clone(),
-        proposal_digest: member_receipt.proposal_digest.clone(),
-        received_at: member_receipt.received_at,
-        decision_due_at: member_receipt.decision_due_at,
-        absolute_due_at: member_receipt.absolute_due_at,
+        realm_id,
+        proposal_digest,
+        received_at,
+        decision_due_at: received_at + policy.decision_window,
+        absolute_due_at: received_at + policy.absolute_horizon,
         defer_count: 0,
-        authority_set_ref: member_receipt.authority_set_ref.clone(),
+        authority_set_ref,
         member_receipts: vec![member_receipt],
     };
     receipt
@@ -192,14 +192,17 @@ pub(crate) async fn mint_control_proposal_receipts(
 }
 
 fn select_proposal_receipt_authority(
-    notary_authority_set_ref: Option<AuthoritySetRef>,
+    notary_authority_set_ref: Option<Hash>,
     bootstrap_ingress_authority_set_ref: Option<&AuthoritySetRef>,
     is_closed_genesis: bool,
-) -> Result<AuthoritySetRef, String> {
+) -> Result<Hash, String> {
     notary_authority_set_ref
         .or_else(|| {
             is_closed_genesis
-                .then(|| bootstrap_ingress_authority_set_ref.cloned())
+                .then(|| {
+                    bootstrap_ingress_authority_set_ref
+                        .map(|authority| authority.authority_set_digest.clone())
+                })
                 .flatten()
         })
         .ok_or_else(|| {
@@ -214,6 +217,16 @@ pub(crate) fn sign_control_proposal_reject(
     reason_code: ControlProposalRejectReason,
     decided_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ControlProposalDecision, String> {
+    let first_member = receipt
+        .member_receipts
+        .first()
+        .ok_or_else(|| "proposal receipt has no member receipt".to_owned())?;
+    let validation_policy = ControlProposalDecisionPolicy {
+        receipt_sla: arkret_wire::MAX_PROPOSAL_RECEIPT_SLA,
+        decision_window: first_member.decision_due_at - first_member.received_at,
+        absolute_horizon: first_member.absolute_due_at - first_member.received_at,
+        max_defers: arkret_wire::MAX_PROPOSAL_DEFERS,
+    };
     let current_due_at = previous_defers
         .last()
         .map(ControlProposalDecision::decision_due_at)
@@ -253,11 +266,7 @@ pub(crate) fn sign_control_proposal_reject(
                 .map_err(|error| error.to_string())?;
     }
     decision
-        .validate_chain(
-            receipt,
-            previous_defers,
-            ControlProposalDecisionPolicy::protocol_maximum(),
-        )
+        .validate_chain(receipt, previous_defers, validation_policy)
         .map_err(|error| error.to_string())?;
     Ok(decision)
 }
@@ -335,7 +344,7 @@ mod tests {
         let lease_authority = authority("a");
         assert_eq!(
             select_proposal_receipt_authority(None, Some(&lease_authority), true).unwrap(),
-            lease_authority
+            lease_authority.authority_set_digest
         );
     }
 
@@ -354,12 +363,12 @@ mod tests {
         let lease_authority = authority("d");
         assert_eq!(
             select_proposal_receipt_authority(
-                Some(notary_authority.clone()),
+                Some(notary_authority.authority_set_digest.clone()),
                 Some(&lease_authority),
                 true,
             )
             .unwrap(),
-            notary_authority
+            notary_authority.authority_set_digest
         );
     }
 }

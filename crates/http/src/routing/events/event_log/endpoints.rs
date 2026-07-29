@@ -8,6 +8,10 @@ pub(in crate::routing::events) fn router() -> Router {
             Router::with_path("authorization-leases")
                 .post(super::lease_issue::issue_authorization_leases),
         )
+        .push(
+            Router::with_path("control-proposal-receipts")
+                .post(super::proposal_receipt_issue::issue_control_proposal_receipt),
+        )
         .push(Router::with_path("events/describe").get(events_describe))
         .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))
         .push(

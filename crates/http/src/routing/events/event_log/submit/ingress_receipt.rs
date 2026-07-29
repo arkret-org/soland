@@ -78,7 +78,7 @@ pub(super) async fn validate_authorization_lease_for_event(
                 )
             },
         )?;
-        let required_audience = session.map_or_else(|| issuer.as_str(), |_| state.service_id());
+        let required_audience = issuer.as_str();
         let audience_covers_service = match proof.audience.as_ref() {
             Some(arkret_wire::Audience::Single(value)) => value == required_audience,
             Some(arkret_wire::Audience::Multiple(values)) => {
@@ -90,7 +90,7 @@ pub(super) async fn validate_authorization_lease_for_event(
             return Err(SubmitOneError::new(
                 StatusCode::FORBIDDEN,
                 "invalid_proof",
-                "authorization lease proof audience does not cover this service",
+                "authorization lease proof audience does not cover its issuer service",
             ));
         }
         let expected_source_digest =

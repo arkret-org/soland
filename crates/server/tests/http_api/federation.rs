@@ -11,7 +11,23 @@ use super::common::*;
 const PEER_SOURCE_DID: &str = "did:web:remote.example";
 const PEER_DELIVERY_FRONTIER: &str = "ak:event:01904100-0000-7000-8000-fede00000001";
 
+fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningKey {
+    ed25519_dalek::SigningKey::from_bytes(&arkret_signatures::development_signing_key_seed(
+        verification_method,
+    ))
+}
+
 fn seed_peer_delivery_binding(state: &AppState) {
+    for verification_method in [
+        format!("{PEER_SOURCE_DID}#authorization-lease-key"),
+        format!("{PEER_SOURCE_DID}#notary-key"),
+    ] {
+        state.install_federation_peer_verification_method_key(
+            None,
+            &verification_method,
+            publication_signing_key(&verification_method).verifying_key(),
+        );
+    }
     // The receiving peer has already accepted the Realm's control basis, so a
     // transported DataEvent's `seal_ref` resolves locally. Without it every
     // inbound Event is deferred as `federation_dependencies_pending` before the
@@ -610,6 +626,26 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
     // receipt, so both are anchored on one instant here.
     let issued_at = chrono::DateTime::from_timestamp_millis(Utc::now().timestamp_millis())
         .expect("fixture publication instant");
+    let action = event.kind.as_str().to_owned();
+    let risk_tier = arkret_schema::capability_action(&action).map_or(
+        arkret_wire::RiskTier::High,
+        |descriptor| match descriptor.risk_tier {
+            arkret_schema::CapabilityRiskTier::Low => arkret_wire::RiskTier::Low,
+            arkret_schema::CapabilityRiskTier::Medium => arkret_wire::RiskTier::Medium,
+            arkret_schema::CapabilityRiskTier::High => arkret_wire::RiskTier::High,
+        },
+    );
+    let lease_basis = if let Some(seal_ref) = event.seal_ref.clone() {
+        arkret_wire::offline_publication::LeaseBasisRef::Seal(seal_ref)
+    } else if let Some(seal_basis) = event.seal_basis.clone() {
+        arkret_wire::offline_publication::LeaseBasisRef::Joined(seal_basis)
+    } else {
+        panic!("federation fixture Event has no publication basis")
+    };
+    let lease_basis_digest = arkret_identifiers::Hash::new(
+        arkret_canonical::canonical_sha256(&lease_basis).expect("fixture lease basis digest"),
+    )
+    .unwrap();
     let authority_set_policy = arkret_wire::AuthoritySetPolicy {
         schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
@@ -618,14 +654,13 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         source: arkret_wire::AuthoritySetPolicySource {
             source_kind: arkret_wire::AuthoritySetSourceKind::RealmControl,
             source_ref: test_cited_basis_seal(&event).id.as_str().to_owned(),
-            source_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "c".repeat(64)))
-                .unwrap(),
+            source_digest: lease_basis_digest,
             generation_ref: "1".to_owned(),
         },
         authorization_rules: vec![arkret_wire::AuthoritySetAuthorizationRule {
             rule_id: "realm_admission".to_owned(),
             issuer_role: arkret_wire::AuthoritySetIssuerRole::RealmAdmission,
-            allowed_actions: vec![event.kind.as_str().to_owned()],
+            allowed_actions: vec![action.clone()],
             issuers: vec![arkret_wire::AuthoritySetIssuer {
                 verification_method: arkret_wire::DidUrl::new(format!(
                     "{PEER_SOURCE_DID}#authorization-lease-key"
@@ -646,20 +681,23 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             "ak:authorization_lease:01904100-0000-7000-8000-fede1ea5e001",
         )
         .unwrap(),
-        basis_ref: arkret_wire::offline_publication::LeaseBasisRef::Seal(
-            test_cited_basis_seal(&event).id,
-        ),
+        basis_ref: lease_basis,
         actor_id: event.actor_id.clone(),
         device_id: arkret_identifiers::DeviceId::new(
             "ak:device:01904100-0000-7000-8000-a11ce0000001",
         )
         .unwrap(),
         scope_ref: event.scope_ref.clone(),
-        action: event.kind.as_str().to_owned(),
+        action,
         authorization_rule_id: "realm_admission".to_owned(),
-        risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
+        risk_tier,
         issued_at,
-        expires_at: issued_at + ChronoDuration::hours(4),
+        expires_at: issued_at
+            + if risk_tier == arkret_wire::RiskTier::High {
+                ChronoDuration::minutes(30)
+            } else {
+                ChronoDuration::hours(4)
+            },
         authority_set_ref: authority_set_ref.clone(),
         authority_set_policy,
         proofs: Vec::new(),
@@ -669,6 +707,14 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         lease.lease_digest().expect("fixture lease digest"),
         issued_at,
     )];
+    let lease_binding = lease
+        .proof_binding_bytes(&lease.proofs[0])
+        .expect("fixture lease proof binding");
+    lease.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(
+        &lease_binding,
+        &publication_signing_key(&lease.proofs[0].verification_method),
+    )
+    .expect("fixture lease proof signature");
     let mut receipt = arkret_wire::offline_publication::IngressReceipt {
         receipt_id: arkret_identifiers::ReceiptId::new(
             "ak:receipt:01904100-0000-7000-8000-fede4ece17e1",
@@ -686,15 +732,24 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         receipt.receipt_digest().expect("fixture receipt digest"),
         issued_at,
     )];
+    let receipt_binding = receipt
+        .proof_binding_bytes(&receipt.proofs[0])
+        .expect("fixture ingress receipt proof binding");
+    receipt.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(
+        &receipt_binding,
+        &publication_signing_key(&receipt.proofs[0].verification_method),
+    )
+    .expect("fixture ingress receipt signature");
     let control_proposal_receipt = event.seal_basis.as_ref().map(|_| {
         let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let authority_set_digest = authority_set_ref.authority_set_digest.clone();
         let mut member_receipt = arkret_wire::ProposalMemberReceipt {
             realm_id: event.realm_id.clone(),
-            proposal_digest: event_digest,
+            proposal_digest: event_digest.clone(),
             received_at: issued_at,
             decision_due_at: issued_at + policy.decision_window,
             absolute_due_at: issued_at + policy.absolute_horizon,
-            authority_set_ref: authority_set_ref.authority_set_digest,
+            authority_set_ref: authority_set_digest.clone(),
             signature: arkret_wire::PayloadSignature {
                 alg: "EdDSA".to_owned(),
                 verification_method: format!("{PEER_SOURCE_DID}#notary-key"),
@@ -706,16 +761,16 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         };
         member_receipt.signature.payload_digest = member_receipt
             .member_receipt_digest()
-            .expect("fixture proposal receipt digest");
+            .expect("fixture proposal member receipt digest");
         arkret_wire::ControlProposalReceipt {
             kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
-            realm_id: member_receipt.realm_id.clone(),
-            proposal_digest: member_receipt.proposal_digest.clone(),
-            received_at: member_receipt.received_at,
-            decision_due_at: member_receipt.decision_due_at,
-            absolute_due_at: member_receipt.absolute_due_at,
+            realm_id: event.realm_id.clone(),
+            proposal_digest: event_digest,
+            received_at: issued_at,
+            decision_due_at: issued_at + policy.decision_window,
+            absolute_due_at: issued_at + policy.absolute_horizon,
             defer_count: 0,
-            authority_set_ref: member_receipt.authority_set_ref.clone(),
+            authority_set_ref: authority_set_digest,
             member_receipts: vec![member_receipt],
         }
     });
@@ -744,7 +799,7 @@ fn publication_proof(
         payload_digest,
         created_at,
         domain: None,
-        audience: None,
+        audience: Some(arkret_wire::Audience::Single(PEER_SOURCE_DID.to_owned())),
         proof_purpose: None,
         jws: "a..b".to_owned(),
     }
