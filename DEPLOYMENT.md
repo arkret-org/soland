@@ -110,6 +110,7 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_ICE_REFRESH_LEAD_SECONDS` | `75` | Lead time before TTL at which clients should refresh the ICE config. |
 | `SOLAND_JWS_REPLAY_WINDOW_SECONDS` | `300` | Accepted JWS replay window; `0` disables replay-window enforcement. |
 | `SOLAND_KEY_BACKUP_DAILY_DOWNLOAD_LIMIT` | spec default | Per-principal daily key-backup download limit. |
+| `SOLAND_NOTARY_SIGNING_KEY` | unset | Base64 (standard or url-safe-no-pad) 32-byte NotaryWorker signing seed. Required outside development mode unless a durable `SOLAND_KEYSTORE_BACKEND` is configured; an ephemeral notary key breaks the Seal signature chain across restarts. |
 | `SOLAND_OBJECT_STORAGE_S3_SESSION_TOKEN` | unset | Optional S3 session token for temporary credentials. |
 | `SOLAND_OBJECT_STORAGE_S3_SKIP_SIGNATURE` | `false` | Skip S3 request signing for test-only object stores; do not enable for production S3. |
 | `SOLAND_PUSH_BRIDGE_CACHE_TTL_SECS` | `900` | TTL for push bridge trust/cache entries. |

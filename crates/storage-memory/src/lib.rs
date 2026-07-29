@@ -13,8 +13,8 @@ pub(crate) use soland_storage::{
     AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
     AgentRuntimeApprovalWrite, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
     AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
-    BlobRecord, BlobStore, CanonicalEventRecord, ConsentCellKey, ConsentCellRecord,
-    ConsentCellStore, ContactKey, ContactRecord, ContactStore, CursorRevocation,
+    BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord, ConsentCellKey,
+    ConsentCellRecord, ConsentCellStore, ContactKey, ContactRecord, ContactStore, CursorRevocation,
     DeviceInventoryRecord, DeviceInventoryStore, DeviceKeyStore, DeviceMessageAckTokenRecord,
     DeviceMessageBatchCommitOutcome, DeviceMessageBatchInspection, DeviceMessageBatchRecord,
     DeviceMessageIntentRecord, DeviceMessageRecord, DeviceMessageStore,
@@ -57,7 +57,8 @@ pub(crate) use soland_storage::{
     peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
     recovery_active_policy_locked, registration_as_existing, registrations_match,
     remove_third_party_active_material, stage_identity_anchor_events,
-    valid_new_service_registration_records, validate_security_transaction_update,
+    valid_new_service_registration_records, validate_backup_erase_progress_initial,
+    validate_backup_erase_progress_update, validate_security_transaction_update,
     webvh_freshness_on_put,
 };
 pub(crate) use uuid::Uuid;

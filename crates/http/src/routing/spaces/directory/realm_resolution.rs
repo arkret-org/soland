@@ -382,6 +382,8 @@ fn join_rule_from_value(value: &Value) -> Option<&str> {
             .or_else(|| value.get("join_rule"))
             .or_else(|| value.pointer("/object/default_join_rule"))
             .or_else(|| value.pointer("/object/join_rule"))
+            .or_else(|| value.pointer("/value/default_join_rule"))
+            .or_else(|| value.pointer("/value/join_rule"))
             .and_then(Value::as_str)
     })
 }

@@ -650,138 +650,21 @@ impl ProjectionState {
         }
     }
 
-    /// SOL-ORG-01 — the soland-local cell family that backs `ak.realm.update`
-    /// mutable Realm metadata (owner / title / security_class /
-    /// federation_policy) and its CAS-register / bottom / conflict-repair
-    /// mechanics. Its wire subject is the literal `null`; `realm_id` is the
-    /// enclosing CellStore namespace and remains a side-band map key.
+    /// The registered cell family that backs `ak.realm.update` mutable Realm
+    /// metadata and its CAS-register / bottom / conflict-repair mechanics. Its
+    /// wire subject is the literal `null`; `realm_id` is the enclosing
+    /// CellStore namespace and remains a side-band map key.
     ///
     /// This is deliberately NOT `ak.component.realm.organization.v1`: that
     /// cell family is the organization-authorized relationship statement
     /// surface (`ak.realm.organization`, cell subject
     /// `(organization_id, relationship)`) and must not be overwritten by
-    /// Realm metadata patches. Spec's event-kind-registry declares no
-    /// dedicated cell family for `ak.realm.update`; the source of truth for
-    /// Realm metadata is the `realm_states` object projection, and this cell
-    /// only exists to drive the concurrent-update conflict resolution.
+    /// Realm metadata patches. The accepted SDK CellStore projection is the
+    /// source of truth for conflict state; this service-local mirror must not
+    /// infer concurrency from incomparable operation and Seal identifiers.
+    #[cfg(test)]
     pub(crate) fn realm_metadata_cell_id() -> Option<CellRef> {
         CellRef::new(arkret_wire::REALM_METADATA_CELL.to_owned()).ok()
-    }
-
-    pub(crate) fn realm_update_conflict_basis(operation: &Operation) -> Option<String> {
-        operation
-            .payload
-            .get("seal_ref")
-            .or_else(|| operation.payload.get("conflict_basis"))
-            .or_else(|| operation.payload.get("state_witness"))
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty())
-            .map(ToOwned::to_owned)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn realm_update_candidate_value(
-        &self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-        owner: Option<&String>,
-        title: Option<&String>,
-        security_class: Option<&String>,
-        federation_policy: Option<&String>,
-    ) -> Value {
-        let mut value = match self.realm_metadata_cells.get(operation.realm_id.as_str()) {
-            Some(CellState::Value(Value::Object(existing))) => existing.clone(),
-            _ => serde_json::Map::new(),
-        };
-        if let Some(o) = owner {
-            value.insert("owner".to_owned(), Value::String(o.clone()));
-        }
-        if let Some(t) = title {
-            value.insert("title".to_owned(), Value::String(t.clone()));
-        }
-        if let Some(sc) = security_class {
-            value.insert("security_class".to_owned(), Value::String(sc.clone()));
-        }
-        if let Some(fp) = federation_policy {
-            value.insert("federation_policy".to_owned(), Value::String(fp.clone()));
-        }
-        value.insert("updated_at".to_owned(), Value::String(utc_timestamp_z(now)));
-        value.insert(
-            "operation_id".to_owned(),
-            Value::String(operation.operation_id.as_str().to_owned()),
-        );
-        Value::Object(value)
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn maybe_project_realm_update_bottom(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-        realm_id: &str,
-        owner: Option<&String>,
-        title: Option<&String>,
-        security_class: Option<&String>,
-        federation_policy: Option<&String>,
-    ) -> Option<ProjectionEffect> {
-        let cell_id = Self::realm_metadata_cell_id()?;
-        match self.realm_metadata_cells.get(realm_id) {
-            Some(CellState::Bottom(_)) => {
-                return Some(ProjectionEffect::Rejected {
-                    reason: "cell_bottom_state".to_owned(),
-                });
-            }
-            Some(CellState::Value(existing)) => {
-                let basis = Self::realm_update_conflict_basis(operation)?;
-                let current_operation = existing
-                    .get("operation_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default();
-                if current_operation.is_empty()
-                    || current_operation == basis
-                    || current_operation == operation.operation_id.as_str()
-                {
-                    return None;
-                }
-                let incoming = self.realm_update_candidate_value(
-                    operation,
-                    now,
-                    owner,
-                    title,
-                    security_class,
-                    federation_policy,
-                );
-                let bottom = arkret_wire::Bottom {
-                    kind: arkret_wire::BottomKind::Conflict,
-                    cells: vec![cell_id.clone()],
-                    move_ids: Vec::new(),
-                    seal_view: None,
-                    heads: vec![
-                        serde_json::json!({
-                            "move_id": current_operation,
-                            "value": existing,
-                        }),
-                        serde_json::json!({
-                            "move_id": operation.operation_id.as_str(),
-                            "value": incoming,
-                        }),
-                    ],
-                    details: Some(arkret_wire::bottom_details([
-                        ("basis", serde_json::json!(basis.as_str())),
-                        ("reason", serde_json::json!("concurrent_realm_update")),
-                    ])),
-                    escalated_at: None,
-                };
-                self.realm_metadata_cells
-                    .insert(realm_id.to_owned(), CellState::Bottom(bottom));
-                return Some(ProjectionEffect::RealmLifecycle {
-                    realm_id: realm_id.to_owned(),
-                    action: "bottom_expose".to_owned(),
-                });
-            }
-            None => {}
-        }
-        None
     }
 
     pub fn check_bottom_cell_transition(&self, operation: &Operation) -> Result<(), &'static str> {
@@ -1187,19 +1070,6 @@ impl ProjectionState {
             };
         }
 
-        if kind == arkret_wire::events::EventKind::REALM_UPDATE
-            && let Some(effect) = self.maybe_project_realm_update_bottom(
-                operation,
-                now,
-                &realm_id,
-                owner.as_ref(),
-                title.as_ref(),
-                payload_security_class.as_ref(),
-                payload_federation_policy.as_ref(),
-            )
-        {
-            return effect;
-        }
         if kind == arkret_wire::events::EventKind::REALM_CREATE
             && self.realm_create_log(&realm_id).is_some()
         {

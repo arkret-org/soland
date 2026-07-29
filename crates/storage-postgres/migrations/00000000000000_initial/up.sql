@@ -1302,6 +1302,15 @@ CREATE TABLE public.security_transactions (
     CONSTRAINT security_transactions_state_check CHECK ((state = ANY (ARRAY['pending'::text, 'running'::text, 'awaiting_device_attestation'::text, 'completed'::text, 'aborted'::text, 'expired'::text])))
 );
 
+CREATE TABLE public.security_transaction_backup_erase_progress (
+    transaction_id uuid NOT NULL,
+    canonical_request bytea NOT NULL,
+    outcome jsonb NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT security_transaction_backup_erase_progress_pkey PRIMARY KEY (transaction_id),
+    CONSTRAINT security_transaction_backup_erase_progress_transaction_id_fkey FOREIGN KEY (transaction_id) REFERENCES public.security_transactions(id) ON DELETE CASCADE
+);
+
 CREATE TABLE public.security_transaction_step_outcomes (
     transaction_id uuid NOT NULL,
     step text NOT NULL,

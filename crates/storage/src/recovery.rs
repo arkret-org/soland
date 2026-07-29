@@ -1,7 +1,7 @@
 use super::{
-    BTreeMap, PersistenceError, PersistenceResult, RecoveryPolicyRecord, RecoverySessionRecord,
-    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
-    SecurityTransactionStepOutcomeRecord, async_trait,
+    BTreeMap, BackupSeriesEraseProgressRecord, PersistenceError, PersistenceResult,
+    RecoveryPolicyRecord, RecoverySessionRecord, SecurityTransactionRecord,
+    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord, async_trait,
 };
 /// Durable recovery policy store. Implementations enforce policy_id
 /// uniqueness, `(principal_id, version)` uniqueness, and the per-principal
@@ -79,6 +79,130 @@ pub trait SecurityTransactionStore: Send + Sync {
         record: SecurityTransactionRecord,
         outcome: SecurityTransactionStepOutcomeRecord,
     ) -> PersistenceResult<SecurityTransactionStepOutcomeRecord>;
+    async fn backup_erase_progress(
+        &self,
+        transaction_id: &str,
+    ) -> PersistenceResult<Option<BackupSeriesEraseProgressRecord>>;
+    /// Fixes the first complete erase request and its initial all-remaining
+    /// progress before the first object deletion.
+    async fn begin_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressRecord,
+    ) -> PersistenceResult<BackupSeriesEraseProgressRecord>;
+    /// Persists a monotonic progress snapshot. Implementations must serialize
+    /// concurrent updates for the same transaction.
+    async fn update_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressRecord,
+    ) -> PersistenceResult<BackupSeriesEraseProgressRecord>;
+}
+
+fn decode_backup_erase_request(
+    progress: &BackupSeriesEraseProgressRecord,
+) -> PersistenceResult<arkret_models_crypto::BackupSeriesEraseRequestBody> {
+    let request = arkret_canonical::from_canonical_json_slice(&progress.canonical_request)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    let request: arkret_models_crypto::BackupSeriesEraseRequestBody =
+        serde_json::from_value(request)
+            .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    if request.transaction_id.as_str() != progress.transaction_id {
+        return Err(PersistenceError::SchemaViolation(
+            "backup erase progress belongs to a different transaction".to_owned(),
+        ));
+    }
+    progress
+        .outcome
+        .validate_for_request(&request)
+        .map_err(|error| PersistenceError::SchemaViolation(error.to_string()))?;
+    Ok(request)
+}
+
+#[doc(hidden)]
+pub fn validate_backup_erase_progress_initial(
+    progress: &BackupSeriesEraseProgressRecord,
+) -> PersistenceResult<()> {
+    let request = decode_backup_erase_request(progress)?;
+    if progress.outcome.status != arkret_models_crypto::BackupSeriesEraseStatus::Partial
+        || progress.outcome.confirmation.is_some()
+        || progress
+            .outcome
+            .series_results
+            .iter()
+            .zip(&request.series)
+            .any(|(result, binding)| {
+                result.status != arkret_models_crypto::BackupSeriesEraseResultStatus::Pending
+                    || !result.erased_backups.is_empty()
+                    || result.remaining_backups != {
+                        let mut refs = binding.old_backups.clone();
+                        refs.sort_by(|left, right| {
+                            left.backup_id.as_str().cmp(right.backup_id.as_str())
+                        });
+                        refs
+                    }
+                    || result.reason_code.is_some()
+            })
+    {
+        return Err(PersistenceError::SchemaViolation(
+            "initial backup erase progress must contain the exact all-remaining plan".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
+#[doc(hidden)]
+pub fn validate_backup_erase_progress_update(
+    existing: &BackupSeriesEraseProgressRecord,
+    proposed: &BackupSeriesEraseProgressRecord,
+) -> PersistenceResult<()> {
+    let existing_request = decode_backup_erase_request(existing)?;
+    let proposed_request = decode_backup_erase_request(proposed)?;
+    if existing.transaction_id != proposed.transaction_id
+        || existing.canonical_request != proposed.canonical_request
+        || existing_request != proposed_request
+        || existing.outcome.transaction_id != proposed.outcome.transaction_id
+        || existing.outcome.request_digest != proposed.outcome.request_digest
+    {
+        return Err(PersistenceError::Conflict(
+            "backup erase progress changed its immutable request".to_owned(),
+        ));
+    }
+    for (before, after) in existing
+        .outcome
+        .series_results
+        .iter()
+        .zip(&proposed.outcome.series_results)
+    {
+        let before_erased = before
+            .erased_backups
+            .iter()
+            .map(|reference| reference.backup_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let after_erased = after
+            .erased_backups
+            .iter()
+            .map(|reference| reference.backup_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let before_remaining = before
+            .remaining_backups
+            .iter()
+            .map(|reference| reference.backup_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        let after_remaining = after
+            .remaining_backups
+            .iter()
+            .map(|reference| reference.backup_id.as_str())
+            .collect::<std::collections::BTreeSet<_>>();
+        if !before_erased.is_subset(&after_erased)
+            || !after_remaining.is_subset(&before_remaining)
+            || !after_erased.is_disjoint(&after_remaining)
+        {
+            return Err(PersistenceError::Conflict(
+                "backup erase progress attempted to resurrect or rewrite an erased object"
+                    .to_owned(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 #[doc(hidden)]

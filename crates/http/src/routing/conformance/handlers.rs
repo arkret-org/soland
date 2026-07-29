@@ -356,7 +356,7 @@ pub async fn realm_basis(
     let mut body = body.into_inner();
     let realm_id = arkret_identifiers::RealmId::new(body.realm_id.clone())
         .map_err(|_| AppError::invalid_param("realm_id must be a canonical Realm id"))?;
-    arkret_identifiers::Did::new(body.subject.clone())
+    let subject = arkret_identifiers::Did::new(body.subject.clone())
         .map_err(|_| AppError::invalid_param("subject must be a canonical DID"))?;
     if body.data_plane_actions.is_empty() || body.data_plane_actions.len() > 32 {
         return Err(AppError::invalid_param(
@@ -402,9 +402,25 @@ pub async fn realm_basis(
         }
     }
 
+    let principal_control_realm =
+        arkret_models_identity::did_document::principal_control_realm_id(&subject);
+    let requested_notary_authority = if body.realm_id == principal_control_realm {
+        body.subject.as_str()
+    } else {
+        state.service_id()
+    };
+    let notary_cell =
+        arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
+            .map_err(|error| AppError::internal(format!("construct notary cell ref: {error}")))?;
+    let has_existing_notary = !state
+        .projections()
+        .sealed_ops_for_cell(&realm_id, &notary_cell)
+        .map_err(|error| AppError::internal(format!("read current notary state: {error}")))?
+        .is_empty();
     let basis = soland_services::conformance_basis::build_conformance_realm_basis(
         &body.realm_id,
         &body.subject,
+        (!has_existing_notary).then_some(requested_notary_authority),
         &body.data_plane_actions,
     )
     .map_err(|error| AppError::internal(format!("build conformance Realm basis: {error}")))?;

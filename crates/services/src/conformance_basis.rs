@@ -17,7 +17,7 @@ use crate::projection::ProjectionService;
 
 const FIXTURE_NOTARY_SEED: [u8; 32] = [0x53; 32];
 const FIXTURE_NOTARY_DID: &str = "did:web:alice.example";
-const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#fixture-notary";
+pub const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#fixture-notary";
 const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 
 /// A synthetic but cryptographically valid accepted governance basis.
@@ -35,6 +35,7 @@ pub struct ConformanceRealmBasis {
 pub fn build_conformance_realm_basis(
     realm_id: &str,
     subject: &str,
+    notary_authority: Option<&str>,
     data_plane_actions: &[String],
 ) -> Result<ConformanceRealmBasis, String> {
     let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
@@ -42,6 +43,7 @@ pub fn build_conformance_realm_basis(
     let founding_move = fixture_move_id(realm_id, subject, data_plane_actions, "founding-grant")?;
     let content_move = fixture_move_id(realm_id, subject, data_plane_actions, "content-grant")?;
     let covered_move = fixture_move_id(realm_id, subject, data_plane_actions, "mls-commit")?;
+    let notary_move = fixture_move_id(realm_id, subject, data_plane_actions, "notary")?;
 
     let founding_grant_id =
         fixture_grant_id(realm_id, subject, data_plane_actions, "founding-grant");
@@ -52,7 +54,34 @@ pub fn build_conformance_realm_basis(
         "ak.realm.admin".to_owned(),
         "ak.realm_key.share".to_owned(),
     ];
-    let mut ops = vec![
+    let mut ops = Vec::new();
+    if let Some(notary_authority) = notary_authority {
+        let notary_authority =
+            Did::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
+        ops.push((
+            CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
+                .map_err(|error| error.to_string())?,
+            issued_op(
+                &issuer,
+                &notary_move,
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Set,
+                    tag: None,
+                    value: Some(
+                        serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
+                            notary_authority,
+                        ))
+                        .map_err(|error| error.to_string())?,
+                    ),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        ));
+    }
+    ops.extend([
         (
             capability_grant_cell(&founding_grant_id)?,
             issued_op(
@@ -75,7 +104,7 @@ pub fn build_conformance_realm_basis(
                 ),
             ),
         ),
-    ];
+    ]);
 
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
@@ -87,6 +116,9 @@ pub fn build_conformance_realm_basis(
         content_move.clone(),
         covered_move.clone(),
     ];
+    if notary_authority.is_some() {
+        delta.push(notary_move);
+    }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     let seal = Seal::sign_single(
         realm.clone(),

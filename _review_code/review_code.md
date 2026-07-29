@@ -90,3 +90,25 @@
 - Prevention dimension: projection-only visibility indexes must derive the same effective scope as
   admission and must have negative tests for every private structural Event kind.
 - Status: fixed; 17 focused Sidecar HTTP tests pass.
+
+## 2026-07-29 — special Event batches can commit without a durable federation outbox
+
+- Surface: Realm bootstrap, identity-anchor, and cross-signing recovery Event publication.
+- Regression: the ordinary Event path commits canonical Event, projection, idempotency outcome,
+  and federation outbox in one storage transaction, but the special atomic batch paths commit
+  their Events first and enqueue federation deliveries afterward. A process crash or enqueue
+  failure in that gap leaves an accepted Event with no durable delivery intent; restart cannot
+  reconstruct the missing outbox row.
+- Additional retry defect: an HTTP `dependency_missing` response schedules the same outbox row
+  immediately with its old `Idempotency-Key`. The federation contract terminates a key after any
+  received response and requires dependency-completed re-evaluation to use a newly built request
+  and a new key.
+- Required correction: every accepted Event variant must pass prebuilt delivery records into the
+  same PostgreSQL unit-of-work as its Event/receipt/CAS mutations. Split transport retry
+  (same body/key after no response) from semantic resubmission (new reduced body/key after a
+  response).
+- Prevention dimension: PostgreSQL tests must inject outbox failure for every special atomic Event
+  unit and must reconstruct AppState across a real restart; ordinary single-Event success tests do
+  not close this regression class.
+- Detailed report:
+  `../../arkret-work/docs/federation-event-delivery-reliability-improvement-report.md`.

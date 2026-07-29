@@ -196,6 +196,18 @@ pub struct SecurityTransactionStepOutcomeRecord {
     pub participant_outcome: Option<Value>,
 }
 
+/// Durable monotonic progress for one transaction-bound backup-series erase.
+///
+/// The first canonical request is immutable. `outcome` may advance only by
+/// moving planned objects from `remaining_backups` to `erased_backups`; an
+/// erased object can never reappear after a retry or restart.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BackupSeriesEraseProgressRecord {
+    pub transaction_id: String,
+    pub canonical_request: Vec<u8>,
+    pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
+}
+
 /// A revoked cursor authority recorded by `ak.self.account.command.revoke_cursor`.
 ///
 /// `scope` mirrors the wire enum: `this_cursor` matches the exact cursor by

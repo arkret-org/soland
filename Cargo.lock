@@ -5220,6 +5220,7 @@ dependencies = [
  "arkret-event-draft",
  "arkret-identity",
  "arkret-models-collaboration",
+ "arkret-models-crypto",
  "arkret-models-identity",
  "arkret-wire",
  "async-trait",

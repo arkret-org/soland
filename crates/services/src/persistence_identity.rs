@@ -1644,6 +1644,26 @@ fn persistence_security_transaction_step_outcome(
     }
 }
 
+fn application_backup_series_erase_progress(
+    record: soland_storage::BackupSeriesEraseProgressRecord,
+) -> crate::identity::BackupSeriesEraseProgressState {
+    crate::identity::BackupSeriesEraseProgressState {
+        transaction_id: record.transaction_id,
+        canonical_request: record.canonical_request,
+        outcome: record.outcome,
+    }
+}
+
+fn persistence_backup_series_erase_progress(
+    progress: crate::identity::BackupSeriesEraseProgressState,
+) -> soland_storage::BackupSeriesEraseProgressRecord {
+    soland_storage::BackupSeriesEraseProgressRecord {
+        transaction_id: progress.transaction_id,
+        canonical_request: progress.canonical_request,
+        outcome: progress.outcome,
+    }
+}
+
 #[async_trait::async_trait]
 impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransactions {
     async fn create(
@@ -1731,6 +1751,42 @@ impl crate::identity::SecurityTransactionPort for PersistenceSecurityTransaction
                     persistence_security_transaction(transaction),
                     persistence_security_transaction_step_outcome(outcome),
                 )
+                .await?,
+        ))
+    }
+
+    async fn backup_erase_progress(
+        &self,
+        transaction_id: &str,
+    ) -> crate::ServiceResult<Option<crate::identity::BackupSeriesEraseProgressState>> {
+        Ok(self
+            .0
+            .security_transactions()
+            .backup_erase_progress(transaction_id)
+            .await?
+            .map(application_backup_series_erase_progress))
+    }
+
+    async fn begin_backup_erase(
+        &self,
+        progress: crate::identity::BackupSeriesEraseProgressState,
+    ) -> crate::ServiceResult<crate::identity::BackupSeriesEraseProgressState> {
+        Ok(application_backup_series_erase_progress(
+            self.0
+                .security_transactions()
+                .begin_backup_erase(persistence_backup_series_erase_progress(progress))
+                .await?,
+        ))
+    }
+
+    async fn update_backup_erase(
+        &self,
+        progress: crate::identity::BackupSeriesEraseProgressState,
+    ) -> crate::ServiceResult<crate::identity::BackupSeriesEraseProgressState> {
+        Ok(application_backup_series_erase_progress(
+            self.0
+                .security_transactions()
+                .update_backup_erase(persistence_backup_series_erase_progress(progress))
                 .await?,
         ))
     }

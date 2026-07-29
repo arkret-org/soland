@@ -230,6 +230,9 @@ async fn admit_signal(
     // constants, the AAD binding, `proof.created_at == sent_at`, the envelope
     // digest and the per-class TTL ceilings.
     envelope.validate_structural().map_err(structural_error)?;
+    if envelope.expires_at <= chrono::Utc::now() {
+        return Err(signal_invalid("signal envelope is already expired"));
+    }
 
     // The sending device is the authenticated one. A Signal proof names the
     // device, so a session may not relay another device's envelope.

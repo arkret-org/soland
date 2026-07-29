@@ -1646,12 +1646,21 @@ pub(crate) async fn submit_federation_events(
                 )
             })
             .collect::<Vec<_>>();
+        // Federation transports the origin's immutable publication evidence.
+        // The leases above have already been structurally and cryptographically
+        // verified against their Events; preserve them through the shared
+        // bootstrap path so the destination does not try to mint replacement
+        // proposal receipts under its own (non-authoritative) service key.
+        let authorization_leases = submissions
+            .iter()
+            .map(|submission| submission.authorization_lease.clone())
+            .collect::<Vec<_>>();
         match submit_realm_bootstrap_batch(
             state,
             &session,
             events,
             Some(admissions.as_slice()),
-            None,
+            Some(authorization_leases.as_slice()),
         )
         .await
         {
@@ -2028,8 +2037,10 @@ mod preflight;
 mod value;
 
 use delivery_binding::*;
-pub(in crate::routing) use ingress_receipt::validate_initial_submission;
 use ingress_receipt::*;
+pub(in crate::routing) use ingress_receipt::{
+    validate_authorization_lease_for_event, validate_initial_submission,
+};
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;

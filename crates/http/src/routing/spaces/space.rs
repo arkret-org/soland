@@ -39,7 +39,7 @@ use soland_services::operation_semantics::CHILD_ORDER_CELL_FAMILY;
 
 use super::{AuthArgs, accept_local_operations};
 use crate::routing::events::operations::operation_policy_reason_code;
-use crate::routing::organizations;
+use crate::routing::{is_valid_discoverability, organizations};
 use crate::state::{AppState, RealmDirectoryEntry};
 use crate::wire::now;
 use crate::{JsonResult, ids, json_ok};
@@ -677,6 +677,27 @@ pub async fn realm_meta_deleted(state: &AppState, realm_id: &str) -> bool {
 }
 
 pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> String {
+    // The accepted control projection is authoritative. Live semantic apply
+    // stores Realm create entries as `{object: Realm}`, while canonical Seal
+    // replay stores the ordered-log value as `{value: Realm + entry_id}`.
+    // Resolve both before consulting the service-local metadata mirror, which
+    // may legitimately lag a freshly materialized Seal.
+    let projected = {
+        let projection = state.projections().snapshot();
+        projection
+            .realm_metadata_cell_value(realm_id)
+            .and_then(discoverability_from_realm_value)
+            .or_else(|| {
+                projection
+                    .realm_create_log(realm_id)
+                    .and_then(|entries| entries.last())
+                    .and_then(discoverability_from_realm_value)
+            })
+            .map(ToOwned::to_owned)
+    };
+    if let Some(discoverability) = projected {
+        return discoverability;
+    }
     state
         .realms()
         .realm_metadata(realm_id)
@@ -691,6 +712,18 @@ pub async fn realm_discoverability_for_id(state: &AppState, realm_id: &str) -> S
                 "invite_only".to_owned()
             }
         })
+}
+
+fn discoverability_from_realm_value(value: &Value) -> Option<&str> {
+    value
+        .get("default_discoverability")
+        .or_else(|| value.get("discoverability"))
+        .or_else(|| value.pointer("/object/default_discoverability"))
+        .or_else(|| value.pointer("/object/discoverability"))
+        .or_else(|| value.pointer("/value/default_discoverability"))
+        .or_else(|| value.pointer("/value/discoverability"))
+        .and_then(Value::as_str)
+        .filter(|value| is_valid_discoverability(value))
 }
 
 pub async fn realm_has_member_by_id(state: &AppState, realm_id: &str, actor: &str) -> bool {

@@ -8,7 +8,8 @@ use arkret_wire::{
 use chrono::Duration;
 use ed25519_dalek::Signer as _;
 use soland_services::identity::{
-    SecurityTransactionStepAttemptState, SecurityTransactionStepOutcomeState,
+    BackupSeriesEraseProgressState, SecurityTransactionStepAttemptState,
+    SecurityTransactionStepOutcomeState,
 };
 
 use super::*;
@@ -555,6 +556,101 @@ async fn continue_rotation_switch(
     .await
 }
 
+fn backup_rotation_kind_name(kind: arkret_wire::BackupRotationKind) -> &'static str {
+    match kind {
+        arkret_wire::BackupRotationKind::SecretStorage => "secret_storage",
+        arkret_wire::BackupRotationKind::MlsHistory => "mls_history",
+    }
+}
+
+fn initial_backup_erase_outcome(
+    request: &arkret_models_crypto::BackupSeriesEraseRequestBody,
+) -> Result<arkret_models_crypto::BackupSeriesEraseOutcome, AppError> {
+    use arkret_models_crypto::{
+        BackupSeriesEraseOutcome, BackupSeriesEraseResult, BackupSeriesEraseResultStatus,
+        BackupSeriesEraseStatus,
+    };
+
+    let request_digest = Hash::new(
+        arkret_canonical::canonical_sha256(request)
+            .map_err(|error| AppError::internal(format!("erase request digest failed: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(error.to_string()))?;
+    let series_results = request
+        .series
+        .iter()
+        .map(|rotation| {
+            let mut remaining_backups = rotation.old_backups.clone();
+            remaining_backups
+                .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
+            BackupSeriesEraseResult {
+                backup_kind: rotation.backup_kind,
+                previous_series_id: rotation.previous_series_id.clone(),
+                new_series_id: rotation.new_series_id.clone(),
+                status: BackupSeriesEraseResultStatus::Pending,
+                erased_backups: Vec::new(),
+                remaining_backups,
+                reason_code: None,
+            }
+        })
+        .collect();
+    let outcome = BackupSeriesEraseOutcome {
+        transaction_id: request.transaction_id.clone(),
+        request_digest,
+        status: BackupSeriesEraseStatus::Partial,
+        series_results,
+        confirmation: None,
+    };
+    outcome.validate_for_request(request).map_err(|error| {
+        AppError::internal(format!("initial backup erase progress is invalid: {error}"))
+    })?;
+    Ok(outcome)
+}
+
+fn backup_value_matches_rotation(
+    value: &Value,
+    principal_id: &Did,
+    series_id: &arkret_wire::BackupSeriesId,
+    backup_kind: arkret_wire::BackupRotationKind,
+    expected: &arkret_wire::BackupObjectRef,
+) -> bool {
+    value.get("backup_id").and_then(Value::as_str) == Some(expected.backup_id.as_str())
+        && value.get("ciphertext_digest").and_then(Value::as_str)
+            == Some(expected.ciphertext_digest.as_str())
+        && value.get("actor_id").and_then(Value::as_str) == Some(principal_id.as_str())
+        && value.get("series_id").and_then(Value::as_str) == Some(series_id.as_str())
+        && value.get("backup_kind").and_then(Value::as_str)
+            == Some(backup_rotation_kind_name(backup_kind))
+}
+
+fn refresh_backup_erase_completion(
+    outcome: &mut arkret_models_crypto::BackupSeriesEraseOutcome,
+    request: &arkret_models_crypto::BackupSeriesEraseRequestBody,
+) -> bool {
+    use arkret_models_crypto::{
+        BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA, BackupSeriesEraseConfirmation,
+        BackupSeriesEraseStatus,
+    };
+
+    let complete = outcome
+        .series_results
+        .iter()
+        .all(|result| result.remaining_backups.is_empty());
+    outcome.status = if complete {
+        BackupSeriesEraseStatus::Complete
+    } else {
+        BackupSeriesEraseStatus::Partial
+    };
+    outcome.confirmation = complete.then(|| BackupSeriesEraseConfirmation {
+        schema: BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA.to_owned(),
+        transaction_id: request.transaction_id.clone(),
+        transaction_request_digest: request.transaction_request_digest.clone(),
+        prepared_plan_digest: request.prepared_plan_digest.clone(),
+        series: request.series.clone(),
+    });
+    complete
+}
+
 #[salvo::oapi::endpoint(
     operation_id = "ak.self.keys.backup_series.command.erase",
     tags("identity")
@@ -567,11 +663,7 @@ pub(crate) async fn backup_series_erase_command(
     res: &mut Response,
     req: &mut Request,
 ) -> JsonResult<arkret_models_crypto::BackupSeriesEraseOutcome> {
-    use arkret_models_crypto::{
-        BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA, BackupSeriesEraseConfirmation,
-        BackupSeriesEraseOutcome, BackupSeriesEraseResult, BackupSeriesEraseResultStatus,
-        BackupSeriesEraseStatus,
-    };
+    use arkret_models_crypto::{BackupSeriesEraseOutcome, BackupSeriesEraseResultStatus};
 
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
@@ -609,6 +701,7 @@ pub(crate) async fn backup_series_erase_command(
     }
 
     let (binding, _) = rotation_parts(&transaction)?;
+    let now = chrono::Utc::now();
     if transaction.resource.next_required_step != Some(SecurityTransactionStep::EraseOldMaterial)
         || transaction.resource.request_digest != request.transaction_request_digest
         || transaction.resource.prepared_plan_digest != request.prepared_plan_digest
@@ -619,7 +712,7 @@ pub(crate) async fn backup_series_erase_command(
         || request.authorization_lease.action != "ak.keys.backup_series.erase"
         || request.authorization_lease.authorization_rule_id != "realm_admission"
         || request.authorization_lease.risk_tier != arkret_wire::RiskTier::High
-        || request.authorization_lease.expires_at <= chrono::Utc::now()
+        || !request.authorization_lease.covers_instant(now)
     {
         return Err(AppError::conflict(
             "backup-series erase request is not authorized for this transaction",
@@ -635,6 +728,27 @@ pub(crate) async fn backup_series_erase_command(
             "backup-series erase lease is scoped outside principal control",
         )
         .with_wire_code("security_transaction_failed_precondition"));
+    }
+    let arkret_wire::LeaseBasisRef::Seal(basis_seal_id) = &request.authorization_lease.basis_ref
+    else {
+        return Err(
+            AppError::conflict("backup-series erase requires an accepted Seal basis")
+                .with_wire_code("authorization_lease_basis_mismatch"),
+        );
+    };
+    let basis_seal = state
+        .projections()
+        .seal_by_id(basis_seal_id)
+        .map_err(|error| AppError::internal(error.to_string()))?
+        .ok_or_else(|| {
+            AppError::conflict("backup-series erase lease basis is not accepted")
+                .with_wire_code("authorization_lease_basis_mismatch")
+        })?;
+    if basis_seal.realm_id != *request.authorization_lease.scope_ref.realm_id() {
+        return Err(
+            AppError::conflict("backup-series erase lease basis belongs to another Realm")
+                .with_wire_code("authorization_lease_basis_mismatch"),
+        );
     }
     let (expected_authority_ref, expected_authority_policy) =
         crate::routing::events::event_log::lease_issue::authority_for_scope(
@@ -657,6 +771,21 @@ pub(crate) async fn backup_series_erase_command(
     for proof in &request.authorization_lease.proofs {
         let issuer = arkret_identity::verification_method_did(&proof.verification_method)
             .map_err(|error| AppError::invalid_param(error.to_string()))?;
+        let audience_covers_issuer = match proof.audience.as_ref() {
+            Some(arkret_wire::Audience::Single(audience)) => audience == issuer.as_str(),
+            Some(arkret_wire::Audience::Multiple(audiences)) => {
+                audiences.iter().any(|audience| audience == issuer.as_str())
+            }
+            None => false,
+        };
+        if !audience_covers_issuer {
+            return Err(AppError::new(
+                ErrorCode::CapabilityDenied,
+                "backup-series erase lease proof audience does not cover its issuer",
+            )
+            .with_status(StatusCode::FORBIDDEN)
+            .with_wire_code("invalid_proof"));
+        }
         let binding_bytes = request
             .authorization_lease
             .proof_binding_bytes(proof)
@@ -688,13 +817,17 @@ pub(crate) async fn backup_series_erase_command(
                 )
                 .with_wire_code("security_transaction_failed_precondition"));
             };
-            if stored.get("ciphertext_digest").and_then(Value::as_str)
-                != Some(expected.ciphertext_digest.as_str())
-            {
-                return Err(
-                    AppError::conflict("replacement backup digest changed before erasure")
-                        .with_wire_code("security_transaction_failed_precondition"),
-                );
+            if !backup_value_matches_rotation(
+                &stored,
+                &transaction.resource.principal_id,
+                &rotation.new_series_id,
+                rotation.backup_kind,
+                expected,
+            ) {
+                return Err(AppError::conflict(
+                    "replacement backup identity, series, kind, or digest changed before erasure",
+                )
+                .with_wire_code("security_transaction_failed_precondition"));
             }
         }
         let active = state
@@ -710,15 +843,34 @@ pub(crate) async fn backup_series_erase_command(
                     .with_wire_code("security_transaction_failed_precondition"),
             );
         }
+        let active_pointer = state
+            .projections()
+            .key_backup_active_series(
+                transaction.resource.principal_id.as_str(),
+                backup_rotation_kind_name(rotation.backup_kind),
+            )
+            .ok_or_else(|| {
+                AppError::conflict("replacement backup series is not authoritative")
+                    .with_wire_code("security_transaction_failed_precondition")
+            })?;
+        if active_pointer.active_series_id != rotation.new_series_id
+            || !active_pointer
+                .previous_series_ids
+                .contains(&rotation.previous_series_id)
+        {
+            return Err(AppError::conflict(
+                "replacement backup series pointer changed before old-series erasure",
+            )
+            .with_wire_code("security_transaction_failed_precondition"));
+        }
     }
 
-    let prior_attempt = state
+    let existing_progress = state
         .security_transactions()
-        .step_attempt(&transaction_id, SecurityTransactionStep::EraseOldMaterial)
+        .backup_erase_progress(&transaction_id)
         .await
-        .map_err(security_transaction_service_error)?
-        .is_some();
-    if !prior_attempt {
+        .map_err(security_transaction_service_error)?;
+    if existing_progress.is_none() {
         for rotation in &binding.backup_rotations {
             for old in &rotation.old_backups {
                 let existing = state
@@ -730,11 +882,15 @@ pub(crate) async fn backup_series_erase_command(
                         AppError::conflict("planned old backup is missing before erasure begins")
                             .with_wire_code("security_transaction_failed_precondition")
                     })?;
-                if existing.get("ciphertext_digest").and_then(Value::as_str)
-                    != Some(old.ciphertext_digest.as_str())
-                {
+                if !backup_value_matches_rotation(
+                    &existing,
+                    &transaction.resource.principal_id,
+                    &rotation.previous_series_id,
+                    rotation.backup_kind,
+                    old,
+                ) {
                     return Err(AppError::conflict(
-                        "planned old backup digest changed before erasure",
+                        "planned old backup identity, series, kind, or digest changed before erasure",
                     )
                     .with_wire_code("security_transaction_failed_precondition"));
                 }
@@ -749,63 +905,109 @@ pub(crate) async fn backup_series_erase_command(
     )
     .await?;
 
-    let mut series_results = Vec::with_capacity(2);
-    for rotation in &binding.backup_rotations {
-        let mut erased_backups = Vec::new();
-        let mut remaining_backups = Vec::new();
-        for old in &rotation.old_backups {
-            match state
+    let mut progress = match existing_progress {
+        Some(progress) => {
+            if progress.canonical_request != canonical_request {
+                return Err(AppError::conflict(
+                    "backup-series erase already began with different canonical bytes",
+                )
+                .with_wire_code("duplicate_conflict"));
+            }
+            progress
+                .outcome
+                .validate_for_request(&request)
+                .map_err(|error| AppError::internal(error.to_string()))?;
+            progress
+        }
+        None => state
+            .security_transactions()
+            .begin_backup_erase(BackupSeriesEraseProgressState {
+                transaction_id: transaction_id.clone(),
+                canonical_request: canonical_request.clone(),
+                outcome: initial_backup_erase_outcome(&request)?,
+            })
+            .await
+            .map_err(security_transaction_service_error)?,
+    };
+
+    for result_index in 0..progress.outcome.series_results.len() {
+        let remaining = progress.outcome.series_results[result_index]
+            .remaining_backups
+            .clone();
+        let mut storage_failed = false;
+        for old in remaining {
+            if let Some(existing) = state
+                .key_backups()
+                .backup(old.backup_id.as_str())
+                .await
+                .map_err(recovery_service_error)?
+                && !backup_value_matches_rotation(
+                    &existing,
+                    &transaction.resource.principal_id,
+                    &request.series[result_index].previous_series_id,
+                    request.series[result_index].backup_kind,
+                    &old,
+                )
+            {
+                return Err(AppError::conflict(
+                    "planned old backup changed while erasure was in progress",
+                )
+                .with_wire_code("security_transaction_failed_precondition"));
+            }
+            if state
                 .key_backups()
                 .delete_backup(old.backup_id.as_str())
                 .await
+                .is_err()
             {
-                Ok(_) => erased_backups.push(old.clone()),
-                Err(_) => remaining_backups.push(old.clone()),
+                storage_failed = true;
+                continue;
             }
+            let result = &mut progress.outcome.series_results[result_index];
+            result
+                .remaining_backups
+                .retain(|reference| reference.backup_id != old.backup_id);
+            if !result
+                .erased_backups
+                .iter()
+                .any(|reference| reference.backup_id == old.backup_id)
+            {
+                result.erased_backups.push(old);
+                result
+                    .erased_backups
+                    .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
+            }
+            result.status = if result.remaining_backups.is_empty() {
+                BackupSeriesEraseResultStatus::Erased
+            } else {
+                BackupSeriesEraseResultStatus::Pending
+            };
+            result.reason_code = None;
+            refresh_backup_erase_completion(&mut progress.outcome, &request);
+            progress = state
+                .security_transactions()
+                .update_backup_erase(progress)
+                .await
+                .map_err(security_transaction_service_error)?;
         }
-        erased_backups.sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
-        remaining_backups
-            .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
-        let status = if remaining_backups.is_empty() {
-            BackupSeriesEraseResultStatus::Erased
-        } else {
-            BackupSeriesEraseResultStatus::FailedRetryable
-        };
-        series_results.push(BackupSeriesEraseResult {
-            backup_kind: rotation.backup_kind,
-            previous_series_id: rotation.previous_series_id.clone(),
-            new_series_id: rotation.new_series_id.clone(),
-            status,
-            erased_backups,
-            remaining_backups,
-            reason_code: (status == BackupSeriesEraseResultStatus::FailedRetryable)
-                .then_some("storage_temporarily_unavailable".to_owned()),
-        });
+        let result = &mut progress.outcome.series_results[result_index];
+        if storage_failed && !result.remaining_backups.is_empty() {
+            result.status = BackupSeriesEraseResultStatus::FailedRetryable;
+            result.reason_code = Some("storage_temporarily_unavailable".to_owned());
+            progress = state
+                .security_transactions()
+                .update_backup_erase(progress)
+                .await
+                .map_err(security_transaction_service_error)?;
+        }
     }
-    let complete = series_results
-        .iter()
-        .all(|result| result.status == BackupSeriesEraseResultStatus::Erased);
-    let confirmation = complete.then(|| BackupSeriesEraseConfirmation {
-        schema: BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA.to_owned(),
-        transaction_id: request.transaction_id.clone(),
-        transaction_request_digest: request.transaction_request_digest.clone(),
-        prepared_plan_digest: request.prepared_plan_digest.clone(),
-        series: request.series.clone(),
-    });
-    let outcome = BackupSeriesEraseOutcome {
-        transaction_id: request.transaction_id.clone(),
-        request_digest: Hash::new(arkret_canonical::canonical_sha256(&request).map_err(
-            |error| AppError::internal(format!("erase request digest failed: {error}")),
-        )?)
-        .map_err(|error| AppError::internal(error.to_string()))?,
-        status: if complete {
-            BackupSeriesEraseStatus::Complete
-        } else {
-            BackupSeriesEraseStatus::Partial
-        },
-        series_results,
-        confirmation,
-    };
+    let complete = refresh_backup_erase_completion(&mut progress.outcome, &request);
+    progress = state
+        .security_transactions()
+        .update_backup_erase(progress)
+        .await
+        .map_err(security_transaction_service_error)?;
+    let outcome = progress.outcome;
     outcome.validate_for_request(&request).map_err(|error| {
         AppError::internal(format!("backup-series erase outcome is invalid: {error}"))
     })?;

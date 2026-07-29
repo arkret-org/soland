@@ -4,9 +4,9 @@ use arkret_wire::{
 };
 
 use super::{
-    AsyncConnection, AsyncPgConnection, Binary, Jsonb, Nullable, OptionalExtension,
-    PersistenceError, PersistenceResult, PgPool, PgTransactionError, QueryableByName, RunQueryDsl,
-    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    AsyncConnection, AsyncPgConnection, BackupSeriesEraseProgressRecord, Binary, Jsonb, Nullable,
+    OptionalExtension, PersistenceError, PersistenceResult, PgPool, PgTransactionError,
+    QueryableByName, RunQueryDsl, SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
     SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, SqlUuid, Text, Timestamptz,
     Uuid, Value, async_trait, ids, pg_conn, sql_query,
 };
@@ -73,6 +73,16 @@ struct SecurityTransactionStepAttemptRow {
     canonical_request: Vec<u8>,
 }
 
+#[derive(QueryableByName)]
+struct BackupSeriesEraseProgressRow {
+    #[diesel(sql_type = SqlUuid)]
+    transaction_id: Uuid,
+    #[diesel(sql_type = Binary)]
+    canonical_request: Vec<u8>,
+    #[diesel(sql_type = Jsonb)]
+    outcome: Value,
+}
+
 impl TryFrom<SecurityTransactionStepAttemptRow> for SecurityTransactionStepAttemptRecord {
     type Error = PersistenceError;
 
@@ -95,6 +105,18 @@ impl TryFrom<SecurityTransactionStepOutcomeRow> for SecurityTransactionStepOutco
             canonical_request: row.canonical_request,
             response: row.response,
             participant_outcome: row.participant_outcome,
+        })
+    }
+}
+
+impl TryFrom<BackupSeriesEraseProgressRow> for BackupSeriesEraseProgressRecord {
+    type Error = PersistenceError;
+
+    fn try_from(row: BackupSeriesEraseProgressRow) -> Result<Self, Self::Error> {
+        Ok(Self {
+            transaction_id: ids::format_typed_uuid("transaction", &row.transaction_id),
+            canonical_request: row.canonical_request,
+            outcome: parse_stored("backup erase progress outcome", row.outcome)?,
         })
     }
 }
@@ -173,6 +195,32 @@ async fn load_one(
     .optional()
     .map_err(PersistenceError::database)?
     .map(SecurityTransactionRecord::try_from)
+    .transpose()
+}
+
+async fn load_backup_erase_progress(
+    conn: &mut AsyncPgConnection,
+    transaction_id: &str,
+    for_update: bool,
+) -> PersistenceResult<Option<BackupSeriesEraseProgressRecord>> {
+    let lock = if for_update { " FOR UPDATE" } else { "" };
+    let transaction_uuid =
+        ids::parse_typed_uuid(transaction_id, "transaction").ok_or_else(|| {
+            PersistenceError::SchemaViolation(format!(
+                "malformed transaction_id `{transaction_id}`"
+            ))
+        })?;
+    sql_query(format!(
+        "SELECT transaction_id, canonical_request, outcome \
+         FROM security_transaction_backup_erase_progress \
+         WHERE transaction_id = $1{lock}"
+    ))
+    .bind::<SqlUuid, _>(transaction_uuid)
+    .get_result::<BackupSeriesEraseProgressRow>(conn)
+    .await
+    .optional()
+    .map_err(PersistenceError::database)?
+    .map(BackupSeriesEraseProgressRecord::try_from)
     .transpose()
 }
 
@@ -631,6 +679,87 @@ impl SecurityTransactionStore for PgSecurityTransactionStore {
                 }
             }
             Ok(outcome)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn backup_erase_progress(
+        &self,
+        transaction_id: &str,
+    ) -> PersistenceResult<Option<BackupSeriesEraseProgressRecord>> {
+        let mut conn = pg_conn(&self.pool).await?;
+        load_backup_erase_progress(&mut conn, transaction_id, false).await
+    }
+
+    async fn begin_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressRecord,
+    ) -> PersistenceResult<BackupSeriesEraseProgressRecord> {
+        super::validate_backup_erase_progress_initial(&progress)?;
+        let transaction_id = progress.transaction_id.clone();
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            if load_one(conn, &transaction_id, true).await?.is_none() {
+                return Err(PersistenceError::NotFound(format!(
+                    "transaction_id `{transaction_id}` not found"
+                ))
+                .into());
+            }
+            if let Some(existing) = load_backup_erase_progress(conn, &transaction_id, true).await? {
+                if existing.canonical_request == progress.canonical_request {
+                    return Ok(existing);
+                }
+                return Err(PersistenceError::Conflict(
+                    "backup erase already began with different canonical bytes".to_owned(),
+                )
+                .into());
+            }
+            let outcome = serde_json::to_value(&progress.outcome)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            sql_query(
+                "INSERT INTO security_transaction_backup_erase_progress \
+                 (transaction_id, canonical_request, outcome) VALUES ($1, $2, $3)",
+            )
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<Binary, _>(&progress.canonical_request)
+            .bind::<Jsonb, _>(outcome)
+            .execute(conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            Ok(progress)
+        })
+        .await
+        .map_err(PgTransactionError::into_persistence)
+    }
+
+    async fn update_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressRecord,
+    ) -> PersistenceResult<BackupSeriesEraseProgressRecord> {
+        let transaction_id = progress.transaction_id.clone();
+        let mut conn = pg_conn(&self.pool).await?;
+        conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+            let existing = load_backup_erase_progress(conn, &transaction_id, true)
+                .await?
+                .ok_or_else(|| {
+                    PersistenceError::NotFound(format!(
+                        "backup erase progress for transaction `{transaction_id}` not found"
+                    ))
+                })?;
+            super::validate_backup_erase_progress_update(&existing, &progress)?;
+            let outcome = serde_json::to_value(&progress.outcome)
+                .map_err(|error| PersistenceError::Internal(error.to_string()))?;
+            sql_query(
+                "UPDATE security_transaction_backup_erase_progress \
+                 SET outcome = $2, updated_at = NOW() WHERE transaction_id = $1",
+            )
+            .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&transaction_id))
+            .bind::<Jsonb, _>(outcome)
+            .execute(conn)
+            .await
+            .map_err(PersistenceError::database)?;
+            Ok(progress)
         })
         .await
         .map_err(PgTransactionError::into_persistence)
