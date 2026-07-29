@@ -438,6 +438,8 @@ mod tests {
             json!({}),
         )
         .unwrap();
+        let authorize_event_id = authorize_event.event_id.clone();
+        let authorize_event = initial_submission(authorize_event);
         let public_key_digest =
             arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value).unwrap();
         let signing_key_binding = serde_json::from_value(json!({
@@ -451,7 +453,7 @@ mod tests {
                 "key": public_key.key
             },
             "public_key_digest": public_key_digest,
-            "agent_key_authorize_event_id": authorize_event.event_id,
+            "agent_key_authorize_event_id": authorize_event_id,
             "issued_at": "2026-07-06T00:00:00.000Z",
             "controller_id": controller_id,
             "controller_proof": {
@@ -490,7 +492,7 @@ mod tests {
             .unwrap(),
             requested_scope_disclosure,
             runtime_attestation: None,
-            authorize_event: initial_submission(authorize_event),
+            authorize_event,
             signing_key_binding,
         }
     }
