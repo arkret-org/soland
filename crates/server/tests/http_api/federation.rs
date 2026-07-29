@@ -688,29 +688,39 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
     )];
     let control_proposal_receipt = event.seal_basis.as_ref().map(|_| {
         let policy = arkret_wire::ControlProposalDecisionPolicy::default();
-        let mut proposal_receipt = arkret_wire::ControlProposalReceipt {
-            kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+        let mut member_receipt = arkret_wire::ProposalMemberReceipt {
             realm_id: event.realm_id.clone(),
             proposal_digest: event_digest,
             received_at: issued_at,
             decision_due_at: issued_at + policy.decision_window,
             absolute_due_at: issued_at + policy.absolute_horizon,
-            defer_count: 0,
-            authority_set_ref,
-            receipt_coordinator: arkret_identifiers::Did::new(PEER_SOURCE_DID.to_owned()).unwrap(),
-            signatures: Vec::new(),
+            authority_set_ref: authority_set_ref.authority_set_digest,
+            signature: arkret_wire::PayloadSignature {
+                alg: "EdDSA".to_owned(),
+                verification_method: format!("{PEER_SOURCE_DID}#notary-key"),
+                payload_digest: arkret_identifiers::Hash::new(format!(
+                    "sha256:{}",
+                    "0".repeat(64)
+                ))
+                .unwrap(),
+                created_at: issued_at,
+                jws: "a..b".to_owned(),
+            },
         };
-        let payload_digest = proposal_receipt
-            .receipt_digest()
+        member_receipt.signature.payload_digest = member_receipt
+            .member_digest()
             .expect("fixture proposal receipt digest");
-        proposal_receipt.signatures = vec![arkret_wire::PayloadSignature {
-            alg: "EdDSA".to_owned(),
-            verification_method: format!("{PEER_SOURCE_DID}#notary-key"),
-            payload_digest,
-            created_at: issued_at,
-            jws: "a..b".to_owned(),
-        }];
-        proposal_receipt
+        arkret_wire::ControlProposalReceipt {
+            kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+            realm_id: member_receipt.realm_id.clone(),
+            proposal_digest: member_receipt.proposal_digest.clone(),
+            received_at: member_receipt.received_at,
+            decision_due_at: member_receipt.decision_due_at,
+            absolute_due_at: member_receipt.absolute_due_at,
+            defer_count: 0,
+            authority_set_ref: member_receipt.authority_set_ref.clone(),
+            member_receipts: vec![member_receipt],
+        }
     });
     arkret_wire::EventFederationSubmission {
         event,
