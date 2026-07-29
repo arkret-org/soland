@@ -30,8 +30,7 @@ pub struct ConformanceRealmBasis {
 /// Build a sealed founding and content-grant basis for one conformance actor.
 ///
 /// The explicit content grant is fixture material, not a protocol bootstrap
-/// rule. It exists because the current v1 specification has no legal path from
-/// the closed founding grant to the first data-plane capability.
+/// rule. It carries only requested actions outside the SDK-owned founding set.
 pub fn build_conformance_realm_basis(
     realm_id: &str,
     subject: &str,
@@ -48,12 +47,17 @@ pub fn build_conformance_realm_basis(
     let founding_grant_id =
         fixture_grant_id(realm_id, subject, data_plane_actions, "founding-grant");
     let content_grant_id = fixture_grant_id(realm_id, subject, data_plane_actions, "content-grant");
-    let founding_actions = [
-        "ak.capability.grant".to_owned(),
-        "ak.capability.revoke".to_owned(),
-        "ak.realm.admin".to_owned(),
-        "ak.realm_key.share".to_owned(),
-    ];
+    let founding_actions = arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS
+        .iter()
+        .map(|action| (*action).to_owned())
+        .collect::<Vec<_>>();
+    let explicit_content_actions = data_plane_actions
+        .iter()
+        .filter(|action| {
+            !arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS.contains(&action.as_str())
+        })
+        .cloned()
+        .collect::<Vec<_>>();
     let mut ops = Vec::new();
     if let Some(notary_authority) = notary_authority {
         let notary_authority =
@@ -81,41 +85,45 @@ pub fn build_conformance_realm_basis(
             ),
         ));
     }
-    ops.extend([
-        (
-            capability_grant_cell(&founding_grant_id)?,
-            issued_op(
-                &issuer,
-                &founding_move,
-                or_set_add(
-                    founding_move.as_str(),
-                    grant_body(&founding_grant_id, realm_id, subject, &founding_actions)?,
-                ),
+    ops.push((
+        capability_grant_cell(&founding_grant_id)?,
+        issued_op(
+            &issuer,
+            &founding_move,
+            or_set_add(
+                founding_move.as_str(),
+                grant_body(&founding_grant_id, realm_id, subject, &founding_actions)?,
             ),
         ),
-        (
+    ));
+    if !explicit_content_actions.is_empty() {
+        ops.push((
             capability_grant_cell(&content_grant_id)?,
             issued_op(
                 &issuer,
                 &content_move,
                 or_set_add(
                     content_move.as_str(),
-                    grant_body(&content_grant_id, realm_id, subject, data_plane_actions)?,
+                    grant_body(
+                        &content_grant_id,
+                        realm_id,
+                        subject,
+                        &explicit_content_actions,
+                    )?,
                 ),
             ),
-        ),
-    ]);
+        ));
+    }
 
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
         Did::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
         FIXTURE_NOTARY_VERIFICATION_METHOD,
     );
-    let mut delta = vec![
-        founding_move.clone(),
-        content_move.clone(),
-        covered_move.clone(),
-    ];
+    let mut delta = vec![founding_move.clone(), covered_move.clone()];
+    if !explicit_content_actions.is_empty() {
+        delta.push(content_move.clone());
+    }
     if notary_authority.is_some() {
         delta.push(notary_move);
     }

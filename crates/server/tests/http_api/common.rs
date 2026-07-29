@@ -83,6 +83,139 @@ pub(crate) fn app_from_state(state: AppState) -> salvo::Service {
     service(state)
 }
 
+/// Prepare standard (non-anchor) Event submissions through the same authority
+/// flow used by real clients: HTTP authorization leases plus a local current
+/// proposal-authority signer.
+///
+/// Keeping this in the HTTP integration layer prevents authoring-only draft
+/// Events from being serialized directly into command bodies.
+pub(crate) async fn prepare_standard_initial_submissions(
+    state: &AppState,
+    token: &str,
+    events: Vec<arkret_wire::Event>,
+    proposal_authority: &(impl arkret_wire::PayloadSigner + ?Sized),
+) -> Vec<arkret_wire::EventInitialSubmission> {
+    assert!(
+        !events.is_empty() && events.iter().all(|event| event.seal_basis.is_some()),
+        "standard initial submissions require non-empty sealed Events"
+    );
+    let lease_request = arkret_wire::AuthorizationLeaseIssueRequest {
+        events: events.clone(),
+        intents: Vec::new(),
+    };
+    let request_key = new_prefixed_uuid7("lease-");
+    let mut lease_response = TestClient::post("http://server/_arkret/self/authorization-leases")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("Idempotency-Key", request_key, true)
+        .json(&lease_request)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let lease_status = lease_response.status_code;
+    let lease_body: Value = lease_response
+        .take_json()
+        .await
+        .expect("authorization lease response body");
+    assert_eq!(
+        lease_status,
+        Some(StatusCode::OK),
+        "authorization lease failed: {lease_body}"
+    );
+    let lease_outcome: arkret_wire::AuthorizationLeaseIssueOutcome =
+        serde_json::from_value(lease_body).expect("authorization lease outcome");
+    assert_eq!(
+        lease_outcome.authorization_leases.len(),
+        events.len(),
+        "authorization lease cardinality"
+    );
+
+    let mut submissions = Vec::with_capacity(events.len());
+    for (event, authorization_lease) in events.into_iter().zip(lease_outcome.authorization_leases) {
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let proposal_digest =
+            arkret_wire::Hash::new(event.event_digest().expect("Event digest")).unwrap();
+        let authority_set_ref = arkret_wire::Hash::new(
+            arkret_canonical::canonical_sha256(&arkret_wire::notary::NotaryValue::single_did(
+                event.actor_id.clone(),
+            ))
+            .expect("single-DID proposal authority digest"),
+        )
+        .unwrap();
+        let member_receipt = arkret_wire::ProposalMemberReceipt::issue_with_signer(
+            event.realm_id.clone(),
+            proposal_digest,
+            authority_set_ref,
+            chrono::Utc::now(),
+            policy,
+            proposal_authority,
+        )
+        .expect("local Control Proposal member receipt");
+        let control_proposal_receipt =
+            arkret_wire::ControlProposalReceipt::from_member_receipts(vec![member_receipt], policy)
+                .expect("canonical Control Proposal receipt");
+        let submission = arkret_wire::EventInitialSubmission {
+            event,
+            authorization_lease,
+            cba_proof_bundles: Vec::new(),
+            control_proposal_receipt: Some(control_proposal_receipt),
+        };
+        submission
+            .validate_structural_in_context(arkret_wire::EventSubmitContext::Standard)
+            .expect("standard initial submission");
+        submissions.push(submission);
+    }
+    submissions
+}
+
+/// Persist one accepted bootstrap Seal together with the exact direct cell
+/// effects committed by its closed Event unit.
+pub(crate) fn seed_seal_with_direct_event_effects(
+    state: &AppState,
+    seal: &arkret_wire::Seal,
+    events: &[&arkret_wire::Event],
+    projector: &impl Fn(
+        &arkret_wire::Event,
+    ) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, String>,
+) {
+    let mut event_digests = events
+        .iter()
+        .map(|event| {
+            arkret_wire::Hash::new(event.event_digest().expect("bootstrap Event digest")).unwrap()
+        })
+        .collect::<Vec<_>>();
+    event_digests.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    assert_eq!(
+        event_digests, seal.delta,
+        "bootstrap Event unit must exactly match Seal delta"
+    );
+
+    let mut ops = Vec::new();
+    for event in events {
+        let digest =
+            arkret_wire::Hash::new(event.event_digest().expect("bootstrap Event digest")).unwrap();
+        for write in projector(event).expect("bootstrap Event projection") {
+            let effect = write
+                .as_direct()
+                .expect("bootstrap Event projection must not depend on pre-state");
+            ops.push((
+                effect.cell,
+                arkret_state::lattice::ordered_log::IssuedOp {
+                    issuer: event.actor_id.clone(),
+                    op: arkret_state::lattice::SealedOp::new(digest.clone(), effect.op),
+                },
+            ));
+        }
+    }
+    assert_eq!(
+        fixture_sealed_state_root(&seal.realm_id, &ops),
+        seal.state_root,
+        "bootstrap sealed effects must match Seal state_root"
+    );
+    state.test_put_seal(seal).expect("bootstrap Seal");
+    state
+        .test_append_sealed_effects(&seal.realm_id, &seal.id, &ops)
+        .expect("bootstrap sealed effects");
+}
+
 pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
     let pool = db.pool.clone().expect("postgres test requires a pool");
     let fallback: std::sync::Arc<dyn soland_storage::PersistenceStore> = if config.seed_demo_data {
@@ -1388,29 +1521,15 @@ pub(crate) async fn seed_verified_device_with_public_key(
 // `arkret_signatures::verify_eddsa_signal_proof`, not merely parsed), and an
 // accepted Seal in the target Realm for `seal_ref` to resolve to.
 
-/// The closed founding-grant action set of `realm-and-space.md` §2.5 step 5.
-///
-/// The set is exact: a founding grant that adds, drops or aggregates any of
-/// these is `invalid_realm_founding_grant`. `ak.realm.admin` is the only
-/// `aggregate_admin` member, which is why the grant body also has to carry a
-/// `capability_action_registry_digest` (`capabilities.md` §3.2).
-const FIXTURE_FOUNDING_GRANT_ACTIONS: [&str; 4] = [
-    "ak.capability.grant",
-    "ak.capability.revoke",
-    "ak.realm.admin",
-    "ak.realm_key.share",
-];
-
-/// The data-plane actions this suite's DataEvents actually exercise.
+/// The additional data-plane actions this suite's DataEvents exercise.
 ///
 /// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
 /// per receiver-derived cell, over the effective grants the governance basis at
 /// `seal_ref` yields for the actor — so the basis has to name every data-plane
-/// kind a test submits, and nothing beyond it. None of these are reachable from
-/// the founding grant: `ak.realm.admin`'s registry `target_event_kinds` are
-/// Realm-facet Control Moves only, so a second, explicit grant carries them.
-const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
-    "ak.message.create",
+/// kind a test submits, and nothing beyond it. The canonical founding grant now
+/// covers `ak.message.create`; a second, explicit grant carries only the other
+/// actions instead of masking founder-message authorization with a duplicate.
+const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 8] = [
     "ak.morph.create",
     "ak.morph.update",
     "ak.relation.create",
@@ -1446,8 +1565,9 @@ pub(crate) struct TestRealmBasis {
 /// So the basis is keyed by `(realm, subject)` and seals one closed unit:
 ///
 /// 1. the founding grant of `realm-and-space.md` §2.5 step 5 — `issuer == subject`, the exact
-///    [`FIXTURE_FOUNDING_GRANT_ACTIONS`] set, one Realm-wide resource selector, no
-///    `parent_grant_id`, and the embedded `capability-action-registry.json` digest;
+///    SDK-owned [`arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS`] set, one
+///    Realm-wide resource selector, no `parent_grant_id`, and the embedded
+///    `capability-action-registry.json` digest;
 /// 2. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`];
 /// 3. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
 ///    MLS-backed DataEvent clears the governance-binding gate.
@@ -1566,7 +1686,7 @@ fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
                         &founding_grant_id,
                         realm_id,
                         subject,
-                        &FIXTURE_FOUNDING_GRANT_ACTIONS,
+                        &arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
                         true,
                     ),
                 ),
@@ -1742,7 +1862,7 @@ fn fixture_grant_body(
 ) -> Value {
     let mut body = serde_json::json!({
         "grant_id": grant_id,
-        "schema": "ak.schema.capability_grant.v1",
+        "schema": arkret_wire::CAPABILITY_SCHEMA,
         "realm_id": realm_id,
         "issuer": subject,
         "subject": subject,

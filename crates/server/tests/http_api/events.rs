@@ -681,6 +681,7 @@ async fn events_describe_and_single_event_submit_work() {
 #[tokio::test]
 async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
     let state = soland_test_support::app_state(test_config());
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let actor = test_event_signer_did().to_owned();
     let token = dev_token_for_device(
         state.clone(),
@@ -772,12 +773,7 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
         "realm_id": realm_id,
         "issuer": actor,
         "subject": actor,
-        "actions": [
-            "ak.realm.admin",
-            "ak.capability.grant",
-            "ak.capability.revoke",
-            "ak.realm_key.share"
-        ],
+        "actions": arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
         "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
         "resources": [{
             "kind": "realm",
@@ -987,9 +983,15 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
             );
         }
     }
+    let projected_founding_grant = state
+        .test_authz()
+        .get_grant(&grant_id)
+        .expect("accepted bootstrap must refresh the authorization cache before success");
     assert!(
-        state.test_authz().get_grant(&grant_id).is_some(),
-        "accepted bootstrap must refresh the authorization cache before success"
+        projected_founding_grant
+            .actions
+            .contains(&"ak.message.create".to_owned()),
+        "founding grant must make creator message authoring reachable at the genesis Seal"
     );
 
     let sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
@@ -1003,31 +1005,38 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
         "Realm create carries its genesis cell write"
     );
 
-    let mut resolve_response =
-        TestClient::post("http://server/_arkret/find/directory/resolve-realm")
-            .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&serde_json::json!({"realm_id": realm_id}))
-            .send(&app_from_state(state.clone()))
-            .await;
-    let resolve_status = resolve_response.status_code.expect("resolve status");
-    let resolve_body: Value = resolve_response
-        .take_json()
-        .await
-        .expect("resolve json body");
-    assert_eq!(
-        resolve_status,
-        StatusCode::OK,
-        "Realm resolution failed: {resolve_body}"
-    );
-    assert_eq!(
-        resolve_body["join_candidates"].as_array().map(Vec::len),
-        Some(1),
-        "the configured Realm notary must advertise a join candidate: {resolve_body}"
-    );
+    let candidate_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let resolve_body = loop {
+        let mut resolve_response =
+            TestClient::post("http://server/_arkret/find/directory/resolve-realm")
+                .add_header("authorization", format!("Bearer {token}"), true)
+                .json(&serde_json::json!({"realm_id": realm_id}))
+                .send(&app_from_state(state.clone()))
+                .await;
+        let resolve_status = resolve_response.status_code.expect("resolve status");
+        let resolve_body: Value = resolve_response
+            .take_json()
+            .await
+            .expect("resolve json body");
+        assert_eq!(
+            resolve_status,
+            StatusCode::OK,
+            "Realm resolution failed: {resolve_body}"
+        );
+        if resolve_body["join_candidates"].as_array().map(Vec::len) == Some(1) {
+            break resolve_body;
+        }
+        assert!(
+            tokio::time::Instant::now() < candidate_deadline,
+            "the configured Realm notary did not finalize a join candidate: {resolve_body}"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
     assert_eq!(
         resolve_body["realm_preview"]["title"], "Bootstrap effects realm",
         "Directory/sidebar projection must expose the title, not the Realm id: {resolve_body}"
     );
+    control_seal_coordinator.abort();
 
     let restarted = soland_test_support::app_state_with_persistence(
         test_config(),

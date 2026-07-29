@@ -1599,7 +1599,7 @@ fn historical_data_event_grant_value(
 ) -> Value {
     let mut value = json!({
         "grant_id": grant_id,
-        "schema": "ak.schema.capability_grant.v1",
+        "schema": arkret_wire::CAPABILITY_SCHEMA,
         "realm_id": DATA_EVENT_REALM,
         "issuer": issuer,
         "subject": subject,

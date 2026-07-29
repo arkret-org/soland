@@ -202,6 +202,12 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         &genesis_projector,
     )
     .unwrap();
+    seed_seal_with_direct_event_effects(
+        state,
+        &bootstrap_seal,
+        &[&bootstrap, &authorize],
+        &genesis_projector,
+    );
     for (event, kind, actor_seq) in [
         (bootstrap, "ak.realm.create", 0),
         (authorize, "ak.device.authorize", 1),
@@ -228,7 +234,6 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
             .await
             .unwrap();
     }
-    state.test_put_seal(&bootstrap_seal).unwrap();
 
     state
         .test_persistence()
@@ -421,7 +426,10 @@ async fn provision_agent_sdk_commit_attempt(
         preparation["controller_realm_id"].clone(),
     )
     .unwrap();
-    let principal_control_realm_id = preparation["principal_control_realm_id"].clone();
+    let principal_control_realm_id = serde_json::from_value::<arkret_identifiers::RealmId>(
+        preparation["principal_control_realm_id"].clone(),
+    )
+    .unwrap();
     let scope = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
     >(requested_scope.clone())
@@ -513,15 +521,35 @@ async fn provision_agent_sdk_commit_attempt(
         )
         .unwrap();
     }
-    let commit_body = serde_json::json!({
-        "phase": "commit",
-        "agent_id": agent_id,
-        "principal_control_realm_id": principal_control_realm_id,
-        "display_name": display_name,
-        "slug": slug,
-        "requested_scope": requested_scope,
-        "provision_events": events,
-    });
+    let mut submissions = prepare_standard_initial_submissions(
+        state,
+        token,
+        vec![events.accountability_grant, events.selector_claim],
+        &signer,
+    )
+    .await
+    .into_iter();
+    let provision_events = arkret_models_collaboration::agent_operations::AgentProvisionEvents {
+        accountability_grant: submissions.next().unwrap(),
+        selector_claim: submissions.next().unwrap(),
+    };
+    assert!(
+        submissions.next().is_none(),
+        "agent provision submission cardinality"
+    );
+    let commit_body = serde_json::to_value(
+        arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Commit {
+            agent_id,
+            principal_control_realm_id,
+            display_name: Some(display_name.to_owned()),
+            slug: slug.to_owned(),
+            avatar_blob_ref: None,
+            requested_scope: scope,
+            provision_events: Box::new(provision_events),
+            pairing_ttl_ms: None,
+        },
+    )
+    .unwrap();
     if let Some((injector, plan)) = fault {
         injector.arm(plan);
     }

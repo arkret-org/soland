@@ -16,11 +16,11 @@
 //! That is what this module builds:
 //!
 //! 1. the founding grant of `realm-and-space.md` §2.5 step 5 — `issuer == subject`, the exact
-//!    [`FOUNDING_GRANT_ACTIONS`] set, one Realm-wide resource selector, no `parent_grant_id`, and
-//!    the embedded `capability-action-registry.json` digest;
-//! 2. an explicit content grant carrying the data-plane actions the calling suite authors — none of
-//!    them are reachable from the founding grant, because `ak.realm.admin`'s registry
-//!    `target_event_kinds` are Realm-facet Control Moves only;
+//!    SDK-owned [`arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS`] set, one
+//!    Realm-wide resource selector, no `parent_grant_id`, and the embedded
+//!    `capability-action-registry.json` digest;
+//! 2. an explicit content grant carrying only requested data-plane actions not already covered by
+//!    the founding grant;
 //! 3. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
 //!    MLS-backed DataEvent clears the governance-binding gate.
 //!
@@ -48,14 +48,6 @@ use soland_http::state::AppState;
 use soland_services::projection::ProjectionService;
 
 use crate::AppStateTestExt as _;
-
-/// The founding grant's action set (`realm-and-space.md` §2.5 step 5).
-pub const FOUNDING_GRANT_ACTIONS: [&str; 4] = [
-    "ak.capability.grant",
-    "ak.capability.revoke",
-    "ak.realm.admin",
-    "ak.realm_key.share",
-];
 
 /// The notary key every fixture basis Seal is signed with.
 const FIXTURE_NOTARY_SEED: [u8; 32] = [0x53; 32];
@@ -199,25 +191,32 @@ fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str])
 
     let founding_grant_id = fixture_grant_id(realm_id, subject, "founding-grant");
     let content_grant_id = fixture_grant_id(realm_id, subject, "content-grant");
-    let mut ops = vec![
-        (
-            capability_grant_cell(&founding_grant_id),
-            issued_op(
-                &issuer,
-                &founding_move,
-                or_set_add(
-                    founding_move.as_str(),
-                    grant_body(
-                        &founding_grant_id,
-                        realm_id,
-                        subject,
-                        &FOUNDING_GRANT_ACTIONS,
-                        true,
-                    ),
+    let explicit_content_actions = data_plane_actions
+        .iter()
+        .copied()
+        .filter(|action| {
+            !arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS.contains(action)
+        })
+        .collect::<Vec<_>>();
+    let mut ops = vec![(
+        capability_grant_cell(&founding_grant_id),
+        issued_op(
+            &issuer,
+            &founding_move,
+            or_set_add(
+                founding_move.as_str(),
+                grant_body(
+                    &founding_grant_id,
+                    realm_id,
+                    subject,
+                    &arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
+                    true,
                 ),
             ),
         ),
-        (
+    )];
+    if !explicit_content_actions.is_empty() {
+        ops.push((
             capability_grant_cell(&content_grant_id),
             issued_op(
                 &issuer,
@@ -228,13 +227,13 @@ fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str])
                         &content_grant_id,
                         realm_id,
                         subject,
-                        data_plane_actions,
+                        &explicit_content_actions,
                         false,
                     ),
                 ),
             ),
-        ),
-    ];
+        ));
+    }
 
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
@@ -245,11 +244,10 @@ fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str])
     // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`
     // hashes it as a set, so the order is part of the wire contract rather
     // than a formatting choice.
-    let mut delta = vec![
-        founding_move.clone(),
-        content_move.clone(),
-        covered_move.clone(),
-    ];
+    let mut delta = vec![founding_move.clone(), covered_move.clone()];
+    if !explicit_content_actions.is_empty() {
+        delta.push(content_move.clone());
+    }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     let seal = Seal::sign_single(
         realm.clone(),
@@ -374,7 +372,7 @@ fn grant_body(
 ) -> Value {
     let mut body = serde_json::json!({
         "grant_id": grant_id,
-        "schema": "ak.schema.capability_grant.v1",
+        "schema": arkret_wire::CAPABILITY_SCHEMA,
         "realm_id": realm_id,
         "issuer": subject,
         "subject": subject,

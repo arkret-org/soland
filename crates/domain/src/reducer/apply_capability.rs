@@ -1440,7 +1440,7 @@ mod agent_key_tests {
             "grant_id": grant_id,
             "grant": {
                 "id": grant_id,
-                "schema": "ak.schema.capability_grant.v1",
+                "schema": arkret_wire::CAPABILITY_SCHEMA,
                 "realm_id": REALM,
                 "issuer": issuer,
                 "subject": subject,
@@ -2031,7 +2031,7 @@ mod federation_revoke_fanout_tests {
             "grant_id": GRANT,
             "grant": {
                 "id": GRANT,
-                "schema": "ak.schema.capability_grant.v1",
+                "schema": arkret_wire::CAPABILITY_SCHEMA,
                 "realm_id": REALM,
                 "issuer": OWNER,
                 "subject": PEER_SERVICE_ID,
