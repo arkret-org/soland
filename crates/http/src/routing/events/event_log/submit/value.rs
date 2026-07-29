@@ -174,6 +174,7 @@ pub(in crate::routing) async fn submit_event_value(
         None,
         None,
         None,
+        None,
     )
     .await
 }
@@ -201,6 +202,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         event,
         authorization_lease,
         cba_proof_bundles: _,
+        control_proposal_receipt,
     } = submission;
     let envelope = typed_event_to_canonical_value(event)?;
     if event_string_field_from_value(&envelope, "kind").as_deref()
@@ -228,6 +230,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         None,
         None,
         Some(&authorization_lease),
+        control_proposal_receipt.as_ref(),
     )
     .await
 }
@@ -241,8 +244,17 @@ pub(in crate::routing) async fn submit_mimi_event_value(
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let admission =
         InternalEventAdmission::mimi_provider(realm_id, state.service_id().as_str(), binding_ref);
-    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission), None)
-        .await
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        Some(&admission),
+        None,
+        None,
+    )
+    .await
 }
 
 pub(in crate::routing) async fn submit_account_data_event_value(
@@ -260,8 +272,17 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         owner,
         key,
     );
-    submit_event_value_with_context(state, session, envelope, &[], None, Some(&admission), None)
-        .await
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        Some(&admission),
+        None,
+        None,
+    )
+    .await
 }
 
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
@@ -287,8 +308,17 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
-    submit_event_value_with_context(state, session, envelope, &[], Some(idempotency), None, None)
-        .await
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        Some(idempotency),
+        None,
+        None,
+        None,
+    )
+    .await
 }
 
 /// Attach the STORED ingress receipt to a submit outcome.
@@ -314,6 +344,7 @@ pub(super) async fn submit_event_value_with_context(
     commit_idempotency: Option<EventCommitIdempotency>,
     internal_admission: Option<&InternalEventAdmission>,
     authorization_lease: Option<&arkret_wire::AuthorizationLease>,
+    submitted_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -1260,23 +1291,44 @@ pub(super) async fn submit_event_value_with_context(
                 format!("Control Proposal policy is unavailable: {error}"),
             )
         })?;
-        Some(
-            crate::control_proposal::mint_control_proposal_receipt(
-                state,
-                realm_id,
-                proposal_digest,
-                authority_set_ref,
-                received_at,
-                policy,
-            )
-            .map_err(|error| {
+        if let Some(receipt) = submitted_control_proposal_receipt {
+            if receipt.realm_id != realm_id
+                || receipt.proposal_digest != proposal_digest
+                || receipt.authority_set_ref != authority_set_ref
+            {
+                return Err(SubmitOneError::new(
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    "submitted Control Proposal receipt does not bind the Event basis authority",
+                ));
+            }
+            receipt.validate_structural(policy).map_err(|error| {
                 SubmitOneError::new(
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "internal_error",
-                    format!("Control Proposal receipt signing failed: {error}"),
+                    StatusCode::PRECONDITION_FAILED,
+                    "failed_precondition",
+                    format!("submitted Control Proposal receipt is invalid: {error}"),
                 )
-            })?,
-        )
+            })?;
+            Some(receipt.clone())
+        } else {
+            Some(
+                crate::control_proposal::mint_control_proposal_receipt(
+                    state,
+                    realm_id,
+                    proposal_digest,
+                    authority_set_ref,
+                    received_at,
+                    policy,
+                )
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("Control Proposal receipt signing failed: {error}"),
+                    )
+                })?,
+            )
+        }
     } else {
         None
     };

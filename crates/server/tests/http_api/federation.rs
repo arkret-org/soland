@@ -674,11 +674,11 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             "ak:receipt:01904100-0000-7000-8000-fede4ece17e1",
         )
         .unwrap(),
-        event_digest,
+        event_digest: event_digest.clone(),
         authorization_lease_id: lease.authorization_lease_id.clone(),
         received_at: issued_at,
         service_id: arkret_identifiers::Did::new(PEER_SOURCE_DID.to_owned()).unwrap(),
-        authority_set_ref,
+        authority_set_ref: authority_set_ref.clone(),
         proofs: Vec::new(),
     };
     receipt.proofs = vec![publication_proof(
@@ -686,10 +686,37 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         receipt.receipt_digest().expect("fixture receipt digest"),
         issued_at,
     )];
+    let control_proposal_receipt = event.seal_basis.as_ref().map(|_| {
+        let policy = arkret_wire::ControlProposalDecisionPolicy::default();
+        let mut proposal_receipt = arkret_wire::ControlProposalReceipt {
+            kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+            realm_id: event.realm_id.clone(),
+            proposal_digest: event_digest,
+            received_at: issued_at,
+            decision_due_at: issued_at + policy.decision_window,
+            absolute_due_at: issued_at + policy.absolute_horizon,
+            defer_count: 0,
+            authority_set_ref,
+            receipt_coordinator: arkret_identifiers::Did::new(PEER_SOURCE_DID.to_owned()).unwrap(),
+            signatures: Vec::new(),
+        };
+        let payload_digest = proposal_receipt
+            .receipt_digest()
+            .expect("fixture proposal receipt digest");
+        proposal_receipt.signatures = vec![arkret_wire::PayloadSignature {
+            alg: "EdDSA".to_owned(),
+            verification_method: format!("{PEER_SOURCE_DID}#notary-key"),
+            payload_digest,
+            created_at: issued_at,
+            jws: "a..b".to_owned(),
+        }];
+        proposal_receipt
+    });
     arkret_wire::EventFederationSubmission {
         event,
         authorization_lease: lease,
         ingress_receipts: vec![receipt],
+        control_proposal_receipt,
     }
 }
 

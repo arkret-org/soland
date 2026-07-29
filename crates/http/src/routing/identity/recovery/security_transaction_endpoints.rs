@@ -1066,27 +1066,46 @@ async fn continue_submit_reanchor_unit(
                 "recovery authority outcome does not contain a typed Event: {error}"
             ))
         })?;
-    if authorized_event
-        .event_digest()
-        .map_err(|error| AppError::internal(error.to_string()))?
-        != authority_outcome.authorized_event_digest.as_str()
-    {
-        return Err(AppError::internal(
-            "recovery authority Event digest is invalid",
-        ));
-    }
+    let authorized_event_digest =
+        arkret_identifiers::Hash::new(authorized_event.event_digest().map_err(|error| {
+            AppError::internal(format!("recovery authority Event digest failed: {error}"))
+        })?)
+        .map_err(|error| AppError::internal(error.to_string()))?;
     if authorized_event.event_id != binding.authorize_event_id
+        || authorized_event_digest != authority_outcome.authorized_event_digest
         || plan.authorize_event_publication_intent.event_id != binding.authorize_event_id
+        || plan
+            .authorize_event_publication_intent
+            .event_preimage_digest
+            != authorized_event_digest
         || plan.reanchor_event_submission.event.event_id != binding.reanchor_event_id
     {
         return Err(AppError::internal(
-            "prepared re-anchor publication changed a reserved Event id",
+            "prepared re-anchor publication changed a reserved Event id or digest",
+        ));
+    }
+    authority_outcome
+        .control_proposal_receipt
+        .validate_structural(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
+        .map_err(|error| {
+            AppError::internal(format!(
+                "recovery authority proposal receipt is invalid: {error}"
+            ))
+        })?;
+    if authority_outcome.control_proposal_receipt.realm_id != authorized_event.realm_id
+        || authority_outcome.control_proposal_receipt.proposal_digest != authorized_event_digest
+        || authority_outcome.control_proposal_receipt.authority_set_ref
+            != plan.authorize_event_publication_intent.authority_set_ref
+    {
+        return Err(AppError::internal(
+            "recovery authority proposal receipt changed the Event or authority binding",
         ));
     }
     let authorize_submission = arkret_wire::EventInitialSubmission {
         event: authorized_event,
-        authorization_lease: authority_outcome.authorization_lease.clone(),
-        cba_proof_bundles: authority_outcome.cba_proof_bundles.clone(),
+        authorization_lease: authority_outcome.authorization_lease,
+        cba_proof_bundles: authority_outcome.cba_proof_bundles,
+        control_proposal_receipt: Some(authority_outcome.control_proposal_receipt),
     };
     authorize_submission
         .validate_structural()
@@ -1336,6 +1355,27 @@ async fn continue_authorize_recovery_device(
             ))
             .with_wire_code("recovery_authority_binding_mismatch")
         })?;
+    let authorized_event_bytes = arkret_canonical::canonical_json_bytes(&outcome.authorized_event)
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    arkret_canonical::verify_digest(
+        &authorized_event_bytes,
+        outcome.authorized_event_digest.as_str(),
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "Account Authority outcome event digest is invalid: {error}"
+        ))
+    })?;
+    if outcome
+        .authorized_event
+        .get("event_id")
+        .and_then(Value::as_str)
+        != Some(binding.authorize_event_id.as_str())
+    {
+        return Err(AppError::internal(
+            "Account Authority outcome changed the reserved authorize Event id",
+        ));
+    }
 
     let participant_request_digest = canonical_digest(participant_request)?;
     let outcome_digest = canonical_digest(&outcome)?;

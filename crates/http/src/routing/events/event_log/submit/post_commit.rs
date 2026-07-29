@@ -217,10 +217,43 @@ async fn federation_submissions(
             );
             continue;
         };
+        let control_proposal_receipt = if event.seal_basis.is_some() {
+            let Ok(proposal_digest) = arkret_identifiers::Hash::new(digest.clone()) else {
+                tracing::warn!(
+                    event_id = %event.event_id,
+                    "Control Move digest is not a typed Hash and cannot be federated"
+                );
+                continue;
+            };
+            match state
+                .projections()
+                .control_proposal_receipt(&proposal_digest)
+            {
+                Ok(Some(receipt)) => Some(receipt),
+                Ok(None) => {
+                    tracing::warn!(
+                        event_id = %event.event_id,
+                        "Control Move has no stored proposal receipt and cannot be federated"
+                    );
+                    continue;
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        event_id = %event.event_id,
+                        "failed to read Control Move proposal receipt for federation"
+                    );
+                    continue;
+                }
+            }
+        } else {
+            None
+        };
         submissions.push(arkret_wire::EventFederationSubmission {
             event: event.clone(),
             authorization_lease: record.authorization_lease.clone(),
             ingress_receipts: vec![record.ingress_receipt.clone()],
+            control_proposal_receipt,
         });
     }
     submissions

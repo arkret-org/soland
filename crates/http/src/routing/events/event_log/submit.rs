@@ -573,7 +573,7 @@ pub(super) async fn submit_event_batch_outcome(
     session: &SessionRecord,
     envelopes: Vec<Value>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
-    submit_event_batch_outcome_with_leases(state, session, envelopes, None).await
+    submit_event_batch_outcome_with_leases(state, session, envelopes, None, None).await
 }
 
 pub(super) async fn submit_initial_event_batch_outcome(
@@ -584,6 +584,7 @@ pub(super) async fn submit_initial_event_batch_outcome(
     let mut envelopes = Vec::with_capacity(submissions.len());
     let mut typed_events = Vec::with_capacity(submissions.len());
     let mut leases = Vec::with_capacity(submissions.len());
+    let mut proposal_receipts = Vec::with_capacity(submissions.len());
     for submission in &submissions {
         typed_events.push(submission.event.clone());
         envelopes.push(typed_event_to_canonical_value(submission.event.clone())?);
@@ -607,8 +608,10 @@ pub(super) async fn submit_initial_event_batch_outcome(
             event: _,
             authorization_lease,
             cba_proof_bundles: _,
+            control_proposal_receipt,
         } = submission;
         leases.push(authorization_lease);
+        proposal_receipts.push(control_proposal_receipt);
     }
     if submit_context == arkret_wire::EventSubmitContext::AnchorUnit {
         arkret_wire::validate_anchor_unit_lease_bindings(&typed_events, &leases).map_err(
@@ -621,7 +624,14 @@ pub(super) async fn submit_initial_event_batch_outcome(
             },
         )?;
     }
-    submit_event_batch_outcome_with_leases(state, session, envelopes, Some(&leases)).await
+    submit_event_batch_outcome_with_leases(
+        state,
+        session,
+        envelopes,
+        Some(&leases),
+        Some(&proposal_receipts),
+    )
+    .await
 }
 
 async fn submit_event_batch_outcome_with_leases(
@@ -629,12 +639,20 @@ async fn submit_event_batch_outcome_with_leases(
     session: &SessionRecord,
     envelopes: Vec<Value>,
     authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+    control_proposal_receipts: Option<&[Option<arkret_wire::ControlProposalReceipt>]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
             StatusCode::BAD_REQUEST,
             "schema_violation",
             "initial publication batch lease cardinality mismatch",
+        ));
+    }
+    if control_proposal_receipts.is_some_and(|receipts| receipts.len() != envelopes.len()) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "initial publication batch proposal-receipt cardinality mismatch",
         ));
     }
     if envelopes.is_empty() {
@@ -700,6 +718,9 @@ async fn submit_event_batch_outcome_with_leases(
             None,
             None,
             authorization_leases.and_then(|leases| leases.get(index)),
+            control_proposal_receipts
+                .and_then(|receipts| receipts.get(index))
+                .and_then(Option::as_ref),
         )
         .await
         {
@@ -1159,6 +1180,16 @@ pub(crate) async fn submit_federation_events(
             ))
         })
         .collect();
+    let inbound_control_proposal_receipts: BTreeMap<String, arkret_wire::ControlProposalReceipt> =
+        submissions
+            .iter()
+            .filter_map(|submission| {
+                submission
+                    .control_proposal_receipt
+                    .clone()
+                    .map(|receipt| (submission.event.event_id.as_str().to_owned(), receipt))
+            })
+            .collect();
     let events: Vec<arkret_wire::Event> = submissions
         .iter()
         .map(|submission| submission.event.clone())
@@ -1871,6 +1902,7 @@ pub(crate) async fn submit_federation_events(
             // already receipted by its origin ingress, and the transported
             // evidence is stored verbatim below instead.
             None,
+            inbound_control_proposal_receipts.get(&id),
         )
         .await
         {
