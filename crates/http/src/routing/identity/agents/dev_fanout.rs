@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::SessionRecord;
-use crate::routing::events::event_log::submit_event_value;
+use crate::routing::events::event_log::{submit_event_value, submit_initial_event_submission};
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -160,8 +160,10 @@ pub(super) async fn fanout_provision_subevents(
     agent_slug: &str,
     events: AgentProvisionEvents,
 ) -> Result<(String, String), AppError> {
-    let accountability = events.accountability_grant;
-    let selector = events.selector_claim;
+    let accountability_submission = events.accountability_grant;
+    let selector_submission = events.selector_claim;
+    let accountability = &accountability_submission.event;
+    let selector = &selector_submission.event;
     if accountability.kind.as_str() != "ak.identity.accountability_grant"
         || selector.kind.as_str() != "ak.agent.selector_claim"
     {
@@ -315,12 +317,9 @@ pub(super) async fn fanout_provision_subevents(
     })?;
     let accountability_event = accountability.event_id.to_string();
     let selector_event = selector.event_id.to_string();
-    for event in [accountability, selector] {
-        let kind = event.kind.to_string();
-        let envelope = serde_json::to_value(event).map_err(|error| {
-            AppError::invalid_param(format!("provision Event invalid: {error}"))
-        })?;
-        submit_event_value(state, session, envelope)
+    for submission in [accountability_submission, selector_submission] {
+        let kind = submission.event.kind.to_string();
+        submit_initial_event_submission(state, session, submission)
             .await
             .map_err(|error| {
                 agent_fanout_submit_error(&kind, error.status, error.code, error.message)

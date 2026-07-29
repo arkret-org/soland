@@ -199,9 +199,9 @@ pub(super) async fn provision_agent(
         let refs_match = record.provision_event_refs.as_ref().is_some_and(|refs| {
             refs.get("accountability_grant_event_id")
                 .and_then(Value::as_str)
-                == Some(events.accountability_grant.event_id.as_str())
+                == Some(events.accountability_grant.event.event_id.as_str())
                 && refs.get("selector_claim_event_id").and_then(Value::as_str)
-                    == Some(events.selector_claim.event_id.as_str())
+                    == Some(events.selector_claim.event.event_id.as_str())
         });
         if record.controller_id != controller_id
             || record.principal_control_realm_id != prepared_realm_id.as_str()
