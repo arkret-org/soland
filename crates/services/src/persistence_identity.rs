@@ -1927,12 +1927,18 @@ pub struct PersistenceIdentityServices {
     pub recovery_session: RecoverySessionService,
     pub security_transaction: SecurityTransactionService,
     pub did: DidService,
+    pub organization_registration:
+        crate::organization_registration::OrganizationRegistrationService,
 }
 
 pub fn build_persistence_identity_services(
     persistence: Arc<dyn PersistenceStore>,
     did_resolver: Arc<dyn DidResolverPort>,
 ) -> PersistenceIdentityServices {
+    let did = DidService::new(
+        Arc::new(PersistenceDidDocuments(persistence.clone())),
+        did_resolver,
+    );
     PersistenceIdentityServices {
         identity: IdentityService::new(
             Arc::new(PersistenceAccountLookup(persistence.clone())),
@@ -1973,6 +1979,11 @@ pub fn build_persistence_identity_services(
         security_transaction: SecurityTransactionService::new(Arc::new(
             PersistenceSecurityTransactions(persistence.clone()),
         )),
-        did: DidService::new(Arc::new(PersistenceDidDocuments(persistence)), did_resolver),
+        organization_registration:
+            crate::organization_registration::OrganizationRegistrationService::new(
+                persistence,
+                did.clone(),
+            ),
+        did,
     }
 }

@@ -357,6 +357,38 @@ impl soland_services::identity::DidResolverPort for SolandDidResolver {
             .map_err(|error| error.to_string())
     }
 
+    async fn resolve_current_external_webvh_state(
+        &self,
+        did: &Did,
+    ) -> Result<
+        soland_services::identity::PinnedDidDocumentState,
+        soland_services::identity::PinnedDidResolutionError,
+    > {
+        use soland_services::identity::{PinnedDidResolutionError, select_pinned_did_webvh_state};
+        if did.method() != "webvh" {
+            return Err(PinnedDidResolutionError::UnsupportedMethod);
+        }
+        if !self.method_allowed("webvh") {
+            return Err(PinnedDidResolutionError::MethodNotAllowed);
+        }
+        let history = self
+            .fetch_verified_webvh_history(did)
+            .await
+            .map_err(PinnedDidResolutionError::HistoryUnverifiable)?;
+        let head = history.raw_entries.last().ok_or_else(|| {
+            PinnedDidResolutionError::HistoryUnverifiable(
+                "verified did:webvh history has no head".to_owned(),
+            )
+        })?;
+        let digest = Hash::new(arkret_canonical::canonical_sha256(head).map_err(|error| {
+            PinnedDidResolutionError::HistoryUnverifiable(format!(
+                "verified did:webvh head digest failed: {error}"
+            ))
+        })?)
+        .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
+        select_pinned_did_webvh_state(did, &history, &history.head_version_id, &digest)
+    }
+
     async fn resolve_external_pinned_webvh_state(
         &self,
         did: &Did,

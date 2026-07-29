@@ -5182,6 +5182,8 @@ dependencies = [
  "sha2 0.11.0",
  "soland-domain",
  "soland-storage",
+ "soland-storage-memory",
+ "soland-storage-postgres",
  "thiserror",
  "tokio",
  "tracing",

@@ -21,6 +21,7 @@ pub(in crate::routing) mod key_backup;
 mod keys;
 pub(crate) use keys::device_signature_kid_points_to_device_key;
 pub(crate) mod managed_agent_pcr;
+mod organization_registration;
 // R3 spec-sync (arkret-spec b47ff6ec) — recovery policy / receipt
 // endpoints (HTTP-4 / REC-1).
 pub(crate) mod recovery;
@@ -66,6 +67,26 @@ pub fn protocol_router() -> Router {
                     .push(
                         Router::with_path("service-registrations")
                             .get(service_registration::get),
+                    )
+                    .push(
+                        Router::with_path("organization-registrations:prepare")
+                            .post(organization_registration::prepare),
+                    )
+                    .push(
+                        Router::with_path("organization-registrations:ensure")
+                            .post(organization_registration::ensure),
+                    )
+                    .push(
+                        Router::with_path("organization-registrations")
+                            .get(organization_registration::get),
+                    )
+                    .push(
+                        Router::with_path("organization-registrations:refresh")
+                            .post(organization_registration::refresh),
+                    )
+                    .push(
+                        Router::with_path("organization-registrations:revoke")
+                            .post(organization_registration::revoke),
                     )
                     .push(
                         Router::with_path("submit-did-operation")

@@ -38,6 +38,7 @@ use soland_services::identity::{
 };
 use soland_services::jobs::{JobsService, RuntimeHealthPort};
 use soland_services::join_applications::JoinApplicationService;
+use soland_services::organization_registration::OrganizationRegistrationService;
 use soland_services::persistence::PersistenceHandle;
 use soland_services::persistence_events::PersistenceEventServices;
 use soland_services::persistence_identity::PersistenceIdentityServices;
@@ -100,6 +101,7 @@ pub struct AppState {
     recovery_sessions: RecoverySessionService,
     security_transactions: SecurityTransactionService,
     dids: DidService,
+    organization_registrations: OrganizationRegistrationService,
     federation: FederationService,
     governance: GovernanceService,
     sync: SyncService,
@@ -769,6 +771,7 @@ impl AppState {
             recovery_session: recovery_sessions,
             security_transaction: security_transactions,
             did: dids,
+            organization_registration: organization_registrations,
         } = persistence.identity_services(did_resolver.clone());
         let PersistenceOperationalServices {
             federation,
@@ -816,6 +819,7 @@ impl AppState {
             recovery_sessions,
             security_transactions,
             dids,
+            organization_registrations,
             federation,
             governance,
             sync,
@@ -907,6 +911,19 @@ impl AppState {
 
     pub(crate) fn dids(&self) -> &DidService {
         &self.dids
+    }
+
+    pub(crate) fn organization_registrations(&self) -> &OrganizationRegistrationService {
+        &self.organization_registrations
+    }
+
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_set_organization_registration_service(
+        &mut self,
+        service: OrganizationRegistrationService,
+    ) {
+        self.organization_registrations = service;
     }
 
     pub(crate) fn agent_pairings(&self) -> &AgentPairingService {

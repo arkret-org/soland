@@ -12,6 +12,7 @@ pub mod identity;
 pub mod jobs;
 pub mod join_applications;
 pub mod operation_semantics;
+pub mod organization_registration;
 pub mod persistence;
 #[doc(hidden)]
 pub mod persistence_delivery;

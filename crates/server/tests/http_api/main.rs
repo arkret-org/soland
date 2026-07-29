@@ -27,6 +27,7 @@ mod identity;
 mod lifecycle;
 mod mimi;
 mod openapi;
+mod organization_registration;
 mod policy_snapshot;
 mod projection;
 mod push_keys;

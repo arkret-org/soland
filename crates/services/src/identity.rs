@@ -2540,6 +2540,10 @@ pub trait DidDocumentPort: Send + Sync {
 #[async_trait]
 pub trait DidResolverPort: arkret_identity::DidResolver + Send + Sync {
     async fn resolve_did_async(&self, did: &Did) -> Result<arkret_identity::DidDocument, String>;
+    async fn resolve_current_external_webvh_state(
+        &self,
+        did: &Did,
+    ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError>;
     async fn resolve_external_pinned_webvh_state(
         &self,
         did: &Did,
@@ -2646,6 +2650,76 @@ impl DidService {
         select_pinned_did_webvh_state(did, &history, version_id, log_head_digest)
     }
 
+    /// Resolve and verify the complete did:webvh history, then return its
+    /// current method-native head. This is used before issuing a registration
+    /// challenge so an unresolvable or deactivated DID never receives a
+    /// challenge that no valid control proof can satisfy.
+    pub async fn resolve_current_webvh_state(
+        &self,
+        did: &Did,
+    ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
+        if did.method() != "webvh" {
+            return Err(PinnedDidResolutionError::UnsupportedMethod);
+        }
+        let mut local_events = self
+            .documents
+            .log_events(did.as_str())
+            .await
+            .map_err(|error| {
+                PinnedDidResolutionError::HistoryUnverifiable(format!(
+                    "local DID history lookup failed: {error}"
+                ))
+            })?;
+        if local_events.is_empty() {
+            return self
+                .resolver
+                .resolve_current_external_webvh_state(did)
+                .await;
+        }
+        local_events.sort_by_key(|event| event.seq);
+        let mut raw_entries = Vec::with_capacity(local_events.len());
+        for (index, event) in local_events.iter().enumerate() {
+            let expected_seq = index as u64 + 1;
+            if event.did != did.as_str() || event.seq != expected_seq {
+                return Err(PinnedDidResolutionError::HistoryUnverifiable(
+                    "local did:webvh log identity or sequence is inconsistent".to_owned(),
+                ));
+            }
+            let canonical_digest =
+                arkret_canonical::canonical_sha256(&event.operation).map_err(|error| {
+                    PinnedDidResolutionError::HistoryUnverifiable(format!(
+                        "local did:webvh event digest failed: {error}"
+                    ))
+                })?;
+            if canonical_digest != event.event_digest {
+                return Err(PinnedDidResolutionError::HistoryUnverifiable(
+                    "local did:webvh event digest does not match stored operation".to_owned(),
+                ));
+            }
+            if event.operation.pointer("/parameters/witness").is_some() {
+                return Err(PinnedDidResolutionError::HistoryUnverifiable(
+                    "local did:webvh witness evidence is unavailable at the resolver boundary"
+                        .to_owned(),
+                ));
+            }
+            raw_entries.push(event.operation.clone());
+        }
+        let history = arkret_identity::verify_did_webvh_v1_chain(did, &raw_entries)
+            .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
+        let head = history.raw_entries.last().ok_or_else(|| {
+            PinnedDidResolutionError::HistoryUnverifiable(
+                "verified did:webvh history has no head".to_owned(),
+            )
+        })?;
+        let digest = Hash::new(arkret_canonical::canonical_sha256(head).map_err(|error| {
+            PinnedDidResolutionError::HistoryUnverifiable(format!(
+                "verified did:webvh head digest failed: {error}"
+            ))
+        })?)
+        .map_err(|error| PinnedDidResolutionError::HistoryUnverifiable(error.to_string()))?;
+        select_pinned_did_webvh_state(did, &history, &history.head_version_id, &digest)
+    }
+
     pub fn cache_resolved_document_state(
         &self,
         document: DidDocumentState,
@@ -2748,6 +2822,13 @@ mod tests {
             _did: &Did,
         ) -> Result<arkret_identity::DidDocument, String> {
             Err("DID resolver is unused in this test".to_owned())
+        }
+
+        async fn resolve_current_external_webvh_state(
+            &self,
+            _did: &Did,
+        ) -> Result<PinnedDidDocumentState, PinnedDidResolutionError> {
+            Err(PinnedDidResolutionError::HistoryUnavailable)
         }
 
         async fn resolve_external_pinned_webvh_state(
