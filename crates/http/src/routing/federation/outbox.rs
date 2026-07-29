@@ -981,7 +981,7 @@ mod tests {
                 issuer_role: arkret_wire::AuthoritySetIssuerRole::RealmAdmission,
                 allowed_actions: vec!["ak.message.create".to_owned()],
                 issuers: vec![arkret_wire::AuthoritySetIssuer {
-                    verification_method: arkret_identifiers::DidUrl::new(
+                    verification_method: arkret_wire::DidUrl::new(
                         "did:web:authority.example#key-1",
                     )
                     .unwrap(),
@@ -1058,6 +1058,7 @@ mod tests {
                 .unwrap(),
                 scope_ref: scope_ref.clone(),
                 action: "ak.message.create".to_owned(),
+                authorization_rule_id: "realm_admission".to_owned(),
                 risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
                 issued_at,
                 expires_at: issued_at + chrono::Duration::hours(4),

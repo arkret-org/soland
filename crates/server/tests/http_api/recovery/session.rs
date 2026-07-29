@@ -17,6 +17,8 @@ fn cross_signing_reset_event(
     actor: &str,
     device_id: &str,
     event_id: &str,
+    actor_seq: u64,
+    prev_event_id: &str,
     payload: Value,
     actor_signing_key: &SigningKey,
 ) -> Value {
@@ -27,8 +29,8 @@ fn cross_signing_reset_event(
         actor,
         device_id,
         &realm_id,
-        0,
-        Vec::new(),
+        actor_seq,
+        vec![prev_event_id],
         payload,
     );
     let mut event: arkret_wire::Event =
@@ -128,10 +130,38 @@ async fn seed_reset_recovery_policy(
         "policy_id": policy_id.clone(),
         "principal_id": principal_id,
         "version": 1,
+        "supersedes": null,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": [allowed_kind],
+        "publication_authorization_rules": [{
+            "rule_id": allowed_kind,
+            "proof_kind": allowed_kind,
+            "issuer_role": "identity_recovery",
+            "allowed_actions": ["ak.device.reanchor"],
+            "issuers": [{
+                "verification_method": format!("{principal_id}#reset-policy")
+            }],
+            "threshold": 1
+        }],
         "issued_at": arkret_canonical::format_timestamp_canonical(issued_at),
         "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
+        "auth_data": {
+            "verification_method": format!("{principal_id}#reset-policy"),
+            "signature_algorithm": "Ed25519",
+            "signed_fields": [
+                "schema",
+                "policy_id",
+                "principal_id",
+                "version",
+                "supersedes",
+                "trust_domain",
+                "allowed_proof_kinds",
+                "publication_authorization_rules",
+                "issued_at",
+                "expires_at"
+            ],
+            "signature": "AA"
+        }
     });
     if let (Some(target), Some(extra)) = (raw_payload.as_object_mut(), extra.as_object()) {
         for (key, value) in extra {
@@ -145,6 +175,7 @@ async fn seed_reset_recovery_policy(
             policy_id: policy_id.clone(),
             principal_id: principal_id.to_owned(),
             version: 1,
+            acceptance_basis: fixture_recovery_policy_basis(),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
             allowed_proof_kinds: vec![allowed_kind.to_owned()],
             supersedes: None,
@@ -207,6 +238,8 @@ async fn seed_verified_reset_recovery_session(
 ) -> String {
     let now = chrono::Utc::now();
     let recovery_session_id = new_prefixed_uuid7("ak:recovery_session:");
+    let (publication_authority_context, publication_authority_context_digest) =
+        fixture_recovery_publication_authority_context(principal_id);
     state
         .test_persistence()
         .recovery_sessions()
@@ -224,6 +257,8 @@ async fn seed_verified_reset_recovery_session(
             registry_head: None,
             accepted_seal_frontier: None,
             policy_payload: serde_json::json!({}),
+            publication_authority_context,
+            publication_authority_context_digest,
             challenge: "verified-reset-session".to_owned(),
             state: "verified".to_owned(),
             proof_payload: Some(serde_json::json!({
@@ -632,7 +667,8 @@ async fn recovery_session_recovery_unlock_binds_policy_transcript_and_key() {
         &principal_id,
         &principal_vm,
         &principal_signing,
-    );
+    )
+    .await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -722,7 +758,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
         }),
     )
     .await;
-    ensure_cross_signing(state.clone(), &principal_id, &vm, &signing);
+    ensure_cross_signing(state.clone(), &principal_id, &vm, &signing).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -835,7 +871,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
         }),
     )
     .await;
-    ensure_cross_signing(state.clone(), &principal_id, &vm, &signing);
+    ensure_cross_signing(state.clone(), &principal_id, &vm, &signing).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -1022,7 +1058,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[122u8; 32]);
     let usk = SigningKey::from_bytes(&[123u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
+    let publish_event_id =
+        seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk).await;
     let recovery_key = SigningKey::from_bytes(&[124u8; 32]);
     let (_recovery_did, recovery_ref) = did_key_principal(&recovery_key);
     let policy_id = seed_reset_recovery_policy(
@@ -1065,6 +1102,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             &principal_id,
             RESET_SOURCE_DEVICE,
             &event_id,
+            2,
+            &publish_event_id,
             payload,
             &signing,
         ),
@@ -1079,7 +1118,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[126u8; 32]);
     let usk = SigningKey::from_bytes(&[127u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
+    let publish_event_id =
+        seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk).await;
     let service_key = SigningKey::from_bytes(&[128u8; 32]);
     let (service_id, service_vm) = did_key_principal(&service_key);
     let policy_id = seed_reset_recovery_policy(
@@ -1121,6 +1161,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             &principal_id,
             RESET_SOURCE_DEVICE,
             &event_id,
+            2,
+            &publish_event_id,
             payload,
             &signing,
         ),
@@ -1135,7 +1177,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[130u8; 32]);
     let usk = SigningKey::from_bytes(&[131u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
+    let publish_event_id =
+        seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk).await;
     seed_reset_recovery_policy(
         &state,
         &principal_id,
@@ -1205,6 +1248,8 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             &principal_id,
             RESET_SOURCE_DEVICE,
             &event_id,
+            2,
+            &publish_event_id,
             payload,
             &signing,
         ),
@@ -1221,7 +1266,8 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
     let (principal_id, vm) = did_key_principal(&signing);
     let ssk = SigningKey::from_bytes(&[135u8; 32]);
     let usk = SigningKey::from_bytes(&[136u8; 32]);
-    seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk);
+    let publish_event_id =
+        seed_cross_signing(&state, &principal_id, &vm, &signing, &ssk, &usk).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -1290,6 +1336,8 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             &principal_id,
             RESET_SOURCE_DEVICE,
             &event_id,
+            2,
+            &publish_event_id,
             payload,
             &signing,
         ),
@@ -1348,6 +1396,8 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             &principal_id,
             RESET_SOURCE_DEVICE,
             &replay_event_id,
+            3,
+            &event_id,
             replay_payload,
             &signing,
         ),

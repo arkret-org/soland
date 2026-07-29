@@ -24,7 +24,14 @@ async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays(
 
     let duplicate_version =
         signed_recovery_policy(&signing, &principal_id, &vm, 1, None, POLICY_FIELDS);
-    post_recovery_policy(restarted, &token, &duplicate_version, StatusCode::CONFLICT).await;
+    post_recovery_policy(
+        restarted,
+        &token,
+        &duplicate_version,
+        &signing,
+        StatusCode::CONFLICT,
+    )
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -43,7 +50,8 @@ async fn recovery_policy_rejects_tampered_signature_body() {
     );
     policy["trust_domain"] = serde_json::json!("ak:trust_domain:tampered.example");
 
-    let body = post_recovery_policy(state, &token, &policy, StatusCode::UNAUTHORIZED).await;
+    let body =
+        post_recovery_policy(state, &token, &policy, &signing, StatusCode::UNAUTHORIZED).await;
     assert_eq!(body["error"]["code"], "proof_invalid");
 }
 
@@ -67,7 +75,7 @@ async fn recovery_policy_production_accepts_verified_payload() {
         POLICY_FIELDS,
     );
 
-    let body = post_recovery_policy(state, token, &policy, StatusCode::CREATED).await;
+    let body = post_recovery_policy(state, token, &policy, &signing, StatusCode::CREATED).await;
     assert_eq!(body["ok"], true);
 }
 
@@ -95,7 +103,14 @@ async fn recovery_policy_accepts_genesis_session_device_signature() {
         POLICY_FIELDS,
     );
 
-    let body = post_recovery_policy(state, token, &policy, StatusCode::CREATED).await;
+    let body = post_recovery_policy(
+        state,
+        token,
+        &policy,
+        &principal_signing,
+        StatusCode::CREATED,
+    )
+    .await;
     assert_eq!(body["ok"], true);
 }
 
@@ -119,8 +134,9 @@ async fn recovery_policy_rejects_missing_signed_field_coverage() {
         &reduced_fields,
     );
 
-    let body = post_recovery_policy(state, &token, &policy, StatusCode::UNAUTHORIZED).await;
-    assert_eq!(body["error"]["code"], "proof_invalid");
+    let body =
+        post_recovery_policy(state, &token, &policy, &signing, StatusCode::BAD_REQUEST).await;
+    assert_eq!(body["error"]["code"], "schema_violation");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -139,7 +155,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
         None,
         POLICY_FIELDS,
     );
-    post_recovery_policy(state.clone(), &token, &v1, StatusCode::CREATED).await;
+    post_recovery_policy(state.clone(), &token, &v1, &signing, StatusCode::CREATED).await;
 
     let restarted = shared_recovery_state(persistence);
     let v2_wrong_supersedes = signed_recovery_policy(
@@ -154,6 +170,7 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
         restarted,
         &token,
         &v2_wrong_supersedes,
+        &signing,
         StatusCode::CONFLICT,
     )
     .await;

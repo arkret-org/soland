@@ -349,16 +349,15 @@ fn realm_admission_authority(
             format!("lease authority basis digest is invalid: {error}"),
         )
     })?;
-    let verification_method = arkret_wire::DidUrl::new(format!(
-        "{}#notary-key",
-        state.service_id()
-    ))
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::InternalError,
-            format!("lease authority verification method is invalid: {error}"),
-        )
-    })?;
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                AppError::new(
+                    ErrorCode::InternalError,
+                    format!("lease authority verification method is invalid: {error}"),
+                )
+            },
+        )?;
     let policy = AuthoritySetPolicy {
         schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),

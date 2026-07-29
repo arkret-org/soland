@@ -627,7 +627,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             issuer_role: arkret_wire::AuthoritySetIssuerRole::RealmAdmission,
             allowed_actions: vec![event.kind.as_str().to_owned()],
             issuers: vec![arkret_wire::AuthoritySetIssuer {
-                verification_method: arkret_identifiers::DidUrl::new(format!(
+                verification_method: arkret_wire::DidUrl::new(format!(
                     "{PEER_SOURCE_DID}#authorization-lease-key"
                 ))
                 .unwrap(),
@@ -656,6 +656,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         .unwrap(),
         scope_ref: event.scope_ref.clone(),
         action: event.kind.as_str().to_owned(),
+        authorization_rule_id: "realm_admission".to_owned(),
         risk_tier: arkret_wire::offline_publication::RiskTier::Medium,
         issued_at,
         expires_at: issued_at + ChronoDuration::hours(4),

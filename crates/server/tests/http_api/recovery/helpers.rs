@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use arkret_identifiers::Hash;
 use arkret_models_crypto::{
     KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
 };
@@ -24,6 +25,7 @@ pub(crate) const POLICY_FIELDS: &[&str] = &[
     "version",
     "trust_domain",
     "allowed_proof_kinds",
+    "publication_authorization_rules",
     "supersedes",
     "issued_at",
     "expires_at",
@@ -32,6 +34,97 @@ pub(crate) const POLICY_FIELDS: &[&str] = &[
 pub(crate) const RECOVERY_TEST_DEVICE: &str = "ak:device:01904100-0000-7000-8000-a11ce0000001";
 
 pub(crate) const RECOVERY_TEST_DEVICE_B: &str = "ak:device:01904100-0000-7000-8000-a11ce0000002";
+
+fn seed_local_notary_authority(state: &AppState, realm_id: &RealmId, seal: &arkret_wire::Seal) {
+    let move_id = seal
+        .delta
+        .first()
+        .cloned()
+        .expect("notary fixture Seal covers a Control Move");
+    let op = arkret_state::lattice::ordered_log::IssuedOp {
+        issuer: Did::new(state.service_id().to_owned()).unwrap(),
+        op: arkret_state::lattice::SealedOp::new(
+            move_id,
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Set,
+                tag: None,
+                value: Some(serde_json::json!({
+                    "kind": "single_did",
+                    "did": state.service_id(),
+                })),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        ),
+    };
+    state
+        .test_append_sealed_effects(
+            realm_id,
+            &seal.id,
+            &[(arkret_wire::REALM_NOTARY_CELL.parse().unwrap(), op)],
+        )
+        .unwrap();
+}
+
+async fn seed_realm_create_proposal_policy(
+    state: &AppState,
+    realm_id: &RealmId,
+    principal_id: &str,
+) -> arkret_wire::EventId {
+    if let Some(record) = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id.as_str())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+    {
+        return arkret_wire::EventId::new(record.event_id).unwrap();
+    }
+    let event = arkret_wire::Event::new(
+        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        Did::new(principal_id.to_owned()).unwrap(),
+        0,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0000-a11ce100",
+            chrono::Utc::now().timestamp_millis()
+        ))
+        .unwrap(),
+        serde_json::json!({
+            "object": {
+                "id": realm_id,
+            }
+        }),
+    )
+    .unwrap();
+    let event_id = event.event_id.clone();
+    let canonical_digest = event.event_digest().unwrap();
+    let envelope = serde_json::to_value(&event).unwrap();
+    state
+        .test_persistence()
+        .events()
+        .put(CanonicalEventRecord {
+            event_id: event_id.to_string(),
+            actor_id: principal_id.to_owned(),
+            actor_seq: 0,
+            realm_id: Some(realm_id.to_string()),
+            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            canonical_digest,
+            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
+            envelope,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    event_id
+}
 
 /// Helper: seed an accepted v1 policy for `principal_id` and open a recovery
 /// session against it. Returns the session JSON body.
@@ -44,7 +137,7 @@ pub(crate) async fn open_recovery_session(
 ) -> Value {
     ingest_fresh_recovery_did_document(&state, principal_id).await;
     seed_recovery_policy(&state, principal_id, vm, 1, None).await;
-    ensure_cross_signing(state.clone(), principal_id, vm, signing);
+    ensure_cross_signing(state.clone(), principal_id, vm, signing).await;
     let create_body = serde_json::json!({
         "principal_id": principal_id,
         "trust_domain": "ak:trust_domain:soland.local",
@@ -60,7 +153,7 @@ pub(crate) async fn open_recovery_session(
     .await
 }
 
-pub(crate) fn ensure_cross_signing(
+pub(crate) async fn ensure_cross_signing(
     state: AppState,
     principal_id: &str,
     vm: &str,
@@ -70,7 +163,7 @@ pub(crate) fn ensure_cross_signing(
     if !state.test_has_current_cross_signing(&principal) {
         let ssk = SigningKey::from_bytes(&[231u8; 32]);
         let usk = SigningKey::from_bytes(&[232u8; 32]);
-        seed_cross_signing(&state, principal_id, vm, signing, &ssk, &usk);
+        let _ = seed_cross_signing(&state, principal_id, vm, signing, &ssk, &usk).await;
     }
 }
 
@@ -89,6 +182,7 @@ pub(crate) fn sign_recovery_proof(signing: &SigningKey, session: &Value) -> Stri
         "recovery_session_id": session["recovery_session_id"],
         "identity_model": session["identity_model"],
         "model_generation_ref": model_generation_ref,
+        "publication_authority_context_digest": session["publication_authority_context_digest"],
         "challenge": session["challenge"],
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
@@ -128,6 +222,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         "recovery_session_id": session["recovery_session_id"],
         "identity_model": session["identity_model"],
         "model_generation_ref": model_generation_ref,
+        "publication_authority_context_digest": session["publication_authority_context_digest"],
         "challenge": session["challenge"],
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
@@ -160,6 +255,7 @@ pub(crate) fn recovery_unlock_proof(
         "recovery_session_id": session["recovery_session_id"],
         "identity_model": session["identity_model"],
         "model_generation_ref": recovery_model_generation_ref(session),
+        "publication_authority_context_digest": session["publication_authority_context_digest"],
         "challenge": session["challenge"],
         "created_at": session["created_at"],
         "expires_at": session["expires_at"],
@@ -192,14 +288,14 @@ fn recovery_model_generation_ref(session: &Value) -> Value {
     }
 }
 
-pub(crate) fn seed_cross_signing(
+pub(crate) async fn seed_cross_signing(
     state: &AppState,
     principal_id: &str,
     vm: &str,
     psk: &SigningKey,
     ssk: &SigningKey,
     usk: &SigningKey,
-) {
+) -> String {
     let publish = serde_json::json!({
         "principal_id": principal_id,
         "trust_domain": "ak:trust_domain:soland.local",
@@ -222,10 +318,123 @@ pub(crate) fn seed_cross_signing(
         "issued_at": "2026-05-30T00:00:00.000Z",
     });
     let content: arkret_models_identity::CrossSigningPublish =
-        serde_json::from_value(publish).expect("cross-signing publish content");
+        serde_json::from_value(publish.clone()).expect("cross-signing publish content");
     state
         .test_record_cross_signing_publish(content)
         .expect("seed cross-signing publish");
+
+    let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
+    let realm = RealmId::new(realm_id.clone()).unwrap();
+    let create_event_id = seed_realm_create_proposal_policy(state, &realm, principal_id).await;
+    let event_id = new_prefixed_uuid7("ak:event:");
+    let envelope = serde_json::json!({
+        "event_id": event_id,
+        "actor_id": principal_id,
+        "actor_seq": 1,
+        "realm_id": realm_id,
+        "kind": "ak.cross_signing.publish",
+        "prev_refs": [create_event_id],
+        "payload": publish,
+    });
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
+    let canonical_digest = arkret_canonical::sha256_digest(&canonical_bytes);
+    state
+        .test_persistence()
+        .events()
+        .put(CanonicalEventRecord {
+            event_id: event_id.clone(),
+            actor_id: principal_id.to_owned(),
+            actor_seq: 1,
+            realm_id: Some(realm_id.clone()),
+            kind: "ak.cross_signing.publish".to_owned(),
+            schema_id: "ak.schema.cross_signing_publish.v1".to_owned(),
+            canonical_digest: canonical_digest.clone(),
+            canonical_bytes,
+            envelope,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .unwrap();
+    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+        [0x61; 32],
+        Did::new(principal_id.to_owned()).unwrap(),
+        format!("{principal_id}#fixture-notary"),
+    );
+    let seal = arkret_wire::Seal::sign_single(
+        realm,
+        Vec::new(),
+        vec![Hash::new(canonical_digest).unwrap()],
+        Hash::new(arkret_state::EMPTY_STATE_ROOT.to_owned()).unwrap(),
+        arkret_identifiers::Hlc::new("019f00000000-0000-a11ce101").unwrap(),
+        &signer,
+    )
+    .unwrap();
+    state.test_put_seal(&seal).unwrap();
+    seed_local_notary_authority(state, &seal.realm_id, &seal);
+    event_id
+}
+
+pub(crate) fn fixture_recovery_policy_basis() -> arkret_wire::LeaseBasisRef {
+    arkret_wire::LeaseBasisRef::Seal(
+        arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64))).unwrap(),
+    )
+}
+
+pub(crate) fn fixture_recovery_publication_authority_context(
+    principal_id: &str,
+) -> (
+    arkret_models_crypto::RecoveryPublicationAuthorityContext,
+    Hash,
+) {
+    let realm_id = RealmId::new(soland_test_support::principal_control_realm_for_did(
+        principal_id,
+    ))
+    .unwrap();
+    let scope_ref = arkret_wire::ScopeRef::Realm { realm_id };
+    let authority_set_policy = arkret_wire::AuthoritySetPolicy {
+        schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        authority_set_id: arkret_wire::RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
+        policy_kind: arkret_wire::AuthoritySetPolicyKind::PrincipalControl,
+        scope_ref: scope_ref.clone(),
+        source: arkret_wire::AuthoritySetPolicySource {
+            source_kind: arkret_wire::AuthoritySetSourceKind::CrossSigningPublish,
+            source_ref: new_prefixed_uuid7("ak:event:"),
+            source_digest: Hash::new(format!("sha256:{}", "c".repeat(64))).unwrap(),
+            generation_ref: "1".to_owned(),
+        },
+        authorization_rules: vec![arkret_wire::AuthoritySetAuthorizationRule {
+            rule_id: "cross_signing".to_owned(),
+            issuer_role: arkret_wire::AuthoritySetIssuerRole::CrossSigningSelfSigning,
+            allowed_actions: vec![
+                "ak.device.authorize".to_owned(),
+                "ak.device.list_update".to_owned(),
+            ],
+            issuers: vec![arkret_wire::AuthoritySetIssuer {
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{principal_id}#CK_self_signing_v1"
+                ))
+                .unwrap(),
+            }],
+            threshold: 1,
+        }],
+    };
+    let authority_set_ref = arkret_wire::AuthoritySetRef {
+        authority_set_id: authority_set_policy.authority_set_id.clone(),
+        authority_set_digest: authority_set_policy.digest().unwrap(),
+    };
+    let context = arkret_models_crypto::RecoveryPublicationAuthorityContext {
+        identity_model: arkret_models_crypto::RecoveryIdentityModel::CrossSigning,
+        basis_ref: fixture_recovery_policy_basis(),
+        scope_ref,
+        authority_set_ref,
+        authority_set_policy,
+        allowed_actions: vec![
+            arkret_models_crypto::RecoveryPublicationAction::DeviceAuthorize,
+            arkret_models_crypto::RecoveryPublicationAction::DeviceListUpdate,
+        ],
+    };
+    let digest = context.digest().unwrap();
+    (context, digest)
 }
 
 /// Build a schema-conforming DID recovery backup fixture.
@@ -349,7 +558,7 @@ pub(crate) async fn post_recovery(
     let mut response = TestClient::post(format!("http://server{path}"))
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(body)
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
@@ -365,7 +574,7 @@ pub(crate) async fn get_recovery(
 ) -> Value {
     let mut response = TestClient::get(format!("http://server{path}"))
         .add_header("authorization", format!("Bearer {token}"), true)
-        .send(&app_from_state(state))
+        .send(&app_from_state(state.clone()))
         .await;
     let status = response.status_code.unwrap();
     let body: Value = response.take_json().await.unwrap();
@@ -405,6 +614,14 @@ pub(crate) async fn seed_recovery_policy(
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
+        "publication_authorization_rules": [{
+            "rule_id": "principal_signing",
+            "proof_kind": "principal_signing",
+            "issuer_role": "identity_recovery",
+            "allowed_actions": ["ak.device.reanchor"],
+            "issuers": [{"verification_method": verification_method}],
+            "threshold": 1
+        }],
         "supersedes": supersedes,
         "issued_at": "2026-05-30T00:00:00.000Z",
         "expires_at": "2026-06-30T00:00:00.000Z",
@@ -422,6 +639,7 @@ pub(crate) async fn seed_recovery_policy(
             policy_id: policy_id.clone(),
             principal_id: principal_id.to_owned(),
             version,
+            acceptance_basis: fixture_recovery_policy_basis(),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
             allowed_proof_kinds: vec!["principal_signing".to_owned()],
             supersedes: supersedes.map(ToOwned::to_owned),
@@ -577,6 +795,14 @@ pub(crate) fn signed_recovery_policy(
         "version": version,
         "trust_domain": "ak:trust_domain:soland.local",
         "allowed_proof_kinds": ["principal_signing"],
+        "publication_authorization_rules": [{
+            "rule_id": "principal_signing",
+            "proof_kind": "principal_signing",
+            "issuer_role": "identity_recovery",
+            "allowed_actions": ["ak.device.reanchor"],
+            "issuers": [{"verification_method": verification_method}],
+            "threshold": 1
+        }],
         "supersedes": supersedes,
         "issued_at": "2026-05-30T00:00:00.000Z",
         "expires_at": "2026-06-30T00:00:00.000Z",
@@ -623,19 +849,179 @@ pub(crate) fn sign_recovery_payload(
 pub(crate) async fn post_recovery_policy(
     state: AppState,
     token: &str,
-    body: &Value,
+    policy: &Value,
+    event_signing_key: &SigningKey,
     expected_status: StatusCode,
 ) -> Value {
-    if let Some(principal_id) = body.get("principal_id").and_then(Value::as_str) {
-        ingest_fresh_recovery_did_document(&state, principal_id).await;
+    let principal_id = policy["principal_id"]
+        .as_str()
+        .expect("recovery policy principal_id");
+    let verification_method = policy["auth_data"]["verification_method"]
+        .as_str()
+        .expect("recovery policy verification method");
+    let event_verification_method = principal_id.strip_prefix("did:key:").map_or_else(
+        || verification_method.to_owned(),
+        |key| format!("{principal_id}#{key}"),
+    );
+    ingest_fresh_recovery_did_document(&state, principal_id).await;
+
+    let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
+    let realm = RealmId::new(realm_id.clone()).unwrap();
+    seed_realm_create_proposal_policy(&state, &realm, principal_id).await;
+    soland_test_support::cba_basis::seed_realm_basis(&state, &realm_id, principal_id, &[]);
+    let basis = soland_test_support::cba_basis::realm_basis_seal(&realm_id, principal_id, &[]);
+    seed_local_notary_authority(&state, &realm, &basis);
+    let prior = state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(&realm_id)
+        .await
+        .expect("recovery policy Realm events");
+    let actor_seq = prior
+        .iter()
+        .filter(|record| record.actor_id == principal_id)
+        .map(|record| record.actor_seq)
+        .max()
+        .map_or(0, |seq| seq + 1);
+    let prev_refs = prior
+        .iter()
+        .filter(|record| record.actor_id == principal_id && record.actor_seq + 1 == actor_seq)
+        .map(|record| arkret_wire::EventId::new(record.event_id.clone()).unwrap())
+        .collect();
+    let logical = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed) & 0xffff;
+    let mut event = arkret_wire::Event::new(
+        arkret_wire::events::EventKind::POLICY_SET,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm.clone(),
+        },
+        Did::new(principal_id.to_owned()).unwrap(),
+        actor_seq,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-{logical:04x}-a11ce101",
+            chrono::Utc::now().timestamp_millis()
+        ))
+        .unwrap(),
+        serde_json::json!({
+            "policy_id": policy["policy_id"],
+            "value": policy,
+        }),
+    )
+    .unwrap();
+    event.prev_refs = prev_refs;
+    event.requirements.schema_profile_refs = vec!["ak.schema.recovery_policy.v1".to_owned()];
+    soland_test_support::cba_basis::apply_registered_cba_plane(
+        &mut event,
+        &event_verification_method,
+        &[],
+    );
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        event_signing_key.clone(),
+        event.actor_id.clone(),
+        event_verification_method.clone(),
+    );
+    let event_created_at = event.created_at;
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &event_verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(event_created_at),
+    )
+    .unwrap();
+
+    let mut lease_response = TestClient::post("http://server/_arkret/self/authorization-leases")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header(
+            "Idempotency-Key",
+            format!("recovery-policy-lease-{}", event.event_id),
+            true,
+        )
+        .json(&arkret_wire::AuthorizationLeaseIssueRequest {
+            events: vec![event.clone()],
+        })
+        .send(&app_from_state(state.clone()))
+        .await;
+    let lease_status = lease_response.status_code.unwrap();
+    let lease_body: Value = lease_response.take_json().await.unwrap();
+    if lease_status != StatusCode::OK {
+        assert_eq!(lease_status, expected_status, "response body: {lease_body}");
+        return lease_body;
     }
+    let lease_outcome: arkret_wire::AuthorizationLeaseIssueOutcome =
+        serde_json::from_value(lease_body).expect("authorization lease outcome");
+    let request = arkret_models_crypto::RecoveryPolicyPublishRequest {
+        event: event.clone(),
+        authorization_lease: lease_outcome.authorization_leases[0].clone(),
+        cba_proof_bundles: Vec::new(),
+    };
     let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(body)
-        .send(&app_from_state(state))
+        .json(&request)
+        .send(&app_from_state(state.clone()))
         .await;
-    let status = response.status_code.unwrap();
-    let body: Value = response.take_json().await.unwrap();
-    assert_eq!(status, expected_status, "response body: {body}");
-    body
+    let mut status = response.status_code.unwrap();
+    let mut response_body: Value = response.take_json().await.unwrap();
+
+    if expected_status == StatusCode::CREATED {
+        assert_eq!(
+            status,
+            StatusCode::PRECONDITION_FAILED,
+            "first publication must wait for Seal coverage: {response_body}"
+        );
+        assert_eq!(response_body["error"]["code"], "frontier_unavailable");
+
+        let leaves = state
+            .test_seal_leaves(&realm)
+            .expect("recovery policy Seal frontier");
+        assert_eq!(leaves.len(), 1, "fixture recovery frontier must be linear");
+        let mut pending = leaves.clone();
+        let mut covered = std::collections::BTreeSet::new();
+        let mut predecessor_state_root = None;
+        while let Some(seal_id) = pending.pop() {
+            let seal = state
+                .test_seal(&seal_id)
+                .expect("recovery policy predecessor lookup")
+                .expect("recovery policy predecessor");
+            if predecessor_state_root.is_none() {
+                predecessor_state_root = Some(seal.state_root.clone());
+            }
+            covered.extend(seal.delta);
+            pending.extend(seal.predecessor_refs);
+        }
+        let event_digest = Hash::new(event.event_digest().unwrap()).unwrap();
+        covered.insert(event_digest.clone());
+        let control_root =
+            arkret_state::control_event_set_root(&covered).expect("recovery policy control root");
+        let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
+            [0x62; 32],
+            Did::new(principal_id.to_owned()).unwrap(),
+            format!("{principal_id}#recovery-policy-notary"),
+        );
+        let successor = arkret_wire::Seal::sign_single_kind_with_control_root(
+            realm,
+            leaves,
+            vec![event_digest],
+            control_root,
+            predecessor_state_root.expect("recovery policy predecessor state root"),
+            arkret_identifiers::Hlc::new(format!(
+                "{:012x}-{logical:04x}-a11ce102",
+                chrono::Utc::now().timestamp_millis()
+            ))
+            .unwrap(),
+            arkret_wire::SealKind::Normal,
+            &seal_signer,
+        )
+        .unwrap();
+        state.test_put_seal(&successor).unwrap();
+
+        let mut retry = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&request)
+            .send(&app_from_state(state))
+            .await;
+        status = retry.status_code.unwrap();
+        response_body = retry.take_json().await.unwrap();
+    }
+
+    assert_eq!(status, expected_status, "response body: {response_body}");
+    response_body
 }

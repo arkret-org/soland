@@ -2711,6 +2711,12 @@ impl DidService {
 mod tests {
     use super::*;
 
+    fn recovery_policy_basis() -> LeaseBasisRef {
+        LeaseBasisRef::Seal(
+            arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
+        )
+    }
+
     struct StaticAccount;
 
     struct NoDevices;
@@ -3172,6 +3178,7 @@ mod tests {
                 policy_id: "ak:policy:current".to_owned(),
                 principal_id: principal_id.to_owned(),
                 version: 2,
+                acceptance_basis: recovery_policy_basis(),
                 trust_domain: "ak:trust_domain:personal".to_owned(),
                 allowed_proof_kinds: vec!["principal_signing".to_owned()],
                 supersedes: Some("ak:policy:genesis".to_owned()),
@@ -3279,6 +3286,7 @@ mod tests {
                     policy_id: "ak:policy:stale".to_owned(),
                     principal_id: "did:web:alice.example".to_owned(),
                     version: 2,
+                    acceptance_basis: recovery_policy_basis(),
                     trust_domain: "ak:trust_domain:personal".to_owned(),
                     allowed_proof_kinds: vec!["principal_signing".to_owned()],
                     supersedes: Some("ak:policy:current".to_owned()),

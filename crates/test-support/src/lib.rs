@@ -141,6 +141,8 @@ pub trait AppStateTestExt {
     fn test_projection(&self) -> &'static Arc<Mutex<ProjectionSnapshot>>;
     fn test_realms(&self) -> &'static Arc<Mutex<RealmDirectoryIndex>>;
     fn test_put_seal(&self, seal: &Seal) -> StoreResult<()>;
+    fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>>;
+    fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>>;
 
     /// Append sealed cell effects the way `apply_seal` commits them.
     ///
@@ -203,6 +205,24 @@ impl AppStateTestExt for AppState {
             .and_then(|resources| resources.seal_store.clone())
             .expect("test Seal store is unavailable for this AppState")
             .put(seal)
+    }
+
+    fn test_seal(&self, seal_id: &SealId) -> StoreResult<Option<Seal>> {
+        state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.seal_store.clone())
+            .expect("test Seal store is unavailable for this AppState")
+            .get(seal_id)
+    }
+
+    fn test_seal_leaves(&self, realm_id: &RealmId) -> StoreResult<Vec<SealId>> {
+        state_test_registry()
+            .lock()
+            .get(&app_state_key(self))
+            .and_then(|resources| resources.seal_store.clone())
+            .expect("test Seal store is unavailable for this AppState")
+            .list_leaves(realm_id)
     }
 
     fn test_append_sealed_effects(

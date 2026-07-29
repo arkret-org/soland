@@ -25,6 +25,7 @@ pub(super) const POLICY_ALLOWED_SIGNED_FIELDS: &[&str] = &[
     "supersedes",
     "trust_domain",
     "allowed_proof_kinds",
+    "publication_authorization_rules",
     "threshold",
     "device_quorum",
     "trusted_recovery_services",
@@ -45,6 +46,7 @@ pub(super) const POLICY_REQUIRED_SIGNED_FIELDS: &[&str] = &[
     "supersedes",
     "trust_domain",
     "allowed_proof_kinds",
+    "publication_authorization_rules",
     "issued_at",
 ];
 

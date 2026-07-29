@@ -264,6 +264,10 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
             policy_id: policy_id.clone(),
             principal_id: controller.to_owned(),
             version: 1,
+            acceptance_basis: arkret_wire::LeaseBasisRef::Seal(
+                arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64)))
+                    .unwrap(),
+            ),
             trust_domain: "ak:trust_domain:soland.local".to_owned(),
             allowed_proof_kinds: vec!["principal_signing".to_owned()],
             supersedes: None,
@@ -276,8 +280,36 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                 "version": 1,
                 "trust_domain": "ak:trust_domain:soland.local",
                 "allowed_proof_kinds": ["principal_signing"],
+                "publication_authorization_rules": [{
+                    "rule_id": "principal_signing",
+                    "proof_kind": "principal_signing",
+                    "issuer_role": "identity_recovery",
+                    "allowed_actions": ["ak.device.reanchor"],
+                    "issuers": [{
+                        "verification_method": format!("{controller}#controller-key")
+                    }],
+                    "threshold": 1
+                }],
+                "supersedes": null,
                 "issued_at": now,
-                "expires_at": now + chrono::Duration::days(30)
+                "expires_at": now + chrono::Duration::days(30),
+                "auth_data": {
+                    "verification_method": format!("{controller}#controller-key"),
+                    "signature_algorithm": "Ed25519",
+                    "signature": "c2ln",
+                    "signed_fields": [
+                        "schema",
+                        "policy_id",
+                        "principal_id",
+                        "version",
+                        "supersedes",
+                        "trust_domain",
+                        "allowed_proof_kinds",
+                        "publication_authorization_rules",
+                        "issued_at",
+                        "expires_at"
+                    ]
+                }
             }),
             accepted_at: now,
             verification_method: format!("{controller}#controller-key"),

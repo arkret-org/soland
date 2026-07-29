@@ -77,15 +77,6 @@ fn recovery_policy_publish_outcome(
     })
 }
 
-fn recovery_event_submit_error(
-    error: crate::routing::events::event_log::SubmitOneError,
-) -> AppError {
-    let code = ErrorCode::from_wire(&error.code).unwrap_or(ErrorCode::InvalidParam);
-    AppError::new(code, error.message)
-        .with_status(error.status)
-        .with_wire_code(error.code)
-}
-
 fn recovery_policy_frontier_unavailable(message: impl Into<String>) -> AppError {
     AppError::new(ErrorCode::FailedPrecondition, message.into())
         .with_status(StatusCode::PRECONDITION_FAILED)
@@ -275,7 +266,7 @@ pub(super) async fn recovery_policy_put(
 
     let event_id = request.event.event_id.to_string();
     let accepted_before = state
-        .events()
+        .event_queries()
         .accepted_event(&event_id)
         .await
         .map_err(recovery_service_error)?;
@@ -311,9 +302,14 @@ pub(super) async fn recovery_policy_put(
     let submission: arkret_wire::EventInitialSubmission = request.into();
     crate::routing::events::event_log::submit_initial_event_submission(state, &session, submission)
         .await
-        .map_err(recovery_event_submit_error)?;
+        .map_err(|error| {
+            let code = ErrorCode::from_wire(&error.code).unwrap_or(ErrorCode::InvalidParam);
+            AppError::new(code, error.message)
+                .with_status(error.status)
+                .with_wire_code(error.code)
+        })?;
     let accepted_event = state
-        .events()
+        .event_queries()
         .accepted_event(&event_id)
         .await
         .map_err(recovery_service_error)?

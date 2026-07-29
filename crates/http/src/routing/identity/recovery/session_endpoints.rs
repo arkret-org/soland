@@ -173,10 +173,16 @@ fn recovery_model_generation_ref(record: &RecoverySessionServiceState) -> Value 
     }
 }
 
-fn recovery_policy_basis_leaves(basis: &LeaseBasisRef) -> Vec<arkret_identifiers::SealId> {
+fn recovery_policy_basis_leaves(
+    basis: &LeaseBasisRef,
+) -> Result<Vec<arkret_identifiers::SealId>, AppError> {
     match basis {
-        LeaseBasisRef::Seal(seal_id) => vec![seal_id.clone()],
-        LeaseBasisRef::Joined(basis) => basis.leaves.clone(),
+        LeaseBasisRef::Seal(seal_id) => Ok(vec![seal_id.clone()]),
+        LeaseBasisRef::Joined(basis) => Ok(basis.leaves.clone()),
+        LeaseBasisRef::AnchorUnit(_) => Err(AppError::conflict(
+            "recovery policy authority cannot use a bootstrap anchor-unit basis",
+        )
+        .with_wire_code("recovery_publication_authority_invalid")),
     }
 }
 
@@ -213,7 +219,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
         .with_wire_code("recovery_publication_authority_invalid"));
     }
 
-    let leaves = recovery_policy_basis_leaves(&active.acceptance_basis);
+    let leaves = recovery_policy_basis_leaves(&active.acceptance_basis)?;
     let covered = state
         .projections()
         .seal_leaf_union_proof(&leaves)
@@ -228,7 +234,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
         .map(|digest| digest.to_string())
         .collect::<BTreeSet<_>>();
     let events = state
-        .events()
+        .event_queries()
         .accepted_events_for_actor(&active.principal_id)
         .await
         .map_err(recovery_service_error)?;
@@ -341,7 +347,7 @@ async fn cross_signing_recovery_publication_authority_context(
     generation: u64,
 ) -> Result<RecoveryPublicationAuthorityContext, AppError> {
     let events = state
-        .events()
+        .event_queries()
         .accepted_events_for_actor(principal_id)
         .await
         .map_err(recovery_service_error)?;
