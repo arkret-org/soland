@@ -1039,7 +1039,8 @@ pub(crate) async fn identity_submit_did_operation(
     let version_id = operation
         .get("versionId")
         .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("operation.versionId is required"))?;
+        .ok_or_else(|| AppError::invalid_param("operation.versionId is required"))?
+        .to_owned();
     let operation_seq = version_id
         .split_once('-')
         .and_then(|(sequence, hash)| (!hash.is_empty()).then_some(sequence))
@@ -1070,10 +1071,16 @@ pub(crate) async fn identity_submit_did_operation(
         .map_err(|error| AppError::internal(error.to_string()))?;
     if let Some(existing_event) = events.iter().find(|event| {
         event.seq == next_seq
-            || event.operation.get("versionId").and_then(Value::as_str) == Some(version_id)
+            || event.operation.get("versionId").and_then(Value::as_str) == Some(version_id.as_str())
     }) {
         if existing_event.event_digest == event_digest && existing_event.operation == operation {
-            return did_operation_submit_outcome("duplicate", typed_did, next_seq, &event_digest);
+            return did_operation_submit_outcome(
+                "duplicate",
+                typed_did,
+                next_seq,
+                &version_id,
+                &event_digest,
+            );
         }
         return Err(AppError::new(
             ErrorCode::CasConflict,
@@ -1175,7 +1182,13 @@ pub(crate) async fn identity_submit_did_operation(
             ));
         }
         WebvhLogCommitOutcome::Duplicate => {
-            return did_operation_submit_outcome("duplicate", typed_did, next_seq, &event_digest);
+            return did_operation_submit_outcome(
+                "duplicate",
+                typed_did,
+                next_seq,
+                &version_id,
+                &event_digest,
+            );
         }
         WebvhLogCommitOutcome::Accepted => {}
     }
@@ -1194,13 +1207,14 @@ pub(crate) async fn identity_submit_did_operation(
         "accepted",
     )
     .await;
-    did_operation_submit_outcome("accepted", typed_did, next_seq, &event_digest)
+    did_operation_submit_outcome("accepted", typed_did, next_seq, &version_id, &event_digest)
 }
 
 fn did_operation_submit_outcome(
     status: &str,
     did: Did,
     seq: u64,
+    version_id: &str,
     event_digest: &str,
 ) -> JsonResult<DidOperationSubmitOutcome> {
     let head_event_digest = Hash::new(event_digest.to_owned()).map_err(|error| {
@@ -1208,12 +1222,13 @@ fn did_operation_submit_outcome(
             "DID operation digest failed SDK type validation: {error}"
         ))
     })?;
+    let operation_ref = format!("{did}?versionId={version_id}");
     json_ok(DidOperationSubmitOutcome {
         status: status.to_owned(),
         did,
         seq: Some(seq),
         head_event_digest: Some(head_event_digest),
-        operation_ref: None,
+        operation_ref: Some(operation_ref),
         receipts: Vec::new(),
     })
 }

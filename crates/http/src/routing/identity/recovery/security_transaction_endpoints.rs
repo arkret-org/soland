@@ -1831,7 +1831,14 @@ async fn continue_publish_did_entry(
         .get("versionId")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::internal("prepared DID entry is missing versionId"))?;
-    if version_id != plan.did_publication.expected_entry_ref {
+    let expected_version_id = did_version_id_from_ref(
+        &transaction.resource.principal_id,
+        &plan.did_publication.expected_entry_ref,
+    )
+    .ok_or_else(|| {
+        AppError::internal("prepared DID entry ref is not a canonical DID version reference")
+    })?;
+    if version_id != expected_version_id {
         return Err(AppError::internal(
             "prepared DID entry versionId changed the reserved entry ref",
         ));
@@ -2547,6 +2554,14 @@ fn canonical_digest(value: &impl Serialize) -> Result<Hash, AppError> {
         .map_err(|error| AppError::internal(error.to_string()))
 }
 
+fn did_version_id_from_ref<'a>(principal_id: &Did, reference: &'a str) -> Option<&'a str> {
+    let value = reference
+        .strip_prefix(principal_id.as_str())?
+        .strip_prefix("?versionId=")?;
+    (!value.is_empty() && !value.bytes().any(|byte| matches!(byte, b'&' | b'#' | b'?')))
+        .then_some(value)
+}
+
 fn security_transaction_service_error(error: soland_services::ServiceError) -> AppError {
     if error.kind() == soland_services::ServiceErrorKind::Conflict
         && error.detail().contains("different canonical bytes")
@@ -2554,5 +2569,34 @@ fn security_transaction_service_error(error: soland_services::ServiceError) -> A
         AppError::conflict(error.detail()).with_wire_code("duplicate_conflict")
     } else {
         recovery_service_error(error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn did_version_reference_yields_only_the_native_version_id() {
+        let did = Did::new("did:webvh:z6mkfixture:alice.example").unwrap();
+        assert_eq!(
+            did_version_id_from_ref(
+                &did,
+                "did:webvh:z6mkfixture:alice.example?versionId=2-zQmRecovery",
+            ),
+            Some("2-zQmRecovery")
+        );
+        assert_eq!(
+            did_version_id_from_ref(&did, "2-zQmRecovery"),
+            None,
+            "a bare native version id is not a protocol artifact reference"
+        );
+        assert_eq!(
+            did_version_id_from_ref(
+                &did,
+                "did:webvh:z6mkfixture:alice.example?versionId=2-zQmRecovery&service=agent",
+            ),
+            None
+        );
     }
 }
