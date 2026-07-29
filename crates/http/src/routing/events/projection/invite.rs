@@ -553,14 +553,63 @@ pub(super) async fn project_invite_create_operation(
         return;
     }
 
+    let inviter = operation
+        .payload
+        .get("sender")
+        .or_else(|| operation.payload.get("inviter"))
+        .or_else(|| operation.payload.get("issuer"))
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or(origin);
+    let expires_at = operation
+        .payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .or_else(|| Some(operation.created_at + chrono::Duration::days(7)));
+    let invite_delivery_target = invite_delivery_target_for_operation(operation);
+    let introduction_evidence_digest = introduction_evidence_digest_for_operation(operation);
     let invites = state.realm_invites();
     match invites.get(&invite_id).await {
         Ok(Some(existing)) => {
-            tracing::debug!(
-                invite_id = %invite_id,
-                status = %existing.status,
-                "ak.invite.create projection replay skipped"
-            );
+            let reconciles_private_delivery = existing.status == "pending"
+                && existing.realm_id == operation.realm_id.as_str()
+                && existing.inviter == inviter
+                && existing.invitee.as_deref() == Some(invitee.as_str())
+                && existing.invite_delivery_target == invite_delivery_target
+                && existing.introduction_evidence_digest == introduction_evidence_digest
+                && existing.third_party_id.is_none()
+                && existing.claim_nonces.is_empty()
+                && existing.expires_at == expires_at
+                && existing.created_at == operation.created_at;
+            if reconciles_private_delivery {
+                if !state
+                    .projections()
+                    .invite_member_is_invited(operation.realm_id.as_str(), invitee.as_str())
+                {
+                    project_invite_creation(state, operation, invitee.as_str());
+                    touch_realm(state, operation.realm_id.as_str()).await;
+                    tracing::info!(
+                        invite_id = %invite_id,
+                        invitee = %invitee.as_str(),
+                        realm_id = %operation.realm_id,
+                        "reconciled shared ak.invite.create after private invite delivery"
+                    );
+                } else {
+                    tracing::debug!(
+                        invite_id = %invite_id,
+                        status = %existing.status,
+                        "ak.invite.create projection replay skipped"
+                    );
+                }
+            } else {
+                tracing::warn!(
+                    invite_id = %invite_id,
+                    status = %existing.status,
+                    "existing invite conflicts with shared ak.invite.create projection"
+                );
+            }
             return;
         }
         Ok(None) => {}
@@ -596,21 +645,6 @@ pub(super) async fn project_invite_create_operation(
         return;
     }
 
-    let inviter = operation
-        .payload
-        .get("sender")
-        .or_else(|| operation.payload.get("inviter"))
-        .or_else(|| operation.payload.get("issuer"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .unwrap_or(origin);
-    let expires_at = operation
-        .payload
-        .get("expires_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .or_else(|| Some(operation.created_at + chrono::Duration::days(7)));
     let invite_token = crate::routing::generate_invite_token(
         &invite_id,
         operation.realm_id.as_str(),
@@ -621,8 +655,8 @@ pub(super) async fn project_invite_create_operation(
         realm_id: operation.realm_id.to_string(),
         inviter: inviter.to_owned(),
         invitee: Some(invitee.as_str().to_owned()),
-        invite_delivery_target: invite_delivery_target_for_operation(operation),
-        introduction_evidence_digest: introduction_evidence_digest_for_operation(operation),
+        invite_delivery_target,
+        introduction_evidence_digest,
         third_party_id: None,
         join_rule_snapshot: None,
         invite_token,
@@ -923,5 +957,146 @@ pub(super) async fn project_plaintext_visible_services_operation(
         .await
     {
         tracing::warn!(%error, "failed to project plaintext visible services");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[tokio::test]
+    async fn shared_invite_create_reconciles_exact_private_delivery_before_replay() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000501").unwrap();
+        let invite_id = "ak:invite:01904100-0000-7000-8000-000000000502";
+        let inviter = "did:web:alice.example";
+        let invitee = "did:web:bob.example";
+        let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
+        let expires_at = "2026-08-05T10:00:00Z".parse().unwrap();
+        let delivery_target = json!({
+            "recipient_service_id": "did:web:beta.example",
+            "recipient_service_kind": "principal_server"
+        });
+        let evidence_digest = format!("sha256:{}", "a".repeat(64));
+        state
+            .realm_invites()
+            .put(RealmInviteRecord {
+                invite_id: invite_id.to_owned(),
+                realm_id: realm_id.to_string(),
+                inviter: inviter.to_owned(),
+                invitee: Some(invitee.to_owned()),
+                invite_delivery_target: Some(delivery_target.clone()),
+                introduction_evidence_digest: Some(evidence_digest.clone()),
+                third_party_id: None,
+                join_rule_snapshot: Some(json!({"private_delivery": true})),
+                invite_token: "private-token".to_owned(),
+                status: "pending".to_owned(),
+                claim_nonces: BTreeMap::new(),
+                expires_at: Some(expires_at),
+                created_at,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        assert!(
+            !state
+                .projections()
+                .invite_member_is_invited(realm_id.as_str(), invitee)
+        );
+
+        let mut operation = Operation::create(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000503",
+            )
+            .unwrap(),
+            realm_id.clone(),
+            arkret_wire::events::EventKind::INVITE_CREATE,
+            json!({
+                "invite_id": invite_id,
+                "invitee": invitee,
+                "invite_delivery_target": delivery_target,
+                "introduction_evidence_digest": evidence_digest,
+                "expires_at": "2026-08-05T10:00:00.000Z"
+            }),
+        );
+        operation.created_at = created_at;
+
+        project_invite_create_operation(&state, inviter, &operation).await;
+
+        assert!(
+            state
+                .projections()
+                .invite_member_is_invited(realm_id.as_str(), invitee)
+        );
+        let retained = state.realm_invites().get(invite_id).await.unwrap().unwrap();
+        assert_eq!(
+            retained.join_rule_snapshot,
+            Some(json!({"private_delivery": true}))
+        );
+        assert_eq!(retained.invite_token, "private-token");
+    }
+
+    #[tokio::test]
+    async fn shared_invite_create_does_not_reconcile_conflicting_private_delivery() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = RealmId::new("ak:realm:01904100-0000-7000-8000-000000000511").unwrap();
+        let invite_id = "ak:invite:01904100-0000-7000-8000-000000000512";
+        let invitee = "did:web:bob.example";
+        let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
+        state
+            .realm_invites()
+            .put(RealmInviteRecord {
+                invite_id: invite_id.to_owned(),
+                realm_id: realm_id.to_string(),
+                inviter: "did:web:mallory.example".to_owned(),
+                invitee: Some(invitee.to_owned()),
+                invite_delivery_target: None,
+                introduction_evidence_digest: None,
+                third_party_id: None,
+                join_rule_snapshot: None,
+                invite_token: "private-token".to_owned(),
+                status: "pending".to_owned(),
+                claim_nonces: BTreeMap::new(),
+                expires_at: Some("2026-08-05T10:00:00Z".parse().unwrap()),
+                created_at,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        let mut operation = Operation::create(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000513",
+            )
+            .unwrap(),
+            realm_id.clone(),
+            arkret_wire::events::EventKind::INVITE_CREATE,
+            json!({
+                "invite_id": invite_id,
+                "invitee": invitee,
+                "expires_at": "2026-08-05T10:00:00.000Z"
+            }),
+        );
+        operation.created_at = created_at;
+
+        project_invite_create_operation(&state, "did:web:alice.example", &operation).await;
+
+        assert!(
+            !state
+                .projections()
+                .invite_member_is_invited(realm_id.as_str(), invitee)
+        );
     }
 }

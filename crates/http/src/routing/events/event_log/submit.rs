@@ -1536,6 +1536,7 @@ pub(crate) async fn submit_federation_events(
                 &actor,
                 &source_service_id,
                 &binding_realm,
+                None,
             )
             .await;
         if !ordinary_origin
@@ -1710,6 +1711,7 @@ pub(crate) async fn submit_federation_events(
             });
             continue;
         }
+        let event_kind = event_string_field_from_value(&envelope, "kind");
         if event_string_field_from_value(&envelope, "kind").as_deref()
             == Some(arkret_wire::events::EventKind::MLS_WELCOME)
         {
@@ -1774,6 +1776,7 @@ pub(crate) async fn submit_federation_events(
             &actor,
             &source_service_id,
             &binding_realm,
+            event_kind.as_deref(),
         )
         .await
         {

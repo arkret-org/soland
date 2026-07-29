@@ -19,13 +19,20 @@ pub(crate) async fn federation_actor_origin_acceptable(
     actor: &str,
     source_service_id: &str,
     binding_realm: &str,
+    event_kind: Option<&str>,
 ) -> bool {
     if did_deployment_authority(actor).is_some()
         && did_deployment_authority(actor) == did_deployment_authority(source_service_id)
     {
         return true;
     }
-    crate::routing::spaces::space::realm_has_member(state, binding_realm, actor).await
+    if crate::routing::spaces::space::realm_has_member(state, binding_realm, actor).await {
+        return true;
+    }
+    event_kind == Some(arkret_wire::events::EventKind::INVITE_ACCEPT)
+        && state
+            .projections()
+            .invite_member_is_invited(binding_realm, actor)
 }
 
 fn did_deployment_authority(did: &str) -> Option<String> {
