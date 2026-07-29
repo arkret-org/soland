@@ -419,7 +419,7 @@ pub(crate) async fn admin_reconfigure_notary(
     // we're the round leader, this folds the Move into a fresh Seal
     // immediately and the response carries an seal_id. Otherwise the
     // Move sits pending until the round leader signs.
-    let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024);
+    let outcome = crate::notary::run_one_signing_pass(state, &realm, 1024).await;
     match outcome {
         Ok(Some(o)) => json_ok(SubmitControlMoveOutcome {
             control_move_id: move_id,

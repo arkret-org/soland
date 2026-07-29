@@ -64,6 +64,28 @@ async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &Real
             return;
         }
     };
+    let pending = match state.projections().pending_control_events_for_notary(
+        realm_id,
+        None,
+        MAX_CONTROL_MOVES_PER_REALM,
+    ) {
+        Ok(pending) => pending,
+        Err(error) => {
+            tracing::warn!(%error, %realm_id, "control-seal coordinator could not load pending proposal policy inputs");
+            return;
+        }
+    };
+    let proposal_policy = match crate::control_proposal::control_proposal_policy(
+        state, realm_id, &pending,
+    )
+    .await
+    {
+        Ok(policy) => policy,
+        Err(error) => {
+            tracing::warn!(%error, %realm_id, "control-seal coordinator could not resolve proposal policy");
+            return;
+        }
+    };
     let now_ms = chrono::Utc::now().timestamp_millis();
     let fence = match state.projections().try_claim_control_signing_lease(
         realm_id,
@@ -80,7 +102,12 @@ async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &Real
         }
     };
 
-    match worker.sign_pending_for_realm(state, realm_id, MAX_CONTROL_MOVES_PER_REALM) {
+    match worker.sign_pending_for_realm(
+        state,
+        realm_id,
+        MAX_CONTROL_MOVES_PER_REALM,
+        proposal_policy,
+    ) {
         Ok(Some(outcome)) => tracing::info!(
             %realm_id,
             seal_id = %outcome.seal_id,
@@ -103,7 +130,7 @@ async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &Real
                 "control-seal signing pass failed"
             );
             if let Err(defer_error) =
-                defer_due_proposals_after_failed_signing(state, realm_id).await
+                defer_due_proposals_after_failed_signing(state, realm_id, proposal_policy)
             {
                 tracing::error!(
                     %defer_error,
@@ -134,11 +161,11 @@ async fn run_realm_pass(state: &AppState, worker: &NotaryWorker, realm_id: &Real
     }
 }
 
-async fn defer_due_proposals_after_failed_signing(
+fn defer_due_proposals_after_failed_signing(
     state: &AppState,
     realm_id: &RealmId,
+    policy: arkret_wire::ControlProposalDecisionPolicy,
 ) -> Result<(), String> {
-    let policy = crate::control_proposal::control_proposal_policy(state, realm_id, &[]).await?;
     if policy.max_defers == 0 {
         return Ok(());
     }
@@ -200,7 +227,7 @@ async fn defer_due_proposals_after_failed_signing(
         .map_err(|error| error.to_string())?;
         state
             .projections()
-            .record_control_proposal_decision(&digest, &decision)
+            .record_control_proposal_decision(&digest, &decision, policy)
             .map_err(|error| error.to_string())?;
     }
     Ok(())

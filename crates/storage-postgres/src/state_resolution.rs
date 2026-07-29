@@ -613,6 +613,7 @@ impl ControlEventStore for PgControlEventStore {
         &self,
         event_digest: &Hash,
         decision: &ControlProposalDecision,
+        policy: arkret_wire::ControlProposalDecisionPolicy,
     ) -> StoreResult<()> {
         let pool = self.pool.clone();
         let digest = event_digest.as_str().to_owned();
@@ -662,11 +663,7 @@ impl ControlEventStore for PgControlEventStore {
                     .into());
                 }
                 decision
-                    .validate_chain(
-                        &receipt,
-                        &decisions,
-                        arkret_wire::ControlProposalDecisionPolicy::protocol_maximum(),
-                    )
+                    .validate_chain(&receipt, &decisions, policy)
                     .map_err(|error| StoreError::Conflict(error.to_string()))?;
                 decisions.push(decision);
                 let decisions = serde_json::to_value(decisions).map_err(serde_to_store)?;

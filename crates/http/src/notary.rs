@@ -35,7 +35,8 @@ use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::state::{StoreError, compute_state_root, control_event_set_root, join_cell};
 use arkret_wire::{
-    ControlProposalDecision, ControlProposalRejectReason, Event, NotarySig, PayloadSignature, Seal,
+    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalRejectReason, Event,
+    NotarySig, PayloadSignature, Seal,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -296,6 +297,7 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
         max_control_moves: usize,
+        proposal_policy: ControlProposalDecisionPolicy,
     ) -> Result<Option<NotaryOutcome>, NotaryError> {
         // Step 1: list pending Control Moves (oldest first). Control-plane
         // Events are keyed by their canonical `event_digest`, so pair each one
@@ -496,7 +498,7 @@ impl NotaryWorker {
                 "control-seal coordinator signed a proposal rejection"
             );
         }
-        self.record_signed_rejections(state, realm_id, &rejected)?;
+        self.record_signed_rejections(state, realm_id, &rejected, proposal_policy)?;
         if accepted.is_empty() {
             // Everyone rejected — nothing to seal, but record diagnostics.
             return Ok(None);
@@ -586,7 +588,7 @@ impl NotaryWorker {
                 },
             )
             .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
-        self.record_signed_rejections(state, realm_id, &effect.rejected_events)?;
+        self.record_signed_rejections(state, realm_id, &effect.rejected_events, proposal_policy)?;
         if tracing::enabled!(tracing::Level::DEBUG) {
             let projected_cells = state.projections().realm_cells(realm_id)?;
             tracing::debug!(
@@ -941,6 +943,7 @@ impl NotaryWorker {
         state: &AppState,
         realm_id: &RealmId,
         rejected: &[(Hash, String)],
+        proposal_policy: ControlProposalDecisionPolicy,
     ) -> Result<(), NotaryError> {
         if rejected.is_empty() {
             return Ok(());
@@ -998,9 +1001,11 @@ impl NotaryWorker {
                 chrono::Utc::now(),
             )
             .map_err(NotaryError::Construction)?;
-            state
-                .projections()
-                .record_control_proposal_decision(digest, &decision)?;
+            state.projections().record_control_proposal_decision(
+                digest,
+                &decision,
+                proposal_policy,
+            )?;
         }
         Ok(())
     }
@@ -1501,13 +1506,24 @@ fn materialized_event_seal_view(
 
 /// Convenience: trigger a single signing pass and report a structured
 /// summary — used by the admin endpoint.
-pub fn run_one_signing_pass(
+pub async fn run_one_signing_pass(
     state: &AppState,
     realm_id: &RealmId,
     max_control_moves: usize,
 ) -> Result<Option<NotaryOutcome>, NotaryError> {
+    let pending =
+        state
+            .projections()
+            .pending_control_events_for_notary(realm_id, None, max_control_moves)?;
+    if pending.is_empty() {
+        return Ok(None);
+    }
+    let proposal_policy =
+        crate::control_proposal::control_proposal_policy(state, realm_id, &pending)
+            .await
+            .map_err(NotaryError::Construction)?;
     let worker = NotaryWorker::for_service(state.service_id().clone());
-    worker.sign_pending_for_realm(state, realm_id, max_control_moves)
+    worker.sign_pending_for_realm(state, realm_id, max_control_moves, proposal_policy)
 }
 
 #[cfg(test)]

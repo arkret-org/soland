@@ -144,7 +144,7 @@ pub(crate) async fn admin_compact_seal_dag(
     // A failed signing pass must surface. Swallowing it lets compaction
     // proceed over a leaf set that still has pending Moves behind it,
     // which then mints a Seal the caller believes covers them.
-    if let Err(err) = crate::notary::run_one_signing_pass(state, &realm, max_pending) {
+    if let Err(err) = crate::notary::run_one_signing_pass(state, &realm, max_pending).await {
         return Err(match err {
             crate::notary::NotaryError::NotAuthorized(_) => AppError::new(
                 ErrorCode::CapabilityDenied,

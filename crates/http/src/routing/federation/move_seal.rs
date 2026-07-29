@@ -1468,7 +1468,7 @@ async fn admin_sign_seal(
     }
     let limit = max_control_moves.unwrap_or(100).min(1000);
 
-    match crate::notary::run_one_signing_pass(state, &realm, limit) {
+    match crate::notary::run_one_signing_pass(state, &realm, limit).await {
         Ok(Some(outcome)) => {
             let rejected = outcome
                 .rejected_events

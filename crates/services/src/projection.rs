@@ -533,9 +533,10 @@ impl ProjectionService {
         &self,
         event_digest: &Hash,
         decision: &ControlProposalDecision,
+        policy: ControlProposalDecisionPolicy,
     ) -> StoreResult<()> {
         self.control_event_store()
-            .record_proposal_decision(event_digest, decision)
+            .record_proposal_decision(event_digest, decision, policy)
     }
 
     pub fn pending_control_records(
