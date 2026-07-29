@@ -1474,7 +1474,9 @@ async fn continue_issue_terminal_receipt(
                 || reanchor_payload.replacement_authorize_event_id != authorize_event_id
                 || reanchor_payload.replacement_authorize_digest.as_str()
                     != authorization_event.canonical_digest
-                || did_entry_ref.as_deref() != Some(reanchor_payload.did_version_id.as_str())
+                || did_entry_ref.as_deref().and_then(|reference| {
+                    did_version_id_from_ref(&transaction.resource.principal_id, reference)
+                }) != Some(reanchor_payload.did_version_id.as_str())
             {
                 return Err(AppError::conflict(
                     "device re-anchor Event changed the accepted recovery unit binding",
