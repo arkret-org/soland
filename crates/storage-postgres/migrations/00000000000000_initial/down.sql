@@ -84,6 +84,7 @@ DROP TABLE IF EXISTS realm_invites CASCADE;
 DROP TABLE IF EXISTS recovery_policies CASCADE;
 DROP TABLE IF EXISTS security_transaction_step_attempts CASCADE;
 DROP TABLE IF EXISTS security_transaction_step_outcomes CASCADE;
+DROP TABLE IF EXISTS security_transaction_backup_erase_progress CASCADE;
 DROP TABLE IF EXISTS security_transactions CASCADE;
 DROP TABLE IF EXISTS recovery_sessions CASCADE;
 DROP TABLE IF EXISTS sessions CASCADE;

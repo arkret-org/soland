@@ -1,8 +1,9 @@
 use super::{
-    Arc, BTreeMap, Mutex, PersistenceError, PersistenceResult, RecoveryPolicyRecord,
-    RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore, SecurityTransactionRecord,
-    SecurityTransactionStepAttemptRecord, SecurityTransactionStepOutcomeRecord,
-    SecurityTransactionStore, async_trait, recovery_active_policy_locked,
+    Arc, BTreeMap, BackupSeriesEraseProgressRecord, Mutex, PersistenceError, PersistenceResult,
+    RecoveryPolicyRecord, RecoveryPolicyStore, RecoverySessionRecord, RecoverySessionStore,
+    SecurityTransactionRecord, SecurityTransactionStepAttemptRecord,
+    SecurityTransactionStepOutcomeRecord, SecurityTransactionStore, async_trait,
+    recovery_active_policy_locked,
 };
 #[derive(Default)]
 pub(crate) struct MemoryRecoveryPolicyStore {
@@ -135,6 +136,7 @@ pub(crate) struct MemorySecurityTransactionStore {
     by_id: Mutex<BTreeMap<String, SecurityTransactionRecord>>,
     step_attempts: Mutex<BTreeMap<(String, String), SecurityTransactionStepAttemptRecord>>,
     step_outcomes: Mutex<BTreeMap<(String, String), SecurityTransactionStepOutcomeRecord>>,
+    backup_erase_progress: Mutex<BTreeMap<String, BackupSeriesEraseProgressRecord>>,
 }
 
 impl MemorySecurityTransactionStore {
@@ -144,6 +146,7 @@ impl MemorySecurityTransactionStore {
             by_id: Mutex::new(BTreeMap::new()),
             step_attempts: Mutex::new(BTreeMap::new()),
             step_outcomes: Mutex::new(BTreeMap::new()),
+            backup_erase_progress: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -363,16 +366,71 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
         outcomes.insert(key, outcome.clone());
         Ok(outcome)
     }
+
+    async fn backup_erase_progress(
+        &self,
+        transaction_id: &str,
+    ) -> PersistenceResult<Option<BackupSeriesEraseProgressRecord>> {
+        Ok(self
+            .backup_erase_progress
+            .lock()
+            .get(transaction_id)
+            .cloned())
+    }
+
+    async fn begin_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressRecord,
+    ) -> PersistenceResult<BackupSeriesEraseProgressRecord> {
+        super::validate_backup_erase_progress_initial(&progress)?;
+        if !self.by_id.lock().contains_key(&progress.transaction_id) {
+            return Err(PersistenceError::NotFound(format!(
+                "transaction_id `{}` not found",
+                progress.transaction_id
+            )));
+        }
+        let mut records = self.backup_erase_progress.lock();
+        if let Some(existing) = records.get(&progress.transaction_id) {
+            if existing.canonical_request == progress.canonical_request {
+                return Ok(existing.clone());
+            }
+            return Err(PersistenceError::Conflict(
+                "backup erase already began with different canonical bytes".to_owned(),
+            ));
+        }
+        records.insert(progress.transaction_id.clone(), progress.clone());
+        Ok(progress)
+    }
+
+    async fn update_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressRecord,
+    ) -> PersistenceResult<BackupSeriesEraseProgressRecord> {
+        let mut records = self.backup_erase_progress.lock();
+        let existing = records.get(&progress.transaction_id).ok_or_else(|| {
+            PersistenceError::NotFound(format!(
+                "backup erase progress for transaction `{}` not found",
+                progress.transaction_id
+            ))
+        })?;
+        super::validate_backup_erase_progress_update(existing, &progress)?;
+        records.insert(progress.transaction_id.clone(), progress.clone());
+        Ok(progress)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use arkret_wire::{
-        AcceptedStep, BackupId, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
-        BackupRotationPlan, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, Did,
-        EventId, Hash, PreparedEventUnit, SecurityRotationTransactionCreateRequest,
-        SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
-        TransactionId,
+        AUTHORITY_SET_POLICY_SCHEMA, AcceptedStep, AuthoritySetAuthorizationRule,
+        AuthoritySetIssuer, AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind,
+        AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, AuthorizationLease,
+        AuthorizationLeaseId, BackupId, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
+        BackupRotationPlan, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, DeviceId,
+        Did, DidUrl, EventId, Hash, LeaseBasisRef, PayloadProof, PreparedEventUnit, RealmId,
+        RiskTier, ScopeRef, SealId, SecurityRotationTransactionCreateRequest,
+        SecurityTransactionBinding, SecurityTransactionCreateRequest, SecurityTransactionState,
+        SecurityTransactionStep, TransactionId, proof_kind,
     };
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -390,6 +448,124 @@ mod tests {
             value,
             canonical_bytes_base64url: arkret_canonical::base64url_encode(&bytes),
             digest: Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap(),
+        }
+    }
+
+    fn erase_authorization_lease() -> AuthorizationLease {
+        let scope_ref = ScopeRef::Realm {
+            realm_id: RealmId::new("ak:realm:019a7360-0000-7000-8000-000000000100").unwrap(),
+        };
+        let authority_set_policy = AuthoritySetPolicy {
+            schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+            authority_set_id: "ak.authority_set.backup_erase.v1".to_owned(),
+            policy_kind: AuthoritySetPolicyKind::RealmAdmission,
+            scope_ref: scope_ref.clone(),
+            source: AuthoritySetPolicySource {
+                source_kind: AuthoritySetSourceKind::RealmControl,
+                source_ref: "ak:event:019a7360-0000-7000-8000-000000000111".to_owned(),
+                source_digest: hash('e'),
+                generation_ref: "1".to_owned(),
+            },
+            authorization_rules: vec![AuthoritySetAuthorizationRule {
+                rule_id: "backup_erase".to_owned(),
+                issuer_role: AuthoritySetIssuerRole::RealmAdmission,
+                allowed_actions: vec!["ak.keys.backup_series.erase".to_owned()],
+                issuers: vec![AuthoritySetIssuer {
+                    verification_method: DidUrl::new(
+                        "did:web:principal.example#backup-erase-authority",
+                    )
+                    .unwrap(),
+                }],
+                threshold: 1,
+            }],
+        };
+        let now = Utc::now();
+        let mut lease = AuthorizationLease {
+            authorization_lease_id: AuthorizationLeaseId::new(
+                "ak:authorization_lease:019a7360-0000-7000-8000-000000000112",
+            )
+            .unwrap(),
+            basis_ref: LeaseBasisRef::Seal(
+                SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
+            ),
+            actor_id: Did::new("did:web:alice.example").unwrap(),
+            device_id: DeviceId::new("ak:device:019a7360-0000-7000-8000-000000000113").unwrap(),
+            scope_ref,
+            action: "ak.keys.backup_series.erase".to_owned(),
+            authorization_rule_id: "backup_erase".to_owned(),
+            risk_tier: RiskTier::High,
+            issued_at: now - Duration::minutes(1),
+            expires_at: now + Duration::minutes(1),
+            authority_set_ref: AuthoritySetRef {
+                authority_set_id: authority_set_policy.authority_set_id.clone(),
+                authority_set_digest: authority_set_policy.digest().unwrap(),
+            },
+            authority_set_policy,
+            proofs: Vec::new(),
+        };
+        let digest = lease.lease_digest().unwrap();
+        lease.proofs = vec![PayloadProof {
+            kind: proof_kind::DETACHED_JWS.to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: "did:web:principal.example#backup-erase-authority".to_owned(),
+            payload_digest: digest,
+            created_at: lease.issued_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "a..b".to_owned(),
+        }];
+        lease
+    }
+
+    fn initial_erase_progress(
+        transaction: &SecurityTransactionRecord,
+    ) -> BackupSeriesEraseProgressRecord {
+        let SecurityTransactionBinding::SecurityRotation(binding) = &transaction.resource.binding
+        else {
+            panic!("test transaction must be a security rotation");
+        };
+        let request = arkret_models_crypto::BackupSeriesEraseRequestBody {
+            transaction_id: transaction.resource.transaction_id.clone(),
+            transaction_request_digest: transaction.resource.request_digest.clone(),
+            prepared_plan_digest: transaction.resource.prepared_plan_digest.clone(),
+            erase_confirmation_digest: binding.erase_confirmation_digest.clone(),
+            series: binding.backup_rotations.clone(),
+            authorization_lease: erase_authorization_lease(),
+            cba_proof_bundles: Vec::new(),
+        };
+        request.validate_structural().unwrap();
+        let canonical_request = arkret_canonical::canonical_json_bytes(&request).unwrap();
+        let request_digest =
+            Hash::new(arkret_canonical::sha256_digest(&canonical_request)).unwrap();
+        let series_results = request
+            .series
+            .iter()
+            .map(|binding| {
+                let mut remaining_backups = binding.old_backups.clone();
+                remaining_backups
+                    .sort_by(|left, right| left.backup_id.as_str().cmp(right.backup_id.as_str()));
+                arkret_models_crypto::BackupSeriesEraseResult {
+                    backup_kind: binding.backup_kind,
+                    previous_series_id: binding.previous_series_id.clone(),
+                    new_series_id: binding.new_series_id.clone(),
+                    status: arkret_models_crypto::BackupSeriesEraseResultStatus::Pending,
+                    erased_backups: Vec::new(),
+                    remaining_backups,
+                    reason_code: None,
+                }
+            })
+            .collect();
+        BackupSeriesEraseProgressRecord {
+            transaction_id: transaction.resource.transaction_id.as_str().to_owned(),
+            canonical_request,
+            outcome: arkret_models_crypto::BackupSeriesEraseOutcome {
+                transaction_id: transaction.resource.transaction_id.clone(),
+                request_digest,
+                status: arkret_models_crypto::BackupSeriesEraseStatus::Partial,
+                series_results,
+                confirmation: None,
+            },
         }
     }
 
@@ -558,5 +734,45 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn backup_erase_progress_is_durable_monotonic_and_idempotent() {
+        let sessions = Arc::new(Mutex::new(BTreeMap::new()));
+        let store = MemorySecurityTransactionStore::new(sessions);
+        let transaction = initial_rotation();
+        store.create(transaction.clone()).await.unwrap();
+
+        let initial = initial_erase_progress(&transaction);
+        let stored = store.begin_backup_erase(initial.clone()).await.unwrap();
+        assert_eq!(stored.outcome, initial.outcome);
+        let replay = store.begin_backup_erase(initial.clone()).await.unwrap();
+        assert_eq!(replay.outcome, initial.outcome);
+
+        let mut advanced = initial;
+        let erased = advanced.outcome.series_results[0]
+            .remaining_backups
+            .remove(0);
+        advanced.outcome.series_results[0]
+            .erased_backups
+            .push(erased);
+        advanced.outcome.series_results[0].status =
+            arkret_models_crypto::BackupSeriesEraseResultStatus::Erased;
+        let advanced = store.update_backup_erase(advanced).await.unwrap();
+        assert_eq!(
+            advanced.outcome.series_results[0].status,
+            arkret_models_crypto::BackupSeriesEraseResultStatus::Erased
+        );
+
+        let mut resurrected = advanced;
+        let erased = resurrected.outcome.series_results[0]
+            .erased_backups
+            .remove(0);
+        resurrected.outcome.series_results[0]
+            .remaining_backups
+            .push(erased);
+        resurrected.outcome.series_results[0].status =
+            arkret_models_crypto::BackupSeriesEraseResultStatus::Pending;
+        assert!(store.update_backup_erase(resurrected).await.is_err());
     }
 }

@@ -1071,6 +1071,15 @@ diesel::table! {
 }
 
 diesel::table! {
+    security_transaction_backup_erase_progress (transaction_id) {
+        transaction_id -> Uuid,
+        canonical_request -> Binary,
+        outcome -> Jsonb,
+        updated_at -> Timestamptz,
+    }
+}
+
+diesel::table! {
     security_transaction_step_attempts (transaction_id, step) {
         transaction_id -> Uuid,
         step -> Text,
@@ -1416,6 +1425,7 @@ diesel::allow_tables_to_appear_in_same_query!(
     realm_owning_organizations,
     recovery_policies,
     recovery_sessions,
+    security_transaction_backup_erase_progress,
     security_transaction_step_attempts,
     security_transaction_step_outcomes,
     security_transactions,

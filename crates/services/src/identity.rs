@@ -1635,6 +1635,13 @@ pub struct SecurityTransactionStepAttemptState {
     pub canonical_request: Vec<u8>,
 }
 
+#[derive(Clone, Debug)]
+pub struct BackupSeriesEraseProgressState {
+    pub transaction_id: String,
+    pub canonical_request: Vec<u8>,
+    pub outcome: arkret_models_crypto::BackupSeriesEraseOutcome,
+}
+
 #[async_trait]
 pub trait SecurityTransactionPort: Send + Sync {
     async fn create(
@@ -1665,6 +1672,18 @@ pub trait SecurityTransactionPort: Send + Sync {
         transaction: SecurityTransactionState,
         outcome: SecurityTransactionStepOutcomeState,
     ) -> ServiceResult<SecurityTransactionStepOutcomeState>;
+    async fn backup_erase_progress(
+        &self,
+        transaction_id: &str,
+    ) -> ServiceResult<Option<BackupSeriesEraseProgressState>>;
+    async fn begin_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressState,
+    ) -> ServiceResult<BackupSeriesEraseProgressState>;
+    async fn update_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressState,
+    ) -> ServiceResult<BackupSeriesEraseProgressState>;
 }
 
 #[derive(Clone)]
@@ -1724,6 +1743,29 @@ impl SecurityTransactionService {
         outcome: SecurityTransactionStepOutcomeState,
     ) -> ServiceResult<SecurityTransactionStepOutcomeState> {
         self.transactions.accept_step(transaction, outcome).await
+    }
+
+    pub async fn backup_erase_progress(
+        &self,
+        transaction_id: &str,
+    ) -> ServiceResult<Option<BackupSeriesEraseProgressState>> {
+        self.transactions
+            .backup_erase_progress(transaction_id)
+            .await
+    }
+
+    pub async fn begin_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressState,
+    ) -> ServiceResult<BackupSeriesEraseProgressState> {
+        self.transactions.begin_backup_erase(progress).await
+    }
+
+    pub async fn update_backup_erase(
+        &self,
+        progress: BackupSeriesEraseProgressState,
+    ) -> ServiceResult<BackupSeriesEraseProgressState> {
+        self.transactions.update_backup_erase(progress).await
     }
 }
 
