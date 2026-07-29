@@ -238,6 +238,67 @@ mod tests {
         })
     }
 
+    fn initial_submission(event: arkret_wire::Event) -> arkret_wire::EventInitialSubmission {
+        use arkret_wire::{
+            AUTHORITY_SET_POLICY_SCHEMA, AuthoritySetAuthorizationRule, AuthoritySetIssuer,
+            AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind,
+            AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, AuthorizationLease,
+            AuthorizationLeaseId, DeviceId, DidUrl, LeaseBasisRef, RiskTier, SealId,
+        };
+
+        let policy = AuthoritySetPolicy {
+            schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+            authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+            policy_kind: AuthoritySetPolicyKind::RealmAdmission,
+            scope_ref: event.scope_ref.clone(),
+            source: AuthoritySetPolicySource {
+                source_kind: AuthoritySetSourceKind::RealmControl,
+                source_ref: event.event_id.as_str().to_owned(),
+                source_digest: arkret_wire::Hash::new(format!("sha256:{}", "e".repeat(64)))
+                    .unwrap(),
+                generation_ref: "1".to_owned(),
+            },
+            authorization_rules: vec![AuthoritySetAuthorizationRule {
+                rule_id: "realm_admission".to_owned(),
+                issuer_role: AuthoritySetIssuerRole::RealmAdmission,
+                allowed_actions: vec![event.kind.as_str().to_owned()],
+                issuers: vec![AuthoritySetIssuer {
+                    verification_method: DidUrl::new("did:web:controller.example#key-1").unwrap(),
+                }],
+                threshold: 1,
+            }],
+        };
+        let issued_at = event.created_at;
+        arkret_wire::EventInitialSubmission {
+            authorization_lease: AuthorizationLease {
+                authorization_lease_id: AuthorizationLeaseId::new(
+                    "ak:authorization_lease:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                )
+                .unwrap(),
+                basis_ref: LeaseBasisRef::Seal(
+                    SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
+                ),
+                actor_id: event.actor_id.clone(),
+                device_id: DeviceId::new("ak:device:01904100-0000-7000-8000-000000000002").unwrap(),
+                scope_ref: event.scope_ref.clone(),
+                action: event.kind.as_str().to_owned(),
+                authorization_rule_id: "realm_admission".to_owned(),
+                risk_tier: RiskTier::Low,
+                issued_at,
+                expires_at: issued_at + chrono::Duration::hours(1),
+                authority_set_ref: AuthoritySetRef {
+                    authority_set_id: policy.authority_set_id.clone(),
+                    authority_set_digest: policy.digest().unwrap(),
+                },
+                authority_set_policy: policy,
+                proofs: Vec::new(),
+            },
+            event,
+            cba_proof_bundles: Vec::new(),
+            control_proposal_receipt: None,
+        }
+    }
+
     fn key_authorize_envelope(
         record: &AgentPrincipalRecord,
         controller: &str,
@@ -429,7 +490,7 @@ mod tests {
             .unwrap(),
             requested_scope_disclosure,
             runtime_attestation: None,
-            authorize_event,
+            authorize_event: initial_submission(authorize_event),
             signing_key_binding,
         }
     }
