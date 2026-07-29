@@ -812,7 +812,7 @@ pub(super) async fn lifecycle_transition(
     event_kind: &str,
     reason: Option<String>,
     sidecar_exposure_ack: Option<Value>,
-    lifecycle_event: Option<arkret_wire::Event>,
+    lifecycle_event: Option<arkret_wire::EventInitialSubmission>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
     let session = aa.authenticated_session(state, req).await?;
     let record = require_agent_controller(state, &session, &agent_id).await?;
@@ -1064,7 +1064,7 @@ pub(super) async fn deactivate_agent(
         record.state.as_wire_str(),
         reason,
         None,
-        &body.lifecycle_event,
+        &body.lifecycle_event.event,
     )?;
 
     let (active_key_authorizations, active_key_ids, active_grant_locations, all_grant_locations) = {
@@ -1095,7 +1095,7 @@ pub(super) async fn deactivate_agent(
             &agent_id,
             reason,
             &active_key_authorizations,
-            event,
+            &event.event,
         )?;
         if !supplied_key_ids.insert(key_id) {
             return Err(AppError::invalid_param(
@@ -1105,7 +1105,7 @@ pub(super) async fn deactivate_agent(
     }
     let mut supplied_grant_locations = BTreeSet::new();
     for event in &body.capability_revocation_events {
-        let location = validate_agent_capability_revocation_event(&session, reason, event)?;
+        let location = validate_agent_capability_revocation_event(&session, reason, &event.event)?;
         if !all_grant_locations.contains(&location) {
             return Err(AppError::capability_denied(
                 "capability_revocation_events contains a grant not held by the Agent",

@@ -17,7 +17,7 @@ use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 
 use super::SessionRecord;
-use crate::routing::events::event_log::{submit_event_value, submit_initial_event_submission};
+use crate::routing::events::event_log::submit_initial_event_submission;
 use crate::state::AppState;
 
 #[cfg(test)]
@@ -486,17 +486,17 @@ pub(super) fn validate_durable_agent_lifecycle(
 pub(super) async fn submit_signed_agent_event(
     state: &AppState,
     session: &SessionRecord,
-    event: Event,
+    submission: arkret_wire::EventInitialSubmission,
 ) -> Result<String, AppError> {
+    let event = &submission.event;
     let event_kind = event.kind.as_str().to_owned();
-    let envelope = serde_json::to_value(&event)
-        .map_err(|error| AppError::invalid_param(format!("signed Event invalid: {error}")))?;
-    submit_event_value(state, session, envelope)
+    let event_id = event.event_id.to_string();
+    crate::routing::events::event_log::submit_initial_event_submission(state, session, submission)
         .await
         .map_err(|error| {
             agent_fanout_submit_error(&event_kind, error.status, error.code, error.message)
         })?;
-    Ok(event.event_id.to_string())
+    Ok(event_id)
 }
 
 /// AKP-0008 §4.11 — submit a durable lifecycle transition event
@@ -512,7 +512,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
     previous_status: &str,
     reason: Option<&str>,
     sidecar_exposure_ack: Option<&Value>,
-    event: Event,
+    submission: arkret_wire::EventInitialSubmission,
 ) -> Result<String, AppError> {
     validate_durable_agent_lifecycle(
         session,
@@ -523,9 +523,9 @@ pub(super) async fn submit_durable_agent_lifecycle(
         previous_status,
         reason,
         sidecar_exposure_ack,
-        &event,
+        &submission.event,
     )?;
-    submit_signed_agent_event(state, session, event).await
+    submit_signed_agent_event(state, session, submission).await
 }
 
 #[cfg(test)]
