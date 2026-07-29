@@ -427,10 +427,11 @@ mod tests {
         AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, AuthorizationLease,
         AuthorizationLeaseId, BackupId, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
         BackupRotationPlan, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, DeviceId,
-        Did, DidUrl, EventId, Hash, LeaseBasisRef, PayloadProof, PreparedEventUnit, RealmId,
-        RiskTier, ScopeRef, SealId, SecurityRotationTransactionCreateRequest,
-        SecurityTransactionBinding, SecurityTransactionCreateRequest, SecurityTransactionState,
-        SecurityTransactionStep, TransactionId, proof_kind,
+        Did, DidUrl, Event, EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash,
+        Hlc, LeaseBasisRef, PayloadProof, PreparedEventUnit, RealmId, RiskTier, ScopeRef, SealId,
+        SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
+        SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
+        TransactionId, proof_kind,
     };
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -441,7 +442,26 @@ mod tests {
         Hash::new(format!("sha256:{}", byte.to_string().repeat(64))).unwrap()
     }
 
-    fn canonical_material(value: serde_json::Value) -> CanonicalPublicMaterial {
+    fn canonical_material(binding: &BackupRotationBinding) -> CanonicalPublicMaterial {
+        let backup_kind = match binding.backup_kind {
+            BackupRotationKind::SecretStorage => "secret_storage",
+            BackupRotationKind::MlsHistory => "mls_history",
+        };
+        let value = serde_json::Value::Array(
+            binding
+                .new_backups
+                .iter()
+                .map(|backup| {
+                    json!({
+                        "actor_id": "did:web:alice.example",
+                        "backup_id": backup.backup_id,
+                        "backup_kind": backup_kind,
+                        "ciphertext_digest": backup.ciphertext_digest,
+                        "series_id": binding.new_series_id,
+                    })
+                })
+                .collect(),
+        );
         let bytes = arkret_canonical::canonical_json_bytes(&value).unwrap();
         CanonicalPublicMaterial {
             canonical_encoding: CanonicalEncoding::CanonicalJson,
@@ -569,18 +589,28 @@ mod tests {
         }
     }
 
-    fn event_unit(service_id: &Did, marker: &str) -> PreparedEventUnit {
-        let request = json!({"events": [], "marker": marker});
-        let bytes = arkret_canonical::canonical_json_bytes(&request).unwrap();
-        PreparedEventUnit {
-            operation_id: "ak.self.events.command.submit".to_owned(),
-            destination_service_id: service_id.clone(),
-            audience: service_id.clone(),
-            request_schema: "https://arkret.org/v1/schemas/service-operation-dtos.schema.json#/$defs/EventsSubmitBatchRequestBody".to_owned(),
-            request,
-            canonical_request_base64url: arkret_canonical::base64url_encode(&bytes),
-            request_digest: Hash::new(arkret_canonical::sha256_digest(&bytes)).unwrap(),
-        }
+    fn event_unit(service_id: &Did, event_id: EventId, kind: &str) -> PreparedEventUnit {
+        let authorization_lease = erase_authorization_lease();
+        let event = Event::new_with_id_at(
+            event_id,
+            kind,
+            authorization_lease.scope_ref.clone(),
+            authorization_lease.actor_id.clone(),
+            1,
+            Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),
+            json!({"fixture": true}),
+            Utc::now(),
+        )
+        .unwrap();
+        let request = EventsSubmitBatchRequestBody {
+            events: vec![EventInitialSubmission {
+                event,
+                authorization_lease,
+                cba_proof_bundles: Vec::new(),
+                control_proposal_receipt: None,
+            }],
+        };
+        PreparedEventUnit::new(service_id.clone(), serde_json::to_value(request).unwrap()).unwrap()
     }
 
     fn initial_rotation() -> SecurityTransactionRecord {
@@ -645,28 +675,34 @@ mod tests {
         };
         let transaction_id =
             TransactionId::new("ak:transaction:019a7360-0000-7000-8000-000000000101").unwrap();
+        let revoke_event_id =
+            EventId::new("ak:event:019a7360-0000-7000-8000-000000000102").unwrap();
         let request = SecurityTransactionCreateRequest::SecurityRotation(
             SecurityRotationTransactionCreateRequest::from_prepared_rotations(
                 transaction_id,
                 Did::new("did:web:alice.example").unwrap(),
                 Utc::now() + Duration::hours(1),
-                EventId::new("ak:event:019a7360-0000-7000-8000-000000000102").unwrap(),
-                event_unit(&service_id, "revoke"),
+                revoke_event_id.clone(),
+                event_unit(&service_id, revoke_event_id, "ak.device.revoke"),
                 hash('1'),
                 vec![
                     BackupRotationPlan {
-                        binding: secret_binding,
-                        encrypted_backup_material: canonical_material(
-                            json!({"ciphertext": "secret-public"}),
+                        active_series_unit: event_unit(
+                            &service_id,
+                            secret_binding.active_series_event_id.clone(),
+                            "ak.key_backup.active_series",
                         ),
-                        active_series_unit: event_unit(&service_id, "activate-secret"),
+                        encrypted_backup_material: canonical_material(&secret_binding),
+                        binding: secret_binding,
                     },
                     BackupRotationPlan {
-                        binding: mls_binding,
-                        encrypted_backup_material: canonical_material(
-                            json!({"ciphertext": "mls-public"}),
+                        active_series_unit: event_unit(
+                            &service_id,
+                            mls_binding.active_series_event_id.clone(),
+                            "ak.key_backup.active_series",
                         ),
-                        active_series_unit: event_unit(&service_id, "activate-mls"),
+                        encrypted_backup_material: canonical_material(&mls_binding),
+                        binding: mls_binding,
                     },
                 ],
             )
