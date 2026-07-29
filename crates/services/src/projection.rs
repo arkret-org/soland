@@ -683,7 +683,7 @@ impl ProjectionService {
             retained_faults,
         };
         health
-            .validate(policy)
+            .validate_with_policy(policy)
             .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
         Ok(health)
     }
