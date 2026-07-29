@@ -944,10 +944,22 @@ impl NotaryWorker {
                 continue;
             }
             let reason_code = closed_reject_reason(raw_reason);
+            let (notary, _) = self
+                .current_notary_profile_for_events(
+                    state,
+                    realm_id,
+                    std::slice::from_ref(&record.event),
+                )?
+                .ok_or_else(|| {
+                    NotaryError::Construction(
+                        "current proposal notary profile is unavailable".to_owned(),
+                    )
+                })?;
             let decision = crate::control_proposal::sign_control_proposal_reject(
                 state,
                 receipt,
                 &record.decisions,
+                &notary,
                 reason_code,
                 chrono::Utc::now(),
             )

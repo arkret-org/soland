@@ -177,10 +177,15 @@ async fn defer_due_proposals_after_failed_signing(
         if next_due_at <= current_due_at {
             continue;
         }
+        let (notary, _) = crate::notary::NotaryWorker::for_service(state.service_id().clone())
+            .current_notary_profile_for_events(state, realm_id, std::slice::from_ref(&record.event))
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "current proposal notary profile is unavailable".to_owned())?;
         let decision = crate::control_proposal::sign_control_proposal_defer(
             state,
             receipt,
             &record.decisions,
+            &notary,
             arkret_wire::ControlProposalDeferReason::TemporarilyUnavailable,
             now,
             next_due_at,

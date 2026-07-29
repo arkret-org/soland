@@ -235,41 +235,10 @@ pub(crate) async fn verify_control_proposal_receipt(
         .await?;
     }
 
-    if !proposal_quorum_met(&profile, &signers) {
+    if !profile.proposal_quorum_met(&signers) {
         return Err("proposal receipt does not satisfy the current notary quorum".to_owned());
     }
     Ok(())
-}
-
-fn proposal_quorum_met(
-    profile: &arkret_wire::notary::NotaryValue,
-    signers: &BTreeSet<arkret_wire::Did>,
-) -> bool {
-    match profile {
-        arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
-            signers.len() == 1 && signers.contains(&did)
-        }
-        arkret_wire::notary::NotaryValue::Threshold {
-            threshold, members, ..
-        } => {
-            signers.iter().all(|signer| members.contains(signer))
-                && signers.len() >= usize::try_from(*threshold).unwrap_or(usize::MAX)
-        }
-        arkret_wire::notary::NotaryValue::OpenSet { members } => {
-            signers.len() == 1 && signers.iter().all(|signer| members.contains(signer))
-        }
-        arkret_wire::notary::NotaryValue::Mixed {
-            did,
-            recovery_members,
-        } => {
-            (signers.len() == 1 && signers.contains(&did))
-                || (!recovery_members.is_empty()
-                    && signers.len() == recovery_members.len()
-                    && signers
-                        .iter()
-                        .all(|signer| recovery_members.contains(signer)))
-        }
-    }
 }
 
 #[cfg(test)]
@@ -293,9 +262,9 @@ mod proposal_receipt_quorum_tests {
             members: vec![did("a"), did("b"), did("c")],
             forensic_attribution: ForensicAttribution::QuorumIntersection,
         };
-        assert!(proposal_quorum_met(&profile, &signers(&["a", "b"])));
-        assert!(!proposal_quorum_met(&profile, &signers(&["a"])));
-        assert!(!proposal_quorum_met(&profile, &signers(&["a", "outsider"])));
+        assert!(profile.proposal_quorum_met(&signers(&["a", "b"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["a"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["a", "outsider"])));
     }
 
     #[test]
@@ -303,9 +272,9 @@ mod proposal_receipt_quorum_tests {
         let profile = NotaryValue::OpenSet {
             members: vec![did("a"), did("b")],
         };
-        assert!(proposal_quorum_met(&profile, &signers(&["a"])));
-        assert!(!proposal_quorum_met(&profile, &signers(&["a", "b"])));
-        assert!(!proposal_quorum_met(&profile, &signers(&["outsider"])));
+        assert!(profile.proposal_quorum_met(&signers(&["a"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["a", "b"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["outsider"])));
     }
 
     #[test]
@@ -314,16 +283,10 @@ mod proposal_receipt_quorum_tests {
             did: did("primary"),
             recovery_members: vec![did("recovery-a"), did("recovery-b")],
         };
-        assert!(proposal_quorum_met(&profile, &signers(&["primary"])));
-        assert!(proposal_quorum_met(
-            &profile,
-            &signers(&["recovery-a", "recovery-b"])
-        ));
-        assert!(!proposal_quorum_met(&profile, &signers(&["recovery-a"])));
-        assert!(!proposal_quorum_met(
-            &profile,
-            &signers(&["primary", "recovery-a"])
-        ));
+        assert!(profile.proposal_quorum_met(&signers(&["primary"])));
+        assert!(profile.proposal_quorum_met(&signers(&["recovery-a", "recovery-b"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["recovery-a"])));
+        assert!(!profile.proposal_quorum_met(&signers(&["primary", "recovery-a"])));
     }
 }
 
@@ -350,6 +313,7 @@ pub(crate) fn sign_control_proposal_reject(
     state: &AppState,
     receipt: &ControlProposalReceipt,
     previous_defers: &[ControlProposalDecision],
+    notary: &arkret_wire::notary::NotaryValue,
     reason_code: ControlProposalRejectReason,
     decided_at: chrono::DateTime<chrono::Utc>,
 ) -> Result<ControlProposalDecision, String> {
@@ -402,7 +366,7 @@ pub(crate) fn sign_control_proposal_reject(
                 .map_err(|error| error.to_string())?;
     }
     decision
-        .validate_chain(receipt, previous_defers, validation_policy)
+        .validate_chain_for_notary(receipt, previous_defers, validation_policy, notary)
         .map_err(|error| error.to_string())?;
     Ok(decision)
 }
@@ -411,6 +375,7 @@ pub(crate) fn sign_control_proposal_defer(
     state: &AppState,
     receipt: &ControlProposalReceipt,
     previous_defers: &[ControlProposalDecision],
+    notary: &arkret_wire::notary::NotaryValue,
     reason_code: ControlProposalDeferReason,
     decided_at: chrono::DateTime<chrono::Utc>,
     next_due_at: chrono::DateTime<chrono::Utc>,
@@ -455,7 +420,7 @@ pub(crate) fn sign_control_proposal_defer(
                 .map_err(|error| error.to_string())?;
     }
     decision
-        .validate_chain(receipt, previous_defers, policy)
+        .validate_chain_for_notary(receipt, previous_defers, policy, notary)
         .map_err(|error| error.to_string())?;
     Ok(decision)
 }
