@@ -571,6 +571,18 @@ impl ProjectionService {
                     "pending Control Move {digest} is missing its proposal receipt"
                 ))
             })?;
+            receipt.validate_structural(policy).map_err(|error| {
+                arkret_state::state::StoreError::Conflict(format!(
+                    "pending Control Move {digest} has an invalid proposal receipt \
+                     (received_at={}, decision_due_at={}, absolute_due_at={}, \
+                     expected_decision_window_ms={}, expected_absolute_horizon_ms={}): {error}",
+                    receipt.received_at,
+                    receipt.decision_due_at,
+                    receipt.absolute_due_at,
+                    policy.decision_window.num_milliseconds(),
+                    policy.absolute_horizon.num_milliseconds(),
+                ))
+            })?;
             let current_due_at = record
                 .decisions
                 .last()

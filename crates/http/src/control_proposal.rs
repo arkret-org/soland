@@ -225,14 +225,31 @@ pub(crate) async fn verify_control_proposal_receipt(
         let bytes = member
             .canonical_bytes_for_signature()
             .map_err(|error| error.to_string())?;
-        crate::jws_verify::verify_jws_ed25519_async(
-            &bytes,
-            &member.signature.jws,
-            &member.signature.verification_method,
-            signer.as_str(),
-            state,
-        )
-        .await?;
+        let device_method = member
+            .signature
+            .verification_method
+            .strip_prefix(&format!("{signer}#"))
+            .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
+        if device_method {
+            crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+                &bytes,
+                &member.signature.jws,
+                &member.signature.verification_method,
+                signer.as_str(),
+                state,
+            )
+            .await
+            .map_err(|error| error.to_string())?;
+        } else {
+            crate::jws_verify::verify_jws_ed25519_async(
+                &bytes,
+                &member.signature.jws,
+                &member.signature.verification_method,
+                signer.as_str(),
+                state,
+            )
+            .await?;
+        }
     }
 
     if !profile.proposal_quorum_met(&signers) {
