@@ -1053,7 +1053,7 @@ pub(crate) fn validate_morph_schema_migrate_capability(
         .payload
         .get("authorization_ref")
         .and_then(serde_json::Value::as_str)
-        .filter(|value| value.starts_with("ak:event:"))
+        .filter(|value| value.starts_with("ak:grant:"))
         .is_none()
     {
         return Err("ak.morph.schema_migrate requires authorization_ref");

@@ -115,6 +115,7 @@ pub(in crate::routing) use validation::{
 };
 mod sdk_projection;
 pub(crate) use sdk_projection::*;
+mod lease_issue;
 
 #[cfg(test)]
 #[path = "event_log/admission_tests.rs"]

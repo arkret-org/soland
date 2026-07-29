@@ -143,14 +143,21 @@ pub(crate) async fn mint_control_proposal_receipts(
     realm_id: &RealmId,
     events: &[Event],
     received_at: chrono::DateTime<chrono::Utc>,
+    bootstrap_ingress_authority_set_ref: Option<&Hash>,
 ) -> Result<Vec<ControlProposalReceipt>, String> {
     let policy = control_proposal_policy(state, realm_id, events).await?;
-    let authority_set_ref = crate::notary::NotaryWorker::for_service(state.service_id().clone())
-        .authority_set_ref_for_events(state, realm_id, events)
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| {
-            "this service cannot issue the current authority set's proposal receipt".to_owned()
-        })?;
+    let notary_authority_set_ref =
+        crate::notary::NotaryWorker::for_service(state.service_id().clone())
+            .authority_set_ref_for_events(state, realm_id, events)
+            .map_err(|error| error.to_string())?;
+    let is_closed_genesis = events
+        .first()
+        .is_some_and(|event| event.kind == arkret_wire::events::EventKind::REALM_CREATE);
+    let authority_set_ref = select_proposal_receipt_authority(
+        notary_authority_set_ref,
+        bootstrap_ingress_authority_set_ref,
+        is_closed_genesis,
+    )?;
     events
         .iter()
         .map(|event| {
@@ -167,6 +174,22 @@ pub(crate) async fn mint_control_proposal_receipts(
             )
         })
         .collect()
+}
+
+fn select_proposal_receipt_authority(
+    notary_authority_set_ref: Option<Hash>,
+    bootstrap_ingress_authority_set_ref: Option<&Hash>,
+    is_closed_genesis: bool,
+) -> Result<Hash, String> {
+    notary_authority_set_ref
+        .or_else(|| {
+            is_closed_genesis
+                .then(|| bootstrap_ingress_authority_set_ref.cloned())
+                .flatten()
+        })
+        .ok_or_else(|| {
+            "this service cannot issue the current authority set's proposal receipt".to_owned()
+        })
 }
 
 pub(crate) fn sign_control_proposal_reject(
@@ -275,4 +298,48 @@ pub(crate) fn sign_control_proposal_defer(
         .validate_chain(receipt, previous_defers, policy)
         .map_err(|error| error.to_string())?;
     Ok(decision)
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_identifiers::Hash;
+
+    use super::select_proposal_receipt_authority;
+
+    fn digest(byte: &str) -> Hash {
+        Hash::new(format!("sha256:{}", byte.repeat(64))).expect("test digest is valid")
+    }
+
+    #[test]
+    fn closed_genesis_can_use_lease_ingress_authority_before_notary_exists() {
+        let lease_authority = digest("a");
+        assert_eq!(
+            select_proposal_receipt_authority(None, Some(&lease_authority), true).unwrap(),
+            lease_authority
+        );
+    }
+
+    #[test]
+    fn ordinary_control_move_cannot_use_genesis_ingress_authority() {
+        let lease_authority = digest("b");
+        assert!(
+            select_proposal_receipt_authority(None, Some(&lease_authority), false).is_err(),
+            "non-genesis proposals must fail closed without the effective notary authority"
+        );
+    }
+
+    #[test]
+    fn effective_notary_authority_takes_precedence() {
+        let notary_authority = digest("c");
+        let lease_authority = digest("d");
+        assert_eq!(
+            select_proposal_receipt_authority(
+                Some(notary_authority.clone()),
+                Some(&lease_authority),
+                true,
+            )
+            .unwrap(),
+            notary_authority
+        );
+    }
 }

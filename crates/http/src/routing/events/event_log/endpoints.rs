@@ -4,6 +4,10 @@ use super::*;
 
 pub(in crate::routing::events) fn router() -> Router {
     Router::new()
+        .push(
+            Router::with_path("authorization-leases")
+                .post(super::lease_issue::issue_authorization_leases),
+        )
         .push(Router::with_path("events/describe").get(events_describe))
         .push(Router::with_path("events/subscribe").get(super::super::sync::events_subscribe))
         .push(
