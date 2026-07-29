@@ -56,12 +56,6 @@ impl fmt::Debug for KeyStoreConfig {
 impl KeyStoreConfig {
     /// Load the backend selector and its backend-specific settings.
     pub fn from_env() -> anyhow::Result<Self> {
-        if env_non_empty("SOLAND_USE_KEYSTORE").is_some() {
-            anyhow::bail!(
-                "SOLAND_USE_KEYSTORE was removed; set SOLAND_KEYSTORE_BACKEND=platform or encrypted_file"
-            );
-        }
-
         let backend =
             env_non_empty("SOLAND_KEYSTORE_BACKEND").map(|value| value.to_ascii_lowercase());
         let path = env_non_empty("SOLAND_KEYSTORE_PATH").map(PathBuf::from);
@@ -801,12 +795,6 @@ impl AppConfig {
                 "SOLAND_SERVICE_ID is no longer accepted: service identity is resolved from the \
                  durable service_identity record, Provider registration mapping, or verified \
                  identity bundle"
-            );
-        }
-        if env_non_empty("SOLAND_BOOTSTRAP_SERVICE_IDENTITY").is_some() {
-            anyhow::bail!(
-                "SOLAND_BOOTSTRAP_SERVICE_IDENTITY was removed; use the one-shot \
-                 --first-provisioning flag or SOLAND_FIRST_PROVISIONING=1"
             );
         }
         let first_provisioning = std::env::args().any(|arg| arg == "--first-provisioning")
@@ -1743,13 +1731,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn key_store_config_selects_backends_and_rejects_legacy_switch() {
+    fn key_store_config_selects_backends() {
         use base64::Engine as _;
 
         let backend = ScopedEnv::new("SOLAND_KEYSTORE_BACKEND");
         let path = ScopedEnv::new("SOLAND_KEYSTORE_PATH");
         let master_key = ScopedEnv::new("SOLAND_KEYSTORE_MASTER_KEY");
-        let legacy = ScopedEnv::new("SOLAND_USE_KEYSTORE");
 
         assert!(matches!(
             KeyStoreConfig::from_env().unwrap(),
@@ -1773,9 +1760,10 @@ mod tests {
         backend.clear();
         path.clear();
         master_key.clear();
-        legacy.set_env("true");
-        let error = KeyStoreConfig::from_env().expect_err("legacy switch must fail");
-        assert!(error.to_string().contains("was removed"));
+        assert!(matches!(
+            KeyStoreConfig::from_env().unwrap(),
+            KeyStoreConfig::Disabled
+        ));
     }
 
     #[test]

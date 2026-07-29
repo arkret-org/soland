@@ -11,11 +11,9 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATTERN = re.compile(r"\bSOLAND_[A-Z0-9_]+\b")
 STRING_ENV_PATTERN = re.compile(r'"(SOLAND_[A-Z0-9_]+)"')
 
-# These names are deliberately read only to fail closed with a migration error.
+# This name is deliberately read only to fail closed with a migration error.
 REMOVED_NAMES = {
-    "SOLAND_BOOTSTRAP_SERVICE_IDENTITY",
     "SOLAND_SERVICE_ID",
-    "SOLAND_USE_KEYSTORE",
 }
 
 

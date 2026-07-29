@@ -113,6 +113,7 @@ pub(crate) fn mint_control_proposal_receipt(
     policy: ControlProposalDecisionPolicy,
 ) -> Result<ControlProposalReceipt, String> {
     policy.validate().map_err(|error| error.to_string())?;
+    let received_at = arkret_canonical::canonical::normalize_timestamp_canonical(received_at);
     let mut member_receipt = ProposalMemberReceipt {
         realm_id: realm_id.clone(),
         proposal_digest: proposal_digest.clone(),

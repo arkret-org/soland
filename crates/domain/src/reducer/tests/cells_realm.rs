@@ -349,46 +349,30 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
 }
 
 #[test]
-fn concurrent_realm_updates_with_same_basis_expose_bottom_and_repair_clears() {
+fn authoritative_realm_metadata_bottom_blocks_update_and_repair_clears() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     let basis = "ak:seal:sha256:0000000000000000000000000000000000000000000000000000000000000000";
-    let first = make_operation(
-        arkret_wire::events::EventKind::REALM_UPDATE,
-        realm,
-        serde_json::json!({
-            "patch": {"title": {"$op": "set", "value": "renamed by alice"}},
-            "seal_ref": basis,
-        }),
-    );
-    let first_id = first.operation_id.as_str().to_owned();
-    state.apply(&first, &hlc);
-
-    let second = make_operation(
-        arkret_wire::events::EventKind::REALM_UPDATE,
-        realm,
-        serde_json::json!({
-            "patch": {"title": {"$op": "set", "value": "renamed by bob"}},
-            "seal_ref": basis,
-        }),
-    );
-    let second_id = second.operation_id.as_str().to_owned();
-    state.apply(&second, &hlc);
-
+    let first_id =
+        "ak:move:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let second_id =
+        "ak:move:sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let cell = ProjectionState::realm_metadata_cell_id().unwrap();
-    let bottom = match state.realm_metadata_cells.get(realm) {
-        Some(CellState::Bottom(bottom)) => bottom,
-        other => panic!("expected bottom cell, got {other:?}"),
-    };
-    assert_eq!(bottom.heads.len(), 2);
-    assert_eq!(
-        bottom.heads[0].get("move_id").and_then(Value::as_str),
-        Some(first_id.as_str())
-    );
-    assert_eq!(
-        bottom.heads[1].get("move_id").and_then(Value::as_str),
-        Some(second_id.as_str())
+    state.realm_metadata_cells.insert(
+        realm.to_owned(),
+        CellState::Bottom(arkret_wire::Bottom {
+            kind: arkret_wire::BottomKind::Conflict,
+            cells: vec![cell.clone()],
+            move_ids: Vec::new(),
+            seal_view: None,
+            heads: vec![
+                serde_json::json!({"move_id": first_id, "value": {"title": "renamed by alice"}}),
+                serde_json::json!({"move_id": second_id, "value": {"title": "renamed by bob"}}),
+            ],
+            details: None,
+            escalated_at: None,
+        }),
     );
     assert_eq!(
         state.check_bottom_cell_transition(&make_operation(

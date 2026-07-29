@@ -19,7 +19,7 @@ use arkret_wire::primitives::{PayloadProof, proof_kind};
 
 use super::*;
 
-pub(super) async fn validate_authorization_lease_for_event(
+pub(in crate::routing) async fn validate_authorization_lease_for_event(
     state: &AppState,
     session: Option<&SessionRecord>,
     event: &arkret_wire::Event,
