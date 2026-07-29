@@ -19,7 +19,6 @@
 use arkret_identity::service_identity::ServiceIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
-use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
@@ -414,36 +413,50 @@ async fn build_server_description_resolved(state: &AppState) -> ServiceDescribe 
     else {
         return description;
     };
-    let registration_key = CanonicalServiceUrl::canonicalize(authority_base)
-        .map_err(|error| error.to_string())
-        .and_then(|public_base| {
-            ServiceRegistrationKey::new(arkret_wire::ServiceKind::AuthServer, public_base)
-                .map_err(|error| error.to_string())
-        });
-    let Ok(registration_key) = registration_key else {
+    let Ok(authority_url) = url::Url::parse(authority_base) else {
         tracing::warn!(
             authority_base,
-            "cannot resolve Account Authority service identity for describe"
+            "cannot resolve Account Authority enrollment identity for describe"
         );
         return description;
     };
-    match state.dids().service_registration(&registration_key).await {
-        Ok(Some(registration)) => {
-            if let Some(authority) = description.auth_metadata.account_authority.as_mut() {
-                authority.enrollment_authority_did = Some(registration.service_id);
-            }
-        }
-        Ok(None) => {
-            tracing::debug!(
+    let authority_client = arkret_http_client::ClientBuilder::new(authority_url)
+        .allow_insecure_localhost()
+        .build();
+    let authority_description = match authority_client {
+        Ok(client) => client.describe().await,
+        Err(error) => {
+            tracing::warn!(
                 authority_base,
-                "Account Authority service registration is not available for describe yet"
+                error = %error,
+                "cannot build Account Authority describe client"
             );
+            return description;
+        }
+    };
+    match authority_description {
+        Ok(authority_description) => {
+            let enrollment_authority_did = authority_description
+                .auth_metadata
+                .account_authority
+                .and_then(|authority| authority.enrollment_authority_did);
+            if let (Some(authority), Some(enrollment_authority_did)) = (
+                description.auth_metadata.account_authority.as_mut(),
+                enrollment_authority_did,
+            ) {
+                authority.enrollment_authority_did = Some(enrollment_authority_did);
+            } else {
+                tracing::warn!(
+                    authority_base,
+                    "Account Authority describe omitted enrollment authority DID"
+                );
+            }
         }
         Err(error) => {
             tracing::warn!(
                 authority_base,
                 error = %error,
-                "failed to resolve Account Authority service identity for describe"
+                "failed to fetch Account Authority describe"
             );
         }
     }
