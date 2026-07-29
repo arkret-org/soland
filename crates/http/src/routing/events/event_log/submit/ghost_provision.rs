@@ -176,7 +176,7 @@ async fn prepare_ghost_event(
             Some(&parsed.actor_id),
         )
     });
-    let outbox = peer_event_fanout_records(state, &parsed, &envelope).await;
+    let outbox = peer_event_fanout_records(state, &parsed, &envelope, None).await;
     let command = soland_services::events::CommitAcceptedEventCommand {
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id,

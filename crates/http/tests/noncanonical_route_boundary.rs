@@ -84,7 +84,7 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
     assert_eq!(metadata.1, "provisional_baseline");
     assert_eq!(
         metadata.2,
-        "arkret-work/review/spec-open/2026-07-27-12-soland-noncanonical-route-boundary-audit.md"
+        "arkret-work/review/spec-done/2026-07-27-12-soland-noncanonical-route-boundary-audit.md"
     );
     assert_eq!(metadata.3, "crates/http/src/product_openapi_appendix.json");
     assert_eq!(metadata.4, 127);

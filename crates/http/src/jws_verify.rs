@@ -173,6 +173,17 @@ pub async fn verify_jws_ed25519_async(
             updated_at: Some(chrono::Utc::now()),
             raw_properties: BTreeMap::new(),
         }
+    } else if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
+        DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.to_owned(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.as_bytes()),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        }
     } else {
         resolve_did_document_async(state, &did).await?
     };

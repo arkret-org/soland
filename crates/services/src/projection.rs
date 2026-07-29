@@ -2062,12 +2062,7 @@ impl ProjectionService {
             .is_some_and(|membership| membership.state == "invite")
     }
 
-    pub fn project_invite_creation(
-        &self,
-        operation: &Operation,
-        invitee: &str,
-        recipient_service_id: Option<String>,
-    ) {
+    pub fn project_invite_creation(&self, operation: &Operation, invitee: &str) {
         let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();
         let key = (operation.realm_id.as_str().to_owned(), invitee.to_owned());
@@ -2087,14 +2082,10 @@ impl ProjectionService {
                     .as_ref()
                     .map(|member| member.role.clone())
                     .unwrap_or_else(|| "member".to_owned()),
-                delivery_status: Some(if recipient_service_id.is_some() {
-                    "routable".to_owned()
-                } else {
-                    "unroutable".to_owned()
-                }),
-                recipient_service_id,
+                delivery_status: None,
+                recipient_service_id: None,
                 membership_event_ref: Some(event_ref.clone()),
-                delivery_binding_frontier: Some(event_ref),
+                delivery_binding_frontier: None,
                 invited_at: previous
                     .as_ref()
                     .and_then(|member| member.invited_at)

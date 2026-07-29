@@ -42,7 +42,7 @@ use soland_http::util::sha256_hex;
 use soland_services::events::{
     InviteLocatorInsertResult as InviteLocatorInsertOutcome,
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
-    InviteLocatorState as InviteLocatorRecord,
+    InviteLocatorState as InviteLocatorRecord, RealmInviteState as RealmInviteRecord,
 };
 use soland_services::identity::{
     AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
@@ -352,39 +352,47 @@ async fn peer_invites_submit(
         revoked_at: None,
     };
 
-    let response =
-        super::events::event_log::submit_event_value(state, &session, body["invite_event"].clone())
-            .await
-            .map_err(|error| {
-                AppError::new(ErrorCode::SchemaViolation, error.message)
-                    .with_status(error.status)
-                    .with_wire_code(error.code)
-            })?;
+    let validated = super::events::event_log::validate_private_invite_envelope(
+        state,
+        &session,
+        &body["invite_event"],
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(ErrorCode::SchemaViolation, error.message)
+            .with_status(error.status)
+            .with_wire_code(error.code)
+    })?;
+    let duplicate = persist_private_invite_projection(
+        state,
+        delivery.invite_address.subject_id.as_str(),
+        &body,
+        &validated,
+    )
+    .await?;
 
-    let status = if response.duplicate {
-        "duplicate"
-    } else {
-        "accepted"
-    };
+    let status = if duplicate { "duplicate" } else { "accepted" };
     super::append_audit_log(
         state,
         None,
         "peer.invites.submit",
         json!({
             "idempotency_key": delivery.idempotency_key,
-            "event_id": response.event_id,
+            "event_id": validated.event_id,
             "invitee": delivery.invite_address.subject_id,
             "recipient_service_id": delivery.invite_address.recipient_service_id,
             "introduction_kind": delivery.introduction_evidence.kind(),
             "effective_kind": decision.effective_kind,
             "trust_tier": decision.trust_tier.as_str(),
             "request_canonical_digest": request_hash,
+            "event_canonical_digest": validated.canonical_digest,
+            "projection": "holder_private_invite",
         }),
         status,
     )
     .await;
     let outcome = InviteDeliveryOutcome {
-        status: if response.duplicate {
+        status: if duplicate {
             InviteDeliveryOutcomeStatus::Duplicate
         } else {
             InviteDeliveryOutcomeStatus::Accepted
@@ -394,6 +402,107 @@ async fn peer_invites_submit(
         retry_after_ms: None,
     };
     json_ok(outcome)
+}
+
+async fn persist_private_invite_projection(
+    state: &AppState,
+    subject: &str,
+    body: &Value,
+    validated: &super::events::event_log::ValidatedEventEnvelope,
+) -> Result<bool, AppError> {
+    let event = body
+        .get("invite_event")
+        .and_then(Value::as_object)
+        .ok_or_else(|| super::events::peer::schema_violation("invite_event must be an object"))?;
+    let payload = event
+        .get("payload")
+        .and_then(Value::as_object)
+        .ok_or_else(|| super::events::peer::schema_violation("invite_event.payload is required"))?;
+    let invite_id = payload
+        .get("invite_id")
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| {
+            super::events::peer::schema_violation("invite_event.payload.invite_id is required")
+        })?
+        .to_owned();
+    let created_at = event
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
+        .ok_or_else(|| {
+            super::events::peer::schema_violation(
+                "invite_event.created_at must be an RFC 3339 timestamp",
+            )
+        })?;
+    let expires_at = payload
+        .get("expires_at")
+        .and_then(Value::as_str)
+        .map(|value| {
+            chrono::DateTime::parse_from_rfc3339(value)
+                .map(|parsed| parsed.with_timezone(&chrono::Utc))
+                .map_err(|_| {
+                    super::events::peer::schema_violation(
+                        "invite_event.payload.expires_at must be an RFC 3339 timestamp",
+                    )
+                })
+        })
+        .transpose()?
+        .or_else(|| Some(created_at + Duration::days(7)));
+    let invite_delivery_target = payload.get("invite_delivery_target").cloned();
+    let introduction_evidence_digest = payload
+        .get("introduction_evidence_digest")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let record = RealmInviteRecord {
+        invite_id: invite_id.clone(),
+        realm_id: validated.realm_id.clone(),
+        inviter: validated.actor_id.clone(),
+        invitee: Some(subject.to_owned()),
+        invite_delivery_target,
+        introduction_evidence_digest,
+        third_party_id: None,
+        join_rule_snapshot: payload.get("join_rule_snapshot").cloned(),
+        invite_token: crate::routing::generate_invite_token(
+            &invite_id,
+            &validated.realm_id,
+            subject,
+        ),
+        status: "pending".to_owned(),
+        claim_nonces: std::collections::BTreeMap::new(),
+        expires_at,
+        created_at,
+        updated_at: None,
+    };
+
+    let invites = state.realm_invites();
+    if let Some(existing) = invites
+        .get(&invite_id)
+        .await
+        .map_err(|error| AppError::internal(format!("private invite lookup: {error}")))?
+    {
+        let exact_replay = existing.realm_id == record.realm_id
+            && existing.inviter == record.inviter
+            && existing.invitee == record.invitee
+            && existing.invite_delivery_target == record.invite_delivery_target
+            && existing.introduction_evidence_digest == record.introduction_evidence_digest
+            && existing.expires_at == record.expires_at
+            && existing.created_at == record.created_at;
+        if exact_replay {
+            return Ok(true);
+        }
+        return Err(AppError::new(
+            ErrorCode::DuplicateConflict,
+            "invite_id is already bound to a different private invite delivery",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
+    invites
+        .put(record)
+        .await
+        .map_err(|error| AppError::internal(format!("private invite projection: {error}")))?;
+    Ok(false)
 }
 
 #[endpoint(
@@ -1614,6 +1723,82 @@ mod invite_locator_security_tests {
         assert_eq!(
             disclosed_outcome_for_action(DisclosureLevel::Outcome, &InviteReceiveAction::Drop),
             Some(DisclosedOutcome::Blocked)
+        );
+    }
+
+    #[tokio::test]
+    async fn private_invite_projection_is_idempotent_and_never_writes_shared_event_state() {
+        let state = AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000401";
+        let invite_id = "ak:invite:01904100-0000-7000-8000-000000000402";
+        let subject = "did:web:bob.example";
+        let body = json!({
+            "invite_event": {
+                "created_at": "2026-07-29T10:00:00.000Z",
+                "payload": {
+                    "invite_id": invite_id,
+                    "invite_delivery_target": {
+                        "recipient_service_id": state.service_id(),
+                        "recipient_service_kind": "principal_server"
+                    },
+                    "introduction_evidence_digest":
+                        format!("sha256:{}", "a".repeat(64)),
+                    "expires_at": "2026-08-05T10:00:00.000Z"
+                }
+            }
+        });
+        let validated = crate::routing::events::event_log::ValidatedEventEnvelope {
+            event_id: "ak:event:01904100-0000-7000-8000-000000000403".to_owned(),
+            actor_id: "did:web:alice.example".to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
+            actor_seq: 7,
+            realm_id: realm_id.to_owned(),
+            kind: arkret_wire::events::EventKind::INVITE_CREATE.to_owned(),
+            schema_id: "ak.schema.event_envelope.v1".to_owned(),
+            prev_refs: Vec::new(),
+            authorized_refs: Vec::new(),
+            canonical_digest: format!("sha256:{}", "b".repeat(64)),
+            canonical_bytes: Vec::new(),
+        };
+
+        assert!(
+            !persist_private_invite_projection(&state, subject, &body, &validated)
+                .await
+                .expect("first private projection")
+        );
+        assert!(
+            persist_private_invite_projection(&state, subject, &body, &validated)
+                .await
+                .expect("exact replay")
+        );
+        assert!(
+            state
+                .realm_invites()
+                .get(invite_id)
+                .await
+                .expect("private invite lookup")
+                .is_some()
+        );
+        assert!(
+            state
+                .event_queries()
+                .realm_events_newest_first(realm_id)
+                .await
+                .expect("shared Event query")
+                .is_empty()
+        );
+        assert!(
+            state
+                .projections()
+                .snapshot()
+                .members_in_state(realm_id, "invite")
+                .is_empty()
         );
     }
 }

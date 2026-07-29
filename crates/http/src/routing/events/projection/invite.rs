@@ -632,15 +632,13 @@ pub(super) async fn project_invite_create_operation(
         created_at: operation.created_at,
         updated_at: None,
     };
-    let delivery_target = record.invite_delivery_target.clone();
     match invites.put(record).await {
         Ok(()) => {
-            // A directed invite establishes the recipient's delivery binding
-            // before the invitee accepts. Keep the member projection in
-            // `routable` state so subsequent Realm events can fan out to the
-            // target service (federation.md §5.1); the membership state remains
-            // `invite` until the invite-accept event is projected.
-            project_invite_creation(state, operation, invitee.as_str(), delivery_target.as_ref());
+            // Invite creation advances only the membership lifecycle
+            // `leave -> invite`. The delivery address is private invite/join
+            // input, not an effective member delivery binding; that binding is
+            // materialized only by the later accepted join transition.
+            project_invite_creation(state, operation, invitee.as_str());
             tracing::info!(
                 invite_id = %invite_id,
                 invitee = %invitee.as_str(),
@@ -653,21 +651,10 @@ pub(super) async fn project_invite_create_operation(
     }
 }
 
-fn project_invite_creation(
-    state: &AppState,
-    operation: &Operation,
-    invitee: &str,
-    delivery_target: Option<&Value>,
-) {
-    let recipient_service_id = delivery_target
-        .and_then(|target| target.get("recipient_service_id"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|did| !did.is_empty())
-        .map(ToOwned::to_owned);
+fn project_invite_creation(state: &AppState, operation: &Operation, invitee: &str) {
     state
         .projections()
-        .project_invite_creation(operation, invitee, recipient_service_id);
+        .project_invite_creation(operation, invitee);
 }
 
 fn invite_id_for_operation(operation: &Operation) -> Option<String> {

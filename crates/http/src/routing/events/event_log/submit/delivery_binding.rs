@@ -12,6 +12,9 @@ pub(super) async fn federation_service_binding_current_for_destination(
     if !crate::routing::events::event_log::realm_is_indexed(state, binding.realm_id.as_str()) {
         return FederationServiceBindingCheck::Current;
     }
+    if realm_sync_endpoint_binding_is_current(state, binding).await {
+        return FederationServiceBindingCheck::Current;
+    }
     let members = {
         let projection = state.projections().snapshot();
         projection
@@ -20,19 +23,6 @@ pub(super) async fn federation_service_binding_current_for_destination(
             .filter_map(delivery_binding_member_view)
             .collect::<Vec<_>>()
     };
-    // Federation replica / observer admission: when this server hosts the Realm
-    // but is the effective `delivery_binding.recipient_service_id` for zero
-    // local members, there is no local member binding the asserted frontier can
-    // be stale against. A conservative deployment (default) still fails closed
-    // below; a server explicitly configured as a replica / observer admits the
-    // push as pure replication (config: `federation_replica_observer`).
-    if state.settings().federation_replica_observer
-        && !members
-            .iter()
-            .any(|member| member.recipient_service_id == *state.service_id())
-    {
-        return FederationServiceBindingCheck::Current;
-    }
     let member_binding_diagnostics = members
         .iter()
         .map(|member| {
@@ -90,6 +80,58 @@ pub(super) async fn federation_service_binding_current_for_destination(
         }
         FederationServiceBindingCheck::Current => FederationServiceBindingCheck::Current,
     }
+}
+
+async fn realm_sync_endpoint_binding_is_current(
+    state: &AppState,
+    binding: &FederationServiceBindingRef,
+) -> bool {
+    let Ok(records) = state
+        .event_queries()
+        .realm_events_newest_first(binding.realm_id.as_str())
+        .await
+    else {
+        return false;
+    };
+    let Some(create) = records
+        .iter()
+        .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+    else {
+        return false;
+    };
+    realm_sync_endpoint_authorizes_destination(
+        state.service_id().as_str(),
+        binding,
+        &create.event_id,
+        &create.envelope,
+    )
+}
+
+pub(super) fn realm_sync_endpoint_authorizes_destination(
+    destination_service_id: &str,
+    binding: &FederationServiceBindingRef,
+    create_event_id: &str,
+    create_envelope: &Value,
+) -> bool {
+    let binding_covers_create = binding
+        .membership_frontier
+        .iter()
+        .any(|event_id| event_id.as_str() == create_event_id)
+        && binding
+            .delivery_binding_frontier
+            .iter()
+            .any(|event_id| event_id.as_str() == create_event_id);
+    if !binding_covers_create {
+        return false;
+    }
+    create_envelope
+        .pointer("/payload/object/sync_endpoints")
+        .and_then(Value::as_array)
+        .is_some_and(|endpoints| {
+            endpoints.iter().any(|endpoint| {
+                endpoint.get("did").and_then(Value::as_str) == Some(destination_service_id)
+            })
+        })
 }
 
 pub(super) fn delivery_binding_member_view(

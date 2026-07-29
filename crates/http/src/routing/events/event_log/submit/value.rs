@@ -1379,7 +1379,13 @@ pub(super) async fn submit_event_value_with_context(
     let outbox = if session.token_hash.starts_with("federation:") {
         Vec::new()
     } else {
-        peer_event_fanout_records(state, &parsed, &envelope_for_bootstrap).await
+        peer_event_fanout_records(
+            state,
+            &parsed,
+            &envelope_for_bootstrap,
+            control_proposal_receipt.as_ref(),
+        )
+        .await
     };
     let next_actor_seq = parsed.actor_seq.checked_add(1).ok_or_else(|| {
         SubmitOneError::new(

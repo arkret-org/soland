@@ -17,6 +17,33 @@ pub(crate) async fn validate_event_envelope_with_context(
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<ValidatedEventEnvelope, EventValidationError> {
+    validate_event_envelope_with_ingress(
+        state,
+        session,
+        envelope,
+        realm_bootstrap_contexts,
+        internal_admission,
+        false,
+    )
+    .await
+}
+
+pub(in crate::routing) async fn validate_private_invite_envelope(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+) -> Result<ValidatedEventEnvelope, EventValidationError> {
+    validate_event_envelope_with_ingress(state, session, envelope, &[], None, true).await
+}
+
+async fn validate_event_envelope_with_ingress(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: &Value,
+    realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
+    internal_admission: Option<&InternalEventAdmission>,
+    private_invite_delivery: bool,
+) -> Result<ValidatedEventEnvelope, EventValidationError> {
     let object = envelope.as_object().ok_or_else(|| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
@@ -252,13 +279,12 @@ pub(crate) async fn validate_event_envelope_with_context(
         &realm_id,
     )
     .await;
-    // A private cross-PS invite delivery (`POST /_arkret/peer/invites`) submits
-    // the inviter-signed `ak.invite.create` on the *recipient* PS so the local
-    // subject can list + accept it. That realm lives on the inviter's PS, so the
-    // recipient PS has no member record for it — yet it MUST still record the
-    // pending invite for its subject. Admit `ak.invite.create` from its own
-    // inviter into a realm this PS does not host (spec invite-addressing.md §5).
-    let is_foreign_invite_delivery = kind == "ak.invite.create"
+    // `/_arkret/peer/invites` verifies the original signed Event before
+    // projecting a holder-private inbox record. This explicit ingress context
+    // bypasses only the local shared-Realm membership lookup: it never commits
+    // the Event or advances a reducer/frontier on the recipient service.
+    let is_private_invite_delivery = private_invite_delivery
+        && kind == "ak.invite.create"
         && invite_create_actor_is_inviter(object, &session.actor)
         && !realm_exists;
     let is_realm_bootstrap_followup = is_realm_bootstrap_followup_kind(&kind)
@@ -296,7 +322,7 @@ pub(crate) async fn validate_event_envelope_with_context(
         && !is_invite_acceptance_join
         && !is_invitee_invite_cancel
         && !is_third_party_invite_claim
-        && !is_foreign_invite_delivery
+        && !is_private_invite_delivery
         && !is_applet_delegated
         && !managed_agent_delegation
         && !is_member_self_knock

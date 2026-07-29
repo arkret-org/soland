@@ -896,60 +896,6 @@ async fn direct_bootstrap_source_is_contact_authority(
         })
 }
 
-fn batch_has_directed_invite_delivery_for_destination(
-    destination_service_id: &str,
-    events: &[Value],
-) -> bool {
-    let Some(invite) = events.last() else {
-        return false;
-    };
-    if event_string_field_from_value(invite, "kind").as_deref()
-        != Some(arkret_wire::events::EventKind::INVITE_CREATE)
-        || invite
-            .get("payload")
-            .and_then(|payload| payload.get("invite_delivery_target"))
-            .and_then(|target| target.get("recipient_service_id"))
-            .and_then(Value::as_str)
-            != Some(destination_service_id)
-    {
-        return false;
-    }
-    let by_id = events
-        .iter()
-        .filter_map(|event| event_string_field_from_value(event, "event_id").map(|id| (id, event)))
-        .collect::<BTreeMap<_, _>>();
-    let mut ancestors = std::collections::BTreeSet::new();
-    let mut pending = invite
-        .get("prev_refs")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(ToOwned::to_owned)
-        .collect::<Vec<_>>();
-    while let Some(event_id) = pending.pop() {
-        if !ancestors.insert(event_id.clone()) {
-            continue;
-        }
-        let Some(event) = by_id.get(event_id.as_str()) else {
-            continue;
-        };
-        pending.extend(
-            event
-                .get("prev_refs")
-                .and_then(Value::as_array)
-                .into_iter()
-                .flatten()
-                .filter_map(Value::as_str)
-                .map(ToOwned::to_owned),
-        );
-    }
-    events[..events.len() - 1].iter().all(|event| {
-        event_string_field_from_value(event, "event_id")
-            .is_some_and(|event_id| ancestors.contains(&event_id))
-    })
-}
-
 async fn accept_federated_seal_prerequisite(
     state: &AppState,
     realm_id: &arkret_identifiers::RealmId,
@@ -1487,35 +1433,32 @@ pub(crate) async fn submit_federation_events(
             return;
         }
     }
-    if !batch_has_directed_invite_delivery_for_destination(state.service_id(), &events) {
-        match federation_service_binding_current_for_destination(state, &service_binding_ref).await
-        {
-            FederationServiceBindingCheck::Current => {}
-            FederationServiceBindingCheck::Reject(reason) => {
-                render_error(res, StatusCode::CONFLICT, reason, reason);
-                return;
-            }
-            FederationServiceBindingCheck::Stale(evidence) => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(
-                    crate::routing::federation::federation::delivery_binding_stale_response(
-                        &evidence.new_recipient_service_id,
-                        &evidence.actor_id,
-                        &evidence.handover_frontier,
-                        evidence.witness,
-                    ),
-                ));
-                return;
-            }
-            FederationServiceBindingCheck::HandedOver(evidence) => {
-                res.status_code(StatusCode::CONFLICT);
-                res.render(Json(
-                    crate::routing::federation::federation::delivery_binding_handed_over_response(
-                        &evidence.new_recipient_service_id,
-                    ),
-                ));
-                return;
-            }
+    match federation_service_binding_current_for_destination(state, &service_binding_ref).await {
+        FederationServiceBindingCheck::Current => {}
+        FederationServiceBindingCheck::Reject(reason) => {
+            render_error(res, StatusCode::CONFLICT, reason, reason);
+            return;
+        }
+        FederationServiceBindingCheck::Stale(evidence) => {
+            res.status_code(StatusCode::CONFLICT);
+            res.render(Json(
+                crate::routing::federation::federation::delivery_binding_stale_response(
+                    &evidence.new_recipient_service_id,
+                    &evidence.actor_id,
+                    &evidence.handover_frontier,
+                    evidence.witness,
+                ),
+            ));
+            return;
+        }
+        FederationServiceBindingCheck::HandedOver(evidence) => {
+            res.status_code(StatusCode::CONFLICT);
+            res.render(Json(
+                crate::routing::federation::federation::delivery_binding_handed_over_response(
+                    &evidence.new_recipient_service_id,
+                ),
+            ));
+            return;
         }
     }
     let mut accepted = Vec::new();
@@ -2237,52 +2180,6 @@ mod federation_delivery_binding_tests {
     }
 
     #[test]
-    fn directed_invite_batch_authorizes_only_its_in_batch_causal_ancestors() {
-        let predecessor = event_id(1);
-        let invite = event_id(2);
-        let events = vec![
-            json!({
-                "event_id": predecessor,
-                "kind": "ak.member.state",
-                "prev_refs": [event_id(9)]
-            }),
-            json!({
-                "event_id": invite,
-                "kind": "ak.invite.create",
-                "prev_refs": [predecessor],
-                "payload": {
-                    "invite_delivery_target": {
-                        "recipient_service_id": "did:web:local.example"
-                    }
-                }
-            }),
-        ];
-
-        assert!(batch_has_directed_invite_delivery_for_destination(
-            "did:web:local.example",
-            &events
-        ));
-
-        let mut unrelated = events.clone();
-        unrelated.insert(
-            1,
-            json!({
-                "event_id": event_id(3),
-                "kind": "ak.message.create",
-                "prev_refs": []
-            }),
-        );
-        assert!(!batch_has_directed_invite_delivery_for_destination(
-            "did:web:local.example",
-            &unrelated
-        ));
-        assert!(!batch_has_directed_invite_delivery_for_destination(
-            "did:web:other.example",
-            &events
-        ));
-    }
-
-    #[test]
     fn federation_service_binding_check_accepts_current_local_frontier() {
         let now = Utc::now();
         let frontier = event_id(1);
@@ -2299,6 +2196,55 @@ mod federation_delivery_binding_tests {
         );
 
         assert!(matches!(result, FederationServiceBindingCheck::Current));
+    }
+
+    #[test]
+    fn realm_sync_endpoint_binding_requires_declared_destination_and_create_frontier() {
+        let create_event_id = event_id(1);
+        let binding = FederationServiceBindingRef {
+            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
+            realm_policy_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+            membership_frontier: vec![create_event_id.clone()],
+            delivery_binding_frontier: vec![create_event_id.clone()],
+            destination_service_kind: "principal_server".to_owned(),
+            reducer_profile_digest: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
+        };
+        let create_envelope = json!({
+            "payload": {
+                "object": {
+                    "sync_endpoints": [{
+                        "did": "did:web:mirror.example",
+                        "endpoint": "https://mirror.example",
+                        "role": "mirror",
+                        "service_kind": "principal_server",
+                        "plaintext_visible": true,
+                        "visibility_scope": "plaintext_events"
+                    }]
+                }
+            }
+        });
+
+        assert!(realm_sync_endpoint_authorizes_destination(
+            "did:web:mirror.example",
+            &binding,
+            create_event_id.as_str(),
+            &create_envelope,
+        ));
+        assert!(!realm_sync_endpoint_authorizes_destination(
+            "did:web:other.example",
+            &binding,
+            create_event_id.as_str(),
+            &create_envelope,
+        ));
+
+        let mut stale_binding = binding;
+        stale_binding.delivery_binding_frontier = vec![event_id(2)];
+        assert!(!realm_sync_endpoint_authorizes_destination(
+            "did:web:mirror.example",
+            &stale_binding,
+            create_event_id.as_str(),
+            &create_envelope,
+        ));
     }
 
     #[test]

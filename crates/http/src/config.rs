@@ -342,19 +342,6 @@ pub struct AppConfig {
     /// that don't want background HTTP traffic (the in-process `enqueue`
     /// path still writes outbox rows so cotest can observe the boundary).
     pub federation_outbound_enabled: bool,
-    /// Federation replica / observer admission posture (member-delivery-binding.md
-    /// §4 delivery-binding gate). The inbound delivery-binding gate normally
-    /// fails closed when a push targets a Realm this server already hosts but is
-    /// the effective `delivery_binding.recipient_service_id` for zero local
-    /// members — there is then no local member binding the asserted frontier can
-    /// correspond to. A conservative server (default `false`) rejects such
-    /// pushes with `delivery_binding_stale`. A server explicitly deployed as a
-    /// federation replica / observer (holds a Realm copy with no locally-homed
-    /// members) sets this `true` to admit those pushes as pure replication;
-    /// there is no locally-bound member that could be stale, so the gate has
-    /// nothing to protect. Env: `SOLAND_FEDERATION_REPLICA_OBSERVER`
-    /// (default `false`).
-    pub federation_replica_observer: bool,
     /// Default page size for `GET /_soland/admin/cells` and the rest of
     /// the admin paginated read surfaces when the caller omits `limit`.
     /// Env: `SOLAND_ADMIN_PAGE_LIMIT` (default `100`).
@@ -753,7 +740,6 @@ impl AppConfig {
             // Off so test binaries never spawn background federation HTTP
             // traffic; the in-process enqueue path still writes outbox rows.
             federation_outbound_enabled: false,
-            federation_replica_observer: false,
             admin_default_page_limit: 100,
             admin_max_page_limit: 1000,
             admin_principal_dids: Vec::new(),
@@ -911,8 +897,6 @@ impl AppConfig {
         // background worker drains the outbox; tests that don't want
         // unsolicited HTTP traffic set `SOLAND_FEDERATION_OUTBOUND=0`.
         let federation_outbound_enabled = env_bool("SOLAND_FEDERATION_OUTBOUND")?.unwrap_or(true);
-        let federation_replica_observer =
-            env_bool("SOLAND_FEDERATION_REPLICA_OBSERVER")?.unwrap_or(false);
         let admin_default_page_limit = std::env::var("SOLAND_ADMIN_PAGE_LIMIT")
             .ok()
             .and_then(|value| value.trim().parse::<usize>().ok())
@@ -1045,7 +1029,6 @@ impl AppConfig {
             federation_fanout_topology,
             federation_peers,
             federation_outbound_enabled,
-            federation_replica_observer,
             admin_default_page_limit,
             admin_max_page_limit,
             admin_principal_dids,

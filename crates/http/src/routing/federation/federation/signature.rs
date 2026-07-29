@@ -213,6 +213,15 @@ fn verify_inbound_peer_http_signature_inner(
         &outer_base,
         "outer",
     )?;
+    let source_verifying_key = verifying_key_for_service_id(state, &source_service_id)?;
+    let source_verification_method =
+        crate::routing::federation::federation_service_signature_key_id(&source_service_id);
+    state.install_federation_peer_verifying_key(None, &source_service_id, source_verifying_key);
+    state.install_federation_peer_verification_method_key(
+        None,
+        &source_verification_method,
+        source_verifying_key,
+    );
 
     if crate::security::federation_origin_denied(&source_service_id) {
         return Err(signature_error("peer is denied by local federation policy"));

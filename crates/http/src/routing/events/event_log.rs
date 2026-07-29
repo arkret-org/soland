@@ -97,21 +97,23 @@ use realm_index::{
 mod submit;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
-    EventCommitIdempotency, InternalEventAdmission, service_event_authoring_lock,
-    submit_account_data_event_value, submit_event_value, submit_ghost_provision_batch,
-    submit_initial_event_submission, submit_initial_identity_anchor_batch, submit_mimi_event_value,
+    EventCommitIdempotency, InternalEventAdmission, ValidatedEventEnvelope,
+    service_event_authoring_lock, submit_account_data_event_value, submit_event_value,
+    submit_ghost_provision_batch, submit_initial_event_submission,
+    submit_initial_identity_anchor_batch, submit_mimi_event_value,
 };
 use submit::{
     EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,
-    SubmittedEventOutcome, ValidatedEventEnvelope, event_validation_error, events_submit_outcome,
-    render_submit_one_error, submit_event_batch, submit_event_batch_outcome,
-    submit_event_value_with_idempotency, submit_initial_event_batch_outcome,
+    SubmittedEventOutcome, event_validation_error, events_submit_outcome, render_submit_one_error,
+    submit_event_batch, submit_event_batch_outcome, submit_event_value_with_idempotency,
+    submit_initial_event_batch_outcome,
 };
 
 mod validation;
 use validation::*;
 pub(in crate::routing) use validation::{
     validate_event_envelope_with_context, validate_federated_device_signing_key_evidence,
+    validate_private_invite_envelope,
 };
 mod sdk_projection;
 pub(crate) use sdk_projection::*;

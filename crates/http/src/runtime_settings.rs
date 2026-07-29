@@ -86,8 +86,6 @@ pub struct RuntimeSettings {
     pub push_bridge_trusted_service_ids: Vec<String>,
     /// Candidate join-policy member-application read surface toggle.
     pub candidate_join_policy_enabled: bool,
-    /// Federation replica/observer admission posture.
-    pub federation_replica_observer: bool,
     /// Rate-limit ceilings.
     pub rate_limit: RateLimitSettings,
 }
@@ -103,7 +101,6 @@ impl RuntimeSettings {
             federation_fanout_topology: config.federation_fanout_topology,
             push_bridge_trusted_service_ids: config.push_bridge_trusted_service_ids.clone(),
             candidate_join_policy_enabled: config.candidate_join_policy_enabled,
-            federation_replica_observer: config.federation_replica_observer,
             rate_limit: RateLimitSettings::from_limiter_config(&RateLimiterConfig::from_env(
                 config.development_mode,
             )),
@@ -144,9 +141,6 @@ impl RuntimeSettings {
             keys::CANDIDATE_JOIN_POLICY_ENABLED => {
                 self.candidate_join_policy_enabled = decode(key, value)?
             }
-            keys::FEDERATION_REPLICA_OBSERVER => {
-                self.federation_replica_observer = decode(key, value)?
-            }
             keys::RATE_LIMIT => {
                 self.rate_limit = decode(key, value)?;
                 self.floor_rate_limit();
@@ -171,9 +165,6 @@ impl RuntimeSettings {
             }
             keys::CANDIDATE_JOIN_POLICY_ENABLED => {
                 serde_json::to_value(self.candidate_join_policy_enabled)
-            }
-            keys::FEDERATION_REPLICA_OBSERVER => {
-                serde_json::to_value(self.federation_replica_observer)
             }
             keys::RATE_LIMIT => serde_json::to_value(self.rate_limit),
             other => anyhow::bail!("unknown setting key: {other}"),
@@ -201,7 +192,6 @@ pub mod keys {
     pub const FEDERATION_FANOUT_TOPOLOGY: &str = "federation_fanout_topology";
     pub const PUSH_BRIDGE_TRUSTED_SERVICE_IDS: &str = "push_bridge_trusted_service_ids";
     pub const CANDIDATE_JOIN_POLICY_ENABLED: &str = "candidate_join_policy_enabled";
-    pub const FEDERATION_REPLICA_OBSERVER: &str = "federation_replica_observer";
     pub const RATE_LIMIT: &str = "rate_limit";
 
     /// Every recognized key, for validation / documentation.
@@ -211,7 +201,6 @@ pub mod keys {
         FEDERATION_FANOUT_TOPOLOGY,
         PUSH_BRIDGE_TRUSTED_SERVICE_IDS,
         CANDIDATE_JOIN_POLICY_ENABLED,
-        FEDERATION_REPLICA_OBSERVER,
         RATE_LIMIT,
     ];
 }
@@ -232,7 +221,6 @@ mod tests {
             federation_fanout_topology: FederationFanoutTopology::Hub,
             push_bridge_trusted_service_ids: vec!["did:web:push.example".to_owned()],
             candidate_join_policy_enabled: true,
-            federation_replica_observer: false,
             rate_limit: RateLimitSettings {
                 window_seconds: 60,
                 default_per_minute: 600,
@@ -330,7 +318,6 @@ mod tests {
                 federation_fanout_topology: FederationFanoutTopology::Mesh,
                 push_bridge_trusted_service_ids: vec![],
                 candidate_join_policy_enabled: false,
-                federation_replica_observer: false,
                 rate_limit: RateLimitSettings {
                     window_seconds: 1,
                     default_per_minute: 1,

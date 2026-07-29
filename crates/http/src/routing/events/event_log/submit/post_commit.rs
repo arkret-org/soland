@@ -182,14 +182,15 @@ fn federation_cba_proof_bundles(
 async fn federation_submissions(
     state: &AppState,
     events: &[Event],
-) -> Vec<arkret_wire::EventFederationSubmission> {
+    current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
+) -> Option<Vec<arkret_wire::EventFederationSubmission>> {
     let mut digests = Vec::with_capacity(events.len());
     for event in events {
         match event.event_digest() {
             Ok(digest) => digests.push(digest),
             Err(error) => {
                 tracing::warn!(%error, event_id = %event.event_id, "failed to digest an Event for federation");
-                return Vec::new();
+                return None;
             }
         }
     }
@@ -201,7 +202,7 @@ async fn federation_submissions(
         Ok(evidence) => evidence,
         Err(error) => {
             tracing::warn!(%error, "failed to read federation publication evidence");
-            return Vec::new();
+            return None;
         }
     };
     let by_digest = evidence
@@ -215,7 +216,7 @@ async fn federation_submissions(
                 event_id = %event.event_id,
                 "Event has no stored publication evidence and cannot be federated"
             );
-            continue;
+            return None;
         };
         let control_proposal_receipt = if event.seal_basis.is_some() {
             let Ok(proposal_digest) = arkret_identifiers::Hash::new(digest.clone()) else {
@@ -223,27 +224,33 @@ async fn federation_submissions(
                     event_id = %event.event_id,
                     "Control Move digest is not a typed Hash and cannot be federated"
                 );
-                continue;
+                return None;
             };
-            match state
-                .projections()
-                .control_proposal_receipt(&proposal_digest)
+            if let Some(receipt) = current_control_proposal_receipt
+                .filter(|receipt| receipt.proposal_digest == proposal_digest)
             {
-                Ok(Some(receipt)) => Some(receipt),
-                Ok(None) => {
-                    tracing::warn!(
-                        event_id = %event.event_id,
-                        "Control Move has no stored proposal receipt and cannot be federated"
-                    );
-                    continue;
-                }
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        event_id = %event.event_id,
-                        "failed to read Control Move proposal receipt for federation"
-                    );
-                    continue;
+                Some(receipt.clone())
+            } else {
+                match state
+                    .projections()
+                    .control_proposal_receipt(&proposal_digest)
+                {
+                    Ok(Some(receipt)) => Some(receipt),
+                    Ok(None) => {
+                        tracing::warn!(
+                            event_id = %event.event_id,
+                            "Control Move has no stored proposal receipt and cannot be federated"
+                        );
+                        return None;
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            %error,
+                            event_id = %event.event_id,
+                            "failed to read Control Move proposal receipt for federation"
+                        );
+                        return None;
+                    }
                 }
             }
         } else {
@@ -256,7 +263,7 @@ async fn federation_submissions(
             control_proposal_receipt,
         });
     }
-    submissions
+    Some(submissions)
 }
 
 pub(super) async fn enqueue_peer_event_fanout(
@@ -264,7 +271,7 @@ pub(super) async fn enqueue_peer_event_fanout(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) {
-    for record in peer_event_fanout_records(state, parsed, envelope).await {
+    for record in peer_event_fanout_records(state, parsed, envelope, None).await {
         if let Err(error) = state
             .federation()
             .enqueue_delivery(
@@ -301,7 +308,7 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         tracing::error!("peer Event batch fanout cardinality mismatch");
         return;
     }
-    let mut peers = dynamic_peer_event_targets(state, first, &envelopes[0]);
+    let mut peers = dynamic_peer_event_targets(state, first).await;
     // The atomic founding unit is routed after acceptance, but its canonical
     // destination is already explicit in a routable peer member join inside
     // the batch. Read that binding directly so bootstrap delivery never
@@ -332,6 +339,7 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             service_id: service_id.to_owned(),
             membership_frontier: vec![parsed.event_id.clone()],
             delivery_binding_frontier: vec![parsed.event_id.clone()],
+            realm_sync_endpoint: false,
         });
     }
     if peers.is_empty() {
@@ -382,10 +390,9 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             return;
         }
     };
-    let submissions = federation_submissions(state, &events).await;
-    if submissions.is_empty() {
+    let Some(submissions) = federation_submissions(state, &events, None).await else {
         return;
-    }
+    };
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -483,12 +490,9 @@ pub(super) async fn peer_event_fanout_records(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
+    current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
 ) -> Vec<soland_services::federation::FederationDeliveryRecord> {
-    // Directed invite-create events carry their recipient service in the
-    // operation payload rather than in the member projection. Pass the
-    // original envelope through so the fanout target can be resolved before
-    // the invitee has joined (federation.md section 5.1).
-    let peers = dynamic_peer_event_targets(state, parsed, envelope);
+    let peers = dynamic_peer_event_targets(state, parsed).await;
     if peers.is_empty() {
         return Vec::new();
     }
@@ -533,8 +537,9 @@ pub(super) async fn peer_event_fanout_records(
         // dependency admission by delivering the original atomic Realm
         // founding unit immediately before that Event. The deterministic
         // idempotency key collapses this prerequisite for later fanout.
-        if let Some(bootstrap) =
-            realm_bootstrap_fanout_record(state, parsed, &peer, now.saturating_sub(1)).await
+        if !peer.realm_sync_endpoint
+            && let Some(bootstrap) =
+                realm_bootstrap_fanout_record(state, parsed, &peer, now.saturating_sub(1)).await
         {
             records.push(bootstrap);
         }
@@ -644,10 +649,11 @@ pub(super) async fn peer_event_fanout_records(
                 continue;
             }
         };
-        let submissions = federation_submissions(state, &peer_events).await;
-        if submissions.is_empty() {
+        let Some(submissions) =
+            federation_submissions(state, &peer_events, current_control_proposal_receipt).await
+        else {
             continue;
-        }
+        };
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: submissions,
@@ -913,10 +919,9 @@ async fn realm_bootstrap_fanout_record(
         hasher_input.extend_from_slice(record.canonical_digest.as_bytes());
     }
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
-    let submissions = federation_submissions(state, &events).await;
-    if submissions.is_empty() {
+    let Some(submissions) = federation_submissions(state, &events, None).await else {
         return None;
-    }
+    };
     let body = EventsSubmitFederationRequestBody {
         service_binding_ref,
         events: submissions,
@@ -946,14 +951,14 @@ struct DynamicPeerEventTarget {
     service_id: String,
     membership_frontier: Vec<String>,
     delivery_binding_frontier: Vec<String>,
+    realm_sync_endpoint: bool,
 }
 
-fn dynamic_peer_event_targets(
+async fn dynamic_peer_event_targets(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
-    envelope: &Value,
 ) -> Vec<DynamicPeerEventTarget> {
-    let service_frontiers = {
+    let mut service_frontiers = {
         let projection = state.projections().snapshot();
         // sync/federation.md §4.4 — peers whose federation service delegation
         // for this Realm has been revoked MUST NOT receive future outbound
@@ -974,16 +979,7 @@ fn dynamic_peer_event_targets(
         };
         let mut service_frontiers: BTreeMap<String, (BTreeSet<String>, BTreeSet<String>)> =
             BTreeMap::new();
-        // Directed invites materialize a routable delivery binding before the
-        // invitee accepts. Keep that peer in the replication set during the
-        // invite -> join hand-off so Events accepted in the outbox latency
-        // window are not permanently missed. Read visibility remains gated by
-        // the receiver's membership/history policy.
-        for member in projection
-            .members_of_realm(&parsed.realm_id)
-            .into_iter()
-            .chain(projection.members_in_state(&parsed.realm_id, "invite"))
-        {
+        for member in projection.members_of_realm(&parsed.realm_id) {
             if member.delivery_status.as_deref() != Some("routable") {
                 continue;
             }
@@ -1015,38 +1011,65 @@ fn dynamic_peer_event_targets(
             }
         }
 
-        // A directed `ak.invite.create` is routable even before the invitee's
-        // member projection exists locally. Its canonical delivery target is
-        // carried in the event payload, so include that peer as a fanout
-        // target with the operation id as the fallback frontier. This keeps
-        // the service-binding precondition typed while allowing the recipient
-        // Principal Server to project the pending invite.
-        if parsed.kind == "ak.invite.create"
-            && let Some(service_id) = envelope
-                .get("payload")
-                .and_then(Value::as_object)
-                .and_then(|payload| payload.get("invite_delivery_target"))
-                .and_then(Value::as_object)
-                .and_then(|target| target.get("recipient_service_id"))
-                .and_then(Value::as_str)
-                .map(str::trim)
-                .filter(|did| !did.is_empty())
-            && service_id != state.service_id()
-            && !revoked_peers.contains(service_id)
-        {
-            service_frontiers.entry(service_id.to_owned()).or_default();
-        }
         service_frontiers
     };
+
+    // Realm-level `sync_endpoints` are the canonical replication binding for
+    // mirrors and shared sync services. They are independent of member-level
+    // delivery bindings and are available from the accepted Realm-create
+    // Event even before any remote member joins.
+    let mut endpoint_urls = BTreeMap::new();
+    let mut realm_sync_endpoint_service_ids = BTreeSet::new();
+    if let Ok(records) = state
+        .event_queries()
+        .realm_events_newest_first(&parsed.realm_id)
+        .await
+        && let Some(create) = records
+            .iter()
+            .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        && let Some(endpoints) = create
+            .envelope
+            .pointer("/payload/object/sync_endpoints")
+            .and_then(Value::as_array)
+    {
+        for endpoint in endpoints {
+            let Some(service_id) = endpoint
+                .get("did")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            if service_id == state.service_id() {
+                continue;
+            }
+            let Some(url) = endpoint
+                .get("endpoint")
+                .and_then(Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            else {
+                continue;
+            };
+            let entry = service_frontiers.entry(service_id.to_owned()).or_default();
+            entry.0.insert(create.event_id.clone());
+            entry.1.insert(create.event_id.clone());
+            endpoint_urls.insert(service_id.to_owned(), url.to_owned());
+            realm_sync_endpoint_service_ids.insert(service_id.to_owned());
+        }
+    }
 
     service_frontiers
         .into_iter()
         .filter_map(
             |(service_id, (membership_frontier, delivery_binding_frontier))| {
-                let url = match crate::routing::federation::federation::peer_url_for_service_id(
-                    state,
-                    &service_id,
-                ) {
+                let url = match endpoint_urls.remove(&service_id).or_else(|| {
+                    crate::routing::federation::federation::peer_url_for_service_id(
+                        state,
+                        &service_id,
+                    )
+                }) {
                     Some(url) => url,
                     None => {
                         tracing::warn!(
@@ -1058,11 +1081,13 @@ fn dynamic_peer_event_targets(
                         return None;
                     }
                 };
+                let realm_sync_endpoint = realm_sync_endpoint_service_ids.contains(&service_id);
                 Some(DynamicPeerEventTarget {
                     url,
                     service_id,
                     membership_frontier: membership_frontier.into_iter().collect(),
                     delivery_binding_frontier: delivery_binding_frontier.into_iter().collect(),
+                    realm_sync_endpoint,
                 })
             },
         )

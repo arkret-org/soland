@@ -12,6 +12,7 @@ pub(crate) use enrollment::{
 };
 #[cfg(test)]
 pub(crate) use envelope::validate_event_envelope;
+pub(in crate::routing) use envelope::validate_private_invite_envelope;
 pub(crate) use envelope::{canonical_json_hash, validate_event_envelope_with_context};
 #[cfg(test)]
 pub(super) use envelope::{

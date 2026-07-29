@@ -103,7 +103,6 @@ and rollout-only switches that should be managed deliberately.
 | `SOLAND_FEDERATION_DENYLIST` | empty | Comma-separated federation host/service denylist. |
 | `SOLAND_FEDERATION_FANOUT_TOPOLOGY` | `mesh` | Federation fanout topology (`mesh` or `hub`). |
 | `SOLAND_FEDERATION_PEER_DENYLIST` | empty | Additional comma-separated peer denylist. |
-| `SOLAND_FEDERATION_REPLICA_OBSERVER` | `false` | Admit inbound pushes as pure replication when this deployment has no locally bound member. |
 | `SOLAND_HEALTHCHECK_URL` | derived from `SOLAND_BIND` | URL used by the built-in healthcheck command. |
 | `SOLAND_ICE_STUN_URLS` | `stun:stun.l.google.com:19302` | Comma-separated STUN URLs advertised in signed ICE configs. |
 | `SOLAND_ICE_TTL_SECONDS` | `300` | Lifetime of an issued ICE config / TURN credential before refresh; non-positive falls back to default. |

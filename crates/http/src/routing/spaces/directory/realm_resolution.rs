@@ -713,21 +713,133 @@ pub(super) async fn join_candidates_for_resolved_realm(
         control_event_set_root: seal.control_event_set_root.clone(),
         state_root: seal.state_root.clone(),
     };
-    vec![RealmJoinCandidate {
-        realm_id: realm_id_typed,
-        service_id: Did::new(state.service_id().clone()).expect("service DID is validated"),
-        service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
-        role: RealmJoinCandidateRole::Primary,
-        endpoint: Some(state.config().public_base_url.clone()),
-        operations: vec!["ak.self.events.command.submit".to_owned()],
-        join_methods,
-        priority: Some(0),
-        source: RealmJoinCandidateSource::DirectoryIngest,
-        source_refs: Vec::new(),
-        frontier_ref: None,
-        seal_basis,
-        as_of: observed_at,
-        expires_at: observed_at + chrono::Duration::minutes(10),
-        proofs: Vec::new(),
-    }]
+    let authority_dids = crate::notary::NotaryWorker::for_service(state.service_id().clone())
+        .current_notary_profile_for_events(state, &realm_id_typed, &[])
+        .ok()
+        .flatten()
+        .map(|(profile, _)| match profile {
+            arkret_wire::notary::NotaryValue::SingleDid { did, .. } => {
+                BTreeSet::from([did.to_string()])
+            }
+            arkret_wire::notary::NotaryValue::Threshold { members, .. }
+            | arkret_wire::notary::NotaryValue::OpenSet { members } => members
+                .into_iter()
+                .map(|member| member.to_string())
+                .collect(),
+            arkret_wire::notary::NotaryValue::Mixed {
+                did,
+                recovery_members,
+            } => std::iter::once(did.to_string())
+                .chain(
+                    recovery_members
+                        .into_iter()
+                        .map(|member| member.to_string()),
+                )
+                .collect(),
+        })
+        .unwrap_or_default();
+    if authority_dids.is_empty() {
+        return Vec::new();
+    }
+
+    let mut candidates = Vec::new();
+    let records = state
+        .event_queries()
+        .realm_events_newest_first(realm_id)
+        .await
+        .unwrap_or_default();
+    if let Some(create) = records
+        .iter()
+        .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+    {
+        let source_ref = EventId::new(create.event_id.clone()).ok();
+        if let Some(endpoints) = create
+            .envelope
+            .pointer("/payload/object/sync_endpoints")
+            .and_then(Value::as_array)
+        {
+            for endpoint in endpoints {
+                let Some(service_id) = endpoint
+                    .get("did")
+                    .and_then(Value::as_str)
+                    .filter(|did| authority_dids.contains(*did))
+                    .and_then(|did| Did::new(did.to_owned()).ok())
+                else {
+                    continue;
+                };
+                let Some((service_kind, role)) = join_candidate_endpoint_kind_role(endpoint) else {
+                    continue;
+                };
+                candidates.push(RealmJoinCandidate {
+                    realm_id: realm_id_typed.clone(),
+                    service_id,
+                    service_kind,
+                    role,
+                    endpoint: endpoint
+                        .get("endpoint")
+                        .and_then(Value::as_str)
+                        .map(ToOwned::to_owned),
+                    operations: vec!["ak.self.events.command.submit".to_owned()],
+                    join_methods: join_methods.clone(),
+                    priority: Some(match role {
+                        RealmJoinCandidateRole::Primary | RealmJoinCandidateRole::Notary => 0,
+                        _ => 10,
+                    }),
+                    source: RealmJoinCandidateSource::RealmSyncEndpoint,
+                    source_refs: source_ref.clone().into_iter().collect(),
+                    frontier_ref: None,
+                    seal_basis: seal_basis.clone(),
+                    as_of: observed_at,
+                    expires_at: observed_at + chrono::Duration::minutes(10),
+                    proofs: Vec::new(),
+                });
+            }
+        }
+    }
+
+    if candidates.is_empty() && authority_dids.contains(state.service_id()) {
+        candidates.push(RealmJoinCandidate {
+            realm_id: realm_id_typed,
+            service_id: Did::new(state.service_id().clone()).expect("service DID is validated"),
+            service_kind: RealmJoinCandidateServiceKind::PrincipalServer,
+            role: RealmJoinCandidateRole::Primary,
+            endpoint: Some(state.config().public_base_url.clone()),
+            operations: vec!["ak.self.events.command.submit".to_owned()],
+            join_methods,
+            priority: Some(0),
+            source: RealmJoinCandidateSource::DirectoryIngest,
+            source_refs: Vec::new(),
+            frontier_ref: None,
+            seal_basis,
+            as_of: observed_at,
+            expires_at: observed_at + chrono::Duration::minutes(10),
+            proofs: Vec::new(),
+        });
+    }
+    candidates.sort_by(|left, right| {
+        left.priority
+            .cmp(&right.priority)
+            .then_with(|| left.service_id.as_str().cmp(right.service_id.as_str()))
+    });
+    candidates
+}
+
+fn join_candidate_endpoint_kind_role(
+    endpoint: &Value,
+) -> Option<(RealmJoinCandidateServiceKind, RealmJoinCandidateRole)> {
+    let service_kind = match endpoint.get("service_kind").and_then(Value::as_str)? {
+        "principal_server" => RealmJoinCandidateServiceKind::PrincipalServer,
+        "sync_node" => RealmJoinCandidateServiceKind::SyncNode,
+        "notary" => RealmJoinCandidateServiceKind::Notary,
+        _ => return None,
+    };
+    let role = match endpoint.get("role").and_then(Value::as_str)? {
+        "primary" => RealmJoinCandidateRole::Primary,
+        "mirror" => RealmJoinCandidateRole::Mirror,
+        "notary" => RealmJoinCandidateRole::Notary,
+        "sync" => RealmJoinCandidateRole::Sync,
+        "federation_peer" => RealmJoinCandidateRole::FederationPeer,
+        _ => return None,
+    };
+    Some((service_kind, role))
 }
