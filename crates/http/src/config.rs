@@ -799,9 +799,9 @@ impl AppConfig {
         let account_authority_url = env_non_empty("SOLAND_ACCOUNT_AUTHORITY_URL");
         let account_authority_enrollment_did =
             env_non_empty("SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID");
-        if account_authority_url.is_some() != account_authority_enrollment_did.is_some() {
+        if account_authority_url.is_none() && account_authority_enrollment_did.is_some() {
             anyhow::bail!(
-                "SOLAND_ACCOUNT_AUTHORITY_URL and SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID must be set together"
+                "SOLAND_ACCOUNT_AUTHORITY_ENROLLMENT_DID requires SOLAND_ACCOUNT_AUTHORITY_URL"
             );
         }
         if let Some(value) = account_authority_enrollment_did.as_deref() {

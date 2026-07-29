@@ -1,9 +1,10 @@
+use arkret_models_identity::service_identity::{CanonicalServiceUrl, ServiceRegistrationKey};
 use arkret_wire::{
     AcceptedStep, EnrollmentAuthorityRecoveryPlan, MAX_RECOVERY_AUTHORITY_TICKET_TTL_SECONDS,
     RECOVERY_AUTHORITY_TICKET_SIGNED_FIELDS, RecoveryAuthorityTicket,
     RecoveryAuthorityTicketAuthData, RecoveryAuthorityTicketIssueRequest, RecoveryBinding,
     RecoveryPreparedPlan, SecurityTransactionBinding, SecurityTransactionPreparedPlan,
-    SecurityTransactionState, SecurityTransactionStep, ServiceSignatureAlgorithm,
+    SecurityTransactionState, SecurityTransactionStep, ServiceKind, ServiceSignatureAlgorithm,
 };
 use chrono::Duration;
 use ed25519_dalek::Signer as _;
@@ -2214,20 +2215,6 @@ async fn continue_authorize_recovery_device(
         .with_wire_code("duplicate_conflict"));
     }
 
-    let configured_authority_id = state
-        .config()
-        .account_authority_enrollment_did
-        .as_deref()
-        .ok_or_else(|| {
-            AppError::internal("Account Authority service binding is not configured")
-                .with_status(StatusCode::SERVICE_UNAVAILABLE)
-        })?;
-    if configured_authority_id != participant_request.ticket.account_authority_id.as_str() {
-        return Err(AppError::conflict(
-            "durable Account Authority id does not match the trusted service binding",
-        )
-        .with_wire_code("recovery_authority_audience_mismatch"));
-    }
     let authority_base = state
         .config()
         .account_authority_url
@@ -2236,6 +2223,43 @@ async fn continue_authorize_recovery_device(
             AppError::internal("Account Authority endpoint is not configured")
                 .with_status(StatusCode::SERVICE_UNAVAILABLE)
         })?;
+    let configured_authority_id = match state.config().account_authority_enrollment_did.as_deref() {
+        Some(authority_id) => authority_id.to_owned(),
+        None => {
+            let registration_key = ServiceRegistrationKey::new(
+                ServiceKind::AuthServer,
+                CanonicalServiceUrl::canonicalize(authority_base).map_err(|error| {
+                    AppError::internal(format!(
+                        "Account Authority endpoint is not canonical: {error}"
+                    ))
+                })?,
+            )
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "Account Authority service registration key is invalid: {error}"
+                ))
+            })?;
+            state
+                .dids()
+                .service_registration(&registration_key)
+                .await
+                .map_err(recovery_service_error)?
+                .ok_or_else(|| {
+                    AppError::internal(
+                        "Account Authority service registration is not available yet",
+                    )
+                    .with_status(StatusCode::SERVICE_UNAVAILABLE)
+                })?
+                .service_id
+                .to_string()
+        }
+    };
+    if configured_authority_id != participant_request.ticket.account_authority_id.as_str() {
+        return Err(AppError::conflict(
+            "durable Account Authority id does not match the trusted service binding",
+        )
+        .with_wire_code("recovery_authority_audience_mismatch"));
+    }
 
     state
         .security_transactions()
