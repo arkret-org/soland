@@ -629,6 +629,14 @@ async fn events_frontier(
                 )
                 .with_status(StatusCode::SERVICE_UNAVAILABLE));
             };
+            let governance_policy =
+                crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
+                    .await
+                    .map_err(|error| {
+                        AppError::internal(format!(
+                            "control governance policy unavailable: {error}"
+                        ))
+                    })?;
             let frontier = RealmSealFrontierView::new(
                 realm_id,
                 seal.id.clone(),
@@ -636,7 +644,11 @@ async fn events_frontier(
                 seal.state_root.clone(),
                 state
                     .projections()
-                    .control_governance_health(&seal.realm_id, chrono::Utc::now())
+                    .control_governance_health(
+                        &seal.realm_id,
+                        chrono::Utc::now(),
+                        governance_policy,
+                    )
                     .map_err(|error| {
                         AppError::internal(format!(
                             "control governance health unavailable: {error}"
@@ -688,6 +700,12 @@ async fn events_frontier(
                 }
                 Err(error) => return Err(error),
             };
+        let governance_policy =
+            crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("control governance policy unavailable: {error}"))
+                })?;
         return soland_http::result::json_ok(EventsFrontierAccountClientState {
             frontier: EventsFrontierView::RealmSeal(RealmSealFrontierView::new(
                 realm_id.clone(),
@@ -696,7 +714,7 @@ async fn events_frontier(
                 seal.state_root,
                 state
                     .projections()
-                    .control_governance_health(&realm_id, chrono::Utc::now())
+                    .control_governance_health(&realm_id, chrono::Utc::now(), governance_policy)
                     .map_err(|error| {
                         AppError::internal(format!(
                             "control governance health unavailable: {error}"

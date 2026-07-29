@@ -16,7 +16,9 @@ use arkret_state::state::{
 use arkret_state::{CellRegistry, CellStore, EffectiveSealView};
 use arkret_wire::cba::ProjectedCellWrite;
 use arkret_wire::event_envelope::Event;
-use arkret_wire::{ControlProposalDecision, ControlProposalReceipt, Seal};
+use arkret_wire::{
+    ControlProposalDecision, ControlProposalDecisionPolicy, ControlProposalReceipt, Seal,
+};
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
 use serde_json::Value;
@@ -549,6 +551,7 @@ impl ProjectionService {
         &self,
         realm_id: &RealmId,
         observed_at: DateTime<Utc>,
+        policy: ControlProposalDecisionPolicy,
     ) -> StoreResult<ControlGovernanceHealth> {
         let records = self.pending_control_records(
             realm_id,
@@ -667,7 +670,7 @@ impl ProjectionService {
             retained_faults,
         };
         health
-            .validate(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
+            .validate(policy)
             .map_err(|error| arkret_state::state::StoreError::Conflict(error.to_string()))?;
         Ok(health)
     }
