@@ -298,32 +298,36 @@ impl crate::identity::AccountDataPort for PersistenceAccountData {
             .collect())
     }
 
-    async fn save_entry(
+    async fn compare_and_set(
         &self,
         entry: crate::identity::AccountDataState,
-    ) -> crate::ServiceResult<()> {
-        self.0
+        expected_revision: u64,
+    ) -> crate::ServiceResult<crate::identity::AccountDataCasOutcome> {
+        let outcome = self
+            .0
             .account_data()
-            .put(&soland_storage::AccountDataRecord {
-                actor: entry.actor_id,
-                account_data_key: entry.account_data_key,
-                payload: entry.payload,
-                updated_at: entry.updated_at,
-            })
+            .compare_and_set(
+                &soland_storage::AccountDataRecord {
+                    actor: entry.actor_id,
+                    account_data_key: entry.account_data_key,
+                    revision: entry.revision,
+                    payload: entry.payload,
+                    tombstone: entry.tombstone,
+                    updated_at: entry.updated_at,
+                },
+                expected_revision,
+            )
             .await?;
-        Ok(())
-    }
-
-    async fn delete_entry(
-        &self,
-        actor_id: &str,
-        account_data_key: &str,
-    ) -> crate::ServiceResult<()> {
-        self.0
-            .account_data()
-            .delete(actor_id, account_data_key)
-            .await?;
-        Ok(())
+        Ok(match outcome {
+            soland_storage::AccountDataCasResult::Applied(record) => {
+                crate::identity::AccountDataCasOutcome::Applied(application_account_data(record))
+            }
+            soland_storage::AccountDataCasResult::Conflict(record) => {
+                crate::identity::AccountDataCasOutcome::Conflict(
+                    record.map(application_account_data),
+                )
+            }
+        })
     }
 }
 
@@ -333,7 +337,9 @@ fn application_account_data(
     crate::identity::AccountDataState {
         actor_id: record.actor,
         account_data_key: record.account_data_key,
+        revision: record.revision,
         payload: record.payload,
+        tombstone: record.tombstone,
         updated_at: record.updated_at,
     }
 }

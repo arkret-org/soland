@@ -248,6 +248,8 @@ pub struct AppError {
     /// `signature_window_invalid`), where `error.code` stays the generic
     /// `unauthenticated` and the discriminator travels in `reason`.
     pub top_level_reason: Option<Box<str>>,
+    /// Typed protocol details inserted into `error.details`.
+    pub wire_details: std::collections::BTreeMap<String, serde_json::Value>,
 }
 
 impl AppError {
@@ -261,6 +263,7 @@ impl AppError {
             reason_detail: None,
             private_detail: None,
             top_level_reason: None,
+            wire_details: std::collections::BTreeMap::new(),
         }
     }
 
@@ -305,6 +308,18 @@ impl AppError {
     /// failure code while `error.code` stays generic.
     pub fn with_top_level_reason(mut self, reason: impl Into<String>) -> Self {
         self.top_level_reason = Some(reason.into().into_boxed_str());
+        self
+    }
+
+    #[must_use]
+    pub fn with_wire_detail(
+        mut self,
+        key: impl Into<String>,
+        value: impl serde::Serialize,
+    ) -> Self {
+        if let Ok(value) = serde_json::to_value(value) {
+            self.wire_details.insert(key.into(), value);
+        }
         self
     }
 
@@ -416,7 +431,28 @@ impl Writer for AppError {
                 .then_some(self.private_detail.as_deref())
                 .flatten()
         });
-        if let Some(reason) = self.top_level_reason.as_deref() {
+        if !self.wire_details.is_empty() {
+            let mut envelope =
+                arkret_wire::problem_details::ErrorEnvelope::new(&wire, public_message)
+                    .with_request_id(request_id());
+            for (key, value) in self.wire_details {
+                envelope = envelope.with_detail(key, value);
+            }
+            if let Some(reason_code) = self.reason_code.as_deref() {
+                envelope = envelope.with_detail(
+                    "reason_code",
+                    serde_json::Value::String(reason_code.to_owned()),
+                );
+            }
+            if let Some(reason_detail) = wire_reason_detail {
+                envelope = envelope.with_detail(
+                    "reason_detail",
+                    serde_json::Value::String(reason_detail.to_owned()),
+                );
+            }
+            res.status_code(status);
+            res.render(Json(envelope));
+        } else if let Some(reason) = self.top_level_reason.as_deref() {
             render_error_with_top_level_reason(
                 res,
                 status,

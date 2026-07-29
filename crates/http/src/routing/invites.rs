@@ -44,7 +44,9 @@ use soland_services::events::{
     InviteLocatorRotateCommand as InviteLocatorRotateMutation,
     InviteLocatorState as InviteLocatorRecord,
 };
-use soland_services::identity::{AccountDataState, SessionIdentityState as SessionRecord};
+use soland_services::identity::{
+    AccountDataCasOutcome, AccountDataState, SessionIdentityState as SessionRecord,
+};
 
 use crate::routing::identity::device_messages::{
     ACCOUNT_DATA_UPDATE_TYPE, fanout_actor_private_update,
@@ -621,13 +623,22 @@ async fn persist_invite_quarantine_entry(
     let record = AccountDataState {
         actor_id: subject.to_owned(),
         account_data_key: ACCOUNT_DATA_KEY_INVITE_QUARANTINE.to_owned(),
+        revision: existing.as_ref().map_or(1, |record| record.revision + 1),
         payload,
+        tombstone: false,
         updated_at: received_at,
     };
-    account_data
-        .save_entry(record.clone())
+    let expected_revision = existing.as_ref().map_or(0, |record| record.revision);
+    let applied = account_data
+        .compare_and_set(record.clone(), expected_revision)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let AccountDataCasOutcome::Applied(record) = applied else {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "invite quarantine account data changed concurrently",
+        ));
+    };
     fanout_actor_private_update(
         state,
         subject,
@@ -636,6 +647,7 @@ async fn persist_invite_quarantine_entry(
         json!({
             "operation": "put",
             "account_data_key": ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
+            "revision": record.revision,
             "content": record.payload.clone(),
             "updated_at": record.updated_at,
         }),

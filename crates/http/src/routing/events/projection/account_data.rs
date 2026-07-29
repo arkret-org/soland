@@ -1,6 +1,6 @@
 use arkret_event_draft::Operation;
 use serde_json::{Value, json};
-use soland_services::identity::AccountDataState;
+use soland_services::identity::{AccountDataCasOutcome, AccountDataState};
 use soland_services::operation_semantics as kinds;
 
 use crate::routing::identity::device_messages::{
@@ -117,66 +117,82 @@ pub(super) async fn project_account_data_set(
         );
         return;
     }
-    if operation
+    let Some(expected_revision) = operation
+        .payload
+        .get("expected_revision")
+        .and_then(Value::as_u64)
+    else {
+        tracing::warn!(
+            owner,
+            account_data_key,
+            "account_data Event missing expected_revision"
+        );
+        return;
+    };
+    let Some(revision) = expected_revision.checked_add(1) else {
+        tracing::warn!(owner, account_data_key, "account_data revision exhausted");
+        return;
+    };
+    let tombstone = operation
         .payload
         .get("tombstone")
         .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        if let Err(error) = state
-            .account_data()
-            .delete_entry(owner, account_data_key)
-            .await
-        {
-            tracing::warn!(%error, owner, account_data_key, "failed to tombstone account_data from event");
+        .unwrap_or(false);
+    let content = if tombstone {
+        Value::Null
+    } else {
+        let Some(content) = operation
+            .payload
+            .get("body")
+            .or_else(|| operation.payload.get("encrypted_payload"))
+            .cloned()
+        else {
             return;
-        }
-        if !source_device_id.is_empty() {
-            fanout_actor_private_update(
-                state,
-                owner,
-                source_device_id,
-                account_data_update_type(account_data_key),
-                json!({
-                    "operation": "delete",
-                    "account_data_key": account_data_key,
-                    "deleted_at": operation.created_at,
-                }),
-            )
-            .await;
-        }
-        return;
-    }
-    let Some(content) = operation
-        .payload
-        .get("body")
-        .or_else(|| operation.payload.get("encrypted_payload"))
-        .or_else(|| operation.payload.get("encrypted_content"))
-        .cloned()
-    else {
-        return;
+        };
+        content
     };
     let record = AccountDataState {
         actor_id: owner.to_owned(),
         account_data_key: account_data_key.to_owned(),
+        revision,
         payload: content,
+        tombstone,
         updated_at: operation.created_at,
     };
-    if let Err(error) = state.account_data().save_entry(record.clone()).await {
-        tracing::warn!(%error, owner, account_data_key, "failed to project account_data from event");
-        return;
-    }
+    let applied = match state
+        .account_data()
+        .compare_and_set(record.clone(), expected_revision)
+        .await
+    {
+        Ok(AccountDataCasOutcome::Applied(applied)) => applied,
+        Ok(AccountDataCasOutcome::Conflict(current)) => {
+            tracing::warn!(
+                owner,
+                account_data_key,
+                expected_revision,
+                current_revision = current.as_ref().map_or(0, |value| value.revision),
+                "rejected stale account_data Event projection"
+            );
+            return;
+        }
+        Err(error) => {
+            tracing::warn!(%error, owner, account_data_key, "failed to project account_data from event");
+            return;
+        }
+    };
     if !source_device_id.is_empty() {
+        let operation_name = if tombstone { "delete" } else { "put" };
         fanout_actor_private_update(
             state,
             owner,
             source_device_id,
             account_data_update_type(account_data_key),
             json!({
-                "operation": "put",
+                "operation": operation_name,
                 "account_data_key": account_data_key,
-                "content": record.payload.clone(),
-                "updated_at": record.updated_at,
+                "revision": applied.revision,
+                "content": (!tombstone).then_some(applied.payload.clone()),
+                "updated_at": applied.updated_at,
             }),
         )
         .await;

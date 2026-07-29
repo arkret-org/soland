@@ -153,8 +153,16 @@ pub struct RegisterAccountCommand {
 pub struct AccountDataState {
     pub actor_id: String,
     pub account_data_key: String,
+    pub revision: u64,
     pub payload: Value,
+    pub tombstone: bool,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AccountDataCasOutcome {
+    Applied(AccountDataState),
+    Conflict(Option<AccountDataState>),
 }
 
 #[async_trait]
@@ -165,8 +173,11 @@ pub trait AccountDataPort: Send + Sync {
         account_data_key: &str,
     ) -> ServiceResult<Option<AccountDataState>>;
     async fn entries_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<AccountDataState>>;
-    async fn save_entry(&self, entry: AccountDataState) -> ServiceResult<()>;
-    async fn delete_entry(&self, actor_id: &str, account_data_key: &str) -> ServiceResult<()>;
+    async fn compare_and_set(
+        &self,
+        entry: AccountDataState,
+        expected_revision: u64,
+    ) -> ServiceResult<AccountDataCasOutcome>;
 }
 
 #[derive(Clone)]
@@ -731,13 +742,13 @@ impl AccountDataService {
         self.account_data.entries_for_actor(actor_id).await
     }
 
-    pub async fn save_entry(&self, entry: AccountDataState) -> ServiceResult<()> {
-        self.account_data.save_entry(entry).await
-    }
-
-    pub async fn delete_entry(&self, actor_id: &str, account_data_key: &str) -> ServiceResult<()> {
+    pub async fn compare_and_set(
+        &self,
+        entry: AccountDataState,
+        expected_revision: u64,
+    ) -> ServiceResult<AccountDataCasOutcome> {
         self.account_data
-            .delete_entry(actor_id, account_data_key)
+            .compare_and_set(entry, expected_revision)
             .await
     }
 }

@@ -77,13 +77,17 @@ async fn put_account_data(
     state: AppState,
     token: &str,
     account_data_key: &str,
+    expected_revision: u64,
     content: Value,
 ) -> (StatusCode, Value) {
     let mut response = TestClient::put(format!(
         "http://server/_arkret/self/account_data/{account_data_key}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
-    .json(&json!({ "content": content }))
+    .json(&json!({
+        "expected_revision": expected_revision,
+        "content": content
+    }))
     .send(&app_from_state(state))
     .await;
     let status = response.status_code.expect("account_data PUT status");
@@ -354,16 +358,46 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         state.clone(),
         &desktop,
         account_data_key,
+        0,
         json!({ "version": 1, "label": "first" }),
     )
     .await;
     assert_eq!(first_status, StatusCode::CREATED, "first PUT: {first}");
     assert_eq!(first["content"]["version"], 1);
 
-    let (second_status, second) =
-        put_account_data(state.clone(), &desktop, account_data_key, json!("second")).await;
+    let (second_status, second) = put_account_data(
+        state.clone(),
+        &desktop,
+        account_data_key,
+        first["revision"].as_u64().unwrap(),
+        json!("second"),
+    )
+    .await;
     assert_eq!(second_status, StatusCode::OK, "second PUT: {second}");
     assert_eq!(second["content"], "second");
+
+    let (stale_status, stale) = put_account_data(
+        state.clone(),
+        &desktop,
+        account_data_key,
+        first["revision"].as_u64().unwrap(),
+        json!("stale retry"),
+    )
+    .await;
+    assert_eq!(stale_status, StatusCode::CONFLICT, "{stale}");
+    assert_eq!(stale["error"]["code"], "cas_conflict");
+    assert_eq!(
+        stale["error"]["details"]["account_data_key"],
+        account_data_key
+    );
+    assert_eq!(
+        stale["error"]["details"]["current_revision"],
+        second["revision"]
+    );
+    assert_eq!(
+        stale["error"]["details"]["current_entry"]["content"],
+        "second"
+    );
 
     let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     let event = account_data_entry(&phone_sync, account_data_key)
@@ -377,6 +411,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         Some(state.service_id().as_str())
     );
     assert_eq!(event["payload"]["owner"], actor);
+    assert_eq!(event["payload"]["expected_revision"], 1);
     assert_eq!(event["payload"]["body"], "second");
     assert!(
         event["proofs"]
@@ -387,12 +422,6 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     serde_json::from_value::<arkret_wire::Event>(event.clone())
         .expect("sync account_data entry is a typed canonical Event");
 
-    state
-        .test_persistence()
-        .account_data()
-        .delete(&actor, account_data_key)
-        .await
-        .expect("simulate rebuildable projection loss");
     let rebuilt_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     assert_eq!(
         account_data_entry(&rebuilt_sync, account_data_key).map(|entry| &entry["payload"]["body"]),
@@ -401,7 +430,8 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     );
 
     let mut delete = TestClient::delete(format!(
-        "http://server/_arkret/self/account_data/{account_data_key}"
+        "http://server/_arkret/self/account_data/{account_data_key}?expected_revision={}",
+        second["revision"].as_u64().unwrap()
     ))
     .add_header("authorization", format!("Bearer {desktop}"), true)
     .send(&app_from_state(state.clone()))
@@ -409,6 +439,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     assert_eq!(delete.status_code, Some(StatusCode::OK));
     let delete_body: Value = delete.take_json().await.unwrap();
     assert_eq!(delete_body["ok"], true);
+    assert_eq!(delete_body["revision"], 3);
 
     let after_delete = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     assert!(account_data_entry(&after_delete, account_data_key).is_none());
@@ -488,6 +519,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "ak.account_data.set",
         json!({
             "key": "ak.account.blocklist",
+            "expected_revision": 0,
             "owner": alice_actor,
             "body": plaintext_blocklist,
             "updated_at": "2026-05-21T00:00:00.000Z",
@@ -510,6 +542,7 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
         "ak.account_data.set",
         json!({
             "key": "ak.account.blocklist",
+            "expected_revision": 0,
             "owner": alice_actor,
             "body": encrypted_blocklist.clone(),
             "updated_at": "2026-05-21T00:00:00.000Z",
@@ -532,6 +565,45 @@ async fn blocklist_account_data_requires_encrypted_carrier_and_fans_out_opaque()
             .any(|record| record.account_data_key == "ak.account.blocklist"),
         "account_data projection must persist encrypted blocklist after accepted event: {stored_account_data:?}"
     );
+    let stale = submit_actor_private_event(
+        state.clone(),
+        &alice_desktop,
+        &alice_actor,
+        "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        &realm_id,
+        "ak.account_data.set",
+        json!({
+            "key": "ak.account.blocklist",
+            "expected_revision": 0,
+            "owner": alice_actor,
+            "body": encrypted_account_data_value(
+                &alice_actor,
+                "ak.account.blocklist",
+                &json!({"version": 1, "entries": []}),
+            ),
+            "updated_at": "2026-05-21T00:00:01.000Z",
+        }),
+    )
+    .await;
+    assert_eq!(stale["error"]["code"], "cas_conflict", "{stale}");
+    assert_eq!(
+        stale["error"]["details"]["account_data_key"],
+        "ak.account.blocklist"
+    );
+    assert_eq!(stale["error"]["details"]["current_revision"], 1);
+    assert_eq!(
+        stale["error"]["details"]["current_entry"]["content"],
+        encrypted_blocklist
+    );
+    let current = state
+        .test_persistence()
+        .account_data()
+        .get(&alice_actor, "ak.account.blocklist")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(current.revision, 1);
+    assert_eq!(current.payload, encrypted_blocklist);
 
     let phone_sync = account_subscribe_frame(
         state.clone(),

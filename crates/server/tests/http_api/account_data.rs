@@ -37,6 +37,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.client.ui_state",
+            "expected_revision": 0,
             "owner": FRESH_DID,
             "body": body.clone(),
             "updated_at": "2026-06-08T00:00:00.000Z"
@@ -64,6 +65,7 @@ async fn account_data_accepts_fresh_principal_control_realm() {
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.client.ui_state",
+            "expected_revision": 0,
             "owner": "did:web:bob.example",
             "body": account_data_encrypted_value(
                 "did:web:bob.example",
@@ -123,6 +125,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "ak.account_data.set",
         serde_json::json!({
             "key": key.as_str(),
+            "expected_revision": 0,
             "owner": "did:web:alice.example",
             "encrypted_payload": remark.clone(),
             "updated_at": "2026-05-08T10:00:00.000Z"
@@ -159,6 +162,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "ak.account_data.set",
         serde_json::json!({
             "key": key.as_str(),
+            "expected_revision": 1,
             "owner": "did:web:alice.example",
             "encrypted_payload": updated_remark.clone(),
             "updated_at": "2026-05-09T10:00:00.000Z"
@@ -206,6 +210,7 @@ async fn encrypted_account_data_realm_remark_round_trip() {
         "ak.account_data.set",
         serde_json::json!({
             "key": key.as_str(),
+            "expected_revision": 2,
             "owner": "did:web:alice.example",
             "tombstone": true,
             "updated_at": "2026-05-10T10:00:00.000Z"
@@ -261,6 +266,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "ak.account_data.set",
         serde_json::json!({
             "key": key,
+            "expected_revision": 0,
             "owner": "did:web:alice.example",
             "encrypted_payload": envelope.clone(),
             "updated_at": "2026-06-18T00:00:00.000Z"
@@ -290,6 +296,7 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "ak.account_data.set",
         serde_json::json!({
             "key": key,
+            "expected_revision": 1,
             "owner": "did:web:alice.example",
             "encrypted_payload": {"ciphertext": "opaque"},
             "updated_at": "2026-06-18T00:01:00.000Z"
@@ -316,7 +323,10 @@ async fn encrypted_account_data_requires_standard_envelope_metadata() {
         "http://server/_arkret/self/account_data/{marker_key}"
     ))
     .add_header("authorization", format!("Bearer {alice}"), true)
-    .json(&serde_json::json!({"content": marker.clone()}))
+    .json(&serde_json::json!({
+        "expected_revision": 0,
+        "content": marker.clone()
+    }))
     .send(&app_from_state(state.clone()))
     .await;
     assert_eq!(response.status_code.unwrap().as_u16(), 400);
@@ -345,6 +355,7 @@ async fn encrypted_realm_remark_rejects_plaintext_carrier() {
         "ak.account_data.set",
         serde_json::json!({
             "key": key,
+            "expected_revision": 0,
             "owner": "did:web:alice.example",
             "encrypted_payload": {
                 "local_name": "Acme",
@@ -370,6 +381,7 @@ async fn account_data_requires_auth() {
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.contacts.realm.ak:realm:0196419b-0000-7000-8000-000000000000",
+            "expected_revision": 0,
             "owner": "did:web:alice.example",
             "body": {"local_name": "x"},
             "updated_at": "2026-05-08T10:00:00.000Z"

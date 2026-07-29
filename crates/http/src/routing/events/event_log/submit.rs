@@ -17,9 +17,11 @@ use crate::invite_claim_proofs::{
 /// entries; two actors hashing to the same shard merely serialize together,
 /// which is a safe superset of the required per-actor exclusion.
 const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
+const ACCOUNT_DATA_SUBMIT_LOCK_SHARDS: usize = 1024;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
+static ACCOUNT_DATA_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod identity_anchor;
@@ -42,6 +44,19 @@ fn actor_submit_lock(realm_id: &str, actor_id: &str) -> Arc<tokio::sync::Mutex<(
     std::hash::Hash::hash(realm_id, &mut hasher);
     std::hash::Hash::hash(actor_id, &mut hasher);
     let shard = (hasher.finish() as usize) % ACTOR_SUBMIT_LOCK_SHARDS;
+    locks[shard].clone()
+}
+
+fn account_data_submit_lock(owner: &str, key: &str) -> Arc<tokio::sync::Mutex<()>> {
+    let locks = ACCOUNT_DATA_SUBMIT_LOCKS.get_or_init(|| {
+        (0..ACCOUNT_DATA_SUBMIT_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(owner, &mut hasher);
+    std::hash::Hash::hash(key, &mut hasher);
+    let shard = (hasher.finish() as usize) % ACCOUNT_DATA_SUBMIT_LOCK_SHARDS;
     locks[shard].clone()
 }
 

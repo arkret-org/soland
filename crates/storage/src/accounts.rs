@@ -1,6 +1,6 @@
 use super::{
-    AccountDataRecord, AccountLifecycleRecord, AccountLocalpartRecord, AccountRecord,
-    PersistenceResult, async_trait,
+    AccountDataCasResult, AccountDataRecord, AccountLifecycleRecord, AccountLocalpartRecord,
+    AccountRecord, PersistenceResult, async_trait,
 };
 /// Trait for account storage operations.
 #[async_trait]
@@ -57,8 +57,13 @@ pub trait AccountDataStore: Send + Sync {
         actor: &str,
         account_data_key: &str,
     ) -> PersistenceResult<Option<AccountDataRecord>>;
-    async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()>;
-    async fn delete(&self, actor: &str, account_data_key: &str) -> PersistenceResult<()>;
+    /// Atomically replace the whole value when the stored revision equals
+    /// `expected_revision`. An absent key has revision 0.
+    async fn compare_and_set(
+        &self,
+        record: &AccountDataRecord,
+        expected_revision: u64,
+    ) -> PersistenceResult<AccountDataCasResult>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>>;
 }
 #[doc(hidden)]

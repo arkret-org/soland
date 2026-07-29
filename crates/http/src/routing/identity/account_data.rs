@@ -195,9 +195,50 @@ fn validate_account_data_key(account_data_key: &str) -> Result<(), AppError> {
 fn entry_from(record: AccountDataState) -> AccountDataRow {
     AccountDataRow {
         account_data_key: record.account_data_key,
+        revision: record.revision,
         content: record.payload,
         updated_at: record.updated_at,
     }
+}
+
+fn account_data_conflict_details(
+    account_data_key: &str,
+    current: Option<&AccountDataState>,
+) -> Value {
+    let current_revision = current.map_or(0, |record| record.revision);
+    let mut details = json!({
+        "account_data_key": account_data_key,
+        "current_revision": current_revision,
+    });
+    if let Some(record) = current.filter(|record| !record.tombstone) {
+        details["current_entry"] = serde_json::to_value(entry_from(record.clone()))
+            .expect("account data entry serialization cannot fail");
+    }
+    details
+}
+
+fn account_data_cas_conflict(
+    account_data_key: &str,
+    current: Option<&AccountDataState>,
+) -> AppError {
+    let details = account_data_conflict_details(account_data_key, current);
+    let mut error = AppError::new(
+        ErrorCode::CasConflict,
+        "expected_revision does not match current account data revision",
+    );
+    for (key, value) in details.as_object().expect("details is an object") {
+        error = error.with_wire_detail(key, value);
+    }
+    error
+}
+
+fn account_data_not_found(account_data_key: &str, current: Option<&AccountDataState>) -> AppError {
+    let details = account_data_conflict_details(account_data_key, current);
+    let mut error = AppError::not_found("not found");
+    for (key, value) in details.as_object().expect("details is an object") {
+        error = error.with_wire_detail(key, value);
+    }
+    error
 }
 
 async fn session_actor_is_agent_runtime(
@@ -233,9 +274,28 @@ async fn persist_account_data_event(
     session: &soland_services::identity::SessionIdentityState,
     account_data_key: &str,
     content: Option<Value>,
-) -> Result<(), AppError> {
+    expected_revision: u64,
+) -> Result<u64, AppError> {
     let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
     let _service_event_guard = service_event_lock.lock().await;
+    let current = state
+        .account_data()
+        .entry(&session.actor, account_data_key)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let current_revision = current.as_ref().map_or(0, |record| record.revision);
+    if current_revision != expected_revision {
+        return Err(account_data_cas_conflict(
+            account_data_key,
+            current.as_ref(),
+        ));
+    }
+    let revision = expected_revision.checked_add(1).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::CasConflict,
+            "account data revision high-water mark is exhausted",
+        )
+    })?;
     let service_actor = state.service_id().as_str();
     let realm_id = RealmId::new(soland_services::identity::principal_control_realm_for_did(
         &session.actor,
@@ -265,6 +325,7 @@ async fn persist_account_data_event(
     let mut payload = json!({
         "owner": session.actor,
         "key": account_data_key,
+        "expected_revision": expected_revision,
         "updated_at": arkret_canonical::format_timestamp_canonical(created_at),
     });
     if let Some(content) = content {
@@ -340,7 +401,7 @@ async fn persist_account_data_event(
         .with_status(error.status)
         .with_wire_code(error.code)
     })?;
-    Ok(())
+    Ok(revision)
 }
 
 #[endpoint(
@@ -378,6 +439,7 @@ async fn put_account_data(
     }
 
     let body = body.into_inner();
+    let expected_revision = body.expected_revision;
     validate_private_account_data_content_for_actor(
         &session.actor,
         &account_data_key,
@@ -402,9 +464,16 @@ async fn put_account_data(
         .entry(&session.actor, &account_data_key)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
-        .is_some();
+        .is_some_and(|record| !record.tombstone);
 
-    persist_account_data_event(state, &session, &account_data_key, Some(body.content)).await?;
+    persist_account_data_event(
+        state,
+        &session,
+        &account_data_key,
+        Some(body.content),
+        expected_revision,
+    )
+    .await?;
     let record = state
         .account_data()
         .entry(&session.actor, &account_data_key)
@@ -459,8 +528,8 @@ async fn get_account_data(
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     {
-        Some(record) => json_ok(entry_from(record)),
-        None => Err(AppError::not_found("not found")),
+        Some(record) if !record.tombstone => json_ok(entry_from(record)),
+        current => Err(account_data_not_found(&account_data_key, current.as_ref())),
     }
 }
 
@@ -511,6 +580,12 @@ async fn delete_account_data(
     let account_data_key = account_data_key.into_inner();
     validate_account_data_key(&account_data_key)?;
     validate_registered_account_data_key(&account_data_key)?;
+    let expected_revision = req.query::<u64>("expected_revision").ok_or_else(|| {
+        AppError::new(
+            ErrorCode::SchemaViolation,
+            "expected_revision query parameter is required",
+        )
+    })?;
 
     if is_controller_private_account_data_key(&account_data_key)
         && session_is_agent_context(state, &session).await?
@@ -519,8 +594,19 @@ async fn delete_account_data(
             "{account_data_key} is controller-private; agent runtimes cannot delete it"
         )));
     }
+    if arkret_schema::account_data_pattern(&account_data_key)
+        .is_some_and(|descriptor| descriptor.deletion_mode == "value_tombstone")
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "this account data type requires an in-value tombstone",
+        )
+        .with_reason_code("physical_delete_forbidden"));
+    }
 
-    persist_account_data_event(state, &session, &account_data_key, None).await?;
+    let revision =
+        persist_account_data_event(state, &session, &account_data_key, None, expected_revision)
+            .await?;
 
     super::append_audit_log(
         state,
@@ -533,6 +619,7 @@ async fn delete_account_data(
     json_ok(AccountDataDeleteOutcome {
         ok: true,
         account_data_key,
+        revision,
     })
 }
 

@@ -422,6 +422,7 @@ async fn push_profile_and_moderation_contracts_work() {
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.push_rules",
+            "expected_revision": 0,
             "owner": "did:web:alice.example",
             "body": {
                 "rules": [{
@@ -553,6 +554,7 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
         TestClient::put("http://server/_arkret/self/account_data/ak.presence.visibility")
             .add_header("authorization", format!("Bearer {token}"), true)
             .json(&serde_json::json!({
+                "expected_revision": 0,
                 "content": {
                     "presence_visibility": "nobody"
                 }
@@ -566,16 +568,21 @@ async fn presence_visibility_account_data_requires_encrypted_content_and_never_g
     state
         .test_persistence()
         .account_data()
-        .put(&soland_storage::AccountDataRecord {
-            actor: ALICE.to_owned(),
-            account_data_key: "ak.presence.visibility".to_owned(),
-            payload: serde_json::json!({
-                "encrypted_payload": {
-                    "ciphertext": "opaque-presence-policy"
-                }
-            }),
-            updated_at: chrono::Utc::now(),
-        })
+        .compare_and_set(
+            &soland_storage::AccountDataRecord {
+                actor: ALICE.to_owned(),
+                account_data_key: "ak.presence.visibility".to_owned(),
+                revision: 1,
+                payload: serde_json::json!({
+                    "encrypted_payload": {
+                        "ciphertext": "opaque-presence-policy"
+                    }
+                }),
+                tombstone: false,
+                updated_at: chrono::Utc::now(),
+            },
+            0,
+        )
         .await
         .unwrap();
 
@@ -968,6 +975,7 @@ async fn signal_fanout_is_filtered_by_signed_scope_only() {
         "ak.account_data.set",
         serde_json::json!({
             "key": "ak.account.blocklist",
+            "expected_revision": 0,
             "owner": bob,
             "body": serde_json::to_value(
                 arkret_crypto::account_data_crypto::seal_account_data_value_with_nonce(

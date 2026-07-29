@@ -1,7 +1,7 @@
 use super::{
-    AccountDataRecord, AccountDataStore, AccountLifecycleRecord, AccountLifecycleStore,
-    AccountLocalpartRecord, AccountLocalpartStore, AccountRecord, AccountStore, Arc, BTreeMap,
-    Mutex, PersistenceError, PersistenceResult, Utc, async_trait, ids,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
+    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
+    AccountStore, Arc, BTreeMap, Mutex, PersistenceError, PersistenceResult, Utc, async_trait, ids,
 };
 // In-memory account store
 pub(crate) type AccountLocalpartMemory = Arc<Mutex<BTreeMap<String, AccountLocalpartRecord>>>;
@@ -343,26 +343,37 @@ impl AccountDataStore for MemoryAccountDataStore {
             .cloned())
     }
 
-    async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
+    async fn compare_and_set(
+        &self,
+        record: &AccountDataRecord,
+        expected_revision: u64,
+    ) -> PersistenceResult<AccountDataCasResult> {
         let mut data = self.data.lock();
-        data.insert(
-            (record.actor.clone(), record.account_data_key.clone()),
-            record.clone(),
-        );
-        Ok(())
-    }
-
-    async fn delete(&self, actor: &str, account_data_key: &str) -> PersistenceResult<()> {
-        let mut data = self.data.lock();
-        data.remove(&(actor.to_owned(), account_data_key.to_owned()));
-        Ok(())
+        let key = (record.actor.clone(), record.account_data_key.clone());
+        let current = data.get(&key);
+        let current_revision = current.map_or(0, |value| value.revision);
+        if current_revision != expected_revision {
+            return Ok(AccountDataCasResult::Conflict(current.cloned()));
+        }
+        let Some(next_revision) = expected_revision.checked_add(1) else {
+            return Err(PersistenceError::Conflict(
+                "account_data revision exhausted".to_owned(),
+            ));
+        };
+        if record.revision != next_revision {
+            return Err(PersistenceError::Internal(
+                "account_data record revision must equal expected_revision + 1".to_owned(),
+            ));
+        }
+        data.insert(key, record.clone());
+        Ok(AccountDataCasResult::Applied(record.clone()))
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
         let data = self.data.lock();
         Ok(data
             .iter()
-            .filter(|((row_actor, _), _)| row_actor == actor)
+            .filter(|((row_actor, _), record)| row_actor == actor && !record.tombstone)
             .map(|(_, record)| record.clone())
             .collect())
     }

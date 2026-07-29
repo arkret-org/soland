@@ -8,9 +8,9 @@ pub(crate) use chrono::Utc;
 pub(crate) use parking_lot::Mutex;
 pub(crate) use serde_json::Value;
 pub(crate) use soland_storage::{
-    AccountDataRecord, AccountDataStore, AccountLifecycleRecord, AccountLifecycleStore,
-    AccountLocalpartRecord, AccountLocalpartStore, AccountRecord, AccountStore,
-    AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
+    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
+    AccountStore, AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
     AgentRuntimeApprovalWrite, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
     AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
     BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord, ConsentCellKey,

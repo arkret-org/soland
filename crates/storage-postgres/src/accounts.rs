@@ -1,9 +1,9 @@
 use super::{
-    AccountDataRecord, AccountDataStore, AccountLifecycleRecord, AccountLifecycleStore,
-    AccountLocalpartRecord, AccountLocalpartStore, AccountRecord, AccountStore, BlobRef, Bool,
-    Jsonb, Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool,
-    QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value,
-    account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
+    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
+    AccountStore, BigInt, BlobRef, Bool, Jsonb, Nullable, OptionalExtension, PersistenceError,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid,
+    Value, account_with_primary_localpart_select, async_trait, ids, pg_conn, sql_query,
 };
 pub struct PgAccountStore {
     pub pool: PgPool,
@@ -411,7 +411,7 @@ impl AccountDataStore for PgAccountDataStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT actor_id AS actor, account_data_key, payload, updated_at \
+            "SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
              FROM account_datas WHERE actor_id = $1 AND account_data_key = $2",
         )
         .bind::<Text, _>(actor)
@@ -423,38 +423,63 @@ impl AccountDataStore for PgAccountDataStore {
         .map_err(PersistenceError::database)
     }
 
-    async fn put(&self, record: &AccountDataRecord) -> PersistenceResult<()> {
+    async fn compare_and_set(
+        &self,
+        record: &AccountDataRecord,
+        expected_revision: u64,
+    ) -> PersistenceResult<AccountDataCasResult> {
+        let expected_revision = i64::try_from(expected_revision).map_err(|_| {
+            PersistenceError::Conflict("account_data revision exceeds i64 storage range".to_owned())
+        })?;
+        let revision = i64::try_from(record.revision).map_err(|_| {
+            PersistenceError::Conflict("account_data revision exceeds i64 storage range".to_owned())
+        })?;
+        if revision
+            != expected_revision.checked_add(1).ok_or_else(|| {
+                PersistenceError::Conflict("account_data revision exhausted".to_owned())
+            })?
+        {
+            return Err(PersistenceError::Internal(
+                "account_data record revision must equal expected_revision + 1".to_owned(),
+            ));
+        }
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        sql_query(
-            "INSERT INTO account_datas (id, actor_id, account_data_key, payload, updated_at) \
-             VALUES ($1, $2, $3, $4, $5) \
-             ON CONFLICT (actor_id, account_data_key) DO UPDATE SET payload = EXCLUDED.payload, \
-             updated_at = EXCLUDED.updated_at",
+        let applied = sql_query(
+            "WITH updated AS ( \
+                 UPDATE account_datas SET revision = $4, payload = $5, tombstone = $6, updated_at = $7 \
+                 WHERE actor_id = $2 AND account_data_key = $3 AND revision = $8 \
+                 RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             ), inserted AS ( \
+                 INSERT INTO account_datas \
+                    (id, actor_id, account_data_key, revision, payload, tombstone, updated_at) \
+                 SELECT $1, $2, $3, $4, $5, $6, $7 \
+                 WHERE $8 = 0 AND NOT EXISTS ( \
+                     SELECT 1 FROM account_datas WHERE actor_id = $2 AND account_data_key = $3 \
+                 ) \
+                 ON CONFLICT (actor_id, account_data_key) DO NOTHING \
+                 RETURNING actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             ) \
+             SELECT * FROM updated UNION ALL SELECT * FROM inserted",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.actor)
         .bind::<Text, _>(&record.account_data_key)
+        .bind::<BigInt, _>(revision)
         .bind::<Jsonb, _>(&record.payload)
+        .bind::<Bool, _>(record.tombstone)
         .bind::<Timestamptz, _>(record.updated_at)
-        .execute(&mut *conn)
+        .bind::<BigInt, _>(expected_revision)
+        .get_result::<AccountDataRow>(&mut *conn)
         .await
-        .map(|_| ())
-        .map_err(PersistenceError::database)
-    }
-
-    async fn delete(&self, actor: &str, account_data_key: &str) -> PersistenceResult<()> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        sql_query("DELETE FROM account_datas WHERE actor_id = $1 AND account_data_key = $2")
-            .bind::<Text, _>(actor)
-            .bind::<Text, _>(account_data_key)
-            .execute(&mut *conn)
-            .await
-            .map(|_| ())
-            .map_err(PersistenceError::database)
+        .optional()
+        .map_err(PersistenceError::database)?;
+        if let Some(applied) = applied {
+            return Ok(AccountDataCasResult::Applied(applied.into()));
+        }
+        let current = self.get(&record.actor, &record.account_data_key).await?;
+        Ok(AccountDataCasResult::Conflict(current))
     }
 
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<AccountDataRecord>> {
@@ -462,8 +487,9 @@ impl AccountDataStore for PgAccountDataStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT actor_id AS actor, account_data_key, payload, updated_at \
-             FROM account_datas WHERE actor_id = $1 ORDER BY account_data_key",
+            "SELECT actor_id AS actor, account_data_key, revision, payload, tombstone, updated_at \
+             FROM account_datas WHERE actor_id = $1 AND tombstone = FALSE \
+             ORDER BY account_data_key",
         )
         .bind::<Text, _>(actor)
         .load::<AccountDataRow>(&mut *conn)
@@ -564,8 +590,12 @@ struct AccountDataRow {
     actor: String,
     #[diesel(sql_type = Text)]
     account_data_key: String,
+    #[diesel(sql_type = BigInt)]
+    revision: i64,
     #[diesel(sql_type = Jsonb)]
     payload: Value,
+    #[diesel(sql_type = Bool)]
+    tombstone: bool,
     #[diesel(sql_type = Timestamptz)]
     updated_at: chrono::DateTime<chrono::Utc>,
 }
@@ -574,7 +604,10 @@ impl From<AccountDataRow> for AccountDataRecord {
         Self {
             actor: row.actor,
             account_data_key: row.account_data_key,
+            revision: u64::try_from(row.revision)
+                .expect("account_data revision constraint guarantees non-negative values"),
             payload: row.payload,
+            tombstone: row.tombstone,
             updated_at: row.updated_at,
         }
     }

@@ -13,9 +13,9 @@ pub(crate) use diesel_async::pooled_connection::deadpool::Object;
 pub(crate) use diesel_async::{AsyncConnection, AsyncPgConnection, RunQueryDsl};
 pub(crate) use serde_json::Value;
 pub(crate) use soland_storage::{
-    AccountDataRecord, AccountDataStore, AccountLifecycleRecord, AccountLifecycleStore,
-    AccountLocalpartRecord, AccountLocalpartStore, AccountRecord, AccountStore,
-    AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, AccountLifecycleRecord,
+    AccountLifecycleStore, AccountLocalpartRecord, AccountLocalpartStore, AccountRecord,
+    AccountStore, AgentParticipationStore, AgentPrincipalRecord, AgentRuntimeActivation,
     AgentRuntimeApprovalWrite, AgentSidecarContextRecord, AgentSidecarRecord, AgentStore,
     AppletStore, AppletTransactionReplayBegin, AppletTransactionReplayRecord, AuditStore,
     BackupSeriesEraseProgressRecord, BlobRecord, BlobStore, CanonicalEventRecord, ConsentCellKey,

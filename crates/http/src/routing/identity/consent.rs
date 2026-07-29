@@ -19,9 +19,11 @@ use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
 use serde_json::{Value, json};
-use soland_http::error::AppError;
+use soland_http::error::{AppError, ErrorCode};
 use soland_services::events::ProjectedEvent as ProjectionEventRecord;
-use soland_services::identity::{AccountDataState, ConsentCellRecord, FindAccountByActorQuery};
+use soland_services::identity::{
+    AccountDataCasOutcome, AccountDataState, ConsentCellRecord, FindAccountByActorQuery,
+};
 
 use super::{AuthArgs, append_audit_log, now, query_param, sha256_hex, validate_did};
 use crate::routing::identity::device_messages::{
@@ -1466,14 +1468,23 @@ async fn invalidate_quarantined_invites_for_revoke(
     let record = AccountDataState {
         actor_id: holder.to_owned(),
         account_data_key: ACCOUNT_DATA_KEY_INVITE_QUARANTINE.to_owned(),
+        revision: existing.revision + 1,
         payload: Value::Object(object),
+        tombstone: false,
         updated_at: revoked_at,
     };
-    state
+    let expected_revision = existing.revision;
+    let applied = state
         .account_data()
-        .save_entry(record.clone())
+        .compare_and_set(record.clone(), expected_revision)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
+    let AccountDataCasOutcome::Applied(record) = applied else {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "invite quarantine account data changed concurrently",
+        ));
+    };
     fanout_actor_private_update(
         state,
         holder,
@@ -1482,6 +1493,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         json!({
             "operation": "put",
             "account_data_key": ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
+            "revision": record.revision,
             "content": record.payload.clone(),
             "updated_at": record.updated_at,
         }),

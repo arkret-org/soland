@@ -280,8 +280,19 @@ pub struct WebvhLogRecord {
 pub struct AccountDataRecord {
     pub actor: String,
     pub account_data_key: String,
+    /// Monotonic CAS high-water mark for this key.
+    pub revision: u64,
     pub payload: Value,
+    /// Physical-delete requests store a versioned tombstone. The row remains
+    /// so `revision` cannot go backwards or permit stale-value resurrection.
+    pub tombstone: bool,
     pub updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Clone, Debug)]
+pub enum AccountDataCasResult {
+    Applied(AccountDataRecord),
+    Conflict(Option<AccountDataRecord>),
 }
 
 #[derive(Clone, Debug)]

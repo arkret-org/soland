@@ -376,6 +376,25 @@ pub(super) async fn submit_event_value_with_context(
     });
     let actor_lock = actor_submit_lock(&parsed.realm_id, &parsed.actor_id);
     let _actor_submit_guard = actor_lock.lock().await;
+    let _account_data_submit_guard =
+        if parsed.kind == arkret_wire::events::EventKind::ACCOUNT_DATA_SET {
+            envelope
+                .get("payload")
+                .and_then(Value::as_object)
+                .and_then(|payload| {
+                    Some((
+                        payload.get("owner")?.as_str()?,
+                        payload.get("key")?.as_str()?,
+                    ))
+                })
+                .map(|(owner, key)| account_data_submit_lock(owner, key))
+        } else {
+            None
+        };
+    let _account_data_submit_guard = match _account_data_submit_guard {
+        Some(lock) => Some(lock.lock_owned().await),
+        None => None,
+    };
     let received_at = now();
     // `offline-publication.md` §2.1 — the receipt is minted once the lease,
     // Event proofs and scope have been verified, and BEFORE the duplicate
@@ -645,6 +664,7 @@ pub(super) async fn submit_event_value_with_context(
                 message,
             ));
         }
+        preflight_account_data_cas(state, operation).await?;
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
                 state,
@@ -1685,4 +1705,81 @@ pub(super) async fn submit_event_value_with_context(
     )
     .await;
     Ok(accepted_response)
+}
+
+async fn preflight_account_data_cas(
+    state: &AppState,
+    operation: &arkret_event_draft::Operation,
+) -> Result<(), SubmitOneError> {
+    if operation.object_kind.as_str() != arkret_wire::events::EventKind::ACCOUNT_DATA_SET {
+        return Ok(());
+    }
+    let payload = operation.payload.as_object().ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "account_data payload must be an object",
+        )
+    })?;
+    let owner = payload
+        .get("owner")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "account_data payload is missing owner",
+            )
+        })?;
+    let key = payload.get("key").and_then(Value::as_str).ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "account_data payload is missing key",
+        )
+    })?;
+    let expected_revision = payload
+        .get("expected_revision")
+        .and_then(Value::as_u64)
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "account_data payload is missing expected_revision",
+            )
+        })?;
+    let current = state
+        .account_data()
+        .entry(owner, key)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("account_data state lookup failed: {error}"),
+            )
+        })?;
+    let current_revision = current.as_ref().map_or(0, |record| record.revision);
+    if current_revision == expected_revision {
+        return Ok(());
+    }
+
+    let mut details = json!({
+        "account_data_key": key,
+        "current_revision": current_revision,
+    });
+    if let Some(record) = current.filter(|record| !record.tombstone) {
+        details["current_entry"] = json!({
+            "account_data_key": record.account_data_key,
+            "revision": record.revision,
+            "content": record.payload,
+            "updated_at": arkret_canonical::format_timestamp_canonical(record.updated_at),
+        });
+    }
+    Err(SubmitOneError::new(
+        StatusCode::CONFLICT,
+        "cas_conflict",
+        "expected_revision does not match current account data revision",
+    )
+    .with_details(details))
 }

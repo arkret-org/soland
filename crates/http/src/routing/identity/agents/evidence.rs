@@ -69,11 +69,11 @@ struct AuthorizationTransition {
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent_signer_evidence.query",
+    operation_id = "ak.self.agent_signer_evidence.query.resolve",
     summary = "Query portable Native Agent signer evidence",
     tags("agents")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent_signer_evidence.query"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent_signer_evidence.query.resolve"))]
 pub(super) async fn query_agent_signer_evidence(
     aa: AuthArgs,
     body: JsonBody<AgentSignerEvidenceQueryRequestBodyBody>,
