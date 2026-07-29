@@ -698,17 +698,14 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             signature: arkret_wire::PayloadSignature {
                 alg: "EdDSA".to_owned(),
                 verification_method: format!("{PEER_SOURCE_DID}#notary-key"),
-                payload_digest: arkret_identifiers::Hash::new(format!(
-                    "sha256:{}",
-                    "0".repeat(64)
-                ))
-                .unwrap(),
+                payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
+                    .unwrap(),
                 created_at: issued_at,
                 jws: "a..b".to_owned(),
             },
         };
         member_receipt.signature.payload_digest = member_receipt
-            .member_digest()
+            .member_receipt_digest()
             .expect("fixture proposal receipt digest");
         arkret_wire::ControlProposalReceipt {
             kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,

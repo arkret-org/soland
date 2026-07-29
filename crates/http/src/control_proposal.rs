@@ -51,10 +51,10 @@ fn policy_from_realm_create(
             .map_err(|_| format!("{field} exceeds the signed duration range"))
     };
     let policy = ControlProposalDecisionPolicy {
-        receipt_sla: Some(duration_from_ms(
+        receipt_sla: duration_from_ms(
             payload.object.receipt_sla_ms.unwrap_or(86_400_000),
             "receipt_sla_ms",
-        )?),
+        )?,
         decision_window: duration_from_ms(
             payload.object.proposal_decision_window_ms.unwrap_or(30_000),
             "proposal_decision_window_ms",
@@ -131,7 +131,7 @@ pub(crate) fn mint_control_proposal_receipt(
         .canonical_bytes_for_signature()
         .map_err(|error| error.to_string())?;
     member_receipt.signature.payload_digest = member_receipt
-        .member_digest()
+        .member_receipt_digest()
         .map_err(|error| error.to_string())?;
     member_receipt.signature.jws =
         arkret_signatures::jws::sign_jws_ed25519(&bytes, state.notary_signing_key().as_ref())

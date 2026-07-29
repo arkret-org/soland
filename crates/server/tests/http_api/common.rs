@@ -928,40 +928,6 @@ pub(crate) fn make_realm_bootstrap_unit_member(event: &mut Value) {
     resign_canonical_event(event);
 }
 
-/// The Realm Seal frontier — the registered source for a Control Move
-/// `seal_basis` and a DataEvent `seal_ref`.
-///
-/// `ak.self.events.query.frontier` with a Realm-only selector returns
-/// `{realm_id, seal_id, control_event_set_root, state_root}`; a producer that
-/// derives its basis from anywhere else is asserting a governance view it never
-/// observed.
-pub(crate) async fn realm_seal_frontier(
-    state: &AppState,
-    token: &str,
-    realm_id: &str,
-) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
-    let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state.clone()))
-    .await;
-    let status = response.status_code;
-    let body: Value = response
-        .take_json()
-        .await
-        .expect("Realm Seal frontier body");
-    assert_eq!(status, Some(StatusCode::OK), "Realm Seal frontier: {body}");
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        serde_json::from_value(body).expect("typed Realm Seal frontier");
-    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
-        frontier.frontier
-    else {
-        panic!("Realm-only selector must materialize a Seal view");
-    };
-    frontier
-}
-
 // `attach_invite_create_effects` is gone with the producer `effects[]` array:
 // the v1 `Event` envelope has no such member (it is `deny_unknown_fields`), and
 // the `ak.invite.create` writes are receiver-projected from the registered

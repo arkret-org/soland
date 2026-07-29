@@ -190,47 +190,6 @@ async fn seed_reset_recovery_policy(
     policy_id
 }
 
-async fn seed_verified_recovery_session_for_reset_test(
-    state: &AppState,
-    token: &str,
-    signing: &SigningKey,
-    principal_id: &str,
-    vm: &str,
-) -> (Value, String) {
-    let mut session = open_recovery_session(state.clone(), token, signing, principal_id, vm).await;
-    let session_id = session["recovery_session_id"].as_str().unwrap().to_owned();
-    let challenge = session["challenge"].as_str().unwrap().to_owned();
-    let signature = sign_recovery_proof(signing, &session);
-    let mut record = state
-        .test_persistence()
-        .recovery_sessions()
-        .get(&session_id)
-        .await
-        .unwrap()
-        .expect("recovery session");
-    let now = chrono::Utc::now();
-    record.state = "verified".to_owned();
-    record.updated_at = now;
-    record.proof_payload = Some(serde_json::json!({
-        "proof": {
-            "kind": "principal_signing",
-            "challenge": challenge,
-            "verification_method": vm,
-            "alg": "EdDSA",
-            "signature": signature,
-        },
-    }));
-    state
-        .test_persistence()
-        .recovery_sessions()
-        .update(record)
-        .await
-        .unwrap();
-    session["state"] = serde_json::json!("verified");
-    session["updated_at"] = serde_json::json!(arkret_canonical::format_timestamp_canonical(now));
-    (session, session_id)
-}
-
 async fn seed_verified_reset_recovery_session(
     state: &AppState,
     principal_id: &str,

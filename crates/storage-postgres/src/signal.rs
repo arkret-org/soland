@@ -84,8 +84,9 @@ struct SignalRelayWatermarkRow {
 
 #[derive(QueryableByName)]
 struct SignalRelayDigestRow {
+    #[diesel(column_name = envelope_digest)]
     #[diesel(sql_type = Text)]
-    envelope_digest: String,
+    _envelope_digest: String,
 }
 
 const SIGNAL_RELAY_COLUMNS: &str = "realm_id, position, scope_ref, sender_actor_id, \

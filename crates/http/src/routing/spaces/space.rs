@@ -26,7 +26,6 @@ use arkret_models_collaboration::governance::realm_governance::{
 use arkret_models_collaboration::governance::realm_lifecycle::{
     RealmArchivePayload, RealmDestroyPayload, RealmTombstonePayload,
 };
-use arkret_models_collaboration::objects::profiles::STRAND_TRACK_NAME_DISCUSSION;
 use arkret_policy::history_visibility::matching_restricted_rules;
 use arkret_wire::{HistoryVisibility, PlaintextDataClassKind};
 use chrono::{DateTime, Utc};
@@ -1140,110 +1139,6 @@ async fn realm_public_content_for_id(state: &AppState, realm_id: &str) -> bool {
         .is_some_and(|record| {
             record.discoverability == "public" && record.history_visibility == "world_readable"
         })
-}
-
-/// Number of Realm members other than `exclude_actor`. Used to report the
-/// realm-broadcast fan-out breadth for relayed `ak.call.signal` envelopes
-/// (`webrtc-signaling.md` §5) without resolving the per-device recipient set.
-pub fn realm_member_count_excluding(state: &AppState, realm_id: &str, exclude_actor: &str) -> u64 {
-    let Ok(realm_id_value) = RealmId::new(realm_id.to_owned()) else {
-        return 0;
-    };
-    let realms = state.realm_directory().snapshot();
-    realms
-        .get(&realm_id_value)
-        .map(|realm| {
-            realm
-                .members
-                .iter()
-                .filter(|member| member.as_str() != exclude_actor)
-                .count() as u64
-        })
-        .unwrap_or(0)
-}
-
-const ACCOUNT_DATA_KEY_BLOCKLIST: &str = "ak.account.blocklist";
-
-async fn personal_blocklist_allows_actor(
-    state: &AppState,
-    session: &SessionRecord,
-    sender: &str,
-) -> bool {
-    if sender == session.actor {
-        return true;
-    }
-    match state
-        .account_data()
-        .entry(&session.actor, ACCOUNT_DATA_KEY_BLOCKLIST)
-        .await
-    {
-        Ok(None) => true,
-        Ok(Some(record)) => !blocklist_payload_blocks_sender(&record.payload, sender),
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                actor = %session.actor,
-                "failed to read personal blocklist policy"
-            );
-            false
-        }
-    }
-}
-
-fn blocklist_payload_blocks_sender(payload: &Value, sender: &str) -> bool {
-    if payload
-        .get("tombstone")
-        .and_then(Value::as_bool)
-        .unwrap_or(false)
-    {
-        return false;
-    }
-    let Some(entries) = payload.get("entries").and_then(Value::as_array) else {
-        // Account data is opaque unless the holder has authorized a readable
-        // policy projection. An encrypted or otherwise unreadable blocklist
-        // cannot prove that this sender is allowed, so cross-actor fanout must
-        // fail closed.
-        return true;
-    };
-    entries
-        .iter()
-        .any(|entry| blocklist_entry_blocks_sender(entry, sender))
-}
-
-fn blocklist_entry_blocks_sender(entry: &Value, sender: &str) -> bool {
-    let mode = entry
-        .get("mode")
-        .or_else(|| entry.get("kind"))
-        .and_then(Value::as_str)
-        .unwrap_or("block");
-    if mode != "block" {
-        return false;
-    }
-    if entry.get("expires_at").is_some_and(|expires_at| {
-        expires_at.as_str().is_some_and(|value| {
-            chrono::DateTime::parse_from_rfc3339(value)
-                .is_ok_and(|expires| expires <= chrono::Utc::now())
-        })
-    }) {
-        return false;
-    }
-    let Some(target) = entry.get("target") else {
-        return ["did", "actor", "id"]
-            .iter()
-            .any(|field| entry.get(*field).and_then(Value::as_str) == Some(sender));
-    };
-    if let Some(value) = target.as_str() {
-        return value == sender;
-    }
-    let Some(object) = target.as_object() else {
-        return false;
-    };
-    if object.get("kind").and_then(Value::as_str) != Some("actor") {
-        return false;
-    }
-    ["did", "actor", "id"]
-        .iter()
-        .any(|field| object.get(*field).and_then(Value::as_str) == Some(sender))
 }
 
 #[cfg(test)]
