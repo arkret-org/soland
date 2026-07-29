@@ -145,7 +145,7 @@ pub(crate) async fn mint_control_proposal_receipts(
     realm_id: &RealmId,
     events: &[Event],
     received_at: chrono::DateTime<chrono::Utc>,
-    bootstrap_ingress_authority_set_ref: Option<&Hash>,
+    bootstrap_ingress_authority_set_ref: Option<&AuthoritySetRef>,
 ) -> Result<Vec<ControlProposalReceipt>, String> {
     let policy = control_proposal_policy(state, realm_id, events).await?;
     let notary_authority_set_ref =
@@ -179,10 +179,10 @@ pub(crate) async fn mint_control_proposal_receipts(
 }
 
 fn select_proposal_receipt_authority(
-    notary_authority_set_ref: Option<Hash>,
-    bootstrap_ingress_authority_set_ref: Option<&Hash>,
+    notary_authority_set_ref: Option<AuthoritySetRef>,
+    bootstrap_ingress_authority_set_ref: Option<&AuthoritySetRef>,
     is_closed_genesis: bool,
-) -> Result<Hash, String> {
+) -> Result<AuthoritySetRef, String> {
     notary_authority_set_ref
         .or_else(|| {
             is_closed_genesis
@@ -305,16 +305,21 @@ pub(crate) fn sign_control_proposal_defer(
 #[cfg(test)]
 mod tests {
     use arkret_identifiers::Hash;
+    use arkret_wire::AuthoritySetRef;
 
     use super::select_proposal_receipt_authority;
 
-    fn digest(byte: &str) -> Hash {
-        Hash::new(format!("sha256:{}", byte.repeat(64))).expect("test digest is valid")
+    fn authority(byte: &str) -> AuthoritySetRef {
+        AuthoritySetRef {
+            authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
+            authority_set_digest: Hash::new(format!("sha256:{}", byte.repeat(64)))
+                .expect("test digest is valid"),
+        }
     }
 
     #[test]
     fn closed_genesis_can_use_lease_ingress_authority_before_notary_exists() {
-        let lease_authority = digest("a");
+        let lease_authority = authority("a");
         assert_eq!(
             select_proposal_receipt_authority(None, Some(&lease_authority), true).unwrap(),
             lease_authority
@@ -323,7 +328,7 @@ mod tests {
 
     #[test]
     fn ordinary_control_move_cannot_use_genesis_ingress_authority() {
-        let lease_authority = digest("b");
+        let lease_authority = authority("b");
         assert!(
             select_proposal_receipt_authority(None, Some(&lease_authority), false).is_err(),
             "non-genesis proposals must fail closed without the effective notary authority"
@@ -332,8 +337,8 @@ mod tests {
 
     #[test]
     fn effective_notary_authority_takes_precedence() {
-        let notary_authority = digest("c");
-        let lease_authority = digest("d");
+        let notary_authority = authority("c");
+        let lease_authority = authority("d");
         assert_eq!(
             select_proposal_receipt_authority(
                 Some(notary_authority.clone()),

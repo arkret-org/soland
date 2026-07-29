@@ -952,6 +952,7 @@ pub(crate) async fn post_recovery_policy(
         event: event.clone(),
         authorization_lease: lease_outcome.authorization_leases[0].clone(),
         cba_proof_bundles: Vec::new(),
+        control_proposal_receipt: None,
     };
     let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)

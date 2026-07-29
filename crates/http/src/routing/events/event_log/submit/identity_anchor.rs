@@ -202,7 +202,7 @@ pub(super) async fn submit_identity_anchor_batch(
             .then(|| {
                 authorization_leases
                     .and_then(|leases| leases.first())
-                    .map(|lease| &lease.authority_set_ref.authority_set_digest)
+                    .map(|lease| &lease.authority_set_ref)
             })
             .flatten();
         crate::control_proposal::mint_control_proposal_receipts(

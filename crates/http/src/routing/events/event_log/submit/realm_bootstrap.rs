@@ -238,7 +238,9 @@ pub(super) async fn submit_realm_bootstrap_batch(
         &bootstrap_realm_id,
         &typed_events,
         received_at,
-        None,
+        authorization_leases
+            .and_then(|leases| leases.first())
+            .map(|lease| &lease.authority_set_ref),
     )
     .await
     .map_err(|error| {
