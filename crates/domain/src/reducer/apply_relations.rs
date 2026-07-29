@@ -215,7 +215,6 @@ impl ProjectionState {
             values.extend(
                 components
                     .get("relation_profiles")
-                    .or_else(|| components.pointer("/components/relation_profiles"))
                     .and_then(Value::as_array)
                     .into_iter()
                     .flatten(),

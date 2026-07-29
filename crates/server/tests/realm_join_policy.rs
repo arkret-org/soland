@@ -5,6 +5,7 @@
 //! must pass before the member FSM is updated.
 
 use arkret_event_draft::Operation;
+use arkret_state::lattice::CellState;
 use chrono::{Duration, Utc};
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
@@ -166,6 +167,43 @@ fn principal_admission_allows_configured_did_method() {
         state
             .member(REALM_A, "did:web:users.acme.example:mallory")
             .is_none()
+    );
+}
+
+#[test]
+fn sealed_policy_payload_wrapper_preserves_join_policy() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    apply_join_rule(&mut state, "public");
+    apply_policy(
+        &mut state,
+        &hlc,
+        json!({
+            "gates": [{
+                "gate_id": "principal-web",
+                "kind": "principal_admission",
+                "auto_resolve": true,
+                "allowed_did_methods": ["did:web"]
+            }],
+            "combinator": "all"
+        }),
+    );
+
+    let live_value = match state.realm_policy_bundle_cells.get(REALM_A) {
+        Some(CellState::Value(value)) => value.clone(),
+        other => panic!("expected live policy value, got {other:?}"),
+    };
+    state.realm_policy_bundle_cells.insert(
+        REALM_A.to_owned(),
+        CellState::Value(json!({"value": live_value})),
+    );
+
+    assert!(
+        matches!(
+            state.apply(&join_op(BOB), &hlc),
+            ProjectionEffect::MembershipChanged { .. }
+        ),
+        "Seal-reloaded generic state payload must retain the canonical join policy"
     );
 }
 

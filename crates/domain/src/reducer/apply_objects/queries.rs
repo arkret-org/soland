@@ -376,16 +376,18 @@ impl ProjectionState {
 
     pub fn realm_policy_bundle_cell_value(&self, realm_id: &str) -> Option<&Value> {
         match self.realm_policy_bundle_cells.get(realm_id)? {
-            CellState::Value(value) => Some(value),
+            // The registry projects `field=payload`, so authoritative Seal
+            // replay stores the generic state payload `{"value": ...}`.
+            // Live dispatch already normalizes that envelope before caching.
+            // Return the one canonical policy value from both paths.
+            CellState::Value(value) => Some(value.get("value").unwrap_or(value)),
             CellState::Bottom(_) => None,
         }
     }
 
     pub fn realm_join_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        let components = self.realm_policy_bundle_cell_value(realm_id)?;
-        components
+        self.realm_policy_bundle_cell_value(realm_id)?
             .get("join_policy")
-            .or_else(|| components.pointer("/components/join_policy"))
     }
 
     /// Submit-time and reducer-time hard gate for Join Policy.

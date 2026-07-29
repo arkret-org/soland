@@ -214,7 +214,6 @@ fn policy_bundle_content_scheme(payload: &Value) -> Option<String> {
     let value = value.get("value").unwrap_or(&value);
     value
         .get("content_scheme")
-        .or_else(|| value.pointer("/components/content_scheme"))
         .and_then(Value::as_str)
         .map(ToOwned::to_owned)
 }

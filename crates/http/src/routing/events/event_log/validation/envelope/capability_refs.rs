@@ -500,20 +500,8 @@ pub(super) fn seal_view_declares_relaxed_e2ee(
 pub(super) fn policy_bundle_declare_relaxed_e2ee(policy_bundle: &Value) -> bool {
     profile_array_contains(policy_bundle.get("profiles"), E2EE_RELAXED_PROFILE)
         || profile_array_contains(policy_bundle.get("active_profiles"), E2EE_RELAXED_PROFILE)
-        || profile_array_contains(
-            policy_bundle.pointer("/components/profiles"),
-            E2EE_RELAXED_PROFILE,
-        )
-        || profile_array_contains(
-            policy_bundle.pointer("/components/active_profiles"),
-            E2EE_RELAXED_PROFILE,
-        )
         || policy_bundle
             .pointer("/e2ee_relaxed/profile")
-            .and_then(Value::as_str)
-            == Some(E2EE_RELAXED_PROFILE)
-        || policy_bundle
-            .pointer("/components/e2ee_relaxed/profile")
             .and_then(Value::as_str)
             == Some(E2EE_RELAXED_PROFILE)
 }
