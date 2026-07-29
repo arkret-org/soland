@@ -353,13 +353,11 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
 #[cfg(test)]
 mod tests {
     use arkret_wire::{
-        AcceptedStep, BackupId, BackupSeriesEraseIntent, BackupSeriesEraseObject,
-        BackupSeriesEraseTarget, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, Did,
-        EventId, Hash, PreparedEventUnit, SecurityRotationBackupBinding,
-        SecurityRotationBackupKind, SecurityRotationBackupPlan, SecurityRotationBinding,
-        SecurityRotationPlan, SecurityRotationTransactionCreateRequest,
-        SecurityTransactionCreateRequest, SecurityTransactionKind, SecurityTransactionState,
-        SecurityTransactionStep, TransactionId,
+        AcceptedStep, BackupId, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
+        BackupRotationPlan, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, Did,
+        EventId, Hash, PreparedEventUnit, SecurityRotationBinding, SecurityRotationPlan,
+        SecurityRotationTransactionCreateRequest, SecurityTransactionCreateRequest,
+        SecurityTransactionKind, SecurityTransactionState, SecurityTransactionStep, TransactionId,
     };
     use chrono::{Duration, Utc};
     use serde_json::json;
@@ -396,25 +394,8 @@ mod tests {
 
     fn initial_rotation() -> SecurityTransactionRecord {
         let service_id = Did::new("did:web:principal.example").unwrap();
-        let mls_binding = SecurityRotationBackupBinding {
-            backup_kind: SecurityRotationBackupKind::MlsHistory,
-            previous_series_id: BackupSeriesId::new(
-                "ak:backup_series:019a7360-0000-7000-8000-000000000103",
-            )
-            .unwrap(),
-            new_series_id: BackupSeriesId::new(
-                "ak:backup_series:019a7360-0000-7000-8000-000000000104",
-            )
-            .unwrap(),
-            genesis_backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000105")
-                .unwrap(),
-            tail_backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000106")
-                .unwrap(),
-            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000107")
-                .unwrap(),
-        };
-        let secret_binding = SecurityRotationBackupBinding {
-            backup_kind: SecurityRotationBackupKind::SecretStorage,
+        let secret_binding = BackupRotationBinding {
+            backup_kind: BackupRotationKind::SecretStorage,
             previous_series_id: BackupSeriesId::new(
                 "ak:backup_series:019a7360-0000-7000-8000-000000000109",
             )
@@ -423,62 +404,75 @@ mod tests {
                 "ak:backup_series:019a7360-0000-7000-8000-00000000010a",
             )
             .unwrap(),
-            genesis_backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010b")
-                .unwrap(),
-            tail_backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010c")
-                .unwrap(),
-            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-00000000010d")
-                .unwrap(),
-        };
-        let erase_intent = BackupSeriesEraseIntent {
-            targets: vec![
-                BackupSeriesEraseTarget {
-                    backup_kind: SecurityRotationBackupKind::MlsHistory,
-                    previous_series_id: mls_binding.previous_series_id.clone(),
-                    successor_series_id: mls_binding.new_series_id.clone(),
-                    successor_pointer_event_id: mls_binding.active_series_event_id.clone(),
-                    objects: vec![BackupSeriesEraseObject {
-                        backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000108")
-                            .unwrap(),
-                        ciphertext_digest: hash('8'),
-                    }],
+            new_backups: vec![
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010b")
+                        .unwrap(),
+                    ciphertext_digest: hash('b'),
                 },
-                BackupSeriesEraseTarget {
-                    backup_kind: SecurityRotationBackupKind::SecretStorage,
-                    previous_series_id: secret_binding.previous_series_id.clone(),
-                    successor_series_id: secret_binding.new_series_id.clone(),
-                    successor_pointer_event_id: secret_binding.active_series_event_id.clone(),
-                    objects: vec![BackupSeriesEraseObject {
-                        backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010e")
-                            .unwrap(),
-                        ciphertext_digest: hash('9'),
-                    }],
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010c")
+                        .unwrap(),
+                    ciphertext_digest: hash('c'),
                 },
             ],
+            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-00000000010d")
+                .unwrap(),
+            old_backups: vec![BackupObjectRef {
+                backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010e").unwrap(),
+                ciphertext_digest: hash('9'),
+            }],
         };
-        let erase_intent_digest =
-            Hash::new(arkret_canonical::canonical::canonical_sha256(&erase_intent).unwrap())
-                .unwrap();
+        let mls_binding = BackupRotationBinding {
+            backup_kind: BackupRotationKind::MlsHistory,
+            previous_series_id: BackupSeriesId::new(
+                "ak:backup_series:019a7360-0000-7000-8000-000000000103",
+            )
+            .unwrap(),
+            new_series_id: BackupSeriesId::new(
+                "ak:backup_series:019a7360-0000-7000-8000-000000000104",
+            )
+            .unwrap(),
+            new_backups: vec![
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000105")
+                        .unwrap(),
+                    ciphertext_digest: hash('5'),
+                },
+                BackupObjectRef {
+                    backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000106")
+                        .unwrap(),
+                    ciphertext_digest: hash('6'),
+                },
+            ],
+            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000107")
+                .unwrap(),
+            old_backups: vec![BackupObjectRef {
+                backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000108").unwrap(),
+                ciphertext_digest: hash('8'),
+            }],
+        };
+        let erase_confirmation_digest = hash('2');
         let plan = SecurityRotationPlan {
             revoke_unit: event_unit(&service_id, "revoke"),
             new_secret_commitment: hash('1'),
             backup_rotations: vec![
-                SecurityRotationBackupPlan {
-                    binding: mls_binding.clone(),
-                    encrypted_backup_material: canonical_material(
-                        json!({"ciphertext": "mls-public"}),
-                    ),
-                    active_series_unit: event_unit(&service_id, "activate-mls"),
-                },
-                SecurityRotationBackupPlan {
+                BackupRotationPlan {
                     binding: secret_binding.clone(),
                     encrypted_backup_material: canonical_material(
                         json!({"ciphertext": "secret-public"}),
                     ),
                     active_series_unit: event_unit(&service_id, "activate-secret"),
                 },
+                BackupRotationPlan {
+                    binding: mls_binding.clone(),
+                    encrypted_backup_material: canonical_material(
+                        json!({"ciphertext": "mls-public"}),
+                    ),
+                    active_series_unit: event_unit(&service_id, "activate-mls"),
+                },
             ],
-            erase_intent,
+            erase_confirmation_digest: erase_confirmation_digest.clone(),
             local_commit_digest: hash('3'),
         };
         let prepared_plan_digest = {
@@ -500,8 +494,8 @@ mod tests {
                     revoke_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000102")
                         .unwrap(),
                     new_secret_commitment: hash('1'),
-                    backup_rotations: vec![mls_binding, secret_binding],
-                    erase_intent_digest,
+                    backup_rotations: vec![secret_binding, mls_binding],
+                    erase_confirmation_digest,
                     local_commit_digest: hash('3'),
                 },
                 prepared_plan: plan,

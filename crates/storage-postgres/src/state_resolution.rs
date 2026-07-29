@@ -463,7 +463,7 @@ impl ControlEventStore for PgControlEventStore {
         }
         if let Some(receipt) = proposal_receipt {
             receipt
-                .validate_structural(arkret_wire::ControlProposalDecisionPolicy::protocol_maximum())
+                .validate_protocol_bounds()
                 .map_err(|error| StoreError::Conflict(error.to_string()))?;
         }
         let proposal_receipt = proposal_receipt

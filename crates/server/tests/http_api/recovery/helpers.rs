@@ -948,11 +948,45 @@ pub(crate) async fn post_recovery_policy(
     }
     let lease_outcome: arkret_wire::AuthorizationLeaseIssueOutcome =
         serde_json::from_value(lease_body).expect("authorization lease outcome");
+    let receipt_request = arkret_wire::ProposalReceiptIssueRequest {
+        event: event.clone(),
+        authorization_lease: lease_outcome.authorization_leases[0].clone(),
+        cba_proof_bundles: Vec::new(),
+    };
+    let mut receipt_response =
+        TestClient::post("http://server/_arkret/self/control-proposal-receipts")
+            .add_header("authorization", format!("Bearer {token}"), true)
+            .json(&receipt_request)
+            .send(&app_from_state(state.clone()))
+            .await;
+    let receipt_status = receipt_response.status_code.unwrap();
+    let receipt_body: Value = receipt_response.take_json().await.unwrap();
+    if receipt_status != StatusCode::OK {
+        assert_eq!(
+            receipt_status, expected_status,
+            "response body: {receipt_body}"
+        );
+        return receipt_body;
+    }
+    let receipt_outcome: arkret_wire::ProposalReceiptIssueOutcome =
+        serde_json::from_value(receipt_body).expect("proposal receipt outcome");
+    let member_receipt = receipt_outcome.member_receipt;
+    let control_proposal_receipt = arkret_wire::ControlProposalReceipt {
+        kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+        realm_id: member_receipt.realm_id.clone(),
+        proposal_digest: member_receipt.proposal_digest.clone(),
+        received_at: member_receipt.received_at,
+        decision_due_at: member_receipt.decision_due_at,
+        absolute_due_at: member_receipt.absolute_due_at,
+        defer_count: 0,
+        authority_set_ref: member_receipt.authority_set_ref.clone(),
+        member_receipts: vec![member_receipt],
+    };
     let request = arkret_models_crypto::RecoveryPolicyPublishRequest {
         event: event.clone(),
         authorization_lease: lease_outcome.authorization_leases[0].clone(),
         cba_proof_bundles: Vec::new(),
-        control_proposal_receipt: None,
+        control_proposal_receipt: Some(control_proposal_receipt),
     };
     let mut response = TestClient::post("http://server/_arkret/root/identity/recovery-policy")
         .add_header("authorization", format!("Bearer {token}"), true)
