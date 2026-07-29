@@ -1274,23 +1274,23 @@ pub(super) async fn submit_event_value_with_context(
                 format!("validated Control Move Realm id is invalid: {error}"),
             )
         })?;
-        let authority_set_ref =
-            crate::notary::NotaryWorker::for_service(state.service_id().clone())
-                .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        format!("Control Proposal authority is unavailable: {error}"),
-                    )
-                })?
-                .ok_or_else(|| {
-                    SubmitOneError::new(
-                        StatusCode::SERVICE_UNAVAILABLE,
-                        "quorum_unreachable",
-                        "this service cannot issue the current authority set's proposal receipt",
-                    )
-                })?;
+        let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+        let (_, authority_set_ref) = worker
+            .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    format!("Control Proposal authority is unavailable: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    "current proposal authority profile is unavailable",
+                )
+            })?;
         let proposal_digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1333,6 +1333,22 @@ pub(super) async fn submit_event_value_with_context(
                 })?;
             Some(receipt.clone())
         } else {
+            worker
+                .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        format!("Control Proposal authority is unavailable: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        "this service cannot issue the current authority set's proposal receipt",
+                    )
+                })?;
             Some(
                 crate::control_proposal::mint_control_proposal_receipt(
                     state,
