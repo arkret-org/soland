@@ -582,8 +582,10 @@ pub(super) async fn submit_initial_event_batch_outcome(
     submissions: Vec<arkret_wire::EventInitialSubmission>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     let mut envelopes = Vec::with_capacity(submissions.len());
+    let mut typed_events = Vec::with_capacity(submissions.len());
     let mut leases = Vec::with_capacity(submissions.len());
     for submission in &submissions {
+        typed_events.push(submission.event.clone());
         envelopes.push(typed_event_to_canonical_value(submission.event.clone())?);
     }
     let submit_context =
@@ -594,12 +596,30 @@ pub(super) async fn submit_initial_event_batch_outcome(
         };
     for submission in submissions {
         validate_initial_submission_in_context(&submission, submit_context)?;
+        validate_authorization_lease_for_event(
+            state,
+            Some(session),
+            &submission.event,
+            &submission.authorization_lease,
+        )
+        .await?;
         let arkret_wire::EventInitialSubmission {
             event: _,
             authorization_lease,
             cba_proof_bundles: _,
         } = submission;
         leases.push(authorization_lease);
+    }
+    if submit_context == arkret_wire::EventSubmitContext::AnchorUnit {
+        arkret_wire::validate_anchor_unit_lease_bindings(&typed_events, &leases).map_err(
+            |error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("anchor-unit publication evidence is invalid: {error}"),
+                )
+            },
+        )?;
     }
     submit_event_batch_outcome_with_leases(state, session, envelopes, Some(&leases)).await
 }
@@ -1143,6 +1163,43 @@ pub(crate) async fn submit_federation_events(
         .iter()
         .map(|submission| submission.event.clone())
         .collect();
+    if events
+        .first()
+        .is_some_and(|event| event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE)
+    {
+        let leases = submissions
+            .iter()
+            .map(|submission| submission.authorization_lease.clone())
+            .collect::<Vec<_>>();
+        if let Err(error) = arkret_wire::validate_anchor_unit_lease_bindings(&events, &leases) {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                &format!("federated anchor-unit publication evidence is invalid: {error}"),
+            );
+            return;
+        }
+    }
+    for submission in &submissions {
+        if let Err(error) = validate_authorization_lease_for_event(
+            state,
+            None,
+            &submission.event,
+            &submission.authorization_lease,
+        )
+        .await
+        {
+            render_error(res, error.status, &error.code, &error.message);
+            return;
+        }
+        if let Err(error) =
+            validate_ingress_receipt_proofs(state, &submission.ingress_receipts).await
+        {
+            render_error(res, error.status, &error.code, &error.message);
+            return;
+        }
+    }
     let mut verified_device_generations = BTreeMap::<(String, String), String>::new();
     for evidence in &signer_key_evidence {
         match super::validate_federated_device_signing_key_evidence(state, evidence).await {

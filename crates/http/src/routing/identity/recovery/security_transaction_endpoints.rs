@@ -1078,7 +1078,7 @@ async fn continue_submit_reanchor_unit(
         ))
     })?;
     if authorized_event.event_id != binding.authorize_event_id
-        || plan.authorize_event_publication_evidence.event_id != binding.authorize_event_id
+        || plan.authorize_event_publication_intent.event_id != binding.authorize_event_id
         || plan.reanchor_event_submission.event.event_id != binding.reanchor_event_id
     {
         return Err(AppError::internal(
@@ -1087,14 +1087,8 @@ async fn continue_submit_reanchor_unit(
     }
     let authorize_submission = arkret_wire::EventInitialSubmission {
         event: authorized_event,
-        authorization_lease: plan
-            .authorize_event_publication_evidence
-            .authorization_lease
-            .clone(),
-        cba_proof_bundles: plan
-            .authorize_event_publication_evidence
-            .cba_proof_bundles
-            .clone(),
+        authorization_lease: authority_outcome.authorization_lease.clone(),
+        cba_proof_bundles: authority_outcome.cba_proof_bundles.clone(),
     };
     authorize_submission
         .validate_structural()

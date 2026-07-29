@@ -190,6 +190,13 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     validate_initial_submission(&submission)?;
+    validate_authorization_lease_for_event(
+        state,
+        Some(session),
+        &submission.event,
+        &submission.authorization_lease,
+    )
+    .await?;
     let arkret_wire::EventInitialSubmission {
         event,
         authorization_lease,

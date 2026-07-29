@@ -193,6 +193,18 @@ pub(super) async fn submit_identity_anchor_batch(
     let proposal_receipts = if reanchor_conflict {
         Vec::new()
     } else {
+        // A self-principal PCR names the newly authorized device as founding
+        // notary, so no notary authority exists before this closed genesis
+        // unit is committed. The Principal Server that performed lease
+        // pre-admission acknowledges ingress; only the later client-signed
+        // Seal provides control-plane finality.
+        let bootstrap_ingress_authority_set_ref = is_bootstrap
+            .then(|| {
+                authorization_leases
+                    .and_then(|leases| leases.first())
+                    .map(|lease| &lease.authority_set_ref.authority_set_digest)
+            })
+            .flatten();
         crate::control_proposal::mint_control_proposal_receipts(
             state,
             &RealmId::new(first.realm_id.clone()).map_err(|error| {
@@ -200,6 +212,7 @@ pub(super) async fn submit_identity_anchor_batch(
             })?,
             &typed_control_events,
             received_at,
+            bootstrap_ingress_authority_set_ref,
         )
         .await
         .map_err(|error| {

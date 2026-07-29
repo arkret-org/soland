@@ -238,6 +238,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         &bootstrap_realm_id,
         &typed_events,
         received_at,
+        None,
     )
     .await
     .map_err(|error| {

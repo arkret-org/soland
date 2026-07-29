@@ -207,6 +207,42 @@ pub(super) async fn recovery_policy_put(
     )
     .await?;
 
+    let principal_control_realm = RealmId::new(
+        soland_services::identity::principal_control_realm_for_did(&session.actor),
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "principal control Realm id is invalid while resolving recovery-policy basis: {error}"
+        ))
+    })?;
+    let accepted_seal_leaves = state
+        .projections()
+        .realm_seal_leaves(&principal_control_realm)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "recovery-policy acceptance basis is unavailable: {error}"
+            ))
+        })?;
+    let acceptance_basis = match accepted_seal_leaves.as_slice() {
+        [seal] => arkret_wire::LeaseBasisRef::Seal(seal.clone()),
+        [] => {
+            return Err(AppError::new(
+                ErrorCode::FailedPrecondition,
+                "recovery policy requires an accepted Principal Control Realm Seal basis",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+            .with_wire_code("recovery_policy_acceptance_basis_missing"));
+        }
+        _ => {
+            return Err(AppError::new(
+                ErrorCode::FailedPrecondition,
+                "recovery policy publication over an open-set frontier requires a closed SealBasis",
+            )
+            .with_status(StatusCode::PRECONDITION_FAILED)
+            .with_wire_code("recovery_policy_acceptance_basis_ambiguous"));
+        }
+    };
+
     // Per-principal monotonicity check (spec
     // recovery-policy.schema.json §version: receivers MUST reject a
     // publish whose version is not strictly greater than the currently
@@ -274,6 +310,7 @@ pub(super) async fn recovery_policy_put(
         principal_id: Did::new(record.principal_id)
             .map_err(|error| stored_recovery_type_error("policy principal id", error))?,
         version: u64::from(record.version),
+        acceptance_basis,
         accepted_at,
     };
     json_ok(outcome)

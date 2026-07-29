@@ -15,9 +15,201 @@
 //!   <= expires_at` is the revocation boundary.
 
 use arkret_wire::offline_publication::{AuthorizationLease, IngressReceipt};
-use arkret_wire::primitives::{Proof, proof_kind};
+use arkret_wire::primitives::{PayloadProof, proof_kind};
 
 use super::*;
+
+pub(super) async fn validate_authorization_lease_for_event(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    event: &arkret_wire::Event,
+    lease: &AuthorizationLease,
+) -> Result<(), SubmitOneError> {
+    if let Some(session) = session
+        && lease.device_id.as_str() != session.device_id
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "authorization_lease_device_mismatch",
+            "authorization lease device_id does not match the authenticated session",
+        ));
+    }
+    let expected_risk = arkret_schema::capability_action(&lease.action).map_or(
+        arkret_wire::RiskTier::High,
+        |descriptor| match descriptor.risk_tier {
+            arkret_schema::CapabilityRiskTier::Low => arkret_wire::RiskTier::Low,
+            arkret_schema::CapabilityRiskTier::Medium => arkret_wire::RiskTier::Medium,
+            arkret_schema::CapabilityRiskTier::High => arkret_wire::RiskTier::High,
+        },
+    );
+    let action_covers_kind = arkret_schema::capability_action(&lease.action)
+        .is_some_and(|descriptor| descriptor.target_event_kinds.contains(&event.kind.as_str()))
+        || (lease.action == event.kind.as_str() && expected_risk == arkret_wire::RiskTier::High);
+    if !action_covers_kind || lease.risk_tier != expected_risk {
+        return Err(SubmitOneError::new(
+            StatusCode::FORBIDDEN,
+            "authorization_lease_action_mismatch",
+            "authorization lease action/risk does not cover the Event kind",
+        ));
+    }
+    match &lease.basis_ref {
+        arkret_wire::LeaseBasisRef::Seal(seal) if event.seal_ref.as_ref() == Some(seal) => {}
+        arkret_wire::LeaseBasisRef::Joined(basis) if event.seal_basis.as_ref() == Some(basis) => {}
+        arkret_wire::LeaseBasisRef::AnchorUnit(_) => {
+            // The complete ordered-unit binding is checked once at the batch
+            // boundary by validate_anchor_unit_lease_bindings.
+        }
+        _ => {
+            return Err(SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "authorization_lease_basis_mismatch",
+                "authorization lease basis does not match the signed Event",
+            ));
+        }
+    }
+
+    for proof in &lease.proofs {
+        let issuer = arkret_identity::verification_method_did(&proof.verification_method).map_err(
+            |error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    format!("authorization lease issuer is invalid: {error}"),
+                )
+            },
+        )?;
+        let required_audience = session.map_or_else(|| issuer.as_str(), |_| state.service_id());
+        let audience_covers_service = match proof.audience.as_ref() {
+            Some(arkret_wire::Audience::Single(value)) => value == required_audience,
+            Some(arkret_wire::Audience::Multiple(values)) => {
+                values.iter().any(|value| value == required_audience)
+            }
+            None => false,
+        };
+        if !audience_covers_service {
+            return Err(SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                "authorization lease proof audience does not cover this service",
+            ));
+        }
+        let expected_source_digest =
+            arkret_canonical::canonical_sha256(&lease.basis_ref).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("authorization lease authority basis digest failed: {error}"),
+                )
+            })?;
+        if lease.authority_set_ref.authority_set_id != "ak.authority_set.realm_admission.v1"
+            || lease.authority_set_policy.source.source_digest.as_str() != expected_source_digest
+            || lease.authority_set_policy.scope_ref != event.scope_ref
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "authorization_lease_authority_mismatch",
+                "authorization lease authority-set reference is not valid for its issuer and basis",
+            ));
+        }
+        let binding = lease.proof_binding_bytes(proof).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "invalid_proof",
+                format!("authorization lease proof binding is invalid: {error}"),
+            )
+        })?;
+        verify_service_publication_proof(
+            state,
+            &binding,
+            &proof.jws,
+            &proof.verification_method,
+            issuer.as_str(),
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::FORBIDDEN,
+                "invalid_proof",
+                format!("authorization lease issuer proof is invalid: {error}"),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+pub(super) async fn validate_ingress_receipt_proofs(
+    state: &AppState,
+    receipts: &[IngressReceipt],
+) -> Result<(), SubmitOneError> {
+    for receipt in receipts {
+        for proof in &receipt.proofs {
+            let issuer = arkret_identity::verification_method_did(&proof.verification_method)
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::BAD_REQUEST,
+                        "invalid_proof",
+                        format!("ingress receipt issuer is invalid: {error}"),
+                    )
+                })?;
+            if issuer != receipt.service_id {
+                return Err(SubmitOneError::new(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    "ingress receipt signer does not match receipt service_id",
+                ));
+            }
+            let binding = receipt.proof_binding_bytes(proof).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "invalid_proof",
+                    format!("ingress receipt proof binding is invalid: {error}"),
+                )
+            })?;
+            verify_service_publication_proof(
+                state,
+                &binding,
+                &proof.jws,
+                &proof.verification_method,
+                issuer.as_str(),
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    format!("ingress receipt proof is invalid: {error}"),
+                )
+            })?;
+        }
+    }
+    Ok(())
+}
+
+async fn verify_service_publication_proof(
+    state: &AppState,
+    binding: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+) -> Result<(), String> {
+    crate::jws_verify::validate_verification_method_controller(issuer, verification_method)?;
+    let cached_key = state
+        .federation_peer_verification_method_key(verification_method)
+        .or_else(|| state.federation_peer_verifying_key(issuer));
+    if let Some(key) = cached_key {
+        return arkret_signatures::Ed25519DetachedJwsVerifier::new()
+            .verify_detached_jws(
+                jws,
+                binding,
+                &arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+                    bytes: key.to_bytes().to_vec(),
+                },
+            )
+            .map_err(|error| error.to_string());
+    }
+    crate::jws_verify::verify_jws_ed25519_async(binding, jws, verification_method, issuer, state)
+        .await
+}
 
 /// Mint this service's ingress receipt for `parsed`, store it first-writer-wins
 /// and return the STORED record.
@@ -115,11 +307,11 @@ fn sign_ingress_receipt(
     let receipt_digest = receipt
         .receipt_digest()
         .map_err(|error| publication_reject(format!("receipt digest failed: {error}")))?;
-    let mut proof = Proof {
+    let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
         verification_method,
-        event_digest: receipt_digest,
+        payload_digest: receipt_digest,
         // §2 — verbatim equality, not "close enough": a retry that re-stamped
         // this would move the revocation boundary.
         created_at: received_at,
