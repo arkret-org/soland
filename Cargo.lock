@@ -5270,6 +5270,7 @@ dependencies = [
 name = "soland-test-support"
 version = "0.3.0"
 dependencies = [
+ "arkret-canonical",
  "arkret-event-draft",
  "arkret-identifiers",
  "arkret-identity",

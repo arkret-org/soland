@@ -11,6 +11,7 @@ description = "Development-only fixtures and helpers for Soland integration test
 publish = false
 
 [dependencies]
+arkret-canonical.workspace = true
 arkret-event-draft.workspace = true
 arkret-identifiers.workspace = true
 arkret-identity.workspace = true

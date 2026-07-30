@@ -1,6 +1,7 @@
 #![forbid(unsafe_code)]
 
 pub mod cba_basis;
+pub mod sealed_grant;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
