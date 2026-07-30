@@ -74,12 +74,23 @@ pub(super) async fn resolve_realm(
             .collect()
     };
     // Normalize the requested alias once under this deployment's authority
-    // domain; match against the entry's canonical alias (object-addressing.md
-    // §3.3) rather than the human-readable title.
-    let alias_query = body
-        .alias
-        .as_deref()
-        .and_then(|raw| crate::realm_alias::canonical_realm_alias(state.service_id(), raw));
+    // domain, then match the entry's canonical alias — the projection of
+    // `ak.component.realm.alias.v1` (object-addressing.md §3.3) — rather than
+    // the human-readable title. A caller MAY send a display form (`#general`,
+    // a bare localpart); a foreign-domain alias resolves to nothing here
+    // because this deployment issues aliases only beneath its own authority.
+    let alias_query = body.alias.as_deref().and_then(|raw| {
+        let authority =
+            arkret_models_collaboration::objects::realm_alias::RealmAlias::authority_domain_for_service(
+                state.service_id(),
+            )
+            .ok()?;
+        arkret_models_collaboration::objects::realm_alias::RealmAlias::prepare_under_authority(
+            raw, &authority,
+        )
+        .ok()
+        .map(|alias| alias.canonical().to_owned())
+    });
     let mut matched_realm = None;
     for entry in candidates {
         let matches_query = body

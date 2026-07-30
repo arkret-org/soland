@@ -69,6 +69,97 @@ pub(crate) async fn validate_history_visibility_content_scheme_policy(
     )
 }
 
+/// `history_visibility=restricted` requires an effective
+/// `ak.realm.history_sharing_policy` (history-visibility.md §3). This is the
+/// batch-level half of that rule, for the `ak.realm.create` genesis case.
+///
+/// The Realm object cannot carry the policy — `realm.schema.json` is closed and
+/// declares no `history_sharing_policy` property — so there are exactly two
+/// admissible sources:
+///
+/// * a Principal Control Realm takes the profile-fixed baseline from `ak.profile.principal_control_
+///   realm.v1`, because the facet kind is absent from its event-kind allowlist and its genesis is a
+///   closed unit (realm-and-space.md §2.8.1);
+/// * every other Realm MUST accept `ak.realm.history_sharing_policy` in the same ordered submit
+///   batch, where it is a registered seal_basis-exempt bootstrap follow-up (realm-and-space.md
+///   §2.5), or already have one projected.
+pub(crate) async fn validate_restricted_history_sharing_policy_present(
+    state: &AppState,
+    operations: &[Operation],
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    match restricted_history_sharing_requirement(operations, operation)? {
+        RestrictedHistorySharingRequirement::NotApplicable => Ok(()),
+        RestrictedHistorySharingRequirement::SatisfiedInBatch => Ok(()),
+        // Nothing in this batch supplies the policy; the Realm may still have
+        // one from an earlier accepted Event.
+        RestrictedHistorySharingRequirement::NeedsProjectedPolicy => {
+            let projected = state
+                .realms()
+                .realm_metadata(operation.realm_id.as_str())
+                .await
+                .ok()
+                .flatten()
+                .is_some_and(|meta| meta.history_sharing_policy.is_some());
+            if projected {
+                Ok(())
+            } else {
+                Err("history_sharing_policy_missing")
+            }
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RestrictedHistorySharingRequirement {
+    NotApplicable,
+    SatisfiedInBatch,
+    NeedsProjectedPolicy,
+}
+
+/// The batch-visible half of the decision, kept pure so the rule is testable
+/// without an `AppState`. Returns `Err` only for the PCR case whose profile-fixed
+/// baseline is unreadable — a PCR with no evaluable policy MUST fail closed
+/// rather than be admitted as if history sharing were open.
+fn restricted_history_sharing_requirement(
+    operations: &[Operation],
+    operation: &Operation,
+) -> Result<RestrictedHistorySharingRequirement, &'static str> {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_wire::events::EventKind::REALM_CREATE)
+    {
+        return Ok(RestrictedHistorySharingRequirement::NotApplicable);
+    }
+    let Some(object) = operation.payload.get("object") else {
+        return Ok(RestrictedHistorySharingRequirement::NotApplicable);
+    };
+    if object.get("history_visibility").and_then(Value::as_str) != Some("restricted") {
+        return Ok(RestrictedHistorySharingRequirement::NotApplicable);
+    }
+    if arkret_models_collaboration::objects::realm::realm_object_is_principal_control(object) {
+        arkret_policy::history_visibility::principal_control_realm_history_sharing_policy()
+            .map_err(|_| "history_sharing_policy_missing")?;
+        return Ok(RestrictedHistorySharingRequirement::NotApplicable);
+    }
+    let realm_id = operation.realm_id.as_str();
+    let in_batch = operations.iter().any(|candidate| {
+        kinds::canonical_kind_for_operation(candidate)
+            == Some(arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY)
+            && candidate.realm_id.as_str() == realm_id
+            && candidate.payload.get("value").is_some()
+    });
+    Ok(if in_batch {
+        RestrictedHistorySharingRequirement::SatisfiedInBatch
+    } else {
+        RestrictedHistorySharingRequirement::NeedsProjectedPolicy
+    })
+}
+
+async fn realm_is_principal_control(state: &AppState, realm_id: &str) -> bool {
+    let projection = state.projections().snapshot();
+    projection.realm_is_principal_control(realm_id)
+}
+
 const READ_RECEIPT_VISIBILITY_COMBINATION_INVALID: &str =
     "read_receipt_visibility_combination_invalid";
 const READ_RECEIPT_FORCED_PUBLIC_WORLD_READABLE_FORBIDDEN: &str =
@@ -448,7 +539,22 @@ pub(crate) async fn validate_realm_key_share_policy(
     else {
         return Err("history_sharing_policy_missing");
     };
-    let Some(policy_value) = meta.history_sharing_policy.as_ref() else {
+    // A Principal Control Realm has no projected policy cell and never can: the
+    // facet kind is absent from its event-kind allowlist. Its effective policy is
+    // the profile-fixed baseline (realm-and-space.md §2.8.1), so a PCR key share
+    // is evaluated against that instead of being refused for a missing Event.
+    let policy = if let Some(policy_value) = meta.history_sharing_policy.as_ref() {
+        let policy = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue,
+        >(policy_value.clone())
+        .map_err(|_| "policy_denied")?;
+        arkret_policy::history_visibility::validate_history_sharing_policy(&policy)
+            .map_err(|_| "policy_denied")?;
+        policy
+    } else if realm_is_principal_control(state, operation.realm_id.as_str()).await {
+        arkret_policy::history_visibility::principal_control_realm_history_sharing_policy()
+            .map_err(|_| "history_sharing_policy_missing")?
+    } else {
         return Err("history_sharing_policy_missing");
     };
     if !realm_key_share_receiver_is_current_member(
@@ -478,12 +584,6 @@ pub(crate) async fn validate_realm_key_share_policy(
         .await
         .map_err(|_| "policy_denied")?
         .ok_or("policy_denied")?;
-    let policy = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::HistorySharingPolicyPayloadValue,
-    >(policy_value.clone())
-    .map_err(|_| "policy_denied")?;
-    arkret_policy::history_visibility::validate_history_sharing_policy(&policy)
-        .map_err(|_| "policy_denied")?;
     let visibility = share.key_scope.history_visibility.unwrap_or_else(|| {
         meta.history_visibility
             .parse()
@@ -1085,6 +1185,111 @@ mod tests {
         assert_eq!(
             policy.disclosure,
             arkret_models_collaboration::objects::read_receipts::ReadReceiptDisclosure::Required
+        );
+    }
+
+    fn realm_create_op(realm_id: &str, object: Value) -> Operation {
+        Operation::create(
+            arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                .unwrap(),
+            arkret_identifiers::RealmId::new(realm_id).unwrap(),
+            arkret_wire::events::EventKind::REALM_CREATE,
+            json!({"object": object}),
+        )
+    }
+
+    fn history_sharing_policy_op(realm_id: &str) -> Operation {
+        Operation::create(
+            arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
+                .unwrap(),
+            arkret_identifiers::RealmId::new(realm_id).unwrap(),
+            arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY,
+            json!({"value": {"version": 1}}),
+        )
+    }
+
+    const TEST_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000f001";
+    const OTHER_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000f002";
+
+    /// `history_visibility=restricted` on an ordinary Realm MUST be backed by an
+    /// `ak.realm.history_sharing_policy`. It cannot come from the closed Realm
+    /// object, so the only in-batch source is the sibling facet Event.
+    #[test]
+    fn ordinary_restricted_create_is_satisfied_only_by_a_same_realm_batch_policy() {
+        let create = realm_create_op(TEST_REALM, json!({"history_visibility": "restricted"}));
+
+        // Alone in the batch: falls through to the projected-policy lookup.
+        assert_eq!(
+            restricted_history_sharing_requirement(std::slice::from_ref(&create), &create).unwrap(),
+            RestrictedHistorySharingRequirement::NeedsProjectedPolicy
+        );
+
+        // Sibling facet Event for the same Realm satisfies it in-batch.
+        let batch = vec![create.clone(), history_sharing_policy_op(TEST_REALM)];
+        assert_eq!(
+            restricted_history_sharing_requirement(&batch, &create).unwrap(),
+            RestrictedHistorySharingRequirement::SatisfiedInBatch
+        );
+
+        // A policy Event for a DIFFERENT Realm must not satisfy this create.
+        let cross_realm = vec![create.clone(), history_sharing_policy_op(OTHER_REALM)];
+        assert_eq!(
+            restricted_history_sharing_requirement(&cross_realm, &create).unwrap(),
+            RestrictedHistorySharingRequirement::NeedsProjectedPolicy
+        );
+    }
+
+    /// A fully marked PCR takes the profile-fixed baseline and needs no Event.
+    /// A HALF-marked object is not a PCR (`realm.schema.json` binds the two
+    /// discriminators bidirectionally) and MUST NOT collect the exemption.
+    #[test]
+    fn only_a_fully_marked_pcr_skips_the_history_sharing_policy_requirement() {
+        let pcr = realm_create_op(
+            TEST_REALM,
+            json!({
+                "history_visibility": "restricted",
+                "fields": {"purpose": "principal_control"},
+                "schema_refs": [
+                    "ak.schema.realm.v1",
+                    "ak.profile.principal_control_realm.v1"
+                ]
+            }),
+        );
+        assert_eq!(
+            restricted_history_sharing_requirement(std::slice::from_ref(&pcr), &pcr).unwrap(),
+            RestrictedHistorySharingRequirement::NotApplicable
+        );
+
+        for half_marked in [
+            json!({
+                "history_visibility": "restricted",
+                "fields": {"purpose": "principal_control"}
+            }),
+            json!({
+                "history_visibility": "restricted",
+                "schema_refs": [
+                    "ak.schema.realm.v1",
+                    "ak.profile.principal_control_realm.v1"
+                ]
+            }),
+        ] {
+            let create = realm_create_op(TEST_REALM, half_marked);
+            assert_eq!(
+                restricted_history_sharing_requirement(std::slice::from_ref(&create), &create)
+                    .unwrap(),
+                RestrictedHistorySharingRequirement::NeedsProjectedPolicy,
+                "a half-marked object is not a PCR and keeps the ordinary requirement"
+            );
+        }
+    }
+
+    /// A non-restricted create carries no requirement at all.
+    #[test]
+    fn non_restricted_create_carries_no_history_sharing_requirement() {
+        let create = realm_create_op(TEST_REALM, json!({"history_visibility": "shared"}));
+        assert_eq!(
+            restricted_history_sharing_requirement(std::slice::from_ref(&create), &create).unwrap(),
+            RestrictedHistorySharingRequirement::NotApplicable
         );
     }
 }

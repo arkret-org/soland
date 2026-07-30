@@ -62,10 +62,30 @@ pub(super) fn operation_realm_summary(operation: &Operation) -> Option<&str> {
         .or_else(|| patch_string_field(operation, "summary"))
 }
 
-pub(super) fn operation_realm_alias_input(operation: &Operation) -> Option<&str> {
-    first_string_field(&operation.payload, &["realm_alias", "alias"])
-        .or_else(|| object_string_field(operation, &["alias"]))
-        .or_else(|| patch_string_field(operation, "alias"))
+/// Canonical alias declared by an accepted `ak.realm.alias` Event.
+///
+/// `ak.realm.alias` is the ONLY wire carrier of a Realm alias
+/// (`discovery/object-addressing.md` §3.3): `realm.schema.json` is closed and
+/// declares no `alias`, and `ak.realm.create` / `ak.realm.update` payloads MUST
+/// NOT carry one. The earlier fallback chain over `payload.realm_alias`,
+/// `payload.alias`, `payload.object.alias` and `patch.alias` accepted four
+/// input shapes for one fact, which is exactly how create-time alias diverged
+/// from the closed schema; those shapes are now registered forbidden wire
+/// fields. Returns `None` for the `{"tombstone": true}` release form.
+pub(super) fn operation_realm_alias_declaration(operation: &Operation) -> Option<&str> {
+    (kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_wire::events::EventKind::REALM_ALIAS))
+    .then(|| operation.payload.get("alias").and_then(Value::as_str))
+    .flatten()
+}
+
+/// Whether this operation is the `ak.realm.alias` value tombstone that releases
+/// the Realm's alias. After it is accepted the Realm resolves only by
+/// `realm_id`; the cell history is preserved, nothing is physically erased.
+pub(super) fn operation_releases_realm_alias(operation: &Operation) -> bool {
+    kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_wire::events::EventKind::REALM_ALIAS)
+        && operation.payload.get("tombstone").and_then(Value::as_bool) == Some(true)
 }
 
 pub(super) fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
@@ -103,18 +123,20 @@ pub(super) fn operation_realm_history_visibility(operation: &Operation) -> Optio
         .or_else(|| patch_string_field(operation, "history_visibility"))
 }
 
+/// Effective history sharing policy declared by an accepted
+/// `ak.realm.history_sharing_policy` Event.
+///
+/// The policy is a mutable facet cell, never a create-locked property of the
+/// closed `realm.schema.json`; the old `payload.object.history_sharing_policy`
+/// branch read a field no schema branch accepts. A Principal Control Realm
+/// publishes no such Event at all — its effective baseline is fixed by
+/// `ak.profile.principal_control_realm.v1` (`models/realm-and-space.md` §2.8.1,
+/// `governance/history-visibility.md` §3).
 pub(super) fn operation_realm_history_sharing_policy(operation: &Operation) -> Option<Value> {
-    match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY) => {
-            operation.payload.get("value").cloned()
-        }
-        Some(arkret_wire::events::EventKind::REALM_CREATE) => operation
-            .payload
-            .get("object")
-            .and_then(|object| object.get("history_sharing_policy"))
-            .cloned(),
-        _ => None,
-    }
+    (kinds::canonical_kind_for_operation(operation)
+        == Some(arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY))
+    .then(|| operation.payload.get("value").cloned())
+    .flatten()
 }
 
 pub(super) fn operation_realm_preview_policy(operation: &Operation) -> Option<Value> {

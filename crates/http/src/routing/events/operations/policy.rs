@@ -297,6 +297,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_realm_organization_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;
         validate_history_visibility_content_scheme_policy(state, operations, operation).await?;
+        validate_restricted_history_sharing_policy_present(state, operations, operation).await?;
         validate_read_receipt_policy_combination_write(state, operations, operation).await?;
         validate_realm_key_share_policy(state, operation).await?;
         validate_realm_moderation_policy(state, operation).await?;

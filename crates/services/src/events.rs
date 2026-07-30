@@ -259,20 +259,6 @@ impl RealmDirectoryService {
         self.index.lock().upsert(entry);
     }
 
-    pub fn upsert_resolving_alias(&self, mut entry: RealmDirectoryEntry) -> bool {
-        let mut index = self.index.lock();
-        let alias_accepted = entry.alias.as_ref().is_none_or(|alias| {
-            !index.entries_iter().any(|(realm_id, existing)| {
-                realm_id != &entry.realm_id && existing.alias.as_ref() == Some(alias)
-            })
-        });
-        if !alias_accepted {
-            entry.alias = None;
-        }
-        index.upsert(entry);
-        alias_accepted
-    }
-
     pub fn update_entry<R>(
         &self,
         realm_id: &RealmId,
@@ -293,6 +279,17 @@ impl RealmDirectoryService {
             entry.alias = Some(alias);
             true
         })
+    }
+
+    /// Release this Realm's alias, projected from an accepted `ak.realm.alias`
+    /// value tombstone. The Realm then resolves only by `realm_id`, and the
+    /// canonical alias becomes claimable by another Realm — a tombstone is the
+    /// only way to free an alias, since a later declaration by a different
+    /// Realm is rejected while the alias is still held
+    /// (`discovery/object-addressing.md` §3.3).
+    pub fn clear_alias(&self, realm_id: &RealmId) -> bool {
+        self.update_entry(realm_id, |entry| entry.alias.take().is_some())
+            .unwrap_or(false)
     }
 
     pub fn add_member(&self, realm_id: &RealmId, member: Did) -> bool {

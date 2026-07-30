@@ -25,7 +25,6 @@ pub mod openapi;
 pub mod openapi_routes;
 pub mod push_rule_core;
 pub mod ratelimit;
-pub mod realm_alias;
 pub mod result;
 pub mod routing;
 pub mod runtime_settings;

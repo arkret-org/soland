@@ -705,7 +705,9 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
             "default_join_rule": "invite",
             "history_visibility": "shared",
             "encryption_profile": "none",
-            "plaintext_visible_services": ["did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service"],
+            // No `plaintext_visible_services` on the object: `realm.schema.json`
+            // is closed and its only carrier is the dedicated
+            // `ak.realm.plaintext_visible_services` facet Event.
             "security_class": "standard",
             "federation_policy": "restricted",
             "notary_profile": "single_did",
@@ -1426,18 +1428,16 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "fields": {"purpose": "principal_control"},
                 "content_encryption_floor": "e2ee_required",
                 "metadata_encryption_floor": "e2ee_required",
-                "plaintext_visible_services": [],
-                "history_sharing_policy": {
-                    "version": 1,
-                    "default_key_share": "deny",
-                    "pre_join_history": "deny",
-                    "allowed_key_sources": ["key_backup"],
-                    "allowed_receiver_states": ["active_member"],
-                    "audit": {
-                        "share_audit_event_required": true,
-                        "access_audit_required": true
-                    }
-                },
+                // `realm.schema.json` is closed (`unevaluatedProperties: false`)
+                // and declares neither `plaintext_visible_services` nor
+                // `history_sharing_policy`. The former has the dedicated
+                // `ak.realm.plaintext_visible_services` facet Event; the latter
+                // is fixed for a PCR by
+                // `ak.profile.principal_control_realm.v1`'s
+                // `history_sharing_policy_fixed_baseline` (realm-and-space.md
+                // §2.8.1), which is why a single-Event managed Agent PCR genesis
+                // satisfies `history_visibility=restricted` without publishing a
+                // policy Event it is not even allowed to write.
                 "notary": {
                     "kind": "single_did",
                     "did": agent_id,
