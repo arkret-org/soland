@@ -125,9 +125,6 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
     dev_login_token(state, actor, device_suffix).await
 }
 
-/// The data-plane actions this suite's ghost-authored DataEvents exercise.
-const DATA_PLANE_GRANT_ACTIONS: [&str; 1] = ["ak.message.create"];
-
 /// A citable accepted Seal of the demo Realm that establishes this service as
 /// the current single-DID proposal/notary authority.
 ///
@@ -135,9 +132,9 @@ const DATA_PLANE_GRANT_ACTIONS: [&str; 1] = ["ak.message.create"];
 /// Move whose `seal_basis.leaves` must be non-empty; unlike a DataEvent
 /// `seal_ref`, the leaves are not resolved into an authorization pre-state at
 /// admission, but proposal receipt admission still resolves the accepted
-/// notary cell. A DataEvent fixture needs the sealed founding unit instead —
-/// see [`DATA_PLANE_GRANT_ACTIONS`] and `soland_test_support::cba_basis`.
+/// notary cell.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
+    const ADMIN_GRANT_ID: &str = "ak:grant:0196419b-0000-7000-8000-000000000001";
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
     let create = arkret_wire::Event::new(
@@ -161,6 +158,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     )
     .unwrap();
     let move_id = arkret_identifiers::Hash::new(create.event_digest().unwrap()).unwrap();
+    let admin_grant_move_id =
+        arkret_identifiers::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
     let notary_cell: arkret_identifiers::CellRef = arkret_wire::REALM_NOTARY_CELL.parse().unwrap();
     let notary_op = arkret_state::lattice::ordered_log::IssuedOp {
         issuer: Did::new(state.service_id().clone()).unwrap(),
@@ -180,26 +179,73 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             },
         ),
     };
+    let admin_grant_cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.capability.grant.v1:{ADMIN_GRANT_ID}"
+    ))
+    .unwrap();
+    let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
+        issuer: Did::new("did:web:alice.example").unwrap(),
+        op: arkret_state::lattice::SealedOp::new(
+            admin_grant_move_id.clone(),
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Add,
+                tag: Some(admin_grant_move_id.to_string()),
+                value: Some(json!({
+                    "grant_id": ADMIN_GRANT_ID,
+                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "realm_id": DEMO_REALM_ID,
+                    "issuer": "did:web:alice.example",
+                    "subject": "did:web:alice.example",
+                    "actions": arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
+                    "resources": [{
+                        "kind": "realm",
+                        "realm_id": DEMO_REALM_ID,
+                        "match_scope": "realm_wide"
+                    }],
+                    "capability_action_registry_digest":
+                        arkret_policy::current_capability_action_registry_digest().unwrap(),
+                    "issued_at": "2026-01-01T00:00:00.000Z"
+                })),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        ),
+    };
     let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
-    let binding = registry
+    let notary_binding = registry
         .resolve(&realm, &notary_cell)
         .expect("notary cell family is registered");
-    let joined = arkret_state::join_cell(
-        binding.lattice.as_ref(),
+    let notary_joined = arkret_state::join_cell(
+        notary_binding.lattice.as_ref(),
         &notary_cell,
         std::slice::from_ref(&notary_op),
     );
-    let state_root =
-        arkret_state::compute_state_root(&BTreeMap::from([(notary_cell.clone(), joined)])).unwrap();
+    let grant_binding = registry
+        .resolve(&realm, &admin_grant_cell)
+        .expect("capability grant cell family is registered");
+    let grant_joined = arkret_state::join_cell(
+        grant_binding.lattice.as_ref(),
+        &admin_grant_cell,
+        std::slice::from_ref(&admin_grant_op),
+    );
+    let state_root = arkret_state::compute_state_root(&BTreeMap::from([
+        (notary_cell.clone(), notary_joined),
+        (admin_grant_cell.clone(), grant_joined),
+    ]))
+    .unwrap();
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         [0x21; 32],
         Did::new("did:web:alice.example").unwrap(),
         "did:web:alice.example#extension-test-notary",
     );
+    let mut delta = vec![move_id, admin_grant_move_id];
+    delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
     let seal = arkret_wire::Seal::sign_single(
         realm.clone(),
         Vec::new(),
-        vec![move_id],
+        delta,
         state_root,
         arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce001").unwrap(),
         &signer,
@@ -207,8 +253,13 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     .unwrap();
     state.test_put_seal(&seal).unwrap();
     state
-        .test_append_sealed_effects(&realm, &seal.id, &[(notary_cell, notary_op)])
+        .test_append_sealed_effects(
+            &realm,
+            &seal.id,
+            &[(notary_cell, notary_op), (admin_grant_cell, admin_grant_op)],
+        )
         .unwrap();
+    state.test_refresh_grant_from_sealed_cells(&realm, ADMIN_GRANT_ID);
     let envelope = serde_json::to_value(&create).unwrap();
     state
         .test_persistence()
@@ -1086,23 +1137,20 @@ fn applet_message_event(
         ("external_id".to_owned(), json!(actor_id)),
     ]));
     let verification_method = format!("{}#applet-service-key", package.service_id);
-    // `ak.message.create` is a data-plane reducer input, so
-    // `event-auth-state-resolution.md` §4(1) makes this a DataEvent: the
-    // envelope's `seal_ref` has to resolve to governance state that already
-    // authorizes `ak.message.create` for the ghost actor. The applet's
-    // `authorization_ref` delegation is checked separately and never stands in
-    // for that basis, so the fixture seals the ghost actor's founding unit.
-    soland_test_support::cba_basis::seed_realm_basis(
-        state,
-        realm_id,
-        actor_id,
-        &DATA_PLANE_GRANT_ACTIONS,
-    );
-    soland_test_support::cba_basis::apply_registered_cba_plane(
-        &mut event,
-        &verification_method,
-        &DATA_PLANE_GRANT_ACTIONS,
-    );
+    // `ak.message.create` is a DataEvent. Formal Applet install grants are
+    // issued to the executing service, while actor_id remains the accountable
+    // ghost, so the frozen CBA view must cover the exact install
+    // authorization_ref for the executing service.
+    let seal_id = seed_applet_message_grant_basis(state, package, realm_id, authorization_ref);
+    event.seal_ref = Some(seal_id);
+    event.auth_context = Some(arkret_wire::AuthContext {
+        did: package.service_id.clone(),
+        key_id: verification_method
+            .split_once('#')
+            .map_or_else(|| verification_method.clone(), |(_, key)| key.to_owned()),
+        key_epoch: 0,
+        credential_epoch: None,
+    });
     let signing_key = applet_service_signing_key(&verification_method);
     let signer = Ed25519PayloadSigner::new(
         signing_key,
@@ -1152,6 +1200,87 @@ fn applet_service_signing_key(verification_method: &str) -> SigningKey {
     hasher.update(verification_method.as_bytes());
     let seed: [u8; 32] = hasher.finalize().into();
     SigningKey::from_bytes(&seed)
+}
+
+fn seed_applet_message_grant_basis(
+    state: &AppState,
+    package: &AppletPackage,
+    realm_id: &str,
+    grant_id: &str,
+) -> arkret_identifiers::SealId {
+    let realm = RealmId::new(realm_id.to_owned()).unwrap();
+    let cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+    ))
+    .unwrap();
+    let move_id = arkret_identifiers::Hash::new(format!(
+        "sha256:{}",
+        Sha256::digest(format!("applet-message-grant:{grant_id}").as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    ))
+    .unwrap();
+    let op = arkret_state::lattice::ordered_log::IssuedOp {
+        issuer: Did::new("did:web:alice.example").unwrap(),
+        op: arkret_state::lattice::SealedOp::new(
+            move_id.clone(),
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Add,
+                tag: Some(move_id.to_string()),
+                value: Some(json!({
+                    "grant_id": grant_id,
+                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "realm_id": realm_id,
+                    "issuer": "did:web:alice.example",
+                    "subject": package.service_id,
+                    "actions": ["ak.message.create"],
+                    "resources": [{"kind": "realm", "realm_id": realm_id}],
+                    "constraints": [{
+                        "constraint_kind": "delegation_control",
+                        "constraint_subkind": "applet_delegation",
+                        "effect": "allow",
+                        "evaluation_class": "grant_local",
+                        "applet_id": package.applet_id,
+                        "executed_by": package.service_id,
+                        "registration_epoch": package.registration_epoch
+                    }],
+                    "issued_at": "2026-01-01T00:00:00.000Z"
+                })),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        ),
+    };
+    let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
+    let binding = registry
+        .resolve(&realm, &cell)
+        .expect("capability grant cell family is registered");
+    let joined =
+        arkret_state::join_cell(binding.lattice.as_ref(), &cell, std::slice::from_ref(&op));
+    let state_root =
+        arkret_state::compute_state_root(&BTreeMap::from([(cell.clone(), joined)])).unwrap();
+    let signer = Ed25519PayloadSigner::from_did_key_seed(
+        [0x21; 32],
+        Did::new("did:web:alice.example").unwrap(),
+        "did:web:alice.example#extension-test-notary",
+    );
+    let seal = arkret_wire::Seal::sign_single(
+        realm.clone(),
+        Vec::new(),
+        vec![move_id],
+        state_root,
+        arkret_identifiers::Hlc::new("0196419b0001-0000-a11ce001").unwrap(),
+        &signer,
+    )
+    .unwrap();
+    state.test_put_seal(&seal).unwrap();
+    state
+        .test_append_sealed_effects(&realm, &seal.id, &[(cell, op)])
+        .unwrap();
+    seal.id
 }
 
 fn strand_id_for_realm(realm_id: &str) -> String {
@@ -1394,6 +1523,10 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     package.requested_scopes = vec![
         "ak.message.create".to_owned(),
         "ak.applet.ghost.provision".to_owned(),
+    ];
+    package.claimed_profiles = vec![
+        "ak.profile.applet_bridge.v1".to_owned(),
+        "ak.profile.applet_service.v1".to_owned(),
     ];
     package.endpoint_policy = AppletEndpointPolicy {
         endpoints: [

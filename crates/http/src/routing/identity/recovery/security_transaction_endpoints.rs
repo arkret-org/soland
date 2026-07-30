@@ -373,10 +373,11 @@ async fn submit_rotation_event_unit(
             .map(|event_id| event_id.as_str())
             .ne(expected_event_ids.iter().map(|event_id| event_id.as_str()))
     {
-        return Err(
-            AppError::conflict("prepared rotation Event unit was not fully accepted")
-                .with_wire_code("security_transaction_failed_precondition"),
-        );
+        return Err(AppError::conflict(format!(
+            "prepared rotation Event unit was not fully accepted: accepted={:?}, rejected={:?}, quarantine={:?}",
+            outcome.accepted, outcome.rejected, outcome.quarantine
+        ))
+        .with_wire_code("security_transaction_failed_precondition"));
     }
     serde_json::to_value(outcome).map_err(|error| AppError::internal(error.to_string()))
 }
@@ -871,6 +872,14 @@ pub(crate) async fn backup_series_erase_command(
         .backup_erase_progress(&transaction_id)
         .await
         .map_err(security_transaction_service_error)?;
+    let test_fail_after_deletes = if state.config().development_mode && existing_progress.is_none()
+    {
+        std::env::var("SOLAND_TEST_ROTATION_ERASE_FAIL_AFTER")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+    } else {
+        None
+    };
     if existing_progress.is_none() {
         for rotation in &binding.backup_rotations {
             for old in &rotation.old_backups {
@@ -931,12 +940,17 @@ pub(crate) async fn backup_series_erase_command(
             .map_err(security_transaction_service_error)?,
     };
 
+    let mut deleted_this_attempt = 0_usize;
     for result_index in 0..progress.outcome.series_results.len() {
         let remaining = progress.outcome.series_results[result_index]
             .remaining_backups
             .clone();
         let mut storage_failed = false;
         for old in remaining {
+            if test_fail_after_deletes.is_some_and(|limit| deleted_this_attempt >= limit) {
+                storage_failed = true;
+                continue;
+            }
             if let Some(existing) = state
                 .key_backups()
                 .backup(old.backup_id.as_str())
@@ -964,6 +978,7 @@ pub(crate) async fn backup_series_erase_command(
                 storage_failed = true;
                 continue;
             }
+            deleted_this_attempt += 1;
             let result = &mut progress.outcome.series_results[result_index];
             result
                 .remaining_backups
