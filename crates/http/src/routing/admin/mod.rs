@@ -15,6 +15,7 @@ mod moderation;
 mod queries;
 mod retention;
 mod seal;
+pub(crate) use seal::pick_admin_seal_basis;
 mod server_ops;
 mod settings;
 

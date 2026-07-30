@@ -173,47 +173,6 @@ pub async fn accept_local_operations(
     .await
 }
 
-/// Validate policy against an actor-contextual copy while persisting the original operations.
-///
-/// Some closed protocol payloads intentionally carry no actor alias. Local HTTP authentication
-/// still has to reach the generic policy validator, but the contextual alias must never leak into
-/// the canonical event payload or its CAS-register value.
-pub async fn accept_local_operations_with_policy_actor(
-    state: &AppState,
-    actor: &str,
-    operations: &[Operation],
-) -> Result<(), &'static str> {
-    let mut policy_operations = operations.to_vec();
-    for operation in &mut policy_operations {
-        if operation.actor().is_none()
-            && let Some(payload) = operation.payload.as_object_mut()
-        {
-            payload.insert(
-                "sender".to_owned(),
-                serde_json::Value::String(actor.to_owned()),
-            );
-        }
-    }
-    let wire_operations = operations
-        .iter()
-        .map(|operation| {
-            let mut wire_operation = operation.clone();
-            wire_operation.payload =
-                crate::routing::events::projection_context_stripped_payload(&operation.payload);
-            wire_operation
-        })
-        .collect::<Vec<_>>();
-    accept_local_operations_with_policy_context(
-        state,
-        actor,
-        operations,
-        &policy_operations,
-        &wire_operations,
-        true,
-    )
-    .await
-}
-
 async fn accept_local_operations_with_policy_context(
     state: &AppState,
     actor: &str,

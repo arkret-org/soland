@@ -1328,6 +1328,21 @@ async fn claim_keypackages_for_request_inner(
         )
         .with_wire_code("mls_keypackage_claim_request_expired"));
     }
+    let body_value = serde_json::to_value(body)
+        .map_err(|error| AppError::internal(format!("local claim serialize: {error}")))?;
+    let request_digest = arkret_canonical::canonical_sha256(&body_value)
+        .map_err(|error| AppError::internal(format!("local claim digest: {error}")))?;
+    let local_claim_request_id = local_last_resort_claim_request_id(body)?;
+    if let Some(existing) = state
+        .mls_key_packages()
+        .peer_claim(state.service_id(), &local_claim_request_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("last-resort claim ledger lookup failed: {error}"))
+        })?
+    {
+        return replay_local_last_resort_claim(existing, &request_digest);
+    }
     let required_capabilities = required_capability_set(&body.required_capabilities)?;
 
     let target_principal_did = body.target_principal_id.clone();
@@ -1544,7 +1559,7 @@ async fn claim_keypackages_for_request_inner(
         return Err(AppError::internal("claimed KeyPackage row missing"));
     };
 
-    Ok(KeyPackagesClaimOutcome {
+    let outcome = KeyPackagesClaimOutcome {
         claims: vec![keypackage_claim_record(&claimed_record, &body.claim_nonce)?],
         failures: Vec::new(),
         available_count: Some(available_keypackage_count(
@@ -1554,7 +1569,116 @@ async fn claim_keypackages_for_request_inner(
             Some(&trust_selector),
             Some(&intended_realm_id),
         )),
-    })
+    };
+    if claimed_record.last_resort {
+        return record_local_last_resort_claim(
+            state,
+            body,
+            &claimed_record,
+            &mls_group_ref,
+            &local_claim_request_id,
+            &request_digest,
+            outcome,
+            now_secs,
+        )
+        .await;
+    }
+    Ok(outcome)
+}
+
+fn local_last_resort_claim_request_id(
+    body: &KeyPackagesClaimRequestBody,
+) -> Result<String, AppError> {
+    let identity = json!({
+        "requester": body.requester,
+        "claim_nonce": body.claim_nonce,
+    });
+    let digest = arkret_canonical::canonical_sha256(&identity)
+        .map_err(|error| AppError::internal(format!("last-resort claim identity: {error}")))?;
+    Ok(format!("local-last-resort:{digest}"))
+}
+
+async fn record_local_last_resort_claim(
+    state: &AppState,
+    body: &KeyPackagesClaimRequestBody,
+    keypackage: &MlsKeyPackageRow,
+    mls_group_ref: &str,
+    claim_request_id: &str,
+    request_digest: &str,
+    outcome: KeyPackagesClaimOutcome,
+    claimed_at: i64,
+) -> Result<KeyPackagesClaimOutcome, AppError> {
+    let response = serde_json::to_value(&outcome).map_err(|error| {
+        AppError::internal(format!("last-resort claim response serialize: {error}"))
+    })?;
+    let record = PeerKeyPackageClaimLedgerRecord {
+        source_service_id: state.service_id().clone(),
+        claim_request_id: claim_request_id.to_owned(),
+        request_digest: request_digest.to_owned(),
+        state: "last_resort_claimed".to_owned(),
+        outcome: Some(json!({
+            "schema": "soland.last_resort_keypackage_claim.v1",
+            "claim_id": format!("{}:{}", keypackage.id, body.claim_nonce),
+            "keypackage_id": keypackage.id,
+            "keypackage_ref": keypackage.keypackage_ref,
+            "keypackage_digest": keypackage.keypackage_digest,
+            "claimant_id": body.requester,
+            "recipient_principal_id": body.target_principal_id,
+            "recipient_device_id": keypackage.device_id,
+            "intended_realm_id": body.intended_realm_id,
+            "mls_group_ref": mls_group_ref,
+            "strand_id": body.strand_id,
+            "claim_nonce": body.claim_nonce,
+            "claimed_at_unix_seconds": claimed_at,
+            "transaction_expires_at": body.expires_at,
+            "response": response,
+        })),
+        keypackage_id: Some(keypackage.id.clone()),
+        // A reusable last-resort package has no single-use claim deadline and
+        // MUST remain published. The transaction deadline is retained inside
+        // the immutable audit payload instead.
+        claim_expires_at_unix_ms: None,
+        expires_at: i64::MAX,
+        updated_at: claimed_at,
+    };
+    match state
+        .mls_key_packages()
+        .store_peer_claim_terminal(&record)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("last-resort claim ledger append failed: {error}"))
+        })? {
+        PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(outcome),
+        PeerKeyPackageClaimLedgerWriteResult::Existing(existing)
+            if existing.request_digest == request_digest =>
+        {
+            replay_local_last_resort_claim(existing, request_digest)
+        }
+        PeerKeyPackageClaimLedgerWriteResult::Existing(_) => Err(AppError::new(
+            ErrorCode::CasConflict,
+            "last-resort claim nonce was already used for a different request",
+        )
+        .with_wire_code("duplicate_conflict")),
+    }
+}
+
+fn replay_local_last_resort_claim(
+    record: PeerKeyPackageClaimLedgerRecord,
+    request_digest: &str,
+) -> Result<KeyPackagesClaimOutcome, AppError> {
+    if record.state != "last_resort_claimed" || record.request_digest != request_digest {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "last-resort claim idempotency record conflicts with the request",
+        )
+        .with_wire_code("duplicate_conflict"));
+    }
+    let response = record
+        .outcome
+        .and_then(|value| value.get("response").cloned())
+        .ok_or_else(|| AppError::internal("last-resort claim ledger response is missing"))?;
+    serde_json::from_value(response)
+        .map_err(|error| AppError::internal(format!("last-resort claim replay failed: {error}")))
 }
 
 #[salvo::oapi::endpoint(

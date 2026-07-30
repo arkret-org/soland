@@ -173,6 +173,7 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
 pub(in crate::routing) struct InternalEventAdmission {
     realm_id: String,
     actor_id: String,
+    session_actor_id: String,
     kind: String,
     device_id: String,
     binding: InternalEventBinding,
@@ -206,6 +207,10 @@ enum InternalEventBinding {
         reporter: String,
         target_ref: String,
     },
+    RealmPolicyServer {
+        requested_by: String,
+        payload: Value,
+    },
     AppletFormal {
         event_id: String,
     },
@@ -226,9 +231,11 @@ impl InternalEventAdmission {
         actor_id: impl Into<String>,
         binding_ref: impl Into<String>,
     ) -> Self {
+        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
             kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
             device_id: "mimi-provider-facade".to_owned(),
             binding: InternalEventBinding::MimiProvider {
@@ -244,9 +251,11 @@ impl InternalEventAdmission {
         owner: impl Into<String>,
         key: impl Into<String>,
     ) -> Self {
+        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
             kind: arkret_wire::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::AccountData {
@@ -262,14 +271,36 @@ impl InternalEventAdmission {
         reporter: impl Into<String>,
         target_ref: impl Into<String>,
     ) -> Self {
+        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
             kind: arkret_wire::events::EventKind::SELF_MODERATION_REPORT.to_owned(),
             device_id: "moderation-report-service".to_owned(),
             binding: InternalEventBinding::ModerationReport {
                 reporter: reporter.into(),
                 target_ref: target_ref.into(),
+            },
+        }
+    }
+
+    pub(in crate::routing) fn realm_policy_server(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        requested_by: impl Into<String>,
+        payload: Value,
+    ) -> Self {
+        let requested_by = requested_by.into();
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: requested_by.clone(),
+            session_actor_id: actor_id.into(),
+            kind: arkret_wire::events::EventKind::REALM_POLICY_SERVER.to_owned(),
+            device_id: "realm-policy-server-service".to_owned(),
+            binding: InternalEventBinding::RealmPolicyServer {
+                requested_by,
+                payload,
             },
         }
     }
@@ -281,9 +312,11 @@ impl InternalEventAdmission {
         subject_id: impl Into<String>,
         signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
     ) -> Self {
+        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
             kind: arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::PeerDirectBinding {
@@ -299,9 +332,11 @@ impl InternalEventAdmission {
         kind: impl Into<String>,
         event_id: impl Into<String>,
     ) -> Self {
+        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
             kind: kind.into(),
             device_id: "applet-service".to_owned(),
             binding: InternalEventBinding::AppletFormal {
@@ -318,9 +353,11 @@ impl InternalEventAdmission {
         signer_key_evidence: Vec<arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
         agent_signer_evidence: Vec<VerifiedFederatedAgentSignerEvidence>,
     ) -> Self {
+        let actor_id = actor_id.into();
         Self {
             realm_id: realm_id.into(),
-            actor_id: actor_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
             kind: String::new(),
             device_id: device_id.into(),
             binding: InternalEventBinding::PeerFederatedEvent {
@@ -336,7 +373,7 @@ impl InternalEventAdmission {
         session: &SessionRecord,
         object: &serde_json::Map<String, Value>,
     ) -> bool {
-        session.actor == self.actor_id
+        session.actor == self.session_actor_id
             && session.device_id == self.device_id
             && object.get("actor_id").and_then(Value::as_str) == Some(self.actor_id.as_str())
             && object.get("realm_id").and_then(Value::as_str) == Some(self.realm_id.as_str())
@@ -366,6 +403,15 @@ impl InternalEventAdmission {
                         && payload.get("target_ref").and_then(Value::as_str)
                             == Some(target_ref.as_str())
                 }),
+                InternalEventBinding::RealmPolicyServer {
+                    requested_by,
+                    payload,
+                } => {
+                    requested_by == &self.actor_id
+                        && object.get("executed_by").and_then(Value::as_str)
+                            == Some(self.session_actor_id.as_str())
+                        && object.get("payload") == Some(payload)
+                }
                 InternalEventBinding::AppletFormal { event_id } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
@@ -2053,6 +2099,7 @@ use value::*;
 pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
     submit_mimi_event_value, submit_moderation_report_event_value,
+    submit_realm_policy_server_event_value,
 };
 
 #[cfg(test)]
@@ -2161,12 +2208,12 @@ mod managed_agent_pcr_batch_tests {
 mod internal_event_admission_tests {
     use super::*;
 
-    fn mimi_session() -> SessionRecord {
+    fn internal_session(actor: &str, device_id: &str) -> SessionRecord {
         let now = Utc::now();
         SessionRecord {
-            token_hash: "mimi-session".to_owned(),
-            actor: "did:web:mimi.example".to_owned(),
-            device_id: "mimi-provider-facade".to_owned(),
+            token_hash: "internal-session".to_owned(),
+            actor: actor.to_owned(),
+            device_id: device_id.to_owned(),
             audience: "soland".to_owned(),
             session_public_key: None,
             agent_session: None,
@@ -2174,6 +2221,10 @@ mod internal_event_admission_tests {
             created_at: now,
             revoked_at: None,
         }
+    }
+
+    fn mimi_session() -> SessionRecord {
+        internal_session("did:web:mimi.example", "mimi-provider-facade")
     }
 
     #[test]
@@ -2197,6 +2248,42 @@ mod internal_event_admission_tests {
         });
 
         assert!(admission.matches(&mimi_session(), object.as_object().unwrap()));
+    }
+
+    #[test]
+    fn realm_policy_server_admission_is_bound_to_caller_and_exact_payload() {
+        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
+        let service_id = "did:web:service.example";
+        let requested_by = "did:web:alice.example";
+        let payload = json!({
+            "policy_server": {
+                "kind": "https",
+                "url": "https://policy.example"
+            }
+        });
+        let admission = InternalEventAdmission::realm_policy_server(
+            realm_id,
+            service_id,
+            requested_by,
+            payload.clone(),
+        );
+        let mut object = json!({
+            "actor_id": requested_by,
+            "realm_id": realm_id,
+            "kind": arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+            "executed_by": service_id,
+            "payload": payload,
+        });
+        let session = internal_session(service_id, "realm-policy-server-service");
+
+        assert!(admission.matches(&session, object.as_object().unwrap()));
+
+        object["actor_id"] = json!("did:web:mallory.example");
+        assert!(!admission.matches(&session, object.as_object().unwrap()));
+
+        object["actor_id"] = json!(requested_by);
+        object["payload"]["policy_server"]["url"] = json!("https://tampered.example");
+        assert!(!admission.matches(&session, object.as_object().unwrap()));
     }
 }
 

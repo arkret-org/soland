@@ -312,6 +312,33 @@ pub(in crate::routing) async fn submit_moderation_report_event_value(
     .await
 }
 
+pub(in crate::routing) async fn submit_realm_policy_server_event_value(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    realm_id: &str,
+    requested_by: &str,
+    payload: Value,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let admission = InternalEventAdmission::realm_policy_server(
+        realm_id,
+        state.service_id().as_str(),
+        requested_by,
+        payload,
+    );
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        Some(&admission),
+        None,
+        None,
+    )
+    .await
+}
+
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,
@@ -768,8 +795,13 @@ pub(super) async fn submit_event_value_with_context(
                 crate::routing::events::operations::operation_policy_reason_code(message);
             return Err(SubmitOneError::new(status, code, message));
         }
+        let policy_actor = operation.actor();
+        let policy_actor = policy_actor
+            .as_ref()
+            .map(arkret_identifiers::Did::as_str)
+            .unwrap_or(parsed.actor_id.as_str());
         if let Err(rejection) =
-            policy_gate::enforce_operation_policy_server(state, &parsed.actor_id, operation).await
+            policy_gate::enforce_operation_policy_server(state, policy_actor, operation).await
         {
             return Err(SubmitOneError::new(
                 rejection.status,

@@ -12,8 +12,7 @@
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
-use arkret_event_draft::Operation;
-use arkret_identifiers::{Did, OperationId, RealmId};
+use arkret_identifiers::{Did, RealmId};
 use arkret_models_collaboration::governance::realm_governance::{
     RealmPolicyServerOnTimeout, RealmPolicyServerPayload, RealmPolicyServerReplaceRequestBody,
     RealmPolicyServerTombstonePayload, RealmPolicyServerView,
@@ -25,8 +24,7 @@ use salvo::prelude::*;
 use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
-use super::{AuthArgs, accept_local_operations_with_policy_actor};
-use crate::ids;
+use super::AuthArgs;
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -94,21 +92,7 @@ async fn put_realm_policy_server(
     if let Some(prior) = direct_policy_server_cell_value(state, &cell_key)? {
         attach_head_eq_precondition(&mut payload, prior)?;
     }
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
-        payload,
-    );
-    accept_local_operations_with_policy_actor(
-        state,
-        &session.actor,
-        std::slice::from_ref(&operation),
-    )
-    .await
-    .map_err(reducer_reject_to_app_error)?;
+    persist_canonical_policy_server_move(state, &session.actor, realm_scope, payload).await?;
 
     let view = state
         .projections()
@@ -155,24 +139,10 @@ async fn delete_realm_policy_server(
         }
     };
 
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let mut payload = serde_json::to_value(RealmPolicyServerTombstonePayload::VALUE)
         .map_err(|error| AppError::internal(format!("policy server tombstone payload: {error}")))?;
     attach_head_eq_precondition(&mut payload, prior)?;
-    let operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
-        payload,
-    );
-    accept_local_operations_with_policy_actor(
-        state,
-        &session.actor,
-        std::slice::from_ref(&operation),
-    )
-    .await
-    .map_err(reducer_reject_to_app_error)?;
+    persist_canonical_policy_server_move(state, &session.actor, realm_scope, payload).await?;
 
     match state
         .projections()
@@ -186,6 +156,133 @@ async fn delete_realm_policy_server(
             "policy server tombstone projection vanished after accept",
         )),
     }
+}
+
+async fn persist_canonical_policy_server_move(
+    state: &AppState,
+    requested_by: &str,
+    realm_id: RealmId,
+    mut operation_payload: serde_json::Value,
+) -> Result<String, AppError> {
+    let payload_object = operation_payload
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("policy server payload must be an object"))?;
+    let preconditions = payload_object
+        .remove("preconditions")
+        .map(serde_json::from_value::<Vec<arkret_wire::Precondition>>)
+        .transpose()
+        .map_err(|error| {
+            AppError::invalid_param(format!("policy server preconditions are invalid: {error}"))
+        })?
+        .unwrap_or_default();
+    let requested_by_did = Did::new(requested_by.to_owned()).map_err(|error| {
+        AppError::invalid_param(format!("request actor DID is invalid: {error}"))
+    })?;
+
+    let authoring_lock = crate::routing::events::event_log::service_event_authoring_lock();
+    let _authoring_guard = authoring_lock.lock().await;
+    let service_did = Did::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
+    let frontier = crate::routing::events::event_log::endpoints::load_realm_actor_frontier(
+        state,
+        realm_id.clone(),
+        requested_by_did.clone(),
+    )
+    .await?;
+    let mut event = arkret_wire::Event::new(
+        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        requested_by_did,
+        frontier.next_actor_seq,
+        arkret_identifiers::Hlc::new(state.hlc().now())
+            .map_err(|error| AppError::internal(format!("policy server HLC failed: {error}")))?,
+        operation_payload.clone(),
+    )
+    .map_err(|error| {
+        AppError::internal(format!("policy server Control Move build failed: {error}"))
+    })?;
+    event.executed_by = Some(service_did.clone());
+    event.authorization_ref = Some(format!(
+        "{}#realm-policy-server-service",
+        state.service_id()
+    ));
+    event.prev_refs = frontier.frontier_event_ids;
+    event.preconditions = preconditions;
+    event.seal_basis = Some(crate::routing::admin::pick_admin_seal_basis(
+        state, &realm_id,
+    )?);
+    let verification_method = format!("{}#notary-key", state.service_id());
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        service_did,
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new(),
+    )
+    .map_err(|error| {
+        AppError::internal(format!(
+            "policy server Control Move signing failed: {error}"
+        ))
+    })?;
+    let event_id = event.event_id.to_string();
+    let created_at = event.created_at;
+    let session = soland_services::identity::SessionIdentityState {
+        token_hash: "realm-policy-server-service".to_owned(),
+        actor: state.service_id().clone(),
+        device_id: "realm-policy-server-service".to_owned(),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: created_at + chrono::Duration::minutes(5),
+        created_at,
+        revoked_at: None,
+    };
+    let envelope = serde_json::to_value(event).map_err(|error| {
+        AppError::internal(format!("policy server Event encode failed: {error}"))
+    })?;
+    crate::routing::events::event_log::submit_realm_policy_server_event_value(
+        state,
+        &session,
+        envelope,
+        realm_id.as_str(),
+        requested_by,
+        operation_payload,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            soland_http::error::ErrorCode::InvalidParam,
+            format!(
+                "policy server Control Move admission failed: {}",
+                error.message
+            ),
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+
+    // The normal Event pipeline has already committed the canonical Event,
+    // proposal receipt, federation outbox, and pending-control index. Prompt a
+    // local notary round so the self-management response normally observes the
+    // resulting Seal without inventing a separate projection-only fast path.
+    match crate::notary::run_one_signing_pass(state, &realm_id, 1024).await {
+        Ok(_) | Err(crate::notary::NotaryError::NotAuthorized(_)) => {}
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                %event_id,
+                realm_id = %realm_id,
+                "policy server Control Move remains pending after local signing pass"
+            );
+        }
+    }
+    Ok(event_id)
 }
 
 fn policy_server_view(
@@ -324,20 +421,6 @@ async fn require_policy_manage(
     } else {
         Err(AppError::capability_denied("missing_capability"))
     }
-}
-
-fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
-    if reason == "projection_event_persistence_failed" {
-        return AppError::internal(reason).with_wire_code("internal_error");
-    }
-    if reason == "failed_precondition" {
-        return AppError::new(soland_http::error::ErrorCode::FailedPrecondition, reason)
-            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
-            .with_wire_code("failed_precondition");
-    }
-    AppError::new(soland_http::error::ErrorCode::FailedPrecondition, reason)
-        .with_status(salvo::http::StatusCode::UNPROCESSABLE_ENTITY)
-        .with_wire_code(reason)
 }
 
 fn policy_server_resolution_error(reason: &'static str) -> AppError {

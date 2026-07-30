@@ -596,6 +596,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn last_resort_claim_audit_is_immutable_without_claiming_the_reusable_package() {
+        let store = MemoryMlsKeyPackageStore::new();
+        store
+            .put(&keypackage("last-resort-audit", true))
+            .await
+            .unwrap();
+
+        let mut first = ledger("last-resort-audit");
+        first.claim_request_id = "local-last-resort:fixture".to_owned();
+        first.state = "last_resort_claimed".to_owned();
+        first.claim_expires_at_unix_ms = None;
+        first.outcome = Some(serde_json::json!({
+            "schema": "soland.last_resort_keypackage_claim.v1",
+            "response": {"claims": ["first"]}
+        }));
+
+        assert_eq!(
+            store.record_peer_claim_terminal(&first).await.unwrap(),
+            PeerKeyPackageClaimLedgerWriteResult::Inserted
+        );
+
+        let mut conflicting = first.clone();
+        conflicting.outcome = Some(serde_json::json!({
+            "schema": "soland.last_resort_keypackage_claim.v1",
+            "response": {"claims": ["conflicting"]}
+        }));
+        assert_eq!(
+            store
+                .record_peer_claim_terminal(&conflicting)
+                .await
+                .unwrap(),
+            PeerKeyPackageClaimLedgerWriteResult::Existing(first.clone())
+        );
+
+        assert!(
+            store
+                .revoke_expired_peer_claims(i64::MAX)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            store
+                .get("last-resort-audit")
+                .await
+                .unwrap()
+                .unwrap()
+                .claimed_by_mls_group_id,
+            None
+        );
+        assert_eq!(
+            store
+                .get_peer_claim("did:web:alpha.example", "local-last-resort:fixture")
+                .await
+                .unwrap(),
+            Some(first)
+        );
+    }
+
+    #[tokio::test]
     async fn expired_peer_claim_is_revoked_but_consumed_claim_remains_terminally_consumed() {
         let store = MemoryMlsKeyPackageStore::new();
         store.put(&keypackage("kp-expired", false)).await.unwrap();

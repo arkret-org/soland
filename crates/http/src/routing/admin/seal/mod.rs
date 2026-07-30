@@ -142,7 +142,7 @@ pub(super) fn admin_signer_for(
 /// The Realm's first Seal is produced by the notary pass over the genesis batch,
 /// so this state is transient; the caller is expected to retry once the Realm
 /// has an accepted Seal.
-pub(super) fn pick_admin_seal_basis(
+pub(crate) fn pick_admin_seal_basis(
     state: &AppState,
     realm_id: &RealmId,
 ) -> Result<arkret_wire::SealBasis, AppError> {
