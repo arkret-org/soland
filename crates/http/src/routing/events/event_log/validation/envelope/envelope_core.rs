@@ -377,7 +377,7 @@ async fn validate_event_envelope_with_ingress(
     // inside the gate so there is one evaluator, shared with
     // `enforce_registered_cell_contract` below.
     let data_event_cells = derived_data_event_cells(envelope, object)?;
-    validate_data_event_capability_refs(
+    let data_event_query_grade = validate_data_event_capability_refs(
         state,
         &actor_id,
         &realm_id,
@@ -558,6 +558,7 @@ async fn validate_event_envelope_with_ingress(
         authorized_refs,
         canonical_digest,
         canonical_bytes,
+        data_event_query_grade,
     })
 }
 

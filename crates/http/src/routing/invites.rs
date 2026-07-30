@@ -1765,6 +1765,8 @@ mod invite_locator_security_tests {
             authorized_refs: Vec::new(),
             canonical_digest: format!("sha256:{}", "b".repeat(64)),
             canonical_bytes: Vec::new(),
+            data_event_query_grade:
+                crate::routing::events::event_log::DataEventQueryGrade::Observed,
         };
 
         assert!(

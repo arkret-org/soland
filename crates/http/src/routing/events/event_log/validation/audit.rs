@@ -392,6 +392,7 @@ mod tests {
             canonical_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
             canonical_bytes: Vec::new(),
+            data_event_query_grade: DataEventQueryGrade::Observed,
         }
     }
 

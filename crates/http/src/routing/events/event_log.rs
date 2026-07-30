@@ -97,7 +97,7 @@ use realm_index::{
 mod submit;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
-    EventCommitIdempotency, InternalEventAdmission, ValidatedEventEnvelope,
+    DataEventQueryGrade, EventCommitIdempotency, InternalEventAdmission, ValidatedEventEnvelope,
     service_event_authoring_lock, submit_account_data_event_value, submit_event_value,
     submit_ghost_provision_batch, submit_initial_event_submission,
     submit_initial_identity_anchor_batch, submit_mimi_event_value,

@@ -92,6 +92,7 @@ fn projection_context_stripped_payload(payload: &Value) -> Value {
             "seal_basis",
             "preconditions",
             "accepted_event_id",
+            "query_grade",
             READ_CURSOR_CAUSAL_RELATION_CONTEXT,
         ] {
             object.remove(field);
