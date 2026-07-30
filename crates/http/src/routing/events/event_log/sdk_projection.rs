@@ -237,6 +237,11 @@ pub(in crate::routing) fn projection_operation_from_event(
                 .or_insert_with(|| digest.clone());
         }
     }
+    if parsed.kind == arkret_wire::events::EventKind::APPLET_REGISTRATION
+        && let Some(scope_ref) = envelope.get("scope_ref")
+    {
+        payload_object.insert("accepted_scope_ref".to_owned(), scope_ref.clone());
+    }
     if parsed.kind == arkret_wire::events::EventKind::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }

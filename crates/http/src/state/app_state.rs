@@ -2200,7 +2200,7 @@ mod membership_hydration_tests {
     }
 
     #[tokio::test]
-    async fn realm_owner_rehydrates_for_capability_upper_bound_checks() {
+    async fn realm_owner_metadata_rehydrates_without_implying_capability() {
         use soland_storage_memory::SolandMemoryPersistenceStore;
 
         let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e7759fc";
@@ -2245,7 +2245,7 @@ mod membership_hydration_tests {
 
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));
-        assert!(proj.issuer_has_projected_capability(
+        assert!(!proj.issuer_has_projected_capability(
             owner,
             realm_id,
             "ak.message.create",

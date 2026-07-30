@@ -46,6 +46,48 @@ impl ProjectionState {
             };
         };
         let namespace = applet_projection_namespace(&operation.payload);
+        let Some(applet_id) = operation
+            .payload
+            .get("applet_id")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_registration_missing_applet_id".to_owned(),
+            };
+        };
+        let Some(registration_epoch) = operation
+            .payload
+            .get("registration_epoch")
+            .and_then(|value| value.as_str())
+            .map(ToOwned::to_owned)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_registration_missing_registration_epoch".to_owned(),
+            };
+        };
+        let Some(claimed_profiles) = operation
+            .payload
+            .get("claimed_profiles")
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(ToOwned::to_owned))
+                    .collect::<Vec<_>>()
+            })
+            .filter(|values| !values.is_empty())
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "applet_registration_missing_claimed_profiles".to_owned(),
+            };
+        };
+        let registration_scope_ref = operation.payload.get("accepted_scope_ref").cloned();
+        if registration_scope_ref.is_none() {
+            return ProjectionEffect::Rejected {
+                reason: "applet_registration_missing_scope_ref".to_owned(),
+            };
+        }
         let capabilities = operation
             .payload
             .get("requested_scopes")
@@ -61,10 +103,14 @@ impl ProjectionState {
             .map(|p| p.registered_at)
             .unwrap_or(now);
         let projection = AppletProjection {
+            applet_id,
             service_id: service_id.clone(),
             namespace,
             manifest: existing_manifest,
             capabilities,
+            claimed_profiles,
+            registration_epoch,
+            registration_scope_ref,
             registered_at,
             updated_at: now,
         };
@@ -97,10 +143,14 @@ impl ProjectionState {
             .applets
             .entry(service_id.clone())
             .or_insert_with(|| AppletProjection {
+                applet_id: String::new(),
                 service_id: service_id.clone(),
                 namespace: String::new(),
                 manifest: None,
                 capabilities: None,
+                claimed_profiles: Vec::new(),
+                registration_epoch: String::new(),
+                registration_scope_ref: None,
                 registered_at: now,
                 updated_at: now,
             });

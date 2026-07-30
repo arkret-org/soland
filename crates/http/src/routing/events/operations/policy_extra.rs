@@ -725,16 +725,6 @@ pub(crate) async fn validate_realm_moderation_policy(
     Ok(())
 }
 
-pub(crate) async fn realm_owner_matches(state: &AppState, realm_id: &str, actor: &str) -> bool {
-    state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
-        .ok()
-        .flatten()
-        .is_some_and(|meta| meta.owner == actor)
-}
-
 pub(crate) fn validate_poll_operation_policy(
     state: &AppState,
     operation: &Operation,

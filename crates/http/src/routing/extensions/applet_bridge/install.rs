@@ -401,7 +401,6 @@ async fn recover_applet_install_fanout(
             "stored applet install is missing its caller-signed capability grant Events; retry the original install request",
         ));
     }
-    update_applet_projection(state, record);
     submit_formal_install_event(state, session, registration_event).await?;
     for event in &record.capability_grant_events {
         submit_formal_install_event(state, session, event).await?;
@@ -618,22 +617,6 @@ fn install_execution_step(
         object.insert("grant_binding".to_owned(), grant_binding);
     }
     step
-}
-
-pub(super) fn update_applet_projection(state: &AppState, record: &AppletRecord) {
-    let Some(package) = record.package.as_ref() else {
-        return;
-    };
-    let now = chrono::Utc::now();
-    state.projections().cache_applet(
-        package.service_id.to_string(),
-        record.applet_id.clone(),
-        record.namespace.clone(),
-        Some(json!(package.manifest_snapshot())),
-        Some(json!(record.capabilities)),
-        now,
-        now,
-    );
 }
 
 pub(super) async fn register_verified_applet(
@@ -893,6 +876,7 @@ pub(super) fn validate_applet_package(
     state: &AppState,
     package: &mut AppletPackage,
 ) -> Result<(), AppError> {
+    validate_requested_capability_actions(package)?;
     let evidence = validated_registration_epoch_evidence(state, package)?;
     package.registration_epoch_evidence = Some(evidence);
     package.validate().map_err(|error| {
@@ -946,6 +930,27 @@ pub(super) fn validate_applet_package(
     // fail closed (`proof_invalid`) when the controller proof is invalid or its
     // key cannot be resolved.
     validate_controller_proof(state, package, &unsigned_canonical_bytes)?;
+    Ok(())
+}
+
+fn validate_requested_capability_actions(package: &AppletPackage) -> Result<(), AppError> {
+    for action in &package.requested_scopes {
+        match arkret_schema::embedded_capability_action(action) {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Err(AppError::invalid_param(format!(
+                    "applet package requested_scopes contains unknown capability action: {action}"
+                ))
+                .with_wire_code("schema_violation")
+                .with_reason_detail("capability_action_unknown"));
+            }
+            Err(error) => {
+                return Err(AppError::internal(format!(
+                    "capability action registry unavailable while validating applet package: {error}"
+                )));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -1181,6 +1186,7 @@ pub(super) fn registration_payload_from_package(
         "controller_id": package.controller_id,
         "base_url": package.base_url,
         "bot_actor_id": package.bot_actor_id,
+        "claimed_profiles": package.claimed_profiles,
         "protocols": package.protocols,
         "namespaces": package.namespaces,
         "receive_events": package.receive_events,
@@ -1347,7 +1353,7 @@ pub(super) async fn require_realm_admin(
 
 /// Resolve the realm owner and member set, matching
 /// `routing/events/operations.rs::realm_owner_and_members` (which is module
-/// private). Both feed the authz check's owner/member implicit-grant logic.
+/// private). They are request context only; neither implies a capability.
 async fn realm_owner_and_members(
     state: &AppState,
     realm_id: &str,
@@ -1550,6 +1556,32 @@ mod tests {
         let error = validate_controller_proof(&state, &package, &bytes)
             .expect_err("wrong-key controller proof must be rejected");
         assert_eq!(error.wire_code(), "proof_invalid");
+    }
+
+    #[test]
+    fn requested_capability_actions_reject_legacy_portal_token() {
+        let controller_seed = [1u8; 32];
+        let (_, controller_vm) = did_key_for_seed(controller_seed);
+        let mut package = signed_did_key_package(controller_seed, controller_seed, &controller_vm);
+        package.requested_scopes = vec!["realm:portal".to_owned()];
+
+        let error = validate_requested_capability_actions(&package)
+            .expect_err("legacy product token must not enter a capability grant plan");
+        assert_eq!(error.wire_code(), "schema_violation");
+    }
+
+    #[test]
+    fn requested_capability_actions_accept_registered_applet_actions() {
+        let controller_seed = [1u8; 32];
+        let (_, controller_vm) = did_key_for_seed(controller_seed);
+        let mut package = signed_did_key_package(controller_seed, controller_seed, &controller_vm);
+        package.requested_scopes = vec![
+            "ak.message.create".to_owned(),
+            "ak.applet.ghost.provision".to_owned(),
+        ];
+
+        validate_requested_capability_actions(&package)
+            .expect("registered capability actions must pass preview validation");
     }
 
     #[test]

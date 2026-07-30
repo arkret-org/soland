@@ -744,6 +744,7 @@ pub struct DocumentVersionProjection {
 /// last-write-wins projection.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppletProjection {
+    pub applet_id: String,
     /// `service_id` of the applet — canonical identity per spec.
     pub service_id: String,
     pub namespace: String,
@@ -753,6 +754,12 @@ pub struct AppletProjection {
     pub manifest: Option<Value>,
     /// Optional capability list from the latest `ak.applet.registration`.
     pub capabilities: Option<Value>,
+    /// Durable profile claims from the accepted registration Event.
+    pub claimed_profiles: Vec<String>,
+    /// Registration epoch bound by applet delegation constraints.
+    pub registration_epoch: String,
+    /// Exact accepted Event scope used by profile-bound grant rules.
+    pub registration_scope_ref: Option<Value>,
     pub registered_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }

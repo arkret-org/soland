@@ -42,6 +42,7 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
             "preconditions",
             "effects",
             "accepted_event_id",
+            "accepted_scope_ref",
             "envelope_causal_refs",
             "canonical_event_digest",
             "query_grade",
