@@ -391,7 +391,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         &self,
         mls_group_id: &str,
     ) -> PersistenceResult<Vec<MlsKeyPackageRow>> {
-        if mls_group_id == "revoked" {
+        if matches!(mls_group_id, "revoked" | "retired") {
             return Ok(Vec::new());
         }
         let mut conn = pg_conn(&self.pool)

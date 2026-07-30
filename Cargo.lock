@@ -5164,6 +5164,7 @@ dependencies = [
  "arkret-event-draft",
  "arkret-identifiers",
  "arkret-identity",
+ "arkret-lattice-registry",
  "arkret-models-collaboration",
  "arkret-models-crypto",
  "arkret-models-identity",

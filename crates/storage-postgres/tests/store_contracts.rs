@@ -1,13 +1,17 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_event_commit_unit_of_work_contract,
-    assert_idempotency_store_contract, assert_organization_registration_store_contract,
+    assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
+    assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
     assert_proposal_member_receipt_store_contract,
 };
-use soland_storage::{AccountDataCasResult, AccountDataRecord, AccountDataStore};
+use soland_storage::{
+    AccountDataCasResult, AccountDataRecord, AccountDataStore, MlsKeyPackageStore,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult,
+};
 use soland_storage_postgres::{
     Db, PgAccountDataStore, PgEventCommitUnitOfWork, PgEventStore, PgFederationOutboxStore,
-    PgIdempotencyStore, PgOrganizationRegistrationStore, PgPool, PgProjectionEventStore,
-    PgProposalMemberReceiptStore,
+    PgIdempotencyStore, PgMlsKeyPackageStore, PgOrganizationRegistrationStore, PgPool,
+    PgProjectionEventStore, PgProposalMemberReceiptStore,
 };
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
@@ -61,6 +65,92 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
         &namespace,
     )
     .await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
+    let store = PgMlsKeyPackageStore { pool: pool.clone() };
+    assert_mls_keypackage_retirement_contract(&store, &namespace).await;
+
+    let restarted_store = PgMlsKeyPackageStore { pool };
+    let retired_id = format!("{namespace}-keypackage-published");
+    let replayed = restarted_store
+        .get(&retired_id)
+        .await
+        .expect("reload retired KeyPackage after store restart")
+        .expect("retired KeyPackage survives store restart");
+    assert_eq!(replayed.claimed_by_mls_group_id.as_deref(), Some("retired"));
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
+    let store = PgMlsKeyPackageStore { pool: pool.clone() };
+    assert_last_resort_claim_ledger_contract(&store, &namespace).await;
+
+    let restarted_store = PgMlsKeyPackageStore { pool };
+    let claim_request_id = format!("local-last-resort:{namespace}-01");
+    let replayed = restarted_store
+        .get_peer_claim(&format!("did:web:{namespace}.example"), &claim_request_id)
+        .await
+        .expect("reload last-resort ledger after store restart")
+        .expect("last-resort ledger survives store restart");
+    assert_eq!(replayed.claim_request_id, claim_request_id);
+    assert_eq!(replayed.state, "last_resort_claimed");
+
+    let concurrent = PeerKeyPackageClaimLedgerRecord {
+        source_service_id: format!("did:web:{namespace}.example"),
+        claim_request_id: format!("local-last-resort:{namespace}-concurrent"),
+        request_digest: "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+            .to_owned(),
+        state: "last_resort_claimed".to_owned(),
+        outcome: Some(serde_json::json!({"response": {"claims": ["concurrent"]}})),
+        keypackage_id: Some(format!("{namespace}-keypackage-last-resort")),
+        claim_expires_at_unix_ms: None,
+        expires_at: i64::MAX,
+        updated_at: 10,
+    };
+    let first_writer = PgMlsKeyPackageStore {
+        pool: restarted_store.pool.clone(),
+    };
+    let second_writer = PgMlsKeyPackageStore {
+        pool: restarted_store.pool.clone(),
+    };
+    let (first_result, second_result) = tokio::join!(
+        first_writer.record_peer_claim_terminal(&concurrent),
+        second_writer.record_peer_claim_terminal(&concurrent)
+    );
+    let results = [
+        first_result.expect("first concurrent ledger writer"),
+        second_result.expect("second concurrent ledger writer"),
+    ];
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| matches!(result, PeerKeyPackageClaimLedgerWriteResult::Inserted))
+            .count(),
+        1
+    );
+    assert_eq!(
+        results
+            .iter()
+            .filter(|result| {
+                matches!(
+                    result,
+                    PeerKeyPackageClaimLedgerWriteResult::Existing(existing)
+                        if existing == &concurrent
+                )
+            })
+            .count(),
+        1
+    );
 }
 
 #[tokio::test]

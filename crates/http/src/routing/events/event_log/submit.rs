@@ -18,10 +18,12 @@ use crate::invite_claim_proofs::{
 /// which is a safe superset of the required per-actor exclusion.
 const ACTOR_SUBMIT_LOCK_SHARDS: usize = 1024;
 const ACCOUNT_DATA_SUBMIT_LOCK_SHARDS: usize = 1024;
+const INVITE_LIFECYCLE_LOCK_SHARDS: usize = 1024;
 pub(super) const IDEMPOTENCY_KEY_TTL_SECONDS: i64 = 86_400;
 
 static ACTOR_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static ACCOUNT_DATA_SUBMIT_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
+static INVITE_LIFECYCLE_LOCKS: OnceLock<Vec<Arc<tokio::sync::Mutex<()>>>> = OnceLock::new();
 static SERVICE_EVENT_AUTHORING_LOCK: OnceLock<Arc<tokio::sync::Mutex<()>>> = OnceLock::new();
 
 mod identity_anchor;
@@ -58,6 +60,32 @@ fn account_data_submit_lock(owner: &str, key: &str) -> Arc<tokio::sync::Mutex<()
     std::hash::Hash::hash(key, &mut hasher);
     let shard = (hasher.finish() as usize) % ACCOUNT_DATA_SUBMIT_LOCK_SHARDS;
     locks[shard].clone()
+}
+
+fn invite_lifecycle_submit_lock(
+    realm_id: &str,
+    envelope: &Value,
+) -> Option<Arc<tokio::sync::Mutex<()>>> {
+    let invite_id = envelope
+        .get("payload")
+        .and_then(Value::as_object)
+        .and_then(|payload| {
+            payload
+                .get("invite_id")
+                .or_else(|| payload.get("invite_ref"))
+                .or_else(|| payload.get("invite").and_then(|invite| invite.get("id")))
+        })
+        .and_then(Value::as_str)?;
+    let locks = INVITE_LIFECYCLE_LOCKS.get_or_init(|| {
+        (0..INVITE_LIFECYCLE_LOCK_SHARDS)
+            .map(|_| Arc::new(tokio::sync::Mutex::new(())))
+            .collect()
+    });
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    std::hash::Hash::hash(realm_id, &mut hasher);
+    std::hash::Hash::hash(invite_id, &mut hasher);
+    let shard = (hasher.finish() as usize) % INVITE_LIFECYCLE_LOCK_SHARDS;
+    Some(locks[shard].clone())
 }
 
 pub(in crate::routing) fn service_event_authoring_lock() -> Arc<tokio::sync::Mutex<()>> {

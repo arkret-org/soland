@@ -9,9 +9,11 @@ use chrono::{Duration, Utc};
 use super::{
     CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork, EventStore,
     FederationOutboxRecord, FederationOutboxStore, IdempotencyRecord, IdempotencyStore,
+    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
     OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
     OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
-    OrganizationRegistrationTerminalReason, ProjectionEventRecord, ProjectionEventStore,
+    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
+    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
     ProposalMemberReceiptRecord, ProposalMemberReceiptStore,
 };
 
@@ -871,5 +873,266 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .await
             .expect("outbox rollback")
             .is_none()
+    );
+}
+
+fn mls_keypackage_contract_row(namespace: &str, suffix: &str) -> MlsKeyPackageRow {
+    MlsKeyPackageRow {
+        id: format!("{namespace}-keypackage-{suffix}"),
+        keypackage_ref: format!("ak:mls:keypackage:{namespace}-{suffix}"),
+        keypackage_digest:
+            "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),
+        actor_id: format!("did:web:{namespace}.example"),
+        device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+        key_package_bytes: vec![1, 2, 3],
+        capabilities: vec!["ak.mls.rfc9420".to_owned()],
+        capabilities_digest:
+            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_owned(),
+        device_signature: serde_json::json!({"kid": "contract", "sig": "AA"}),
+        last_resort: false,
+        last_resort_realm_id: None,
+        lifetime_not_before: 1,
+        lifetime_not_after: 100,
+        claimed_by_mls_group_id: None,
+        ssk_generation: Some(1),
+        device_authorize_event_id: None,
+        agent_key_authorize_event_id: None,
+        claimed_at: None,
+        claim_expires_at_unix_ms: None,
+        consumed_at: None,
+        created_at: 1,
+    }
+}
+
+fn mls_claim<'a>(id: &'a str, target: MlsKeyPackageClaimTarget<'a>) -> MlsKeyPackageClaim<'a> {
+    MlsKeyPackageClaim {
+        id,
+        target,
+        intended_realm_id: None,
+        ssk_generation: Some(1),
+        device_authorize_event_id: None,
+        agent_key_authorize_event_id: None,
+        claimed_at: 10,
+        claim_expires_at_unix_ms: Some(20_000),
+    }
+}
+
+pub async fn assert_mls_keypackage_retirement_contract(
+    store: &dyn MlsKeyPackageStore,
+    namespace: &str,
+) {
+    let published = mls_keypackage_contract_row(namespace, "published");
+    let claimed = mls_keypackage_contract_row(namespace, "claimed");
+    let consumed = mls_keypackage_contract_row(namespace, "consumed");
+    let revoked = mls_keypackage_contract_row(namespace, "revoked");
+    for row in [&published, &claimed, &consumed, &revoked] {
+        assert!(store.put(row).await.expect("publish KeyPackage"));
+    }
+
+    let retired = store
+        .try_claim(mls_claim(&published.id, MlsKeyPackageClaimTarget::Retire))
+        .await
+        .expect("retire published KeyPackage")
+        .expect("published KeyPackage must retire");
+    assert_eq!(retired.claimed_by_mls_group_id.as_deref(), Some("retired"));
+    assert!(retired.claimed_at.is_none());
+    assert!(retired.claim_expires_at_unix_ms.is_none());
+    assert!(retired.consumed_at.is_none());
+    assert!(
+        store
+            .try_claim(mls_claim(
+                &published.id,
+                MlsKeyPackageClaimTarget::Group("group-after-retirement"),
+            ))
+            .await
+            .expect("query retired KeyPackage")
+            .is_none()
+    );
+
+    let group_id = format!("group-{namespace}");
+    store
+        .try_claim(mls_claim(
+            &claimed.id,
+            MlsKeyPackageClaimTarget::Group(&group_id),
+        ))
+        .await
+        .expect("claim ordinary KeyPackage")
+        .expect("ordinary KeyPackage must be claimable");
+    assert!(
+        store
+            .try_claim(mls_claim(&claimed.id, MlsKeyPackageClaimTarget::Retire,))
+            .await
+            .expect("attempt to retire claimed KeyPackage")
+            .is_none()
+    );
+
+    store
+        .try_claim(mls_claim(
+            &consumed.id,
+            MlsKeyPackageClaimTarget::Group(&group_id),
+        ))
+        .await
+        .expect("claim KeyPackage before consume")
+        .expect("ordinary KeyPackage must be claimable");
+    store
+        .consume_claim(&consumed.id, &group_id, 15)
+        .await
+        .expect("consume KeyPackage")
+        .expect("claimed KeyPackage must be consumable");
+    assert!(
+        store
+            .try_claim(mls_claim(&consumed.id, MlsKeyPackageClaimTarget::Retire,))
+            .await
+            .expect("attempt to retire consumed KeyPackage")
+            .is_none()
+    );
+
+    store
+        .try_claim(mls_claim(&revoked.id, MlsKeyPackageClaimTarget::Revoke))
+        .await
+        .expect("revoke published KeyPackage")
+        .expect("published KeyPackage must be revocable");
+    assert!(
+        store
+            .try_claim(mls_claim(&revoked.id, MlsKeyPackageClaimTarget::Retire,))
+            .await
+            .expect("attempt to retire revoked KeyPackage")
+            .is_none()
+    );
+
+    let group_rows = store
+        .list_claimed_by_group(&group_id)
+        .await
+        .expect("query claimed KeyPackages");
+    assert_eq!(group_rows.len(), 2);
+    assert!(
+        store
+            .list_claimed_by_group("retired")
+            .await
+            .expect("query retired sentinel")
+            .is_empty()
+    );
+    assert!(
+        store
+            .list_claimed_by_group("revoked")
+            .await
+            .expect("query revoked sentinel")
+            .is_empty()
+    );
+
+    let replayed = store
+        .get(&published.id)
+        .await
+        .expect("reload retired KeyPackage")
+        .expect("retired KeyPackage remains durable");
+    assert_eq!(
+        replayed
+            .lifecycle()
+            .expect("valid retired lifecycle")
+            .claim_state,
+        super::PersistedKeyPackageClaimState::Retired
+    );
+}
+
+pub async fn assert_last_resort_claim_ledger_contract(
+    store: &dyn MlsKeyPackageStore,
+    namespace: &str,
+) {
+    let mut keypackage = mls_keypackage_contract_row(namespace, "last-resort");
+    keypackage.last_resort = true;
+    let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
+    keypackage.last_resort_realm_id = Some(realm_id.to_owned());
+    store
+        .put(&keypackage)
+        .await
+        .expect("publish last-resort KeyPackage");
+
+    let ledger = |suffix: &str, welcome: &str| PeerKeyPackageClaimLedgerRecord {
+        source_service_id: format!("did:web:{namespace}.example"),
+        claim_request_id: format!("local-last-resort:{namespace}-{suffix}"),
+        request_digest: format!("sha256:{:0>64}", suffix),
+        state: "last_resort_claimed".to_owned(),
+        outcome: Some(serde_json::json!({
+            "schema": "soland.last_resort_keypackage_claim.v1",
+            "keypackage_id": keypackage.id,
+            "keypackage_ref": keypackage.keypackage_ref,
+            "keypackage_digest": keypackage.keypackage_digest,
+            "claimant": format!("did:web:{namespace}.example"),
+            "recipient_principal_id": "did:web:bob.example",
+            "recipient_device_id": "ak:device:01904100-0000-7000-8000-000000000002",
+            "realm_id": realm_id,
+            "mls_group_id": format!("group-{namespace}"),
+            "strand_id": format!("strand-{namespace}"),
+            "nonce": suffix,
+            "transaction_time": "2026-07-30T00:00:00Z",
+            "response": {
+                "claims": [{
+                    "keypackage_ref": keypackage.keypackage_ref,
+                    "welcome_ref": welcome,
+                }]
+            }
+        })),
+        keypackage_id: Some(keypackage.id.clone()),
+        claim_expires_at_unix_ms: None,
+        expires_at: i64::MAX,
+        updated_at: 10,
+    };
+    let first = ledger("01", "welcome-01");
+    let second = ledger("02", "welcome-02");
+
+    assert!(matches!(
+        store
+            .record_peer_claim_terminal(&first)
+            .await
+            .expect("record first last-resort claim"),
+        PeerKeyPackageClaimLedgerWriteResult::Inserted
+    ));
+    assert!(matches!(
+        store
+            .record_peer_claim_terminal(&second)
+            .await
+            .expect("record second last-resort claim"),
+        PeerKeyPackageClaimLedgerWriteResult::Inserted
+    ));
+    assert_eq!(
+        store
+            .record_peer_claim_terminal(&first)
+            .await
+            .expect("replay first last-resort claim"),
+        PeerKeyPackageClaimLedgerWriteResult::Existing(first.clone())
+    );
+    assert_eq!(
+        store
+            .get_peer_claim(&first.source_service_id, &first.claim_request_id)
+            .await
+            .expect("reload first last-resort claim"),
+        Some(first)
+    );
+    assert_eq!(
+        store
+            .get_peer_claim(&second.source_service_id, &second.claim_request_id)
+            .await
+            .expect("reload second last-resort claim"),
+        Some(second)
+    );
+    assert!(
+        store
+            .revoke_expired_peer_claims(i64::MAX)
+            .await
+            .expect("run expired-claim maintenance")
+            .is_empty()
+    );
+    let reusable = store
+        .get(&keypackage.id)
+        .await
+        .expect("reload last-resort KeyPackage")
+        .expect("last-resort KeyPackage remains durable");
+    assert!(reusable.claimed_by_mls_group_id.is_none());
+    assert_eq!(
+        reusable
+            .lifecycle()
+            .expect("valid last-resort lifecycle")
+            .claim_state,
+        super::PersistedKeyPackageClaimState::Available
     );
 }

@@ -38,8 +38,10 @@ mod timeline;
 pub use account_data::*;
 pub use apply::*;
 pub use event_json::*;
-pub(in crate::routing::events) use invite::validate_invite_cancel_pre_admission;
 use invite::*;
+pub(in crate::routing::events) use invite::{
+    freeze_invite_cancel_pre_state, validate_invite_cancel_pre_admission,
+};
 pub use message::*;
 pub use operation_fields::*;
 pub use realm::*;

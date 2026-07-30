@@ -89,27 +89,37 @@ async fn realm_seal_frontier(
     token: &str,
     realm_id: &str,
 ) -> arkret_models_collaboration::event_sync::RealmSealFrontierView {
-    let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-    ))
-    .add_header("authorization", format!("Bearer {token}"), true)
-    .send(&app_from_state(state))
-    .await;
-    let status = response.status_code;
-    let body: Value = response.take_json().await.unwrap_or(Value::Null);
-    assert_eq!(
-        status,
-        Some(StatusCode::OK),
-        "Realm Seal frontier failed with {status:?}: {body}"
-    );
-    let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
-        serde_json::from_value(body).expect("typed Realm Seal frontier");
-    let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
-        frontier.frontier
-    else {
-        panic!("Realm-only selector returned the wrong frontier variant");
-    };
-    frontier
+    for attempt in 0..50 {
+        let mut response = TestClient::get(format!(
+            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+        ))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+        let status = response.status_code;
+        let body: Value = response.take_json().await.unwrap_or(Value::Null);
+        if status == Some(StatusCode::OK) {
+            let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+                serde_json::from_value(body).expect("typed Realm Seal frontier");
+            let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+                frontier.frontier
+            else {
+                panic!("Realm-only selector returned the wrong frontier variant");
+            };
+            return frontier;
+        }
+        assert_eq!(
+            status,
+            Some(StatusCode::SERVICE_UNAVAILABLE),
+            "Realm Seal frontier failed with {status:?}: {body}"
+        );
+        assert!(
+            attempt < 49,
+            "Realm Seal frontier remained unavailable: {body}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    unreachable!("bounded Realm Seal frontier retry returns or panics")
 }
 
 #[expect(
@@ -257,6 +267,7 @@ fn seed_cross_signing_generation(state: &AppState, principal: &str, generation: 
 #[tokio::test]
 async fn mls_lifecycle_end_to_end() {
     let state = soland_test_support::app_state(test_config());
+    let _control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
 
     let alice_did = "did:web:alice.example";
     let alice_device = "ak:device:01904100-0000-7000-8000-a11ce0000001";
@@ -395,14 +406,6 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(claims[0]["capabilities_digest"], json!(capabilities_digest));
     assert_eq!(claims[0]["ssk_generation"], json!(3));
     assert_eq!(claims[0]["device_signature"], device_signature);
-    let claim_id = claims[0]["claim_id"].as_str().unwrap().to_owned();
-    let claimed_keypackage_ref = claims[0]["keypackage_ref"].as_str().unwrap().to_owned();
-    let claimed_keypackage_digest = claims[0]["keypackage_digest"].as_str().unwrap().to_owned();
-    let claimed_capabilities_digest = claims[0]["capabilities_digest"]
-        .as_str()
-        .unwrap()
-        .to_owned();
-
     // ── 2b. a new request cannot re-claim the package for the same group ─
     let same_group_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -457,7 +460,253 @@ async fn mls_lifecycle_end_to_end() {
     let bob_did = "did:web:bob.example";
     let bob_device = "ak:device:01904100-0000-7000-8000-b0b0e0000001";
     let bob_token = dev_token(state.clone(), bob_did, bob_device, "Bob").await;
+    let mut bob_device_record = state
+        .test_persistence()
+        .devices()
+        .get(bob_did, bob_device)
+        .await
+        .unwrap()
+        .unwrap();
+    bob_device_record.payload["device_public_key"] =
+        json!(ed25519_public_multibase(&event_signing_key));
+    bob_device_record.verification_state = "verified".to_owned();
+    state
+        .test_persistence()
+        .devices()
+        .put(&bob_device_record)
+        .await
+        .unwrap();
+    seed_cross_signing_generation(&state, bob_did, 3);
+
     let group_id = "ak:mls_group:abc";
+    let last_resort_keypackage_id = "ak:mls_keypackage:last-resort-bob";
+    let last_resort_keypackage_ref = "ak:mls:keypackage:last-resort-bob";
+    let last_resort_keypackage_bytes = b"opaque-last-resort-keypackage";
+    let last_resort_keypackage_digest =
+        arkret_canonical::sha256_digest(last_resort_keypackage_bytes);
+    let last_resort_created_at = Utc::now();
+    let last_resort_expires_at = last_resort_created_at + chrono::Duration::days(7);
+    let last_resort_claim_expires_at = last_resort_created_at + chrono::Duration::days(1);
+    let last_resort_capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
+    let last_resort_capabilities_digest = sha256_json(&last_resort_capabilities);
+    let last_resort_publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
+        serde_json::from_value(json!({
+            "principal_id": bob_did,
+            "device_id": bob_device,
+            "key_packages": [{
+                "keypackage_id": last_resort_keypackage_id,
+                "keypackage_ref": last_resort_keypackage_ref,
+                "keypackage_digest": last_resort_keypackage_digest,
+                "key_package": b64(last_resort_keypackage_bytes),
+                "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
+                "capabilities": last_resort_capabilities,
+                "expires_at": arkret_canonical::format_timestamp_canonical(
+                    last_resort_expires_at
+                ),
+                "created_at": arkret_canonical::format_timestamp_canonical(
+                    last_resort_created_at
+                ),
+                "last_resort": true
+            }]
+        }))
+        .unwrap();
+    let last_resort_publish_signature =
+        arkret_signatures::keypackages::sign_keypackages_upload_request(
+            &last_resort_publish_unsigned,
+            &format!("{bob_did}#{bob_device}"),
+            &[21_u8; 32],
+        )
+        .unwrap();
+    let last_resort_publish_body =
+        last_resort_publish_unsigned.into_signed(last_resort_publish_signature);
+    let last_resort_publish_resp =
+        TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
+            .add_header("authorization", format!("Bearer {bob_token}"), true)
+            .json(&last_resort_publish_body)
+            .send(&app_from_state(state.clone()))
+            .await;
+    assert_eq!(last_resort_publish_resp.status_code, Some(StatusCode::OK));
+
+    let first_last_resort_nonce = b64(b"last-resort-claim-nonce-01");
+    let first_last_resort_claim_body = json!({
+        "target_principal_id": bob_did,
+        "target_device_ids": [bob_device],
+        "intended_realm_id": realm_id,
+        "requester": alice_did,
+        "required_capabilities": ["ak.mls.profile.full"],
+        "claim_nonce": first_last_resort_nonce,
+        "expires_at": arkret_canonical::format_timestamp_canonical(
+            last_resort_claim_expires_at
+        ),
+        "mls_group_id": group_id
+    });
+    let mut first_last_resort_claim_resp = TestClient::post(&claim_url)
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&first_last_resort_claim_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        first_last_resort_claim_resp.status_code,
+        Some(StatusCode::OK)
+    );
+    let first_last_resort_claim: Value = first_last_resort_claim_resp.take_json().await.unwrap();
+    assert_eq!(
+        first_last_resort_claim["claims"][0]["keypackage_ref"],
+        json!(last_resort_keypackage_ref)
+    );
+    assert_eq!(
+        first_last_resort_claim["claims"][0]["last_resort"],
+        json!(true)
+    );
+    assert_eq!(
+        first_last_resort_claim["claims"][0]["capabilities_digest"],
+        json!(last_resort_capabilities_digest)
+    );
+
+    let second_last_resort_nonce = b64(b"last-resort-claim-nonce-02");
+    let second_last_resort_claim_body = json!({
+        "target_principal_id": bob_did,
+        "target_device_ids": [bob_device],
+        "intended_realm_id": realm_id,
+        "requester": alice_did,
+        "required_capabilities": ["ak.mls.profile.full"],
+        "claim_nonce": second_last_resort_nonce,
+        "expires_at": arkret_canonical::format_timestamp_canonical(
+            last_resort_claim_expires_at
+        ),
+        "mls_group_id": "ak:mls_group:second"
+    });
+    let mut second_last_resort_claim_resp = TestClient::post(&claim_url)
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&second_last_resort_claim_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        second_last_resort_claim_resp.status_code,
+        Some(StatusCode::OK)
+    );
+    let second_last_resort_claim: Value = second_last_resort_claim_resp.take_json().await.unwrap();
+    assert_eq!(
+        second_last_resort_claim["claims"][0]["keypackage_ref"],
+        json!(last_resort_keypackage_ref)
+    );
+    assert_ne!(
+        first_last_resort_claim["claims"][0]["claim_id"],
+        second_last_resort_claim["claims"][0]["claim_id"]
+    );
+
+    let mut replayed_last_resort_claim_resp = TestClient::post(&claim_url)
+        .add_header("authorization", format!("Bearer {alice_token}"), true)
+        .json(&first_last_resort_claim_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    assert_eq!(
+        replayed_last_resort_claim_resp.status_code,
+        Some(StatusCode::OK)
+    );
+    let replayed_last_resort_claim: Value =
+        replayed_last_resort_claim_resp.take_json().await.unwrap();
+    assert_eq!(replayed_last_resort_claim, first_last_resort_claim);
+
+    let first_ledger_id = format!(
+        "local-last-resort:{}",
+        arkret_canonical::canonical_sha256(&json!({
+            "requester": alice_did,
+            "claim_nonce": first_last_resort_nonce,
+        }))
+        .unwrap()
+    );
+    let second_ledger_id = format!(
+        "local-last-resort:{}",
+        arkret_canonical::canonical_sha256(&json!({
+            "requester": alice_did,
+            "claim_nonce": second_last_resort_nonce,
+        }))
+        .unwrap()
+    );
+    let first_ledger = state
+        .test_persistence()
+        .mls_key_packages()
+        .get_peer_claim(state.service_id(), &first_ledger_id)
+        .await
+        .unwrap()
+        .expect("first last-resort claim ledger");
+    let second_ledger = state
+        .test_persistence()
+        .mls_key_packages()
+        .get_peer_claim(state.service_id(), &second_ledger_id)
+        .await
+        .unwrap()
+        .expect("second last-resort claim ledger");
+    assert_eq!(first_ledger.state, "last_resort_claimed");
+    assert_eq!(second_ledger.state, "last_resort_claimed");
+    assert_eq!(
+        first_ledger.outcome.as_ref().unwrap()["response"],
+        first_last_resort_claim
+    );
+    assert_eq!(
+        second_ledger.outcome.as_ref().unwrap()["response"],
+        second_last_resort_claim
+    );
+    assert_eq!(
+        first_ledger.outcome.as_ref().unwrap()["recipient_principal_id"],
+        json!(bob_did)
+    );
+    assert_eq!(
+        first_ledger.outcome.as_ref().unwrap()["recipient_device_id"],
+        json!(bob_device)
+    );
+    assert_eq!(
+        first_ledger.outcome.as_ref().unwrap()["mls_group_ref"],
+        json!(group_id)
+    );
+
+    let reusable_row = state
+        .test_persistence()
+        .mls_key_packages()
+        .get(last_resort_keypackage_id)
+        .await
+        .unwrap()
+        .expect("last-resort KeyPackage remains durable");
+    assert!(reusable_row.claimed_by_mls_group_id.is_none());
+    assert!(
+        state
+            .test_projection()
+            .lock()
+            .mls_key_packages
+            .get(last_resort_keypackage_id)
+            .unwrap()
+            .claimed_by
+            .is_none()
+    );
+    assert!(
+        state
+            .test_persistence()
+            .mls_key_packages()
+            .list_claimed_by_group(group_id)
+            .await
+            .unwrap()
+            .iter()
+            .all(|row| row.id != last_resort_keypackage_id)
+    );
+
+    let claim_id = first_last_resort_claim["claims"][0]["claim_id"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let claimed_keypackage_ref = first_last_resort_claim["claims"][0]["keypackage_ref"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let claimed_keypackage_digest = first_last_resort_claim["claims"][0]["keypackage_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    let claimed_capabilities_digest = first_last_resort_claim["claims"][0]["capabilities_digest"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
     let frontier_ref = "ak:event:01904100-0000-7000-8000-00000000f00d";
     let keypackage_ref = claimed_keypackage_ref;
@@ -520,7 +769,8 @@ async fn mls_lifecycle_end_to_end() {
             "ak.realm.admin",
             "ak.capability.grant",
             "ak.capability.revoke",
-            "ak.realm_key.share"
+            "ak.realm_key.share",
+            "ak.message.create"
         ],
         "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
         "resources": [{

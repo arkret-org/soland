@@ -163,47 +163,126 @@ pub(super) async fn project_invite_cancel_operation(
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
 }
 
-/// Validate the frozen invite lifecycle predicates that must hold before an
-/// `ak.invite.cancel` Event is accepted into the durable log.
+/// Freeze the authoritative lifecycle row and its two registered cells before
+/// an `ak.invite.cancel` reaches durable acceptance.
+///
+/// The caller holds the per-Invite lifecycle admission lock while this
+/// snapshot is built and consumed. The SDK pre-state predicates and Soland's
+/// lifecycle/member checks therefore inspect exactly the same values.
+pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
+    state: &AppState,
+    event: &arkret_wire::Event,
+) -> Result<arkret_schema::FrozenPreState, &'static str> {
+    let mut frozen = arkret_schema::FrozenPreState::new();
+    if event.kind.as_str() != arkret_wire::events::EventKind::INVITE_CANCEL {
+        return Ok(frozen);
+    }
+    let invite_id = event
+        .payload
+        .get("invite_id")
+        .and_then(Value::as_str)
+        .ok_or("reducer_projection_failed")?;
+    let record = state
+        .realm_invites()
+        .get(invite_id)
+        .await
+        .map_err(|_| "reducer_projection_failed")?
+        .ok_or("reducer_projection_failed")?;
+    if record.realm_id != event.realm_id.as_str() {
+        return Err("reducer_projection_failed");
+    }
+    if record.third_party_id.is_none() && record.invitee.is_none() {
+        return Err("reducer_projection_failed");
+    }
+
+    let lifecycle_cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
+    ))
+    .map_err(|_| "reducer_projection_failed")?;
+    let projection = state.projections().snapshot();
+    let lifecycle_value = projection
+        .cell_value(&lifecycle_cell)
+        .ok_or("reducer_projection_failed")?;
+    let lifecycle_status = lifecycle_value
+        .as_str()
+        .or_else(|| lifecycle_value.get("state").and_then(Value::as_str))
+        .ok_or("reducer_projection_failed")?;
+    if lifecycle_status != record.status {
+        return Err("reducer_projection_failed");
+    }
+
+    let mut lifecycle = serde_json::Map::from_iter([
+        ("invite_id".to_owned(), Value::String(record.invite_id)),
+        ("realm_id".to_owned(), Value::String(record.realm_id)),
+        ("state".to_owned(), Value::String(record.status)),
+        (
+            "third_party".to_owned(),
+            Value::Bool(record.third_party_id.is_some()),
+        ),
+    ]);
+    if record.third_party_id.is_none()
+        && let Some(invitee) = record.invitee
+    {
+        let member_cell = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.member.state.v1:{invitee}"
+        ))
+        .map_err(|_| "reducer_projection_failed")?;
+        let member_value = projection
+            .cell_value(&member_cell)
+            .cloned()
+            .ok_or("reducer_projection_failed")?;
+        lifecycle.insert("invitee".to_owned(), Value::String(invitee));
+        frozen.insert(member_cell, member_value);
+    }
+    frozen.insert(lifecycle_cell, Value::Object(lifecycle));
+    Ok(frozen)
+}
+
+/// Validate the remaining lifecycle predicates against the exact pre-state
+/// already consumed by the SDK registered-write projector.
 ///
 /// Projection-time rejection is too late: once the Event is durable, skipping
 /// the lifecycle/member projection would permanently split the two cells.
-pub(in crate::routing::events) async fn validate_invite_cancel_pre_admission(
-    state: &AppState,
+pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     origin: &str,
     operation: &Operation,
+    frozen_pre_state: &arkret_schema::FrozenPreState,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_string(operation) != arkret_wire::events::EventKind::INVITE_CANCEL {
         return Ok(());
     }
     let invite_id =
         invite_acceptance_ref_for_operation(operation).ok_or("reducer_projection_failed")?;
-    let record = state
-        .realm_invites()
-        .get(&invite_id)
-        .await
-        .map_err(|_| "reducer_projection_failed")?
+    let lifecycle_cell = arkret_identifiers::CellRef::new(format!(
+        "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
+    ))
+    .map_err(|_| "reducer_projection_failed")?;
+    let lifecycle = frozen_pre_state
+        .get(&lifecycle_cell)
         .ok_or("reducer_projection_failed")?;
-    if record.realm_id != operation.realm_id.as_str() {
+    if lifecycle.get("realm_id").and_then(Value::as_str) != Some(operation.realm_id.as_str()) {
         return Err("reducer_projection_failed");
     }
-    if record.third_party_id.is_some() {
+    if lifecycle.get("third_party").and_then(Value::as_bool) == Some(true) {
         return Err("invite_kind_requires_revoke");
     }
-    let invitee = record
-        .invitee
-        .as_deref()
+    let invitee = lifecycle
+        .get("invitee")
+        .and_then(Value::as_str)
         .ok_or("reducer_projection_failed")?;
     if operation.payload.get("invitee").and_then(Value::as_str) != Some(invitee) {
         return Err("reducer_projection_failed");
     }
     if !matches!(
-        record.status.as_str(),
-        "pending" | "claimed" | "send_failed"
-    ) || !state
-        .projections()
-        .invite_member_is_invited(record.realm_id.as_str(), invitee)
-    {
+        lifecycle.get("state").and_then(Value::as_str),
+        Some("pending" | "claimed" | "send_failed")
+    ) {
+        return Err("reducer_projection_failed");
+    }
+    let member_cell =
+        arkret_identifiers::CellRef::new(format!("ak:cell:ak.component.member.state.v1:{invitee}"))
+            .map_err(|_| "reducer_projection_failed")?;
+    if frozen_pre_state.get(&member_cell).and_then(Value::as_str) != Some("invite") {
         return Err("reducer_projection_failed");
     }
     let terminal_status = invite_terminal_transition_target(operation, &invite_id)
@@ -379,19 +458,25 @@ fn invite_terminal_transition_target<'a>(
 ) -> Option<&'a str> {
     operation
         .payload
-        .get("effects")
-        .and_then(Value::as_array)?
-        .iter()
-        .find(|effect| {
-            effect
-                .get("cell")
-                .and_then(Value::as_str)
-                .is_some_and(|cell| {
-                    cell == format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
-                })
-        })
-        .and_then(|effect| effect.pointer("/op/to"))
+        .get("target_state")
         .and_then(Value::as_str)
+        .or_else(|| {
+            operation
+                .payload
+                .get("effects")
+                .and_then(Value::as_array)?
+                .iter()
+                .find(|effect| {
+                    effect
+                        .get("cell")
+                        .and_then(Value::as_str)
+                        .is_some_and(|cell| {
+                            cell == format!("ak:cell:ak.component.invite.lifecycle.v1:{invite_id}")
+                        })
+                })
+                .and_then(|effect| effect.pointer("/op/to"))
+                .and_then(Value::as_str)
+        })
 }
 
 pub(super) async fn project_invite_third_party_operation(state: &AppState, operation: &Operation) {
@@ -1021,6 +1106,239 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    const CANCEL_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000521";
+    const CANCEL_INVITE: &str = "ak:invite:01904100-0000-7000-8000-000000000522";
+    const CANCEL_INVITER: &str = "did:web:alice.example";
+    const CANCEL_INVITEE: &str = "did:web:bob.example";
+
+    fn invite_test_state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig {
+                seed_demo_data: false,
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        )
+    }
+
+    fn cancel_event(invitee: Option<&str>) -> arkret_wire::Event {
+        let mut payload = json!({
+            "invite_id": CANCEL_INVITE,
+            "target_state": "revoked",
+        });
+        if let Some(invitee) = invitee {
+            payload["invitee"] = json!(invitee);
+        }
+        arkret_wire::Event::new(
+            arkret_wire::events::EventKind::INVITE_CANCEL,
+            arkret_wire::ScopeRef::Realm {
+                realm_id: RealmId::new(CANCEL_REALM).unwrap(),
+            },
+            Did::new(CANCEL_INVITER).unwrap(),
+            0,
+            arkret_identifiers::Hlc::new("019041000000-0000-aabbccdd").unwrap(),
+            payload,
+        )
+        .unwrap()
+    }
+
+    fn cancel_operation(invitee: Option<&str>) -> Operation {
+        let event = cancel_event(invitee);
+        let mut operation = Operation::create(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:01904100-0000-7000-8000-000000000523",
+            )
+            .unwrap(),
+            RealmId::new(CANCEL_REALM).unwrap(),
+            arkret_wire::events::EventKind::INVITE_CANCEL,
+            serde_json::to_value(event.payload).unwrap(),
+        );
+        operation.created_at = event.created_at;
+        operation
+    }
+
+    async fn seed_cancel_invite(state: &AppState, third_party: bool) {
+        let created_at = "2026-07-29T10:00:00Z".parse().unwrap();
+        state
+            .realm_invites()
+            .put(RealmInviteRecord {
+                invite_id: CANCEL_INVITE.to_owned(),
+                realm_id: CANCEL_REALM.to_owned(),
+                inviter: CANCEL_INVITER.to_owned(),
+                invitee: (!third_party).then(|| CANCEL_INVITEE.to_owned()),
+                invite_delivery_target: None,
+                introduction_evidence_digest: None,
+                third_party_id: third_party.then(|| {
+                    json!({
+                        "kind": "email",
+                        "token_commitment": format!("sha256:{}", "a".repeat(64))
+                    })
+                }),
+                join_rule_snapshot: None,
+                invite_token: "private-token".to_owned(),
+                status: "pending".to_owned(),
+                claim_nonces: BTreeMap::new(),
+                expires_at: Some("2026-08-05T10:00:00Z".parse().unwrap()),
+                created_at,
+                updated_at: None,
+            })
+            .await
+            .unwrap();
+        state.projections().cache_cell(
+            arkret_identifiers::CellRef::new(format!(
+                "ak:cell:ak.component.invite.lifecycle.v1:{CANCEL_INVITE}"
+            ))
+            .unwrap(),
+            json!("pending"),
+        );
+        if !third_party {
+            let mut create = Operation::create(
+                arkret_identifiers::OperationId::new(
+                    "ak:operation:01904100-0000-7000-8000-000000000524",
+                )
+                .unwrap(),
+                RealmId::new(CANCEL_REALM).unwrap(),
+                arkret_wire::events::EventKind::INVITE_CREATE,
+                json!({"invite_id": CANCEL_INVITE, "invitee": CANCEL_INVITEE}),
+            );
+            create.created_at = created_at;
+            state
+                .projections()
+                .project_invite_creation(&create, CANCEL_INVITEE);
+        }
+    }
+
+    async fn assert_cancel_state_unchanged(state: &AppState, expected_invitee: Option<&str>) {
+        assert!(
+            state
+                .event_queries()
+                .accepted_events()
+                .await
+                .unwrap()
+                .is_empty(),
+            "pre-admission failure must not accept a canonical Event"
+        );
+        let record = state
+            .realm_invites()
+            .get(CANCEL_INVITE)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(record.status, "pending");
+        assert_eq!(record.invitee.as_deref(), expected_invitee);
+        assert_eq!(record.invite_token, "private-token");
+        assert_eq!(
+            state.projections().cell_value(
+                &arkret_identifiers::CellRef::new(format!(
+                    "ak:cell:ak.component.invite.lifecycle.v1:{CANCEL_INVITE}"
+                ))
+                .unwrap()
+            ),
+            Some(json!("pending"))
+        );
+        if let Some(invitee) = expected_invitee {
+            assert_eq!(
+                state.projections().cell_value(
+                    &arkret_identifiers::CellRef::new(format!(
+                        "ak:cell:ak.component.member.state.v1:{invitee}"
+                    ))
+                    .unwrap()
+                ),
+                Some(json!("invite"))
+            );
+            assert!(
+                state
+                    .projections()
+                    .invite_member_is_invited(CANCEL_REALM, invitee)
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn direct_invite_cancel_uses_one_frozen_lifecycle_and_member_pre_state() {
+        let state = invite_test_state();
+        seed_cancel_invite(&state, false).await;
+        let event = cancel_event(Some(CANCEL_INVITEE));
+        let frozen = freeze_invite_cancel_pre_state(&state, &event)
+            .await
+            .unwrap();
+        let writes = state
+            .projections()
+            .project_cell_writes_with_pre_state(&event, &frozen)
+            .unwrap();
+
+        assert_eq!(writes.len(), 2);
+        validate_invite_cancel_pre_admission(
+            CANCEL_INVITER,
+            &cancel_operation(Some(CANCEL_INVITEE)),
+            &frozen,
+        )
+        .unwrap();
+        assert_cancel_state_unchanged(&state, Some(CANCEL_INVITEE)).await;
+    }
+
+    #[tokio::test]
+    async fn direct_invite_cancel_missing_or_mismatched_invitee_has_zero_side_effects() {
+        for supplied_invitee in [None, Some("did:web:mallory.example")] {
+            let state = invite_test_state();
+            seed_cancel_invite(&state, false).await;
+            let event = cancel_event(supplied_invitee);
+            let frozen = freeze_invite_cancel_pre_state(&state, &event)
+                .await
+                .unwrap();
+            let error = state
+                .projections()
+                .project_cell_writes_with_pre_state(&event, &frozen)
+                .unwrap_err();
+
+            assert_eq!(error.reason_code(), "reducer_projection_failed");
+            assert_cancel_state_unchanged(&state, Some(CANCEL_INVITEE)).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn third_party_invite_cancel_requires_revoke_with_zero_side_effects() {
+        let state = invite_test_state();
+        seed_cancel_invite(&state, true).await;
+        let event = cancel_event(Some(CANCEL_INVITEE));
+        let frozen = freeze_invite_cancel_pre_state(&state, &event)
+            .await
+            .unwrap();
+        let error = state
+            .projections()
+            .project_cell_writes_with_pre_state(&event, &frozen)
+            .unwrap_err();
+
+        assert_eq!(error.reason_code(), "invite_kind_requires_revoke");
+        assert_cancel_state_unchanged(&state, None).await;
+    }
+
+    #[tokio::test]
+    async fn unknown_invite_cancel_is_reducer_failure_with_zero_side_effects() {
+        let state = invite_test_state();
+        let error = freeze_invite_cancel_pre_state(&state, &cancel_event(Some(CANCEL_INVITEE)))
+            .await
+            .unwrap_err();
+
+        assert_eq!(error, "reducer_projection_failed");
+        assert!(
+            state
+                .event_queries()
+                .accepted_events()
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            state
+                .realm_invites()
+                .get(CANCEL_INVITE)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
 
     #[tokio::test]
     async fn shared_invite_create_reconciles_exact_private_delivery_before_replay() {

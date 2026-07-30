@@ -451,7 +451,15 @@ impl ProjectionService {
 
     #[must_use]
     pub fn sdk_cell_registry() -> Arc<dyn CellRegistry> {
-        Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry())
+        Self::try_sdk_cell_registry()
+            .expect("canonical shared FSM registry must pass the startup closure gate")
+    }
+
+    pub fn try_sdk_cell_registry()
+    -> Result<Arc<dyn CellRegistry>, arkret_lattice_registry::ContractRegistryError> {
+        Ok(Arc::new(
+            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry()?,
+        ))
     }
 
     fn control_event_store(&self) -> &dyn ControlEventStore {
@@ -859,6 +867,24 @@ impl ProjectionService {
             self.realm_digest_suite(event.realm_id.as_str()),
         )
         .map_err(|error| error.to_string())
+    }
+
+    /// Project registered writes against one caller-frozen pre-state.
+    ///
+    /// Security-barrier contracts such as `ak.invite.cancel` inspect durable
+    /// lifecycle fields before exposing any write. The HTTP admission lane
+    /// freezes those fields while holding the lifecycle lock and passes the
+    /// same snapshot through the SDK projector and the remaining preflight.
+    pub fn project_cell_writes_with_pre_state(
+        &self,
+        event: &Event,
+        frozen_pre_state: &arkret_schema::FrozenPreState,
+    ) -> Result<Vec<ProjectedCellWrite>, arkret_schema::EventCellContractError> {
+        arkret_schema::project_registered_cell_writes_with_pre_state(
+            event,
+            self.realm_digest_suite(event.realm_id.as_str()),
+            frozen_pre_state,
+        )
     }
 
     pub fn resolve_projected_cell_write(
@@ -2232,4 +2258,31 @@ fn pending_device_revoke_exists(
                 .iter()
                 .any(|event_id| event_id == revoke_event_id)
     })
+}
+
+#[cfg(test)]
+mod fsm_registry_tests {
+    use super::*;
+
+    #[test]
+    fn live_projection_registry_resolves_the_exact_canonical_fsm_closure() {
+        let registry = ProjectionService::try_sdk_cell_registry().unwrap();
+        let contracts = arkret_lattice_registry::canonical_fsm_contracts().unwrap();
+        assert_eq!(
+            contracts.len(),
+            soland_domain::reducer::lattice_kinds::CANONICAL_SHARED_FSM_FAMILY_COUNT
+        );
+        let realm =
+            RealmId::new("ak:realm:01900000-0000-7000-8000-000000000001".to_owned()).unwrap();
+        for contract in contracts {
+            let cell =
+                CellRef::new(format!("ak:cell:{}:live-admission", contract.cell_family)).unwrap();
+            let binding = registry.resolve(&realm, &cell).unwrap();
+            assert_eq!(
+                binding.lattice.kind(),
+                arkret_state::lattice::LatticeKind::Fsm
+            );
+            assert_eq!(binding.bottom_mode, arkret_state::state::BottomMode::Reject);
+        }
+    }
 }

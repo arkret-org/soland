@@ -1888,6 +1888,33 @@ mod membership_hydration_tests {
             })
             .await
             .expect("put keypackage");
+        store
+            .mls_key_packages()
+            .put(&MlsKeyPackageRow {
+                id: "ak:mls_keypackage:retired".to_owned(),
+                keypackage_ref: "sha256:retired-ref".to_owned(),
+                keypackage_digest: "sha256:retired-digest".to_owned(),
+                actor_id: "did:web:bob.example".to_owned(),
+                device_id: "ak:device:bob-1".to_owned(),
+                key_package_bytes: vec![4, 5, 6],
+                capabilities: vec!["ak.content.v1".to_owned()],
+                capabilities_digest: "sha256:retired-caps".to_owned(),
+                device_signature: serde_json::json!({}),
+                last_resort: false,
+                last_resort_realm_id: None,
+                lifetime_not_before: 0,
+                lifetime_not_after: i64::MAX,
+                claimed_by_mls_group_id: Some("retired".to_owned()),
+                ssk_generation: None,
+                device_authorize_event_id: Some("ak:event:auth".to_owned()),
+                agent_key_authorize_event_id: None,
+                claimed_at: None,
+                claim_expires_at_unix_ms: None,
+                consumed_at: None,
+                created_at: 2,
+            })
+            .await
+            .expect("put retired keypackage");
 
         let effective_scope = serde_json::json!({ "kind": "realm", "realm_id": realm_id });
         let governance_binding = serde_json::json!({ "policy_root": "sha256:locked-root" });
@@ -1925,6 +1952,14 @@ mod membership_hydration_tests {
         assert_eq!(kp.actor_id, "did:web:bob.example");
         assert!(kp.last_resort);
         assert!(kp.claimed_by.is_none());
+        let retired = proj
+            .mls_key_packages
+            .get("ak:mls_keypackage:retired")
+            .expect("retired keypackage rehydrated");
+        assert_eq!(retired.claimed_by.as_deref(), Some("retired"));
+        assert!(retired.claimed_at.is_none());
+        assert!(retired.claim_expires_at_unix_ms.is_none());
+        assert!(retired.consumed_at.is_none());
 
         // Commit-epoch projection is rebuilt with the genesis-locked policy_root
         // → the add-member commit's governance binding check passes.

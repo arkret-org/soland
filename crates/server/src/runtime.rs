@@ -29,7 +29,10 @@ pub fn build_app_state(
     service_identity: arkret_identity::service_identity::ServiceIdentityState,
     resolved_signing_seed: [u8; 32],
 ) -> anyhow::Result<AppState> {
-    let cell_registry = soland_services::projection::ProjectionService::sdk_cell_registry();
+    let cell_registry = soland_services::projection::ProjectionService::try_sdk_cell_registry()
+        .map_err(|error| {
+            anyhow::anyhow!("canonical shared FSM registry failed startup validation: {error}")
+        })?;
     let stores =
         soland_storage_postgres::build_state_resolution_stores(db.pool.clone(), cell_registry);
     let service_id = service_identity

@@ -127,7 +127,7 @@ async fn prepare_ghost_event(
     let mut operation = projection_operation_from_event(&parsed, &envelope);
     // The reducer preflight below reads the receiver's own registry-derived
     // writes; v1 has no producer `effects[]` to take them from.
-    let projected_cell_writes = derive_submit_cell_writes(state, &parsed, &envelope)?;
+    let (projected_cell_writes, _) = derive_submit_cell_writes(state, &parsed, &envelope).await?;
     if let Some(operation) = operation.as_ref() {
         let mut aggregate_operations = preceding_operations.to_vec();
         aggregate_operations.push(operation.clone());

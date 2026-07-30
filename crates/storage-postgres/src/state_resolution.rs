@@ -1827,9 +1827,18 @@ mod event_seal_commit_tests {
 
     use super::{
         BTreeSet, CellRef, CellRegistry, CellStore, EventSealCommitStore, Hash, LatticeOp,
-        MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp, compute_state_root,
-        effective_state_with_new_ops,
+        MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp, build_state_resolution_stores,
+        compute_state_root, effective_state_with_new_ops,
     };
+
+    #[test]
+    fn in_memory_state_resolution_reuses_the_validated_registry_instance() {
+        let registry: Arc<dyn CellRegistry> = Arc::new(
+            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        );
+        let stores = build_state_resolution_stores(None, registry.clone());
+        assert!(Arc::ptr_eq(&registry, &stores.cell_registry));
+    }
 
     fn competing_seal(
         cell_store: &dyn CellStore,
@@ -1840,7 +1849,7 @@ mod event_seal_commit_tests {
     ) -> (Seal, Vec<(CellRef, super::IssuedOp)>, BTreeSet<Hash>) {
         let move_id = Hash::new(format!("sha256:{}", marker.to_string().repeat(64))).unwrap();
         let cell = CellRef::new(
-            "ak:cell:ak.component.metric.counter.v1:ak.metric.seal_admission".to_owned(),
+            "ak:cell:ak.component.agent.selector_claim.v1:ak.selector.seal_admission".to_owned(),
         )
         .unwrap();
         let ops = vec![(
@@ -1848,7 +1857,7 @@ mod event_seal_commit_tests {
             test_issued(SealedOp::new(
                 move_id.clone(),
                 LatticeOp {
-                    op_type: LatticeOpType::Inc,
+                    op_type: LatticeOpType::Set,
                     tag: None,
                     value: Some(json!(increment)),
                     from: None,
@@ -1896,9 +1905,10 @@ mod event_seal_commit_tests {
     }
 
     #[test]
-    fn composite_state_preserves_fsm_causal_order() {
+    fn postgres_replay_uses_validated_sdk_fsm_contract() {
         let cell_store = arkret_state::state::MemoryCellStore::default();
-        let registry = soland_domain::reducer::lattice_kinds::build_sdk_cell_registry();
+        let registry =
+            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap();
         let realm = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000ca55").unwrap();
         let cell =
             CellRef::new("ak:cell:ak.component.member.state.v1:did:web:member.example".to_owned())
@@ -1940,8 +1950,9 @@ mod event_seal_commit_tests {
     fn memory_composite_commit_never_exposes_loser_effects() {
         let seal_store = Arc::new(arkret_state::state::MemorySealStore::default());
         let cell_store = Arc::new(arkret_state::state::MemoryCellStore::default());
-        let registry: Arc<dyn CellRegistry> =
-            Arc::new(soland_domain::reducer::lattice_kinds::build_sdk_cell_registry());
+        let registry: Arc<dyn CellRegistry> = Arc::new(
+            soland_domain::reducer::lattice_kinds::try_build_validated_sdk_cell_registry().unwrap(),
+        );
         let committer = Arc::new(MemoryEventSealCommitStore {
             lock: parking_lot::Mutex::new(()),
             seal_store: seal_store.clone(),

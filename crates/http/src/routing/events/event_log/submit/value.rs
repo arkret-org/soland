@@ -42,14 +42,20 @@ pub(super) fn typed_event_to_canonical_value(envelope: Event) -> Result<Value, S
 /// not an active reducer input declares no contract and legitimately writes
 /// nothing; a reducer input whose contract will not evaluate fails the Event
 /// closed rather than admitting it with an empty projection.
-pub(super) fn derive_submit_cell_writes(
+pub(super) async fn derive_submit_cell_writes(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
-) -> Result<Vec<arkret_wire::cba::ProjectedCellWrite>, SubmitOneError> {
+) -> Result<
+    (
+        Vec<arkret_wire::cba::ProjectedCellWrite>,
+        arkret_schema::FrozenPreState,
+    ),
+    SubmitOneError,
+> {
     let descriptor = arkret_wire::events::EventKind::from(parsed.kind.as_str()).descriptor();
     if !descriptor.is_some_and(|descriptor| descriptor.reducer_input) {
-        return Ok(Vec::new());
+        return Ok((Vec::new(), arkret_schema::FrozenPreState::new()));
     }
     let event = serde_json::from_value::<Event>(envelope.clone()).map_err(|error| {
         SubmitOneError::new(
@@ -58,16 +64,45 @@ pub(super) fn derive_submit_cell_writes(
             format!("reducer input is not a valid Event Envelope: {error}"),
         )
     })?;
-    state
-        .projections()
-        .project_cell_writes(&event)
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::BAD_REQUEST,
-                "reducer_projection_failed",
-                format!("event does not project its registered cell writes: {error}"),
-            )
-        })
+    let frozen_pre_state =
+        crate::routing::events::projection::freeze_invite_cancel_pre_state(state, &event)
+            .await
+            .map_err(|reason| {
+                SubmitOneError::new(StatusCode::PRECONDITION_FAILED, reason, reason)
+            })?;
+    let projected = if parsed.kind == arkret_wire::events::EventKind::INVITE_CANCEL {
+        state
+            .projections()
+            .project_cell_writes_with_pre_state(&event, &frozen_pre_state)
+            .map_err(|error| {
+                let reason = error.reason_code();
+                let status = if matches!(
+                    error,
+                    arkret_schema::EventCellContractError::PreStateRequirement { .. }
+                ) {
+                    StatusCode::PRECONDITION_FAILED
+                } else {
+                    StatusCode::BAD_REQUEST
+                };
+                SubmitOneError::new(
+                    status,
+                    reason,
+                    format!("event does not project its registered cell writes: {error}"),
+                )
+            })?
+    } else {
+        state
+            .projections()
+            .project_cell_writes(&event)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "reducer_projection_failed",
+                    format!("event does not project its registered cell writes: {error}"),
+                )
+            })?
+    };
+    Ok((projected, frozen_pre_state))
 }
 
 async fn validate_active_series_authority_before_commit(
@@ -449,6 +484,11 @@ pub(super) async fn submit_event_value_with_context(
         Some(lock) => Some(lock.lock_owned().await),
         None => None,
     };
+    let _invite_lifecycle_submit_guard =
+        match invite_lifecycle_submit_lock(&parsed.realm_id, &envelope) {
+            Some(lock) => Some(lock.lock_owned().await),
+            None => None,
+        };
     let received_at = now();
     // `offline-publication.md` §2.1 — the receipt is minted once the lease,
     // Event proofs and scope have been verified, and BEFORE the duplicate
@@ -689,7 +729,8 @@ pub(super) async fn submit_event_value_with_context(
     // preflight clone and the live apply reading the same projection. Kinds
     // that are not reducer inputs declare no contract and project nothing —
     // the same guard `enforce_registered_cell_contract` uses at admission.
-    let projected_cell_writes = derive_submit_cell_writes(state, &parsed, &envelope)?;
+    let (projected_cell_writes, frozen_pre_state) =
+        derive_submit_cell_writes(state, &parsed, &envelope).await?;
     // Active-series pointer versions are a per-(actor,class) CAS. Keep the
     // semantic preflight, canonical Event+projection commit, and live reducer
     // application in one admission lane so two concurrent vN successors
@@ -841,11 +882,10 @@ pub(super) async fn submit_event_value_with_context(
         }
         if let Err(reason) =
             crate::routing::events::projection::validate_invite_cancel_pre_admission(
-                state,
                 &parsed.actor_id,
                 operation,
+                &frozen_pre_state,
             )
-            .await
         {
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,

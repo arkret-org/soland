@@ -340,7 +340,7 @@ mod tests {
 
     #[tokio::test]
     async fn pairing_commit_intent_is_immutable_and_exact_retry_is_idempotent() {
-        let store = MemoryAgentStore::new();
+        let store = MemoryAgentStore::default();
         store.put(pending_agent()).await.unwrap();
         let intent = AgentPairingCommitIntent {
             agent_id: "did:web:agent.example".to_owned(),
@@ -394,7 +394,7 @@ mod tests {
 
     #[tokio::test]
     async fn activation_requires_and_consumes_the_exact_commit_intent() {
-        let store = MemoryAgentStore::new();
+        let store = MemoryAgentStore::default();
         store.put(pending_agent()).await.unwrap();
         let activation = AgentRuntimeActivation {
             agent_id: "did:web:agent.example".to_owned(),

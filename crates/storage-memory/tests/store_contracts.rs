@@ -1,10 +1,12 @@
 use soland_storage::contract_tests::{
     EventCommitContractStores, assert_event_commit_unit_of_work_contract,
-    assert_idempotency_store_contract, assert_proposal_member_receipt_store_contract,
+    assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
+    assert_mls_keypackage_retirement_contract, assert_proposal_member_receipt_store_contract,
 };
 use soland_storage::{
     AccountDataCasResult, AccountDataRecord, EventProjectionStoreRegistry,
-    FederationGovernanceStoreRegistry, IdentityStoreRegistry, SyncStoreRegistry,
+    FederationGovernanceStoreRegistry, IdentityStoreRegistry, MlsAgentStoreRegistry,
+    SyncStoreRegistry,
 };
 use soland_storage_memory::SolandMemoryPersistenceStore;
 
@@ -38,6 +40,18 @@ async fn memory_adapter_satisfies_shared_event_commit_contract() {
         "memory-event-commit",
     )
     .await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_mls_keypackage_retirement_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_mls_keypackage_retirement_contract(store.mls_key_packages(), "memory-retirement").await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_last_resort_claim_ledger_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_last_resort_claim_ledger_contract(store.mls_key_packages(), "memory-last-resort").await;
 }
 
 fn account_data_record(

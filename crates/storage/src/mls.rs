@@ -409,8 +409,8 @@ pub trait MlsKeyPackageStore: Send + Sync {
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>>;
     /// Snapshot all rows. Diagnostics + the integration test rely on it.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<MlsKeyPackageRow>>;
-    /// All rows claimed by `mls_group_id` (excluding the sentinel
-    /// `"revoked"` claims). Ordered by `claimed_at` then `id` so callers
+    /// All rows claimed by `mls_group_id` (excluding the terminal sentinel
+    /// `"revoked"` and `"retired"` states). Ordered by `claimed_at` then `id` so callers
     /// get a stable leaf iteration order. Feeds the minimal-metadata
     /// author-credential admission view (encryption-and-audit.md §2.10.3).
     async fn list_claimed_by_group(

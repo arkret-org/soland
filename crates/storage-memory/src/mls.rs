@@ -297,7 +297,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             .rows
             .values()
             .filter(|row| {
-                mls_group_id != "revoked"
+                !matches!(mls_group_id, "revoked" | "retired")
                     && row.claimed_by_mls_group_id.as_deref() == Some(mls_group_id)
             })
             .cloned()
