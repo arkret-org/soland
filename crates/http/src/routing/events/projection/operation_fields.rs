@@ -62,32 +62,6 @@ pub(super) fn operation_realm_summary(operation: &Operation) -> Option<&str> {
         .or_else(|| patch_string_field(operation, "summary"))
 }
 
-/// Canonical alias declared by an accepted `ak.realm.alias` Event.
-///
-/// `ak.realm.alias` is the ONLY wire carrier of a Realm alias
-/// (`discovery/object-addressing.md` §3.3): `realm.schema.json` is closed and
-/// declares no `alias`, and `ak.realm.create` / `ak.realm.update` payloads MUST
-/// NOT carry one. The earlier fallback chain over `payload.realm_alias`,
-/// `payload.alias`, `payload.object.alias` and `patch.alias` accepted four
-/// input shapes for one fact, which is exactly how create-time alias diverged
-/// from the closed schema; those shapes are now registered forbidden wire
-/// fields. Returns `None` for the `{"tombstone": true}` release form.
-pub(super) fn operation_realm_alias_declaration(operation: &Operation) -> Option<&str> {
-    (kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_wire::events::EventKind::REALM_ALIAS))
-    .then(|| operation.payload.get("alias").and_then(Value::as_str))
-    .flatten()
-}
-
-/// Whether this operation is the `ak.realm.alias` value tombstone that releases
-/// the Realm's alias. After it is accepted the Realm resolves only by
-/// `realm_id`; the cell history is preserved, nothing is physically erased.
-pub(super) fn operation_releases_realm_alias(operation: &Operation) -> bool {
-    kinds::canonical_kind_for_operation(operation)
-        == Some(arkret_wire::events::EventKind::REALM_ALIAS)
-        && operation.payload.get("tombstone").and_then(Value::as_bool) == Some(true)
-}
-
 pub(super) fn operation_realm_discoverability(operation: &Operation) -> Option<&str> {
     (kinds::canonical_kind_for_operation(operation)
         == Some(arkret_wire::events::EventKind::REALM_DISCOVERY))

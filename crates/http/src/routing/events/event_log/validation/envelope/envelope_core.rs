@@ -299,12 +299,6 @@ async fn validate_event_envelope_with_ingress(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
-    let is_realm_founding_grant = kind == arkret_wire::events::EventKind::CAPABILITY_GRANT
-        && realm_bootstrap_contexts.iter().any(|context| {
-            context.ordinary_realm_bootstrap
-                && context.realm_id == realm_id
-                && context.actor_id == actor_id
-        });
     let is_identity_anchor_authorize = kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
@@ -341,7 +335,6 @@ async fn validate_event_envelope_with_ingress(
         && !managed_agent_delegation
         && !is_member_self_knock
         && !is_realm_bootstrap_followup
-        && !is_realm_founding_grant
         && !is_identity_anchor_authorize
         && !is_identity_anchor_reanchor
         && !is_authorized_internal_adapter
@@ -384,6 +377,39 @@ async fn validate_event_envelope_with_ingress(
     // reducer contract (`event-and-patch.md` §2.4.2). Derived here rather than
     // inside the gate so there is one evaluator, shared with
     // `enforce_registered_cell_contract` below.
+    // `event-auth-state-resolution.md` section 5 - the two closed anchor units
+    // carry no CBA basis field at all, so their registry plane check runs in the
+    // bootstrap context. Membership of a unit is decided by the batch context
+    // this validator was handed (the closed-whitelist owner is
+    // `arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit`, already
+    // run before the batch reaches here), never guessed from the kind. The
+    // authority-root claim below is resolved against that same membership, so a
+    // staged genesis proof and an accepted-Seal proof can never be swapped for
+    // one another.
+    let bootstrap_unit_member = is_realm_bootstrap_unit_member(
+        &kind,
+        &realm_id,
+        &actor_id,
+        is_realm_bootstrap_followup,
+        is_identity_anchor_authorize,
+        is_identity_anchor_reanchor,
+        realm_bootstrap_contexts,
+    );
+    // `capabilities.md` section 3.2 - an Event may name the Realm authority-root
+    // cell as its `authorization_ref` and thereby author under effective
+    // `ak.realm.owner` instead of under a grant.
+    let realm_authority_root_authorized = event_string_field(object, &["authorization_ref"])
+        .as_deref()
+        == Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL);
+    realm_authority_root::validate_realm_authority_root_authorization(
+        state,
+        object,
+        &kind,
+        &realm_id,
+        &actor_id,
+        bootstrap_unit_member,
+        realm_bootstrap_contexts,
+    )?;
     let data_event_cells = derived_data_event_cells(envelope, object)?;
     let data_event_query_grade = validate_data_event_capability_refs(
         state,
@@ -392,10 +418,11 @@ async fn validate_event_envelope_with_ingress(
         &kind,
         object,
         &data_event_cells,
+        realm_authority_root_authorized,
     )?;
     validate_control_move_seal_basis(
         object,
-        is_realm_bootstrap_followup || is_realm_founding_grant || is_identity_anchor_authorize,
+        is_realm_bootstrap_followup || is_identity_anchor_authorize,
     )?;
     if kind == arkret_wire::events::EventKind::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
@@ -532,22 +559,7 @@ async fn validate_event_envelope_with_ingress(
     )
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
-    // `event-auth-state-resolution.md` §5 — the two closed anchor units carry no
-    // CBA basis field at all, so their registry plane check runs in the
-    // bootstrap context. Membership of a unit is decided by the batch context
-    // this validator was handed (the closed-whitelist owner is
-    // `arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit`, already
-    // run before the batch reaches here), never guessed from the kind.
-    let cba_context = if is_realm_bootstrap_unit_member(
-        &kind,
-        &realm_id,
-        &actor_id,
-        is_realm_bootstrap_followup,
-        is_realm_founding_grant,
-        is_identity_anchor_authorize,
-        is_identity_anchor_reanchor,
-        realm_bootstrap_contexts,
-    ) {
+    let cba_context = if bootstrap_unit_member {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
     } else {
         arkret_schema::EventCellContractContext::Standard
@@ -713,25 +725,20 @@ async fn enforce_device_generation_fence(
 /// Whether this envelope is a member of one of the two closed
 /// `seal_basis`-exempt anchor units of `event-auth-state-resolution.md` §5.
 ///
-/// The `ak.realm.create` genesis is the unit head; the founding grant, the
-/// whitelisted initial facets and the delegated first `ak.device.authorize` are
-/// its already-classified members. Nothing else may claim the exemption, so the
+/// The `ak.realm.create` genesis is the unit head; the whitelisted initial
+/// facets and the delegated first `ak.device.authorize` are its
+/// already-classified members. Nothing else may claim the exemption, so the
 /// answer is read from the batch context rather than derived from the kind.
 fn is_realm_bootstrap_unit_member(
     kind: &str,
     realm_id: &str,
     actor_id: &str,
     is_realm_bootstrap_followup: bool,
-    is_realm_founding_grant: bool,
     is_identity_anchor_authorize: bool,
     is_identity_anchor_reanchor: bool,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> bool {
-    if is_realm_bootstrap_followup
-        || is_realm_founding_grant
-        || is_identity_anchor_authorize
-        || is_identity_anchor_reanchor
-    {
+    if is_realm_bootstrap_followup || is_identity_anchor_authorize || is_identity_anchor_reanchor {
         return true;
     }
     kind == arkret_wire::events::EventKind::REALM_CREATE
@@ -839,6 +846,7 @@ fn enforce_registered_cell_contract(
             ),
             arkret_wire::REALM_CREATE_CELL.to_owned(),
             arkret_wire::REALM_NOTARY_CELL.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ]
         .into_iter()
         .collect();
@@ -850,7 +858,7 @@ fn enforce_registered_cell_contract(
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",
-                "Realm create does not derive the canonical four genesis cells",
+                "Realm create does not derive the canonical five genesis cells",
             ));
         }
     }

@@ -46,18 +46,6 @@ impl FederationProfileIntersection {
         self.enforce_atoms(&atoms)
     }
 
-    pub(crate) fn enforce_realm_founding_grant(
-        &self,
-        envelope: &Value,
-    ) -> Result<(), FederationProfileGateRejection> {
-        let mut atoms = SemanticAtoms::from_event_envelope(envelope);
-        atoms.schemas.remove(SCHEMA_CAPABILITY);
-        atoms.capability_actions.clear();
-        atoms.constraint_kinds.clear();
-        atoms.requires_capability_semantics = false;
-        self.enforce_atoms(&atoms)
-    }
-
     fn enforce_atoms(&self, atoms: &SemanticAtoms) -> Result<(), FederationProfileGateRejection> {
         // federation.md: inbound `/_arkret/peer/events` acceptance is gated by
         // the RFC 9421 service signature + trust-domain/destination binding +

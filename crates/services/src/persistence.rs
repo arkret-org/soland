@@ -4,7 +4,6 @@ use std::sync::Arc;
 use arkret_identifiers::RealmId;
 use soland_storage::{PersistenceResult, PersistenceStore};
 
-use crate::authorization::AuthorizationService;
 use crate::delivery::{DeliveryService, ObjectStoragePort};
 use crate::events::RealmDirectoryIndex;
 use crate::governance::{AdminSigningKeyPort, RuntimeSettingsPort};
@@ -230,14 +229,9 @@ impl PersistenceHandle {
         JoinApplicationService::new(self.persistence.clone())
     }
 
-    pub async fn hydrate_realm_directory(&self, local_service_id: &str) -> RealmDirectoryIndex {
+    pub async fn hydrate_realm_directory(&self) -> RealmDirectoryIndex {
         let mut realms = RealmDirectoryIndex::new();
-        hydrate_realms_from_canonical_events(
-            self.persistence.as_ref(),
-            &mut realms,
-            local_service_id,
-        )
-        .await;
+        hydrate_realms_from_canonical_events(self.persistence.as_ref(), &mut realms).await;
         realms
     }
 
@@ -248,17 +242,11 @@ impl PersistenceHandle {
     pub async fn hydrate_projection(
         &self,
         projection: &ProjectionService,
-        authorization: &AuthorizationService,
         projection_adapter: &dyn HydrationProjectionAdapter,
         realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
         projection
-            .hydrate_from_persistence(
-                self.persistence.as_ref(),
-                authorization,
-                projection_adapter,
-                realm_ids,
-            )
+            .hydrate_from_persistence(self.persistence.as_ref(), projection_adapter, realm_ids)
             .await
     }
 

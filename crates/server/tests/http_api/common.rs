@@ -1046,8 +1046,8 @@ pub(crate) fn resign_canonical_event(event: &mut Value) {
 /// anchor unit and re-sign it.
 ///
 /// The ordinary Realm genesis transaction has no accepted Seal to point at, so
-/// every member of its closed unit — the `ak.realm.create` head, the founding
-/// grant and the whitelisted initial facets — MUST carry no CBA basis field at
+/// every member of its closed unit — the `ak.realm.create` head and the
+/// whitelisted initial facets — MUST carry no CBA basis field at
 /// all, and no `preconditions` either: the receiver runs the registry plane
 /// check under `EventCellContractContext::OrdinaryRealmBootstrap`, where a
 /// half-filled basis is a `plane_cross_write`.
@@ -1526,9 +1526,10 @@ pub(crate) async fn seed_verified_device_with_public_key(
 /// `capability_refs.rs::validate_data_event_capability_refs` decides coverage
 /// per receiver-derived cell, over the effective grants the governance basis at
 /// `seal_ref` yields for the actor — so the basis has to name every data-plane
-/// kind a test submits, and nothing beyond it. The canonical founding grant now
-/// covers `ak.message.create`; a second, explicit grant carries only the other
-/// actions instead of masking founder-message authorization with a duplicate.
+/// kind a test submits, and nothing beyond it. The owner bootstrap grant
+/// already covers `ak.message.create`; a second, explicit grant carries only
+/// the other actions instead of masking owner-message authorization with a
+/// duplicate.
 const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 8] = [
     "ak.morph.create",
     "ak.morph.update",
@@ -1560,16 +1561,18 @@ pub(crate) struct TestRealmBasis {
 /// `arkret_state::effective_state_at`, which joins the cell log filtered by the
 /// Seal's covered Control-Move digests). An empty Seal therefore authorizes
 /// nothing, and no per-test patch can fix that — the Realm has to have sealed a
-/// real founding unit.
+/// real genesis unit.
 ///
 /// So the basis is keyed by `(realm, subject)` and seals one closed unit:
 ///
-/// 1. the founding grant of `realm-and-space.md` §2.5 step 5 — `issuer == subject`, the exact
-///    SDK-owned [`arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS`] set, one
-///    Realm-wide resource selector, no `parent_grant_id`, and the embedded
+/// 1. the registered `ak.component.realm.authority_root.v1` singleton of `realm-and-space.md` §2.5
+///    — the only authority genesis establishes, whose controller holds effective `ak.realm.owner`;
+/// 2. the owner's own first governance grant
+///    ([`soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS`]) — `issuer ==
+///    subject`, one Realm-wide resource selector, no `parent_grant_id`, and the embedded
 ///    `capability-action-registry.json` digest;
-/// 2. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`];
-/// 3. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
+/// 3. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`];
+/// 4. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
 ///    MLS-backed DataEvent clears the governance-binding gate.
 ///
 /// Keying by subject rather than by Realm is what makes the Seal
@@ -1579,7 +1582,7 @@ pub(crate) struct TestRealmBasis {
 /// single per-Realm Seal would have to grow its covered set every time a new
 /// actor appeared, and every such growth invalidates both roots.
 ///
-/// The one member that cannot be inside `state_root` is (3): its or-set element
+/// The one member that cannot be inside `state_root` is (4): its or-set element
 /// value is the enclosing Seal's own id, which does not exist until the body —
 /// `state_root` included — has been hashed. See the report note on
 /// `capability_refs.rs::validate_data_event_covered_seals`.
@@ -1630,7 +1633,7 @@ pub(crate) fn test_cited_basis_seal(event: &arkret_wire::Event) -> arkret_wire::
 
 /// A citable accepted Seal that covers no Control Move at all.
 ///
-/// [`test_realm_basis_seal`] covers a founding unit, which is exactly what a
+/// [`test_realm_basis_seal`] covers a genesis unit, which is exactly what a
 /// DataEvent needs and exactly what a Realm whose *first canonical* Seal the
 /// server is about to materialize must not already have: the notary refuses to
 /// build a Seal whose canonical coverage does not contain what the current
@@ -1668,25 +1671,52 @@ static TEST_REALM_UNCOVERED_BASES: LazyLock<
 fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let issuer = Did::new(subject.to_owned()).expect("fixture grant issuer DID");
-    let founding_move = fixture_move_id(realm_id, subject, "founding-grant");
+    let authority_root_move = fixture_move_id(realm_id, subject, "authority-root");
+    let owner_move = fixture_move_id(realm_id, subject, "owner-grant");
     let content_move = fixture_move_id(realm_id, subject, "content-grant");
     let covered_move = fixture_move_id(realm_id, subject, "mls-commit");
 
-    let founding_grant_id = fixture_grant_id(realm_id, subject, "founding-grant");
+    let owner_grant_id = fixture_grant_id(realm_id, subject, "owner-grant");
     let content_grant_id = fixture_grant_id(realm_id, subject, "content-grant");
     let mut ops = vec![
         (
-            fixture_capability_grant_cell(&founding_grant_id),
+            arkret_identifiers::CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
+                .expect("fixture authority-root cell id"),
             fixture_issued_op(
                 &issuer,
-                &founding_move,
+                &authority_root_move,
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Set,
+                    tag: None,
+                    value: Some(
+                        serde_json::to_value(
+                            arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
+                                issuer.clone(),
+                                arkret_policy::current_capability_action_registry_digest()
+                                    .expect("embedded capability action registry digest"),
+                            ),
+                        )
+                        .expect("fixture authority-root value"),
+                    ),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        ),
+        (
+            fixture_capability_grant_cell(&owner_grant_id),
+            fixture_issued_op(
+                &issuer,
+                &owner_move,
                 fixture_or_set_add(
-                    founding_move.as_str(),
+                    owner_move.as_str(),
                     fixture_grant_body(
-                        &founding_grant_id,
+                        &owner_grant_id,
                         realm_id,
                         subject,
-                        &arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
+                        &soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                         true,
                     ),
                 ),
@@ -1721,7 +1751,8 @@ fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
     // hashes it as a set, so the order is part of the wire contract rather
     // than a formatting choice.
     let mut delta = vec![
-        founding_move.clone(),
+        authority_root_move.clone(),
+        owner_move.clone(),
         content_move.clone(),
         covered_move.clone(),
     ];
@@ -1789,7 +1820,7 @@ fn fixture_capability_grant_cell(grant_id: &str) -> arkret_identifiers::CellRef 
     .expect("fixture capability grant cell id")
 }
 
-/// A deterministic Control-Move digest for one member of the founding unit.
+/// A deterministic Control-Move digest for one member of the genesis unit.
 fn fixture_move_id(realm_id: &str, subject: &str, slot: &str) -> arkret_identifiers::Hash {
     arkret_identifiers::Hash::new(format!(
         "sha256:{}",
@@ -1884,7 +1915,7 @@ fn fixture_grant_body(
     body
 }
 
-/// Put the founding unit of `realm_id` in place for `subject`.
+/// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
 /// same Realm (`event-auth-state-resolution.md` §4.3(1)) **and** the governance
@@ -1906,7 +1937,7 @@ pub(crate) fn seed_test_realm_basis_seal(
     basis.seal.id
 }
 
-/// Seal the demo Realm's founding unit for the actor [`dev_token`] logs in.
+/// Seal the demo Realm's genesis unit for the actor [`dev_token`] logs in.
 ///
 /// The stateless envelope builders (`signed_space_event`,
 /// `signed_strand_event`, `signed_morph_event`, …) all author demo-Realm

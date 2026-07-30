@@ -1462,10 +1462,10 @@ impl ProjectionState {
     /// need to recognise the profile before concluding a policy is missing.
     pub fn realm_is_principal_control(&self, realm_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {
-            realm.active_profiles.iter().any(|profile| {
-                profile
-                    == arkret_models_collaboration::objects::realm::PRINCIPAL_CONTROL_REALM_PROFILE
-            })
+            realm
+                .active_profiles
+                .iter()
+                .any(|profile| profile == arkret_bootstrap::PRINCIPAL_CONTROL_REALM_PROFILE)
         })
     }
 }

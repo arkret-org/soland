@@ -125,7 +125,6 @@ pub struct RealmOrganizationStatementRecord {
 pub struct RealmDirectoryEntry {
     pub realm_id: RealmId,
     pub title: String,
-    pub alias: Option<String>,
     pub description: Option<String>,
     pub tags: BTreeSet<String>,
     pub members: BTreeSet<Did>,
@@ -143,7 +142,6 @@ impl RealmDirectoryEntry {
         Self {
             realm_id,
             title: title.into(),
-            alias: None,
             description: None,
             tags: BTreeSet::new(),
             members: BTreeSet::new(),
@@ -265,31 +263,6 @@ impl RealmDirectoryService {
         update: impl FnOnce(&mut RealmDirectoryEntry) -> R,
     ) -> Option<R> {
         self.index.lock().get_mut(realm_id).map(update)
-    }
-
-    pub fn set_alias_if_available(&self, realm_id: &RealmId, alias: String) -> bool {
-        let mut index = self.index.lock();
-        let taken = index.entries_iter().any(|(existing_id, existing)| {
-            existing_id != realm_id && existing.alias.as_deref() == Some(alias.as_str())
-        });
-        if taken {
-            return false;
-        }
-        index.get_mut(realm_id).is_some_and(|entry| {
-            entry.alias = Some(alias);
-            true
-        })
-    }
-
-    /// Release this Realm's alias, projected from an accepted `ak.realm.alias`
-    /// value tombstone. The Realm then resolves only by `realm_id`, and the
-    /// canonical alias becomes claimable by another Realm — a tombstone is the
-    /// only way to free an alias, since a later declaration by a different
-    /// Realm is rejected while the alias is still held
-    /// (`discovery/object-addressing.md` §3.3).
-    pub fn clear_alias(&self, realm_id: &RealmId) -> bool {
-        self.update_entry(realm_id, |entry| entry.alias.take().is_some())
-            .unwrap_or(false)
     }
 
     pub fn add_member(&self, realm_id: &RealmId, member: Did) -> bool {

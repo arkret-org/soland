@@ -718,6 +718,7 @@ async fn sidecar_structural_events_are_visible_only_inside_the_backing_circle() 
                 "schema": "ak.schema.realm.v1",
                 "title": "Sidecar recovery",
                 "created_by": ROSTER_ACTOR,
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "encryption_profile": "mls_rfc9420"
             }
         }),
@@ -738,6 +739,7 @@ async fn sidecar_structural_events_are_visible_only_inside_the_backing_circle() 
                 "metadata_encryption_floor": "e2ee_required",
                 "encryption_profile": "mls_rfc9420",
                 "created_by": ROSTER_ACTOR,
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "created_at": arkret_canonical::format_timestamp_canonical(created_at)
             }
         }),
@@ -1784,6 +1786,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
                 "id": ROSTER_REALM,
                 "title": "Pinned welcome space",
                 "created_by": ROSTER_ACTOR,
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "default_join_rule": "invite",
                 "history_visibility": "joined",
                 "encryption_profile": "none"
@@ -1922,6 +1925,7 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
                 "id": ROSTER_REALM,
                 "title": "Redacted revision space",
                 "created_by": ROSTER_ACTOR,
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "default_join_rule": "invite",
                 "history_visibility": "joined",
                 "encryption_profile": "none"

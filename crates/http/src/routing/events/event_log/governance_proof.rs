@@ -1608,6 +1608,7 @@ fn canonical_event_sealed_ops(
             ),
             arkret_wire::REALM_CREATE_CELL.to_owned(),
             arkret_wire::REALM_NOTARY_CELL.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ]
         .into_iter()
         .collect();
@@ -1618,7 +1619,7 @@ fn canonical_event_sealed_ops(
         if resolved.len() != expected.len() || actual != expected {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
-                "Realm create proof material does not derive the canonical four genesis cells",
+                "Realm create proof material does not derive the canonical five genesis cells",
             ));
         }
     }
@@ -1678,6 +1679,8 @@ mod tests {
                 "object": {
                     "id": realm_id,
                     "created_by": actor_id,
+                    "capability_action_registry_digest":
+                        arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "fields": {"purpose": "principal_control"},
                     "notary": {"kind": "single_did", "did": actor_id},
                 }
@@ -1686,14 +1689,14 @@ mod tests {
         .unwrap()
     }
 
-    /// The v1 wire carries no producer `effects[]`, so the four canonical
+    /// The v1 wire carries no producer `effects[]`, so the five canonical
     /// genesis cells of a managed Agent PCR create are whatever the registered
     /// contract derives — and the create-log target is the wire singleton
     /// (`realm-and-space.md` §2.8.3), never a per-Realm subject. A per-Realm
     /// variant would both fork the `state_root` leaf set and turn a per-Realm
     /// genesis singleton into a deployment-wide shared key.
     #[test]
-    fn governance_materializer_derives_the_four_canonical_genesis_cells() {
+    fn governance_materializer_derives_the_five_canonical_genesis_cells() {
         let state = test_state();
         let event = managed_agent_pcr_create();
         let realm_id = event.realm_id.clone();
@@ -1713,10 +1716,11 @@ mod tests {
             ),
             arkret_wire::REALM_CREATE_CELL.to_owned(),
             arkret_wire::REALM_NOTARY_CELL.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ]
         .into_iter()
         .collect::<BTreeSet<_>>();
-        assert_eq!(ops.len(), 4);
+        assert_eq!(ops.len(), 5);
         assert_eq!(derived, expected);
         assert!(!derived.contains(&format!(
             "ak:cell:ak.component.realm.create.v1:{}",

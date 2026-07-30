@@ -278,6 +278,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
                 "object": {
                     "created_by": "did:web:alice",
                     "title": "Test Realm",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 },
             }),
         ),
@@ -591,6 +592,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
             serde_json::json!({
                 "object": {
                     "created_by": "did:web:alice",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "title": "Spec Realm",
                     "trust_domain": "ak:trust_domain:example.net",
                     "encryption_profile": "none",
@@ -636,6 +638,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
             serde_json::json!({
                 "object": {
                     "created_by": "did:web:bob",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "title": "Duplicate Realm",
                     "trust_domain": "ak:trust_domain:example.net",
                     "encryption_profile": "none",
@@ -666,6 +669,7 @@ fn direct_conversation_role_reads_the_genesis_object_from_the_create_log() {
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(creator),
+        arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     );
 

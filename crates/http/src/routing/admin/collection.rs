@@ -269,6 +269,14 @@ pub(super) async fn admin_create_realm(
     let realm_id = ids::generate_realm_id();
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|error| AppError::invalid_param(format!("realm_id: {error}")))?;
+    // The create-locked genesis basis of the Realm's authority root
+    // (`realm-and-space.md` section 2.5). It is a `state_root` leaf input, so
+    // the author states its own embedded snapshot rather than letting a
+    // receiver re-infer one.
+    let capability_action_registry_digest =
+        arkret_policy::current_capability_action_registry_digest().map_err(|error| {
+            AppError::internal(format!("capability action registry unavailable: {error}"))
+        })?;
     let object = json!({
         "id": realm_id,
         "title": title,
@@ -279,6 +287,7 @@ pub(super) async fn admin_create_realm(
         "encryption_profile": if body.is_encrypted { "mls_rfc9420" } else { "plaintext" },
         "realm_class": body.realm_class,
         "created_by": session.actor.clone(),
+        "capability_action_registry_digest": capability_action_registry_digest,
     });
     let payload = json!({
         "object": object,

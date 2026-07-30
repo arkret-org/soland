@@ -271,11 +271,10 @@ async fn submit_join_application(
                     recipient.reviewer_did.as_str(),
                     recipient.device_id.as_str(),
                 ))
-                || !snapshot.issuer_has_projected_capability(
+                || !snapshot.actor_governs_realm(
+                    realm_id.as_str(),
                     recipient.reviewer_did.as_str(),
-                    realm_id.as_str(),
-                    &action,
-                    realm_id.as_str(),
+                    &[action.as_str()],
                     body.receipt.submitted_at,
                 )
             {
@@ -481,11 +480,15 @@ fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, b
     let review_action = snapshot
         .realm_join_policy_review_capability(realm_id.as_str())
         .unwrap_or_else(|| REVIEW_ACTION_FALLBACK.to_owned());
-    let reviewer = snapshot.issuer_has_projected_capability(
+    // Review eligibility is a Realm-governance decision, so it goes through the
+    // shared predicate: the owner aggregate satisfies it without a verbatim
+    // reviewer grant. Audit read is not a governance decision and stays an
+    // operational capability - the owner aggregate does not reach the non-Event
+    // audit surface (`capabilities.md` section 3.2 empty-coverage guard).
+    let reviewer = snapshot.actor_governs_realm(
+        realm_id.as_str(),
         actor,
-        realm_id.as_str(),
-        &review_action,
-        realm_id.as_str(),
+        &[review_action.as_str()],
         evaluated_at,
     );
     let audit_reader = snapshot.issuer_has_projected_capability(

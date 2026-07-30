@@ -280,6 +280,26 @@ fn projected_grant_is_active_for(
         && crate::capability::resource_matches(&grant.resource, resource_expr)
 }
 
+/// Operational sibling of [`projected_grant_is_active_for`]: identical except
+/// the action test admits a registry-anchored aggregate expansion.
+///
+/// Kept as a separate function rather than a flag so no caller can flip "does
+/// this holder carry the action" into "may this holder author that Event" by
+/// passing the wrong boolean.
+fn projected_grant_covers_action(
+    grant: &crate::capability::Grant,
+    realm_id: &str,
+    action: &str,
+    resource_expr: &str,
+    evaluation_basis: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    grant.realm_id == realm_id
+        && !grant.revoked
+        && !crate::capability::is_grant_expired(grant, evaluation_basis)
+        && grant_action_covers(grant, action)
+        && crate::capability::resource_matches(&grant.resource, resource_expr)
+}
+
 #[cfg(test)]
 mod cba_capability_cell_tests {
     use arkret_state::lattice::CellState;
@@ -473,6 +493,30 @@ fn validate_resource_selector(selector: &Value) -> Result<(), &'static str> {
     }
 }
 
+/// True when a projected grant authorizes authoring under `action`.
+///
+/// `capabilities.md` section 3.2 answers Event admission over
+/// `target_event_kinds`. A verbatim action match is unconditional; an aggregate
+/// expansion is a re-reading of the issuer's signature under a
+/// capability-action registry snapshot, so it is anchored to the basis the
+/// grant itself names and fails closed as
+/// `capability_registry_basis_unavailable` when that snapshot is not the one
+/// this build embeds. The receiver never falls back to its own registry.
+fn grant_action_covers(grant: &crate::capability::Grant, action: &str) -> bool {
+    if grant.actions.iter().any(|candidate| candidate == action) {
+        return true;
+    }
+    if arkret_policy::require_registry_basis(grant.capability_action_registry_digest.as_ref())
+        .is_err()
+    {
+        return false;
+    }
+    grant
+        .actions
+        .iter()
+        .any(|holder| arkret_policy::action_covers_event_kinds(holder, action).unwrap_or(false))
+}
+
 /// or_set add dot for a capability event. Deterministic per accepted event.
 fn capability_add_dot(operation: &Operation) -> String {
     operation.operation_id.to_string()
@@ -634,7 +678,41 @@ impl ProjectionState {
         })
     }
 
-    /// Does `issuer` hold an active projected grant for `action` on `resource`?
+    /// Literal action match only — the grant names `action` verbatim.
+    ///
+    /// Separate from [`Self::issuer_has_projected_capability`] because an
+    /// aggregate expansion answers "may this holder author that Event", which
+    /// is a different question from "does this holder actually carry that
+    /// action". Governance and owner checks want the second one.
+    pub fn issuer_holds_literal_capability(
+        &self,
+        issuer: &str,
+        realm_id: &str,
+        action: &str,
+        resource: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        let resource_expr = self.authz_resource_expr(realm_id, resource);
+        self.projected_capability_grants().any(|grant| {
+            grant.subject == issuer
+                && projected_grant_is_active_for(
+                    &grant,
+                    realm_id,
+                    action,
+                    &resource_expr,
+                    evaluation_basis,
+                )
+        })
+    }
+
+    /// Operational coverage: may `issuer` directly author under `action`?
+    ///
+    /// A literal hit needs no registry basis. An aggregate expansion
+    /// re-interprets a historical signature under a registry snapshot, so it is
+    /// anchored to the basis the grant itself names and fails closed when that
+    /// snapshot is unknown. The expansion is the SDK's
+    /// `action_covers_event_kinds`, which already guards the empty-coverage
+    /// (non-Event surface) case.
     ///
     /// `evaluation_basis` is the caller's admission / evaluation timestamp; the
     /// projection never reads the wall clock on its own.
@@ -649,7 +727,7 @@ impl ProjectionState {
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.projected_capability_grants().any(|grant| {
             grant.subject == issuer
-                && projected_grant_is_active_for(
+                && projected_grant_covers_action(
                     &grant,
                     realm_id,
                     action,
@@ -676,7 +754,7 @@ impl ProjectionState {
         };
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         grant.subject == subject
-            && projected_grant_is_active_for(
+            && projected_grant_covers_action(
                 &grant,
                 realm_id,
                 action,
@@ -685,8 +763,14 @@ impl ProjectionState {
             )
     }
 
-    /// Distinct subjects holding an active realm-scoped grant for `action` —
-    /// the eligible-reviewer denominator for `majority` / `all` quorum.
+    /// Distinct subjects holding `action` **verbatim** in this Realm.
+    ///
+    /// Deliberately unexpanded. This count drives the join-review quorum
+    /// fallback, where the denominator is the set of principals a Realm
+    /// actually appointed as reviewers. Expanding it through the aggregate
+    /// would silently fold every owner and aggregate holder into "eligible
+    /// reviewers" and move the majority threshold without any governance Event
+    /// saying so.
     pub fn projected_capability_holder_count(
         &self,
         realm_id: &str,
@@ -707,6 +791,126 @@ impl ProjectionState {
             .map(|grant| grant.subject)
             .collect::<std::collections::BTreeSet<_>>()
             .len()
+    }
+
+    /// True when `actor` currently speaks for this Realm's owner aggregate.
+    ///
+    /// Two sources, both revocable-by-governance and neither of them a
+    /// membership or `realm_states[..].owner` fallback:
+    /// 1. `actor` is the controller of the registered authority-root cell;
+    /// 2. `actor` holds a live, verbatim `ak.realm.owner` co-owner grant.
+    pub fn actor_holds_effective_realm_owner(
+        &self,
+        realm_id: &str,
+        actor: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        if self
+            .realm_authority_root(realm_id)
+            .is_some_and(|root| root.controller_id.as_str() == actor)
+        {
+            return true;
+        }
+        self.issuer_holds_literal_capability(
+            actor,
+            realm_id,
+            arkret_policy::REALM_OWNER_ACTION,
+            realm_id,
+            evaluation_basis,
+        )
+    }
+
+    /// The shared Realm-governance predicate over projected capability state.
+    ///
+    /// A governance decision (join review, ban, applet install, ...) is allowed
+    /// when `actor` either speaks for the Realm owner aggregate or holds one of
+    /// `actions` verbatim. Realm membership and the discardable
+    /// `realm_states[..].owner` presentation mirror are never inputs. Every
+    /// review surface routes through this one function so the two legs cannot
+    /// drift apart per surface.
+    pub fn actor_governs_realm(
+        &self,
+        realm_id: &str,
+        actor: &str,
+        actions: &[&str],
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
+            || actions.iter().any(|action| {
+                self.issuer_holds_literal_capability(
+                    actor,
+                    realm_id,
+                    action,
+                    realm_id,
+                    evaluation_basis,
+                )
+            })
+    }
+
+    /// Owner-aggregate leg of the section 3.2 issuer upper bound.
+    ///
+    /// Matching is by action id against the registry's
+    /// `grant_authority_actions` (through `arkret_policy::owner_may_grant`),
+    /// which additionally rejects `root_control_only` / `subject_only` /
+    /// `reducer_only` actions and requires a profile action to be registered as
+    /// owner-grantable by an active profile. Event-kind coverage is never
+    /// substituted here.
+    fn owner_may_issue_grant_for(
+        &self,
+        issuer: &str,
+        realm_id: &str,
+        action: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        if !self.actor_holds_effective_realm_owner(realm_id, issuer, evaluation_basis) {
+            return false;
+        }
+        let basis = self.realm_authority_registry_basis(realm_id);
+        arkret_policy::owner_may_grant(
+            action,
+            basis.as_ref(),
+            &self.realm_owner_grantable_profile_actions(realm_id),
+        )
+        .unwrap_or(false)
+    }
+
+    /// Actions the Realm's currently active profiles register as
+    /// owner-grantable (`capabilities.md` section 3.2).
+    ///
+    /// Read from the Realm's own `schema_refs` rather than a deployment-wide
+    /// profile list: owner grant authority is a per-Realm question, and a
+    /// profile the Realm never claimed must not widen its owner ceiling.
+    /// A profile action absent here stays non-grantable by the owner aggregate
+    /// even while the profile is active, and being listed does not waive that
+    /// profile's own registration / constraint / evidence gates.
+    fn realm_owner_grantable_profile_actions(&self, realm_id: &str) -> Vec<String> {
+        let Some(metadata) =
+            self.realm_null_subject_cell_value(realm_id, "ak.component.realm.metadata.v1")
+        else {
+            return Vec::new();
+        };
+        let mut actions = std::collections::BTreeSet::new();
+        for profile_id in metadata
+            .get("schema_refs")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+        {
+            let Some(requirements) =
+                arkret_schema::generated::profile_requirements::PROFILE_REQUIREMENTS
+                    .get(profile_id)
+            else {
+                continue;
+            };
+            actions.extend(
+                requirements
+                    .owner_grant_authority_actions
+                    .iter()
+                    .map(|action| (*action).to_owned()),
+            );
+        }
+        actions.into_iter().collect()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -765,13 +969,18 @@ impl ProjectionState {
                             .iter()
                             .any(|candidate| candidate.as_str() == Some(action))
                     })
-                || !self.issuer_has_projected_capability(
+                // conformance-profiles.json marks the applet bridge rule
+                // `issuer_owner_authority_allowed`: the Realm owner aggregate
+                // satisfies the issuer leg exactly like a verbatim
+                // `rule.issuer_action` holder. Every other leg of the rule -
+                // registration, scope, epoch, evidence - is unchanged.
+                || !(self.issuer_holds_literal_capability(
                     issuer,
                     realm_id,
                     rule.issuer_action,
                     resource,
                     evaluation_basis,
-                )
+                ) || self.actor_holds_effective_realm_owner(realm_id, issuer, evaluation_basis))
             {
                 return false;
             }
@@ -803,21 +1012,28 @@ impl ProjectionState {
             return Err("capability_grant_resources_empty");
         }
         for action in &actions {
+            // The owner aggregate is Realm-wide, so it is resolved once per
+            // action rather than per resource selector.
+            let owner_authorized =
+                self.owner_may_issue_grant_for(&issuer, realm_id, action, operation.created_at);
             for resource in &resources {
-                if !self.issuer_has_projected_capability(
-                    &issuer,
-                    realm_id,
-                    action,
-                    resource,
-                    operation.created_at,
-                ) && !self.applet_non_event_grant_authority_matches(
-                    &issuer,
-                    realm_id,
-                    action,
-                    resource,
-                    body,
-                    operation.created_at,
-                ) {
+                if !owner_authorized
+                    && !self.issuer_has_projected_capability(
+                        &issuer,
+                        realm_id,
+                        action,
+                        resource,
+                        operation.created_at,
+                    )
+                    && !self.applet_non_event_grant_authority_matches(
+                        &issuer,
+                        realm_id,
+                        action,
+                        resource,
+                        body,
+                        operation.created_at,
+                    )
+                {
                     return Err("grant_exceeds_issuer_authority");
                 }
             }
@@ -977,50 +1193,6 @@ impl ProjectionState {
             .insert(cell_ref, CellState::Value(Value::Array(items)));
 
         ProjectionEffect::CapabilityGrantProjected { grant_id, realm_id }
-    }
-
-    /// Apply the one ordinary-Realm founding grant after the server has
-    /// validated the complete `create -> founding grant` protocol unit.
-    /// Genesis cannot use the ordinary issuer-upper-bound check because this
-    /// grant establishes that very first bound.
-    pub fn apply_validated_realm_founding_grant(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let Some(grant_id) = operation
-            .payload
-            .get("grant_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_grant_id_missing".to_owned(),
-            };
-        };
-        if grant_issuer(&operation.payload).is_none() {
-            return ProjectionEffect::Rejected {
-                reason: "capability_grant_issuer_missing".to_owned(),
-            };
-        }
-        let Some(cell_ref) = Self::capability_grant_cell_ref(&grant_id) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_grant_cell_ref_invalid".to_owned(),
-            };
-        };
-        let mut items = self.capability_cell_items(&cell_ref);
-        let terminal_revoked = Self::capability_cell_has_revoked_item(&items);
-        let value = grant_item_value(operation, &grant_id, terminal_revoked, now);
-        items.push(serde_json::json!({
-            "tag": capability_add_dot(operation),
-            "value": value,
-        }));
-        self.cells
-            .insert(cell_ref, CellState::Value(Value::Array(items)));
-        ProjectionEffect::CapabilityGrantProjected {
-            grant_id,
-            realm_id: operation.realm_id.to_string(),
-        }
     }
 
     /// P1 — project `ak.capability.revoke` as an or_set observed-remove on the
@@ -1521,7 +1693,8 @@ mod agent_key_tests {
     const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a1";
     const GRANT_2: &str = "ak:grant:01970000-0000-7000-8000-0000000000a2";
     const GRANT_3: &str = "ak:grant:01970000-0000-7000-8000-0000000000a3";
-    const FOUNDING_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a0";
+    const OWNER_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a0";
+    const REALM_OWNER: &str = "did:web:alice.example";
 
     fn op(object_kind: &str, payload: serde_json::Value) -> Operation {
         Operation {
@@ -1583,17 +1756,20 @@ mod agent_key_tests {
                 active_profiles: Vec::new(),
             },
         );
-        let mut founding = grant_payload(
-            FOUNDING_GRANT,
-            "did:web:alice.example",
-            "did:web:alice.example",
+        crate::reducer::tests::install_realm_authority_root(state, REALM, REALM_OWNER);
+        // Genesis authority is the authority-root cell, not a founding grant.
+        // The owner's own bootstrap grant therefore goes through the ordinary
+        // issuer-upper-bound path and is authorized by the owner aggregate.
+        let mut owner_grant = grant_payload(
+            OWNER_GRANT,
+            REALM_OWNER,
+            REALM_OWNER,
             json!(["ak.realm.admin", "ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        founding["grant"]["capability_action_registry_digest"] =
+        owner_grant["grant"]["capability_action_registry_digest"] =
             json!(arkret_policy::current_capability_action_registry_digest().unwrap());
-        let effect =
-            state.apply_validated_realm_founding_grant(&op("capability_grant", founding), now);
+        let effect = state.apply_capability_grant(&op("capability_grant", owner_grant), now);
         assert!(matches!(
             effect,
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
@@ -2109,6 +2285,7 @@ mod delegation_cycle_tests {
 
     fn seed_realm_owner(state: &mut ProjectionState) {
         let now = chrono::Utc::now();
+        crate::reducer::tests::install_realm_authority_root(state, REALM, "did:web:alice.example");
         state.realm_states.insert(
             REALM.to_owned(),
             SolandRealmState {
@@ -2134,7 +2311,7 @@ mod delegation_cycle_tests {
         // Project g_b delegated from root g_a, so the chain is g_a <- g_b.
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
-        proj.apply_validated_realm_founding_grant(
+        proj.apply_capability_grant(
             &root_grant_op(G_A, "did:web:alice.example", "did:web:alice.example"),
             chrono::Utc::now(),
         );
@@ -2172,7 +2349,7 @@ mod delegation_cycle_tests {
     fn delegated_grant_must_decrement_parent_depth() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
-        proj.apply_validated_realm_founding_grant(
+        proj.apply_capability_grant(
             &root_grant_op_with_constraints(
                 G_A,
                 "did:web:alice.example",
@@ -2206,7 +2383,7 @@ mod delegation_cycle_tests {
     fn delegated_grant_rejects_when_parent_depth_exhausted() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
-        proj.apply_validated_realm_founding_grant(
+        proj.apply_capability_grant(
             &root_grant_op_with_constraints(
                 G_A,
                 "did:web:alice.example",
@@ -2244,7 +2421,7 @@ mod federation_revoke_fanout_tests {
     const OWNER: &str = "did:web:alice.example";
     const PEER_SERVICE_ID: &str = "did:web:beta.example";
     const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d1";
-    const FOUNDING_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d0";
+    const OWNER_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d0";
 
     fn capability_op(operation_id: &str, kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -2257,6 +2434,7 @@ mod federation_revoke_fanout_tests {
 
     fn seed_realm_authority(state: &mut ProjectionState) {
         let now = chrono::Utc::now();
+        crate::reducer::tests::install_realm_authority_root(state, REALM, OWNER);
         state.realm_states.insert(
             REALM.to_owned(),
             SolandRealmState {
@@ -2278,13 +2456,13 @@ mod federation_revoke_fanout_tests {
         );
         let registry_digest = arkret_policy::current_capability_action_registry_digest()
             .expect("embedded capability action registry");
-        let founding = capability_op(
+        let owner_grant = capability_op(
             "ak:operation:01970000-0000-7000-8000-0000000000a0",
             arkret_wire::events::EventKind::CAPABILITY_GRANT,
             json!({
-                "grant_id": FOUNDING_GRANT,
+                "grant_id": OWNER_GRANT,
                 "grant": {
-                    "id": FOUNDING_GRANT,
+                    "id": OWNER_GRANT,
                     "schema": arkret_wire::CAPABILITY_SCHEMA,
                     "realm_id": REALM,
                     "issuer": OWNER,
@@ -2296,7 +2474,7 @@ mod federation_revoke_fanout_tests {
             }),
         );
         assert!(matches!(
-            state.apply_validated_realm_founding_grant(&founding, now),
+            state.apply_capability_grant(&owner_grant, now),
             ProjectionEffect::CapabilityGrantProjected { .. }
         ));
     }
@@ -2377,5 +2555,354 @@ mod federation_revoke_fanout_tests {
                 .is_empty(),
             "revocation is scoped to the grant's Realm"
         );
+    }
+}
+
+/// Regression suite for the Realm owner aggregate (`capabilities.md` §3.2).
+///
+/// Genesis registers an authority-root cell and nothing else; its controller
+/// holds effective `ak.realm.owner`. These cases pin the boundaries of what
+/// that does and does not confer, because every one of them is a place where a
+/// plausible-looking widening silently hands out authority nobody granted.
+#[cfg(test)]
+mod realm_owner_authority_tests {
+    use arkret_event_draft::Operation;
+    use arkret_identifiers::{OperationId, RealmId};
+    use serde_json::json;
+
+    use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
+
+    const REALM: &str = "ak:realm:01980000-0000-7000-8000-000000000000";
+    const OWNER: &str = "did:web:owner.example";
+    const CO_OWNER: &str = "did:web:co-owner.example";
+    const STRANGER: &str = "did:web:stranger.example";
+
+    fn grant_op(
+        operation_slot: &str,
+        grant_id: &str,
+        issuer: &str,
+        subject: &str,
+        actions: serde_json::Value,
+    ) -> Operation {
+        Operation::create(
+            OperationId::new(format!(
+                "ak:operation:01980000-0000-7000-8000-0000000000{operation_slot}"
+            ))
+            .unwrap(),
+            RealmId::new(REALM.to_owned()).unwrap(),
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            json!({
+                "grant_id": grant_id,
+                "grant": {
+                    "id": grant_id,
+                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "realm_id": REALM,
+                    "issuer": issuer,
+                    "subject": subject,
+                    "actions": actions,
+                    "capability_action_registry_digest":
+                        arkret_policy::current_capability_action_registry_digest().unwrap(),
+                    "resources": [{
+                        "kind": "realm",
+                        "realm_id": REALM,
+                        "match_scope": "realm_wide"
+                    }],
+                    "issued_at": "2026-01-01T00:00:00.000Z",
+                }
+            }),
+        )
+    }
+
+    fn grant_id(slot: &str) -> String {
+        format!("ak:grant:01980000-0000-7000-8000-0000000000{slot}")
+    }
+
+    /// A Realm whose `realm_states` mirror names `mirror_owner` but whose
+    /// authority root is controlled by `controller` (when supplied).
+    fn realm(controller: Option<&str>, mirror_owner: Option<&str>) -> ProjectionState {
+        let mut state = ProjectionState::default();
+        let now = chrono::Utc::now();
+        state.realm_states.insert(
+            REALM.to_owned(),
+            SolandRealmState {
+                realm_id: REALM.to_owned(),
+                owner: mirror_owner.map(ToOwned::to_owned),
+                title: None,
+                deleted: false,
+                archived: false,
+                frozen: false,
+                freeze_expires_at: None,
+                created_at: now,
+                updated_at: now,
+                trust_domain: None,
+                terminal_state: None,
+                successor_realm_id: None,
+                default_strand_id: None,
+                active_profiles: Vec::new(),
+            },
+        );
+        if let Some(controller) = controller {
+            crate::reducer::tests::install_realm_authority_root(&mut state, REALM, controller);
+        }
+        state
+    }
+
+    fn issue(state: &mut ProjectionState, operation: &Operation) -> ProjectionEffect {
+        state.apply_capability_grant(operation, chrono::Utc::now())
+    }
+
+    fn projected(effect: &ProjectionEffect) -> bool {
+        matches!(effect, ProjectionEffect::CapabilityGrantProjected { .. })
+    }
+
+    fn rejected_reason(effect: &ProjectionEffect) -> Option<&str> {
+        match effect {
+            ProjectionEffect::Rejected { reason } => Some(reason.as_str()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn only_the_authority_root_controller_is_the_owner() {
+        // A forged `realm_states[..].owner` is a discardable presentation
+        // mirror. It never authorizes anything; only the registered cell does.
+        let forged = realm(None, Some(OWNER));
+        assert!(!forged.actor_holds_effective_realm_owner(REALM, OWNER, chrono::Utc::now()));
+        assert!(!forged.actor_governs_realm(REALM, OWNER, &["ak.realm.admin"], chrono::Utc::now()));
+
+        let rooted = realm(Some(OWNER), Some(STRANGER));
+        assert!(rooted.actor_holds_effective_realm_owner(REALM, OWNER, chrono::Utc::now()));
+        assert!(!rooted.actor_holds_effective_realm_owner(REALM, STRANGER, chrono::Utc::now()));
+    }
+
+    #[test]
+    fn owner_signs_the_core_actions_its_grant_authority_set_names() {
+        let mut state = realm(Some(OWNER), None);
+        // An Event-plane action, a non-Event surface, a key-distribution
+        // action, and the aggregate itself: all four are owner-grantable.
+        for (slot, action) in [
+            ("a1", "ak.strand.create"),
+            ("a2", "ak.strand.admin"),
+            ("a3", "ak.audit.export"),
+            ("a4", "ak.realm_key.share"),
+        ] {
+            let id = grant_id(slot);
+            let effect = issue(
+                &mut state,
+                &grant_op(slot, &id, OWNER, OWNER, json!([action])),
+            );
+            assert!(projected(&effect), "owner must sign {action}: {effect:?}");
+            // ...and the literal grant it just signed is then usable.
+            assert!(
+                state.issuer_holds_literal_capability(
+                    OWNER,
+                    REALM,
+                    action,
+                    REALM,
+                    chrono::Utc::now()
+                ),
+                "{action} must be held verbatim after issuance"
+            );
+        }
+    }
+
+    #[test]
+    fn owner_appoints_a_co_owner_who_is_then_an_owner_too() {
+        let mut state = realm(Some(OWNER), None);
+        let id = grant_id("b1");
+        let effect = issue(
+            &mut state,
+            &grant_op("b1", &id, OWNER, CO_OWNER, json!(["ak.realm.owner"])),
+        );
+        assert!(
+            projected(&effect),
+            "owner may appoint a co-owner: {effect:?}"
+        );
+        assert!(state.actor_holds_effective_realm_owner(REALM, CO_OWNER, chrono::Utc::now()));
+
+        // The co-owner's authority is the same aggregate, so it can sign on.
+        let delegated = grant_id("b2");
+        assert!(projected(&issue(
+            &mut state,
+            &grant_op(
+                "b2",
+                &delegated,
+                CO_OWNER,
+                STRANGER,
+                json!(["ak.strand.create"])
+            ),
+        )));
+    }
+
+    #[test]
+    fn owner_never_reaches_the_two_root_control_only_actions() {
+        let state = realm(Some(OWNER), None);
+        let basis = state.realm_authority_registry_basis(REALM);
+        for action in ["ak.realm.destroy", "ak.realm.tombstone"] {
+            assert!(
+                !arkret_policy::owner_may_grant(action, basis.as_ref(), &[]).unwrap(),
+                "{action} is root_control_only and is not owner-grantable"
+            );
+            assert!(
+                !arkret_policy::action_covers_event_kinds(
+                    arkret_policy::REALM_OWNER_ACTION,
+                    action
+                )
+                .unwrap(),
+                "{action} is outside the owner aggregate's operational coverage"
+            );
+        }
+    }
+
+    #[test]
+    fn realm_admin_alone_cannot_sign_out_strand_create() {
+        // `ak.realm.admin` is an aggregate, but `ak.strand.create` is in
+        // neither its coverage set nor its grant-authority set.
+        let mut state = realm(Some(OWNER), None);
+        let admin = grant_id("c1");
+        assert!(projected(&issue(
+            &mut state,
+            &grant_op("c1", &admin, OWNER, STRANGER, json!(["ak.realm.admin"])),
+        )));
+        let escalation = grant_id("c2");
+        let effect = issue(
+            &mut state,
+            &grant_op(
+                "c2",
+                &escalation,
+                STRANGER,
+                STRANGER,
+                json!(["ak.strand.create"]),
+            ),
+        );
+        assert_eq!(
+            rejected_reason(&effect),
+            Some("grant_exceeds_issuer_authority")
+        );
+    }
+
+    #[test]
+    fn capability_grant_alone_signs_out_nothing() {
+        // Holding the grant *verb* is not holding any authority to grant.
+        let mut state = realm(Some(OWNER), None);
+        let granter = grant_id("d1");
+        assert!(projected(&issue(
+            &mut state,
+            &grant_op(
+                "d1",
+                &granter,
+                OWNER,
+                STRANGER,
+                json!(["ak.capability.grant"])
+            ),
+        )));
+        for (slot, action) in [("d2", "ak.strand.create"), ("d3", "ak.realm.admin")] {
+            let id = grant_id(slot);
+            let effect = issue(
+                &mut state,
+                &grant_op(slot, &id, STRANGER, STRANGER, json!([action])),
+            );
+            assert_eq!(
+                rejected_reason(&effect),
+                Some("grant_exceeds_issuer_authority"),
+                "ak.capability.grant must not confer authority over {action}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_non_event_child_is_not_satisfied_by_operational_coverage() {
+        // `ak.audit.export` has an empty `target_event_kinds`; without the
+        // empty-set guard every aggregate would vacuously "cover" it.
+        assert!(
+            !arkret_policy::action_covers_event_kinds(
+                arkret_policy::REALM_OWNER_ACTION,
+                "ak.audit.export"
+            )
+            .unwrap()
+        );
+        let mut state = realm(Some(OWNER), None);
+        let owner_grant = grant_id("e1");
+        assert!(projected(&issue(
+            &mut state,
+            &grant_op(
+                "e1",
+                &owner_grant,
+                OWNER,
+                CO_OWNER,
+                json!(["ak.realm.owner"])
+            ),
+        )));
+        // The co-owner holds the aggregate, but not the non-Event surface it
+        // does not cover.
+        assert!(!state.issuer_has_projected_capability(
+            CO_OWNER,
+            REALM,
+            "ak.audit.export",
+            REALM,
+            chrono::Utc::now()
+        ));
+        assert!(state.issuer_has_projected_capability(
+            CO_OWNER,
+            REALM,
+            "ak.strand.create",
+            REALM,
+            chrono::Utc::now()
+        ));
+    }
+
+    #[test]
+    fn same_target_event_kind_does_not_confer_grant_authority() {
+        // `ak.agent.sidecar.write` and `ak.message.create` both target
+        // `ak.message.create`, so the owner aggregate *covers* the sidecar
+        // action operationally - but the issuer upper bound is answered over
+        // action ids, and the profile-gated action is not in the owner's
+        // grant-authority set.
+        assert!(
+            arkret_policy::action_covers_event_kinds(
+                arkret_policy::REALM_OWNER_ACTION,
+                "ak.agent.sidecar.write"
+            )
+            .unwrap()
+        );
+        let mut state = realm(Some(OWNER), None);
+        let id = grant_id("f1");
+        let effect = issue(
+            &mut state,
+            &grant_op(
+                "f1",
+                &id,
+                OWNER,
+                STRANGER,
+                json!(["ak.agent.sidecar.write"]),
+            ),
+        );
+        assert_eq!(
+            rejected_reason(&effect),
+            Some("grant_exceeds_issuer_authority"),
+            "no active profile registers ak.agent.sidecar.write as owner-grantable"
+        );
+    }
+
+    #[test]
+    fn aggregate_expansion_requires_the_grants_own_registry_basis() {
+        // A grant that names no registry snapshot cannot be re-read through
+        // the aggregate: the expansion fails closed rather than falling back
+        // to the receiver's embedded registry.
+        let mut state = realm(Some(OWNER), None);
+        let id = grant_id("9a");
+        let mut unanchored = grant_op("9a", &id, OWNER, CO_OWNER, json!(["ak.realm.owner"]));
+        unanchored
+            .payload
+            .get_mut("grant")
+            .and_then(serde_json::Value::as_object_mut)
+            .unwrap()
+            .remove("capability_action_registry_digest");
+        // The grant body itself is refused, so nothing enters the index.
+        assert_eq!(
+            rejected_reason(&issue(&mut state, &unanchored)),
+            Some("capability_registry_basis_unavailable")
+        );
+        assert!(!state.actor_holds_effective_realm_owner(REALM, CO_OWNER, chrono::Utc::now()));
     }
 }

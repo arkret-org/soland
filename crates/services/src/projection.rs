@@ -29,9 +29,7 @@ use soland_domain::reducer::{
 };
 use soland_storage::{JoinApplicationRecord, PersistenceResult, PersistenceStore};
 
-use crate::authorization::{
-    AuthorizationService, RealmPolicyServerConfig, RealmPolicyServerConfigView,
-};
+use crate::authorization::{RealmPolicyServerConfig, RealmPolicyServerConfigView};
 use crate::hydration::{HydrationProjectionAdapter, hydrate_projections_from_persistence};
 
 pub mod tombstone;
@@ -236,7 +234,6 @@ pub enum ProjectionEffectView {
 
 pub struct StagedRealmBootstrap {
     state: ProjectionState,
-    founding_grant_id: Option<String>,
 }
 
 /// One reducer Operation paired with the registry-derived cell writes of the
@@ -393,18 +390,11 @@ impl ProjectionService {
     pub async fn hydrate_from_persistence(
         &self,
         persistence: &dyn PersistenceStore,
-        authorization: &AuthorizationService,
         projection_adapter: &dyn HydrationProjectionAdapter,
         realm_ids: impl IntoIterator<Item = RealmId>,
     ) -> PersistenceResult<()> {
         let mut state = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            persistence,
-            &mut state,
-            authorization,
-            projection_adapter,
-        )
-        .await?;
+        hydrate_projections_from_persistence(persistence, &mut state, projection_adapter).await?;
         state.replay_resolved_pending(self.clock());
         for realm_id in realm_ids {
             if let Err(error) =
@@ -1182,15 +1172,9 @@ impl ProjectionService {
         operations: &[ProjectedOperation],
     ) -> Result<StagedRealmBootstrap, RealmBootstrapProjectionError> {
         let mut staged = self.state.lock().clone();
-        let mut founding_grant_id = None;
         for (index, projected) in operations.iter().enumerate() {
             let operation = &projected.operation;
-            let effect = if index == 1
-                && operation.object_kind.as_str()
-                    == arkret_wire::events::EventKind::CAPABILITY_GRANT
-            {
-                staged.apply_validated_realm_founding_grant(operation, operation.created_at)
-            } else if operation.object_kind.as_str().starts_with("ak.realm.")
+            let effect = if operation.object_kind.as_str().starts_with("ak.realm.")
                 && operation.object_kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE
             {
                 staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
@@ -1212,21 +1196,14 @@ impl ProjectionService {
                         ignored: true,
                     });
                 }
-                ProjectionEffect::CapabilityGrantProjected { grant_id, .. } if index == 1 => {
-                    founding_grant_id = Some(grant_id);
-                }
                 _ => {}
             }
         }
-        Ok(StagedRealmBootstrap {
-            state: staged,
-            founding_grant_id,
-        })
+        Ok(StagedRealmBootstrap { state: staged })
     }
 
-    pub fn install_staged_realm_bootstrap(&self, staged: StagedRealmBootstrap) -> Option<String> {
+    pub fn install_staged_realm_bootstrap(&self, staged: StagedRealmBootstrap) {
         self.install_snapshot(staged.state);
-        staged.founding_grant_id
     }
 
     pub fn effective_engine_grant(

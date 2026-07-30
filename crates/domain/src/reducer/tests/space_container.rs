@@ -808,6 +808,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "encryption_profile": "mls_rfc9420"
                 }
             }),
@@ -824,6 +825,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
                     "realm_id": realm_id,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
                 }
@@ -944,6 +946,7 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "encryption_profile": "mls_rfc9420"
                 }
             }),
@@ -960,6 +963,7 @@ fn child_scope_policy_gates_space_parent_edges() {
                     "realm_id": realm_id,
                     "title": "Private",
                     "created_by": "did:web:alice.example",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "join_rule": "public",
                     "encryption_profile": "mls_rfc9420"
                 }

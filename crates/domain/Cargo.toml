@@ -10,6 +10,7 @@ authors.workspace = true
 description = "Pure deterministic domain rules and projections for Soland."
 
 [dependencies]
+arkret-bootstrap = {workspace = true}
 arkret-canonical = {workspace = true}
 arkret-event-draft = {workspace = true}
 arkret-hlc = {workspace = true}

@@ -441,7 +441,6 @@ mod tests {
         .expect("PCR genesis satisfies restricted history_visibility by profile");
     }
 
-    #[test]
     /// A Realm claiming the purpose without the profile ref (or the reverse) is
     /// not a PCR under the closed schema's bidirectional guard, so it must not
     /// inherit the exemption.

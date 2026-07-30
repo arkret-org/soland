@@ -21,7 +21,7 @@ use soland_test_support::AppStateTestExt as _;
 /// per receiver-derived cell over the effective grants the governance basis at
 /// `seal_ref` yields for the actor, so the fixture basis has to name every
 /// data-plane kind this suite submits and nothing beyond it. None of them are
-/// reachable from the founding grant: `ak.realm.admin`'s registry
+/// reachable from the owner bootstrap grant: `ak.realm.admin`'s registry
 /// `target_event_kinds` are Realm-facet Control Moves only.
 const DATA_PLANE_GRANT_ACTIONS: [&str; 3] =
     ["ak.message.create", "ak.reaction.add", "ak.reaction.remove"];
@@ -625,7 +625,7 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     // governance state of its own. Every reducer-input Event still has to be a
     // DataEvent or a Control Move (`event-auth-state-resolution.md` §5), and a
     // DataEvent's `seal_ref` has to resolve to a Seal whose covered state
-    // authorizes the receiver-derived writes — so the founding unit is sealed
+    // authorizes the receiver-derived writes — so the genesis unit is sealed
     // here, per author, before the envelope names it.
     soland_test_support::cba_basis::seed_realm_basis(
         state,

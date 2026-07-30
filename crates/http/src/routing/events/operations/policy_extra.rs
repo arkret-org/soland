@@ -992,6 +992,56 @@ pub(crate) async fn realm_owner_and_members(
     (owner, members)
 }
 
+/// The single Realm-governance issuer predicate every review surface uses.
+///
+/// `authz/capabilities.md` section 3.2 makes the Realm owner aggregate an
+/// authorization source in its own right, so a governance decision is allowed
+/// when either of two independent, revocable-by-governance sources holds:
+///
+/// 1. `actor` speaks for the owner aggregate - it is the controller of the registered
+///    `ak.component.realm.authority_root.v1` cell, or it holds a live `ak.realm.owner` co-owner
+///    grant;
+/// 2. `actor` holds one of `actions` verbatim, through the projected capability-grant cells or the
+///    engine read index over them.
+///
+/// Realm membership and the discardable `realm_states[..].owner` presentation
+/// mirror are never inputs. Every caller goes through this function so the two
+/// legs cannot drift apart per surface.
+pub(crate) async fn actor_governs_realm(
+    state: &AppState,
+    realm_id: &str,
+    actor: &str,
+    actions: &[&str],
+    evaluation_basis: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    if state.projections().snapshot().actor_governs_realm(
+        realm_id,
+        actor,
+        actions,
+        evaluation_basis,
+    ) {
+        return true;
+    }
+    // The engine grant map is a read index over the same projected cells; it is
+    // still consulted so an index entry that has not been re-projected yet does
+    // not silently drop a governance capability.
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    actions.iter().any(|action| {
+        state
+            .authorization()
+            .check(soland_services::authorization::AuthorizationCheck {
+                actor,
+                action,
+                resource: realm_id,
+                realm_id,
+                owner: owner.as_deref(),
+                members: &members,
+                resource_facets: &[],
+            })
+            .allowed
+    })
+}
+
 pub(crate) fn grant_has_broadcast_safety_constraints(grant: &crate::authz::Grant) -> bool {
     let has_temporal = grant.expires_at.is_some()
         || grant.constraints.iter().any(|constraint| {

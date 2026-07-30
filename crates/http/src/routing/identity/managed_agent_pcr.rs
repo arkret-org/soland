@@ -920,6 +920,7 @@ fn validate_agent_pcr_genesis_effect(
         ),
         arkret_wire::REALM_CREATE_CELL.to_owned(),
         arkret_wire::REALM_NOTARY_CELL.to_owned(),
+        arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
     ]
     .into_iter()
     .collect();
@@ -929,7 +930,7 @@ fn validate_agent_pcr_genesis_effect(
         .collect();
     if derived.len() != expected.len() || actual != expected {
         return Err(failed_precondition(
-            "managed Agent PCR genesis must derive the canonical four genesis cells",
+            "managed Agent PCR genesis must derive the canonical five genesis cells",
             "managed_agent_pcr_create_effect_mismatch",
         ));
     }
@@ -1377,6 +1378,7 @@ mod tests {
         json!({
             "id": PCR,
             "created_by": AGENT,
+            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
             "fields": { "purpose": "principal_control" },
             "schema_refs": ["ak.profile.principal_control_realm.v1"],
             "history_visibility": "restricted",
@@ -1473,7 +1475,7 @@ mod tests {
     }
 
     /// The genesis gate is the registered contract, not a producer array: a
-    /// signed `ak.realm.create` either derives the canonical four genesis cells
+    /// signed `ak.realm.create` either derives the canonical five genesis cells
     /// or fails closed (`event-and-patch.md` §2.4.2). The old negative case
     /// declared a legacy per-Realm create cell in `effects[]`; v1 removed that
     /// field, so the surviving negative is a genesis payload the contract

@@ -1302,6 +1302,7 @@ fn realm_create_rejects_world_readable_history_without_history_capable_scheme() 
                 "schema": "ak.schema.realm.v1",
                 "title": "encrypted public history",
                 "created_by": "did:web:alice.example",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "trust_domain": "ak:trust_domain:soland.local",
                 "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "listed",
@@ -2025,6 +2026,7 @@ fn data_event_capability_ref_must_resolve() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("unknown capability_ref must reject");
 
@@ -2048,6 +2050,7 @@ fn data_event_capability_must_cover_derived_cell() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect("matching grant must cover the derived DataEvent cell");
 
@@ -2064,6 +2067,7 @@ fn data_event_capability_must_cover_derived_cell() {
         "ak.message.create",
         &wrong_action_object,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("wrong action must not cover the derived DataEvent cell");
     assert_eq!(err.code, "capability_denied");
@@ -2090,6 +2094,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
         "ak.message.create",
         &with_capability_refs,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("auth_context.capability_refs must be refused");
     assert_eq!(err.code, "schema_violation");
@@ -2110,6 +2115,7 @@ fn data_event_rejects_producer_selected_capability_fields() {
         "ak.message.create",
         &with_effects,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("effects must be refused");
     assert_eq!(err.code, "schema_violation");
@@ -2133,6 +2139,7 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect("a DataEvent citing no grant is authorized by the basis at seal_ref");
 }
@@ -2164,6 +2171,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect("Applet DataEvent must use its executor's exact install grant");
 
@@ -2178,6 +2186,7 @@ fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("another effective grant cannot substitute for authorization_ref");
     assert_eq!(err.code, "authorization_ref_inactive");
@@ -2198,6 +2207,7 @@ fn data_event_capability_ref_must_not_be_revoked() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("revoked capability_ref must reject");
 
@@ -2225,6 +2235,7 @@ fn data_event_capability_ref_reports_upstream_revoked_parent() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("child capability_ref with revoked parent must reject");
 
@@ -2249,6 +2260,7 @@ fn data_event_uses_seal_ref_pre_state_not_live_authz_index() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect("DataEvent authz must evaluate the seal_ref pre-state, not the live authz index");
 }
@@ -2269,6 +2281,7 @@ fn data_event_revocation_successor_within_window_is_stale() {
             "ak.message.create",
             &object,
             &data_event_derived_cells(),
+            false,
         )
         .unwrap(),
         DataEventQueryGrade::Stale
@@ -2290,6 +2303,7 @@ fn data_event_revocation_successor_outside_window_is_excluded() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .unwrap_err();
     assert_eq!(err.code, "stale_seal_ref");
@@ -2311,6 +2325,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .unwrap_err();
     assert_eq!(err.code, "stale_seal_ref");
@@ -2331,6 +2346,7 @@ fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect_err("E2EE DataEvent without covered_seals coverage must fail closed");
 
@@ -2354,6 +2370,7 @@ fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect("covered E2EE DataEvent should pass the covered_seals gate");
 }
@@ -2373,6 +2390,7 @@ fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
         "ak.message.create",
         &object,
         &data_event_derived_cells(),
+        false,
     )
     .expect("relaxed E2EE profile should not require the full covered_seals gate");
 }

@@ -7,70 +7,6 @@ use soland_services::operation_semantics as kinds;
 use super::*;
 use crate::state::{AppState, RealmDirectoryEntry};
 
-/// Project an accepted `ak.realm.alias` Event onto the directory row.
-///
-/// `ak.realm.alias` is the only wire carrier of a Realm alias
-/// (`discovery/object-addressing.md` §3.3); the directory row is a projection
-/// of `ak.component.realm.alias.v1`, not a second source of truth. Two rules
-/// are enforced here and MUST fail closed rather than degrade:
-///
-/// * the alias `<domain>` MUST be this deployment's authority domain — a Realm's own notary
-///   signature is no evidence that a foreign domain's issuer authorized the claim
-///   (`realm_alias_authority_mismatch`);
-/// * a canonical alias held by a DIFFERENT Realm MUST NOT be re-pointed (`realm_alias_taken`); the
-///   holder releases it with a tombstone first.
-fn project_realm_alias(
-    state: &AppState,
-    directory: &soland_services::events::RealmDirectoryService,
-    realm_id: &RealmId,
-    operation: &Operation,
-) {
-    if operation_releases_realm_alias(operation) {
-        directory.clear_alias(realm_id);
-        return;
-    }
-    let Some(declared) = operation_realm_alias_declaration(operation) else {
-        return;
-    };
-    let authority = match arkret_models_collaboration::objects::realm_alias::RealmAlias::authority_domain_for_service(
-        state.service_id(),
-    ) {
-        Ok(authority) => authority,
-        Err(error) => {
-            tracing::warn!(%realm_id, service_id = state.service_id(), %error, "cannot derive realm alias authority domain");
-            return;
-        }
-    };
-    // The wire value is already canonical; parse (not prepare) so a
-    // non-canonical byte sequence is rejected instead of being repaired.
-    let alias = match arkret_models_collaboration::objects::realm_alias::RealmAlias::parse(declared)
-    {
-        Ok(alias) => alias,
-        Err(error) => {
-            tracing::warn!(%realm_id, declared, %error, "non-canonical realm alias declaration ignored");
-            return;
-        }
-    };
-    if alias.domain() != authority {
-        tracing::warn!(
-            %realm_id,
-            declared,
-            authority,
-            reason = arkret_wire::ReasonCode::REALM_ALIAS_AUTHORITY_MISMATCH,
-            "realm alias domain is not this deployment's issuing authority"
-        );
-        return;
-    }
-    if !directory.set_alias_if_available(realm_id, alias.canonical().to_owned()) {
-        tracing::warn!(
-            %realm_id,
-            declared,
-            reason = arkret_wire::ReasonCode::REALM_ALIAS_TAKEN,
-            "realm alias is held by another realm; declaration ignored"
-        );
-    }
-}
-
 pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &Operation) {
     let Ok(realm_id) = RealmId::new(operation.realm_id.to_string()) else {
         return;
@@ -105,7 +41,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                     entry.public
                 })
                 .unwrap_or(false);
-            project_realm_alias(state, &directory, &realm_id, operation);
             public
         } else {
             let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
@@ -114,9 +49,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             entry.realm_class = operation_realm_class(operation).map(ToOwned::to_owned);
             entry.default_join_rule =
                 operation_realm_default_join_rule(operation).map(ToOwned::to_owned);
-            // A Realm alias never rides on `ak.realm.create`: the directory row
-            // is created without one and the create-batch `ak.realm.alias`
-            // follow-up projects it through `project_realm_alias` below.
             let discoverability = explicit_discoverability.unwrap_or(if payload_public {
                 "public"
             } else {
@@ -128,7 +60,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             }
             let entry_public = entry.public;
             directory.upsert(entry);
-            project_realm_alias(state, &directory, &realm_id, operation);
             entry_public
         }
     };

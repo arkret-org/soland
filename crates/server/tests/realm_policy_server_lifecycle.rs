@@ -208,8 +208,6 @@ fn signed_event(
 /// genuine accepted governance Seal the policy-server Control Moves can cite.
 async fn bootstrap_realm(state: &AppState, token: &str, realm_id: &str, slot: u8, seq_base: u64) {
     let realm_event_id = format!("ak:event:01904100-0000-7000-8000-00000000{slot:02x}e0");
-    let grant_event_id = format!("ak:event:01904100-0000-7000-8000-00000000{slot:02x}e1");
-    let grant_id = format!("ak:grant:01904100-0000-7000-8000-00000000{slot:02x}ef");
     let realm_create = signed_event(
         &realm_event_id,
         seq_base,
@@ -223,6 +221,7 @@ async fn bootstrap_realm(state: &AppState, token: &str, realm_id: &str, slot: u8
                 "schema": "ak.schema.realm.v1",
                 "title": format!("policy server lifecycle {slot}"),
                 "created_by": ALICE,
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "trust_domain": "ak:trust_domain:soland-policy-test.local",
                 "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "listed",
@@ -241,67 +240,9 @@ async fn bootstrap_realm(state: &AppState, token: &str, realm_id: &str, slot: u8
         }),
         &[],
     );
-    let grant_created_at = realm_create["created_at"].as_str().unwrap().to_owned();
-    let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant =
-        serde_json::from_value(json!({
-            "id": grant_id,
-            "schema": "ak.schema.capability.v1",
-            "realm_id": realm_id,
-            "issuer": ALICE,
-            "subject": ALICE,
-            "actions": [
-                "ak.realm.admin",
-                "ak.capability.grant",
-                "ak.capability.revoke",
-                "ak.realm_key.share",
-                "ak.message.create"
-            ],
-            "capability_action_registry_digest":
-                arkret_policy::current_capability_action_registry_digest().unwrap(),
-            "resources": [{
-                "kind": "realm",
-                "realm_id": realm_id,
-                "match_scope": "realm_wide"
-            }],
-            "issued_at": grant_created_at,
-            "proofs": []
-        }))
-        .unwrap();
-    let event_signing_key = SigningKey::from_bytes(&EVENT_SIGNING_SEED);
-    let mut grant_proof = arkret_wire::PayloadProof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method: format!("{ALICE}#{ALICE_DEVICE}"),
-        payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
-            .unwrap(),
-        created_at: chrono::DateTime::parse_from_rfc3339(&grant_created_at)
-            .unwrap()
-            .with_timezone(&Utc),
-        domain: None,
-        audience: None,
-        proof_purpose: Some(arkret_wire::PayloadProofPurpose::IssuerAttestation),
-        jws: "pending".to_owned(),
-    };
-    grant_proof.payload_digest = grant.payload_digest().unwrap();
-    grant_proof.jws = arkret_signatures::jws::sign_jws_ed25519(
-        &grant.canonical_proof_binding_bytes(&grant_proof).unwrap(),
-        &event_signing_key,
-    )
-    .unwrap();
-    grant.proofs.push(grant_proof);
-    let founding_grant = signed_event(
-        &grant_event_id,
-        seq_base + 1,
-        ALICE,
-        ALICE_DEVICE,
-        realm_id,
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
-        json!({"grant_id": grant_id, "grant": grant}),
-        &[&realm_event_id],
-    );
     let mut create_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&json!({"events": [realm_create, founding_grant]}))
+        .json(&json!({"events": [realm_create]}))
         .send(&app_from_state(state.clone()))
         .await;
     let create_status = create_resp.status_code;
@@ -315,8 +256,9 @@ async fn bootstrap_realm(state: &AppState, token: &str, realm_id: &str, slot: u8
     accepted_seal_frontier(state, token, realm_id).await;
 }
 
-/// The founding grant deliberately excludes `ak.policy.manage`; register the
-/// explicit grant the admission gate requires in the shared authz engine.
+/// Realm genesis grants nothing: the create Event registers the authority-root
+/// cell and nothing else. Register the explicit `ak.policy.manage` grant the
+/// admission gate requires in the shared authz engine.
 fn grant_policy_manage(state: &AppState, realm_id: &str) {
     soland_http::authz::install_projected_grant(
         state.test_authz(),

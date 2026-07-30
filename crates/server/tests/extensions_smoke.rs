@@ -149,6 +149,8 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             "object": {
                 "id": realm,
                 "created_by": "did:web:alice.example",
+                "capability_action_registry_digest":
+                    arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "notary": {
                     "kind": "single_did",
                     "did": state.service_id(),
@@ -196,7 +198,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "realm_id": DEMO_REALM_ID,
                     "issuer": "did:web:alice.example",
                     "subject": "did:web:alice.example",
-                    "actions": arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
+                    "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
                         "kind": "realm",
                         "realm_id": DEMO_REALM_ID,

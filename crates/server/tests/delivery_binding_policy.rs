@@ -63,6 +63,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) {
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(creator),
+        arkret_policy::current_capability_action_registry_digest().unwrap(),
         chrono::Utc::now(),
     );
     let effect = state.apply(

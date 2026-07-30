@@ -47,6 +47,7 @@ fn state_with_direct_binding() -> (AppState, arkret_identifiers::RealmId) {
                 .unwrap(),
             arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
             arkret_wire::notary::NotaryValue::single_did(alice.clone()),
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
             now,
         ))
         .unwrap(),
@@ -153,6 +154,7 @@ fn realm_with_proposal_policy(
         arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:test".to_owned()).unwrap(),
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(owner),
+        arkret_policy::current_capability_action_registry_digest().unwrap(),
     );
     realm.proposal_decision_window_ms = Some(decision_ms);
     realm.proposal_absolute_deadline_ms = Some(absolute_ms);

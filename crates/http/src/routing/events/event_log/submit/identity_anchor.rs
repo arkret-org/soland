@@ -112,7 +112,7 @@ pub(super) async fn submit_identity_anchor_batch(
             actor_id: lock_actor.clone(),
             identity_anchor_event_id: event_string_field_from_value(&envelopes[0], "event_id"),
             self_principal_pcr_bootstrap: false,
-            ordinary_realm_bootstrap: false,
+            authority_root: None,
         })
     };
 
@@ -126,7 +126,7 @@ pub(super) async fn submit_identity_anchor_batch(
             actor_id: first.actor_id.clone(),
             identity_anchor_event_id: Some(first.event_id.clone()),
             self_principal_pcr_bootstrap: false,
-            ordinary_realm_bootstrap: false,
+            authority_root: None,
         });
     if identity_anchor_context.realm_id != first.realm_id
         || identity_anchor_context.actor_id != first.actor_id
@@ -726,7 +726,7 @@ fn validate_self_principal_pcr_bootstrap_context(
         actor_id: create.actor_id.to_string(),
         identity_anchor_event_id: Some(create.event_id.to_string()),
         self_principal_pcr_bootstrap: true,
-        ordinary_realm_bootstrap: false,
+        authority_root: None,
     })
 }
 
@@ -1805,6 +1805,8 @@ mod tests {
                     "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                     arkret_bootstrap::DID_INCEPTION_REF_ROLE,
                 ),
+                capability_action_registry_digest:
+                    arkret_policy::current_capability_action_registry_digest().unwrap(),
                 event_id: arkret_identifiers::EventId::new(event_id("000000000001")).unwrap(),
                 created_at,
                 hlc: arkret_identifiers::Hlc::new("01970e589d21-0004-a13f9c2e").unwrap(),

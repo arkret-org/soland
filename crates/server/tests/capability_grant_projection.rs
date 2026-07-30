@@ -76,8 +76,31 @@ fn revoke_op(grant_id: &str) -> Operation {
     )
 }
 
+/// Give the Realm the one authority genesis establishes.
+///
+/// `realm-and-space.md` section 2.5: the create Event registers an
+/// `ak.component.realm.authority_root.v1` singleton whose controller holds
+/// effective `ak.realm.owner`, and that aggregate is what lets the issuer here
+/// sign the grants below. The `realm_states[..].owner` mirror seeded alongside
+/// it is deliberately a different principal in spirit - it is a discardable
+/// presentation field and authorizes nothing.
 fn seed_realm_owner(state: &mut ProjectionState) {
     let now = chrono::Utc::now();
+    state.realm_null_subject_cells.insert(
+        (
+            REALM.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+        ),
+        arkret_state::lattice::CellState::Value(
+            serde_json::to_value(
+                arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
+                    arkret_identifiers::Did::new(ISSUER).unwrap(),
+                    arkret_policy::current_capability_action_registry_digest().unwrap(),
+                ),
+            )
+            .unwrap(),
+        ),
+    );
     state.realm_states.insert(
         REALM.to_owned(),
         SolandRealmState {

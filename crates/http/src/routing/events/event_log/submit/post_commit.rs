@@ -293,9 +293,9 @@ pub(super) async fn enqueue_peer_event_fanout(
 }
 
 /// Preserve a protocol-atomic local Event batch as one federation request.
-/// Realm founding units cannot be split into independent outbox rows because
-/// receivers must validate and commit create + founding grant + closed facets
-/// as one transaction.
+/// Realm genesis units cannot be split into independent outbox rows because
+/// receivers must validate and commit create + closed facets as one
+/// transaction.
 pub(super) async fn enqueue_peer_event_batch_fanout(
     state: &AppState,
     parsed_events: &[ValidatedEventEnvelope],
@@ -309,7 +309,7 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         return;
     }
     let mut peers = dynamic_peer_event_targets(state, first).await;
-    // The atomic founding unit is routed after acceptance, but its canonical
+    // The atomic genesis unit is routed after acceptance, but its canonical
     // destination is already explicit in a routable peer member join inside
     // the batch. Read that binding directly so bootstrap delivery never
     // depends on projection-install visibility or on the first Realm-create
@@ -535,7 +535,7 @@ pub(super) async fn peer_event_fanout_records(
         // A directed Event can be the first reason this Realm is routed to a
         // remote principal server. Preserve the receiver's fail-closed
         // dependency admission by delivering the original atomic Realm
-        // founding unit immediately before that Event. The deterministic
+        // genesis unit immediately before that Event. The deterministic
         // idempotency key collapses this prerequisite for later fanout.
         if !peer.realm_sync_endpoint
             && let Some(bootstrap) =

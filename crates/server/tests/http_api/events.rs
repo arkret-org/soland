@@ -388,7 +388,7 @@ async fn events_describe_and_single_event_submit_work() {
     let token = dev_token(state.clone()).await;
     authorize_test_plaintext_message_service(&state, "did:web:alice.example", DEMO_REALM_ID).await;
     // `signed_event_envelope` authors a DataEvent whose `seal_ref` is the demo
-    // Realm's basis Seal, so the founding unit that Seal covers has to be
+    // Realm's basis Seal, so the genesis unit that Seal covers has to be
     // accepted before the submit (`event-auth-state-resolution.md` §4.3).
     seed_demo_realm_basis(&state);
 
@@ -679,7 +679,7 @@ async fn events_describe_and_single_event_submit_work() {
 }
 
 #[tokio::test]
-async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
+async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     let state = soland_test_support::app_state(test_config());
     let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
     let actor = test_event_signer_did().to_owned();
@@ -712,6 +712,7 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
             "federation_policy": "restricted",
             "notary_profile": "single_did",
             "digest_algorithm": "sha256",
+            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
             "notary": {
                 "kind": "single_did",
                 "did": state.service_id(),
@@ -735,7 +736,7 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
     // v1 carries no producer `effects[]` and no producer `preconditions` on a
     // genesis anchor: `event-auth-state-resolution.md` §5 makes the
     // `ak.realm.create` unit carry no CBA basis field at all, and
-    // `event-and-patch.md` §2.4.2 makes the four genesis cell writes a pure
+    // `event-and-patch.md` §2.4.2 makes the five genesis cell writes a pure
     // function of `kind + payload`. Restate the old hand-written effect array as
     // the receiver's own projection — the identical check
     // `crates/http/.../envelope/envelope_core.rs` runs before admission.
@@ -747,85 +748,58 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
             arkret_wire::REALM_NOTARY_CELL.to_owned(),
             arkret_wire::REALM_CREATE_CELL.to_owned(),
             arkret_wire::REALM_METADATA_CELL.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
         ]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>(),
-        "ak.realm.create must derive exactly the four canonical genesis cells"
+        "ak.realm.create must derive exactly the five canonical genesis cells"
     );
-    // A create cannot be committed on its own: the founding grant is the
-    // second member of the same atomic protocol unit.
-    let mut missing_grant = TestClient::post("http://server/_arkret/self/events")
-        .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&event)
-        .send(&app_from_state(state.clone()))
-        .await;
-    let missing_status = missing_grant.status_code.expect("missing grant status");
-    let missing_body: Value = missing_grant.take_json().await.expect("missing grant body");
-    assert_eq!(
-        missing_status,
-        StatusCode::PRECONDITION_FAILED,
-        "unexpected single-create response: {missing_body}"
-    );
-    assert_eq!(missing_body["reason"], "realm_founding_grant_missing");
-
-    let grant_id = new_prefixed_uuid7("ak:grant:");
-    let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant = serde_json::from_value(serde_json::json!({
-        "id": grant_id,
-        "schema": "ak.schema.capability.v1",
-        "realm_id": realm_id,
-        "issuer": actor,
-        "subject": actor,
-        "actions": arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
-        "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-        "resources": [{
-            "kind": "realm",
-            "realm_id": realm_id,
-            "match_scope": "realm_wide"
-        }],
-        "issued_at": created_at,
-        "proofs": []
-    }))
-    .unwrap();
-    let verification_method = actor
-        .strip_prefix("did:key:")
-        .map_or_else(|| format!("{actor}#device"), |key| format!("{actor}#{key}"));
-    grant.proofs = vec![arkret_wire::PayloadProof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method,
-        payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
-            .unwrap(),
-        created_at: chrono::DateTime::parse_from_rfc3339(created_at)
-            .unwrap()
-            .with_timezone(&chrono::Utc),
-        domain: None,
-        audience: None,
-        proof_purpose: Some(arkret_wire::PayloadProofPurpose::IssuerAttestation),
-        jws: "pending".to_owned(),
-    }];
-    grant.proofs[0].payload_digest = grant.payload_digest().unwrap();
-    let proof_binding = grant
-        .canonical_proof_binding_bytes(&grant.proofs[0])
-        .unwrap();
-    grant.proofs[0].jws = arkret_signatures::jws::sign_jws_ed25519(
-        &proof_binding,
-        &SigningKey::from_bytes(&[21_u8; 32]),
-    )
-    .unwrap();
-    let mut founding = signed_canonical_event(
-        "ak:event:01904100-0000-7000-8000-c7ea7e000002",
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
+    // A create that cannot establish an authority root is not a Realm anybody
+    // could govern, so `realm-and-space.md` §2.5 makes the whole atomic unit
+    // roll back rather than materialize an ownerless Realm. The
+    // create-locked `capability_action_registry_digest` is the value
+    // projection's only non-literal input, so removing it is the minimal way
+    // to reach that state.
+    let mut rootless_payload = payload.clone();
+    rootless_payload["object"]
+        .as_object_mut()
+        .expect("create payload object")
+        .remove("capability_action_registry_digest");
+    let mut rootless_create = signed_canonical_event(
+        "ak:event:01904100-0000-7000-8000-c7ea7e00000a",
+        "ak.realm.create",
         &actor,
         "01904100-0000-7000-8000-a11ce0000001",
         &realm_id,
-        1,
-        vec![event["event_id"].as_str().unwrap()],
-        serde_json::json!({
-            "grant_id": grant_id,
-            "grant": grant
-        }),
+        0,
+        Vec::new(),
+        rootless_payload,
     );
-    make_realm_bootstrap_unit_member(&mut founding);
+    make_realm_bootstrap_unit_member(&mut rootless_create);
+    let mut rootless_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"events": [rootless_create]}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let rootless_status = rootless_response.status_code.expect("rootless status");
+    let rootless_body: Value = rootless_response.take_json().await.expect("rootless body");
+    assert_eq!(
+        rootless_status,
+        StatusCode::PRECONDITION_FAILED,
+        "unexpected rootless-create response: {rootless_body}"
+    );
+    assert_eq!(rootless_body["reason"], "realm_authority_root_missing");
+    assert!(
+        state
+            .test_persistence()
+            .events()
+            .snapshot_all()
+            .await
+            .unwrap()
+            .iter()
+            .all(|record| record.realm_id.as_deref() != Some(realm_id.as_str())),
+        "a genesis without an authority root must leave no canonical Event"
+    );
 
     let facet =
         |event_id: &str, actor_seq: u64, previous_event_id: &str, kind: &str, value: Value| {
@@ -847,21 +821,21 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
         };
     let join_rule = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000003",
-        2,
-        founding["event_id"].as_str().unwrap(),
+        1,
+        event["event_id"].as_str().unwrap(),
         arkret_wire::events::EventKind::REALM_JOIN_RULE,
         serde_json::json!("invite"),
     );
     let history_visibility = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000004",
-        3,
+        2,
         join_rule["event_id"].as_str().unwrap(),
         arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY,
         serde_json::json!("shared"),
     );
     let discovery = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000005",
-        4,
+        3,
         history_visibility["event_id"].as_str().unwrap(),
         arkret_wire::events::EventKind::REALM_DISCOVERY,
         serde_json::json!("listed"),
@@ -886,7 +860,6 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
         .json(&serde_json::json!({
             "events": [
                 event.clone(),
-                founding.clone(),
                 join_rule.clone(),
                 history_visibility.clone(),
                 malformed_discovery
@@ -929,7 +902,6 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
         .json(&serde_json::json!({
             "events": [
                 event.clone(),
-                founding.clone(),
                 join_rule.clone(),
                 history_visibility.clone(),
                 discovery.clone()
@@ -946,8 +918,7 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
     );
     assert_eq!(body["status"], "accepted");
     assert_eq!(body["accepted"][0], event["event_id"]);
-    assert_eq!(body["accepted"][1], founding["event_id"]);
-    assert_eq!(body["accepted"][4], discovery["event_id"]);
+    assert_eq!(body["accepted"][3], discovery["event_id"]);
     assert!(
         state
             .test_projection()
@@ -957,9 +928,29 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
     );
     {
         let projection = state.test_projection().lock();
+        let authority_root = projection
+            .realm_authority_root(&realm_id)
+            .expect("accepted genesis must register the Realm authority-root cell");
         assert!(
-            projection.effective_engine_grant(&grant_id).is_some(),
-            "accepted bootstrap must make its founding grant effective before success"
+            authority_root.is_genesis_for(&actor),
+            "the authority root's controller is the Realm creator at epoch/generation 0"
+        );
+        assert_eq!(
+            authority_root.capability_action_registry_digest,
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
+            "the root copies the signed create payload's registry basis verbatim"
+        );
+        assert!(
+            projection.actor_holds_effective_realm_owner(&realm_id, &actor, chrono::Utc::now()),
+            "the authority-root controller holds effective ak.realm.owner"
+        );
+        assert!(
+            !projection.actor_holds_effective_realm_owner(
+                &realm_id,
+                "did:web:mallory.example",
+                chrono::Utc::now()
+            ),
+            "nobody else does"
         );
         // The registered `effect_projection` for each initial facet is
         // `{"kind":"set","value":{"field":"payload"}}`, so the cas-register cell
@@ -985,15 +976,13 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
             );
         }
     }
-    let projected_founding_grant = state
-        .test_authz()
-        .get_grant(&grant_id)
-        .expect("accepted bootstrap must refresh the authorization cache before success");
     assert!(
-        projected_founding_grant
-            .actions
-            .contains(&"ak.message.create".to_owned()),
-        "founding grant must make creator message authoring reachable at the genesis Seal"
+        state
+            .test_authz()
+            .grants_snapshot()
+            .iter()
+            .all(|grant| { grant.realm_id != realm_id }),
+        "genesis issues no capability grant at all: authority is the root cell"
     );
 
     let sync = account_subscribe_frame(state.clone(), Some(&token), "catchup=true").await;
@@ -1065,16 +1054,11 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
     );
     {
         let restarted_projection = restarted.test_projection().lock();
-        let grant_cell = arkret_identifiers::CellRef::new(format!(
-            "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-        ))
-        .unwrap();
-        let projected_grant_cell = restarted_projection.cell_value(&grant_cell).cloned();
         assert!(
             restarted_projection
-                .effective_engine_grant(&grant_id)
-                .is_some(),
-            "restart must rebuild the founding capability grant; cell={projected_grant_cell:?}"
+                .realm_authority_root(&realm_id)
+                .is_some_and(|root| root.is_genesis_for(&actor)),
+            "restart must rebuild the Realm authority root from canonical create"
         );
         // The registered `effect_projection` for each initial facet is
         // `{"kind":"set","value":{"field":"payload"}}`, so the cas-register cell
@@ -1101,10 +1085,6 @@ async fn realm_create_genesis_unit_projects_four_cells_without_seal_basis() {
             );
         }
     }
-    assert!(
-        restarted.test_authz().get_grant(&grant_id).is_some(),
-        "restart must refresh the authorization cache from the founding grant"
-    );
 
     let proof_request = serde_json::json!({
         "realm_id": realm_id,
@@ -1411,6 +1391,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "summary": "Controller-managed E2EE continuity for a Native Personal Agent",
                 "trust_domain": "ak:trust_domain:soland.local",
                 "created_by": agent_id,
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "schema_refs": [
                     "ak.schema.realm.v1",
                     "ak.profile.principal_control_realm.v1"
@@ -1460,7 +1441,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     // `arkret_bootstrap::realm_create_effects` is gone with the producer effect
     // array. The genesis write set is now derived by the receiver, and the only
     // thing a producer can still get wrong is a payload whose registered
-    // contract lands somewhere other than the four canonical genesis cells —
+    // contract lands somewhere other than the five canonical genesis cells —
     // which is exactly what `arkret_bootstrap` and soland's admission both
     // assert. Restate the old assignment as that check.
     assert_eq!(
@@ -1468,12 +1449,13 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         [
             format!("ak:cell:ak.component.member.state.v1:{agent_id}"),
             arkret_wire::REALM_NOTARY_CELL.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
             arkret_wire::REALM_CREATE_CELL.to_owned(),
             arkret_wire::REALM_METADATA_CELL.to_owned(),
         ]
         .into_iter()
         .collect::<std::collections::BTreeSet<_>>(),
-        "managed Agent PCR create must derive the canonical four genesis cells"
+        "managed Agent PCR create must derive the canonical five genesis cells"
     );
     let signer = ControllerSealSigner {
         did: Did::new(controller_id).unwrap(),

@@ -1,6 +1,73 @@
 use super::*;
 
+/// Cell family of the registered Realm authority-root singleton.
+///
+/// `realm_null_subject_cells` keys the Realm-scoped `null`-subject families by
+/// their family id, so the wire cell ref constant is split here rather than
+/// re-spelled.
+const REALM_AUTHORITY_ROOT_FAMILY: &str = "ak.component.realm.authority_root.v1";
+
+/// Re-derive the registered `ak.component.realm.authority_root.v1` genesis
+/// value from an `ak.realm.create` payload.
+///
+/// `realm-and-space.md` §2.5 makes this the fifth genesis write and the only
+/// authority a Realm has at genesis: there is no founding grant. The value is
+/// recomputed through the SDK's own projection type instead of being read off a
+/// producer field, so a receiver can never be talked into a different
+/// controller, epoch, generation, or registry basis than the signed create
+/// payload derives.
+fn genesis_authority_root_value(
+    payload_object: Option<&serde_json::Map<String, Value>>,
+    created_by: &str,
+) -> Result<Value, &'static str> {
+    let object = payload_object.ok_or("realm_authority_root_missing")?;
+    let digest = object
+        .get("capability_action_registry_digest")
+        .and_then(Value::as_str)
+        .ok_or("realm_authority_root_missing")?;
+    let digest = arkret_identifiers::Hash::new(digest.to_owned())
+        .map_err(|_| "realm_authority_root_conflict")?;
+    let controller =
+        arkret_identifiers::Did::new(created_by).map_err(|_| "realm_authority_root_conflict")?;
+    serde_json::to_value(
+        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(controller, digest),
+    )
+    .map_err(|_| "realm_authority_root_conflict")
+}
+
+/// The registry-projected authority-root write of this create Event, when the
+/// caller supplied the contract projection.
+fn registered_authority_root_write(writes: &[ProjectedCellWrite]) -> Option<Value> {
+    writes
+        .iter()
+        .find(|write| write.cell.as_str() == arkret_wire::REALM_AUTHORITY_ROOT_CELL)
+        .and_then(|write| write.as_direct())
+        .and_then(|effect| effect.op.value)
+}
+
 impl ProjectionState {
+    /// Current value of this Realm's registered authority-root cell.
+    ///
+    /// The controller named here holds effective `ak.realm.owner`
+    /// (`authz/capabilities.md` §3.2). `realm_states[..].owner` is a
+    /// discardable presentation mirror and MUST NOT be consulted for
+    /// authorization.
+    pub fn realm_authority_root(
+        &self,
+        realm_id: &str,
+    ) -> Option<arkret_policy::realm_bootstrap::RealmAuthorityRootValue> {
+        serde_json::from_value(
+            self.realm_null_subject_cell_value(realm_id, REALM_AUTHORITY_ROOT_FAMILY)?
+                .clone(),
+        )
+        .ok()
+    }
+
+    /// Registry snapshot the Realm's authority root was established against.
+    pub fn realm_authority_registry_basis(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
+        self.realm_authority_root(realm_id)
+            .map(|root| root.capability_action_registry_digest)
+    }
     pub(crate) fn apply_membership(
         &mut self,
         operation: &Operation,
@@ -82,8 +149,8 @@ impl ProjectionState {
                     // there is no DID Document fallback path. The registered
                     // Direct Conversation founding unit is the sole exception:
                     // contact-and-direct-conversation.md §6 fixes that atomic
-                    // sequence as Realm create, founding grant, then peer join,
-                    // so no policy event can precede the peer join.
+                    // sequence as Realm create then peer join, so no policy
+                    // event can precede the peer join.
                     let policy_value = self
                         .realm_delivery_binding_policy_cell_value(&realm_id)
                         .cloned()
@@ -1078,6 +1145,38 @@ impl ProjectionState {
             };
         }
 
+        // `realm-and-space.md` §2.5 — genesis registers five cell writes and
+        // the authority root is one of them. Derive it before any structured
+        // cache mutation so a create that cannot establish an authority root
+        // rejects the whole atomic bootstrap unit instead of materializing a
+        // Realm nobody can govern.
+        let authority_root = if kind == arkret_wire::events::EventKind::REALM_CREATE {
+            let derived = match genesis_authority_root_value(
+                payload_object,
+                creator.as_deref().unwrap_or_default(),
+            ) {
+                Ok(value) => value,
+                Err(reason) => {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+            };
+            // When the caller supplied the registry projection of the signed
+            // Event, the two derivations must agree byte-for-byte: the value is
+            // a `state_root` leaf preimage, so a divergence is a forked genesis.
+            if let Some(projected) = registered_authority_root_write(self.projected_cell_writes())
+                && projected != derived
+            {
+                return ProjectionEffect::Rejected {
+                    reason: "realm_authority_root_conflict".to_owned(),
+                };
+            }
+            Some(derived)
+        } else {
+            None
+        };
+
         // Structured cache mirror.
         let realm = self
             .realm_states
@@ -1191,6 +1290,15 @@ impl ProjectionState {
                 if let Some(notary) = payload_object.and_then(|object| object.get("notary")) {
                     self.realm_notary_cells
                         .insert(realm_id.clone(), CellState::Value(notary.clone()));
+                }
+                if let Some(authority_root) = authority_root {
+                    self.realm_null_subject_cells.insert(
+                        (
+                            realm_id.clone(),
+                            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+                        ),
+                        CellState::Value(authority_root),
+                    );
                 }
                 if let Some(creator) = creator.as_deref() {
                     self.bootstrap_realm_creator_member(&realm_id, creator, operation, now);

@@ -27,10 +27,27 @@ pub struct ConformanceRealmBasis {
     pub ops: Vec<(CellRef, IssuedOp)>,
 }
 
-/// Build a sealed founding and content-grant basis for one conformance actor.
+/// Actions the fixture Realm owner appoints itself with at genesis.
+///
+/// Genesis itself grants nothing (`realm-and-space.md` section 2.5): the create
+/// Event registers the authority-root cell, and its controller holds effective
+/// `ak.realm.owner`. Every action listed here is owner-grantable under the
+/// registry's `grant_authority_actions`, so this set is exactly what the owner
+/// would sign for itself as its first governance act. It is fixture
+/// convenience, not a protocol constant.
+pub const OWNER_BOOTSTRAP_GRANT_ACTIONS: [&str; 5] = [
+    "ak.realm.admin",
+    "ak.capability.grant",
+    "ak.capability.revoke",
+    "ak.realm_key.share",
+    "ak.message.create",
+];
+
+/// Build a sealed authority-root, owner-bootstrap-grant and content-grant basis
+/// for one conformance actor.
 ///
 /// The explicit content grant is fixture material, not a protocol bootstrap
-/// rule. It carries only requested actions outside the SDK-owned founding set.
+/// rule. It carries only requested actions outside the owner bootstrap set.
 pub fn build_conformance_realm_basis(
     realm_id: &str,
     subject: &str,
@@ -39,26 +56,52 @@ pub fn build_conformance_realm_basis(
 ) -> Result<ConformanceRealmBasis, String> {
     let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
     let issuer = Did::new(subject.to_owned()).map_err(|error| error.to_string())?;
-    let founding_move = fixture_move_id(realm_id, subject, data_plane_actions, "founding-grant")?;
+    let authority_root_move =
+        fixture_move_id(realm_id, subject, data_plane_actions, "authority-root")?;
+    let owner_move = fixture_move_id(realm_id, subject, data_plane_actions, "owner-grant")?;
     let content_move = fixture_move_id(realm_id, subject, data_plane_actions, "content-grant")?;
     let covered_move = fixture_move_id(realm_id, subject, data_plane_actions, "mls-commit")?;
     let notary_move = fixture_move_id(realm_id, subject, data_plane_actions, "notary")?;
 
-    let founding_grant_id =
-        fixture_grant_id(realm_id, subject, data_plane_actions, "founding-grant");
+    let owner_grant_id = fixture_grant_id(realm_id, subject, data_plane_actions, "owner-grant");
     let content_grant_id = fixture_grant_id(realm_id, subject, data_plane_actions, "content-grant");
-    let founding_actions = arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS
+    let owner_actions = OWNER_BOOTSTRAP_GRANT_ACTIONS
         .iter()
         .map(|action| (*action).to_owned())
         .collect::<Vec<_>>();
     let explicit_content_actions = data_plane_actions
         .iter()
-        .filter(|action| {
-            !arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS.contains(&action.as_str())
-        })
+        .filter(|action| !OWNER_BOOTSTRAP_GRANT_ACTIONS.contains(&action.as_str()))
         .cloned()
         .collect::<Vec<_>>();
     let mut ops = Vec::new();
+    // The registered genesis authority root: its controller is the Realm owner.
+    ops.push((
+        CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
+            .map_err(|error| error.to_string())?,
+        issued_op(
+            &issuer,
+            &authority_root_move,
+            arkret_wire::LatticeOp {
+                op_type: arkret_wire::LatticeOpType::Set,
+                tag: None,
+                value: Some(
+                    serde_json::to_value(
+                        arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
+                            issuer.clone(),
+                            arkret_policy::current_capability_action_registry_digest()
+                                .map_err(|error| error.to_string())?,
+                        ),
+                    )
+                    .map_err(|error| error.to_string())?,
+                ),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        ),
+    ));
     if let Some(notary_authority) = notary_authority {
         let notary_authority =
             Did::new(notary_authority.to_owned()).map_err(|error| error.to_string())?;
@@ -86,13 +129,13 @@ pub fn build_conformance_realm_basis(
         ));
     }
     ops.push((
-        capability_grant_cell(&founding_grant_id)?,
+        capability_grant_cell(&owner_grant_id)?,
         issued_op(
             &issuer,
-            &founding_move,
+            &owner_move,
             or_set_add(
-                founding_move.as_str(),
-                grant_body(&founding_grant_id, realm_id, subject, &founding_actions)?,
+                owner_move.as_str(),
+                grant_body(&owner_grant_id, realm_id, subject, &owner_actions)?,
             ),
         ),
     ));
@@ -120,7 +163,11 @@ pub fn build_conformance_realm_basis(
         Did::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
         FIXTURE_NOTARY_VERIFICATION_METHOD,
     );
-    let mut delta = vec![founding_move.clone(), covered_move.clone()];
+    let mut delta = vec![
+        authority_root_move.clone(),
+        owner_move.clone(),
+        covered_move.clone(),
+    ];
     if !explicit_content_actions.is_empty() {
         delta.push(content_move.clone());
     }

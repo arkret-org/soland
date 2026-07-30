@@ -12,16 +12,18 @@
 //!
 //! A fixture Realm that is seeded straight into `AppState` — rather than
 //! bootstrapped through `ak.realm.create` over HTTP — therefore has to be given
-//! a genuinely sealed founding unit before any Event it hosts can be admitted.
+//! a genuinely sealed genesis unit before any Event it hosts can be admitted.
 //! That is what this module builds:
 //!
-//! 1. the founding grant of `realm-and-space.md` §2.5 step 5 — `issuer == subject`, the exact
-//!    SDK-owned [`arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS`] set, one
-//!    Realm-wide resource selector, no `parent_grant_id`, and the embedded
+//! 1. the registered `ak.component.realm.authority_root.v1` singleton of `realm-and-space.md` §2.5
+//!    — the only authority genesis establishes, whose controller holds effective `ak.realm.owner`;
+//! 2. the owner's own first governance grant
+//!    ([`soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS`]), `issuer == subject`,
+//!    one Realm-wide resource selector, no `parent_grant_id`, and the embedded
 //!    `capability-action-registry.json` digest;
-//! 2. an explicit content grant carrying only requested data-plane actions not already covered by
-//!    the founding grant;
-//! 3. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
+//! 3. an explicit content grant carrying only requested data-plane actions not already covered by
+//!    the owner bootstrap grant;
+//! 4. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
 //!    MLS-backed DataEvent clears the governance-binding gate.
 //!
 //! The basis is keyed by `(realm_id, subject, data-plane actions)`, and that is
@@ -31,7 +33,7 @@
 //! per-Realm Seal would have to grow its covered set every time a new actor
 //! appeared, and every such growth invalidates both roots.
 //!
-//! The one member that cannot be inside `state_root` is (3): its or-set element
+//! The one member that cannot be inside `state_root` is (4): its or-set element
 //! value is the enclosing Seal's own id, which does not exist until the body —
 //! `state_root` included — has been hashed.
 
@@ -103,7 +105,7 @@ pub fn realm_basis_seal_basis(
     }
 }
 
-/// Put the founding unit of `realm_id` in place for `subject`.
+/// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
 /// same Realm (`event-auth-state-resolution.md` §4.3(1)) **and** the governance
@@ -185,36 +187,64 @@ pub fn apply_registered_cba_plane(
 fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str]) -> RealmBasis {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let issuer = Did::new(subject.to_owned()).expect("fixture grant issuer DID");
-    let founding_move = fixture_move_id(realm_id, subject, "founding-grant");
+    let authority_root_move = fixture_move_id(realm_id, subject, "authority-root");
+    let owner_move = fixture_move_id(realm_id, subject, "owner-grant");
     let content_move = fixture_move_id(realm_id, subject, "content-grant");
     let covered_move = fixture_move_id(realm_id, subject, "mls-commit");
 
-    let founding_grant_id = fixture_grant_id(realm_id, subject, "founding-grant");
+    let owner_grant_id = fixture_grant_id(realm_id, subject, "owner-grant");
     let content_grant_id = fixture_grant_id(realm_id, subject, "content-grant");
+    let owner_bootstrap_actions = soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS;
     let explicit_content_actions = data_plane_actions
         .iter()
         .copied()
-        .filter(|action| {
-            !arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS.contains(action)
-        })
+        .filter(|action| !owner_bootstrap_actions.contains(action))
         .collect::<Vec<_>>();
-    let mut ops = vec![(
-        capability_grant_cell(&founding_grant_id),
-        issued_op(
-            &issuer,
-            &founding_move,
-            or_set_add(
-                founding_move.as_str(),
-                grant_body(
-                    &founding_grant_id,
-                    realm_id,
-                    subject,
-                    &arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
-                    true,
+    let mut ops = vec![
+        (
+            CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
+                .expect("fixture authority-root cell id"),
+            issued_op(
+                &issuer,
+                &authority_root_move,
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Set,
+                    tag: None,
+                    value: Some(
+                        serde_json::to_value(
+                            arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
+                                issuer.clone(),
+                                arkret_policy::current_capability_action_registry_digest()
+                                    .expect("embedded capability action registry digest"),
+                            ),
+                        )
+                        .expect("fixture authority-root value"),
+                    ),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        ),
+        (
+            capability_grant_cell(&owner_grant_id),
+            issued_op(
+                &issuer,
+                &owner_move,
+                or_set_add(
+                    owner_move.as_str(),
+                    grant_body(
+                        &owner_grant_id,
+                        realm_id,
+                        subject,
+                        &owner_bootstrap_actions,
+                        true,
+                    ),
                 ),
             ),
         ),
-    )];
+    ];
     if !explicit_content_actions.is_empty() {
         ops.push((
             capability_grant_cell(&content_grant_id),
@@ -244,7 +274,11 @@ fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str])
     // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`
     // hashes it as a set, so the order is part of the wire contract rather
     // than a formatting choice.
-    let mut delta = vec![founding_move.clone(), covered_move.clone()];
+    let mut delta = vec![
+        authority_root_move.clone(),
+        owner_move.clone(),
+        covered_move.clone(),
+    ];
     if !explicit_content_actions.is_empty() {
         delta.push(content_move.clone());
     }
@@ -303,7 +337,7 @@ fn capability_grant_cell(grant_id: &str) -> CellRef {
     .expect("fixture capability grant cell id")
 }
 
-/// A deterministic Control-Move digest for one member of the founding unit.
+/// A deterministic Control-Move digest for one member of the genesis unit.
 fn fixture_move_id(realm_id: &str, subject: &str, slot: &str) -> Hash {
     Hash::new(format!(
         "sha256:{}",

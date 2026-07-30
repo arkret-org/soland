@@ -18,6 +18,31 @@ mod redaction_message;
 mod space_container;
 mod strand_morph;
 
+/// Materialize the registered genesis authority-root cell for a Realm.
+///
+/// `realm-and-space.md` section 2.5 makes this cell the sole source of Realm
+/// owner authority, so a reducer test that needs an owner installs the cell
+/// rather than a self-issued grant. The value is built through the SDK
+/// projection type so a test can never seed a shape the create reducer would
+/// not derive.
+pub(super) fn install_realm_authority_root(
+    state: &mut ProjectionState,
+    realm_id: &str,
+    controller_id: &str,
+) {
+    let value = arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
+        arkret_identifiers::Did::new(controller_id).unwrap(),
+        arkret_policy::current_capability_action_registry_digest().unwrap(),
+    );
+    state.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+        ),
+        CellState::Value(serde_json::to_value(value).unwrap()),
+    );
+}
+
 pub(super) fn make_operation(object_kind: &str, realm_id: &str, payload: Value) -> Operation {
     Operation::create(
         arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))

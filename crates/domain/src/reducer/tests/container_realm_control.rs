@@ -163,6 +163,7 @@ fn realm_notary_and_digest_suite_transition_project_control_cells() {
                     "created_by": "did:web:alice.example",
                     "title": "Control Realm",
                     "digest_algorithm": "sha256",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "notary": {"kind": "single_did", "did": "did:web:notary.example"}
                 }
             }),

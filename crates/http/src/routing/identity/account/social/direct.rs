@@ -1665,35 +1665,6 @@ async fn prepare_reserved_direct_materialization(
             fail_closed: true,
         });
 
-    let founding_grant_id = crate::ids::generate("grant");
-    let founding_payload = json!({
-        "grant_id": founding_grant_id,
-        "grant": {
-            "id": founding_grant_id,
-            "schema": "ak.schema.capability.v1",
-            "realm_id": realm_id,
-            "issuer": actor,
-            "subject": actor,
-            "actions": arkret_policy::realm_bootstrap::REALM_FOUNDING_GRANT_ACTIONS,
-            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest()
-                .map_err(|error| AppError::internal(format!("capability registry unavailable: {error}")))?,
-            "resources": [{
-                "kind": "realm",
-                "realm_id": realm_id,
-                "match_scope": "realm_wide"
-            }],
-            "issued_at": reserved.created_at,
-            "proofs": []
-        }
-    });
-    let founding_grant_event = unsigned_direct_materialization_event(
-        state,
-        actor,
-        &crate::ids::generate_event_id(),
-        realm_id,
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
-        founding_payload,
-    )?;
     let creator_member_event =
         direct_creator_member_rebind_payload(state, realm_scope.clone(), actor, contact)
             .map_err(AppError::internal)?
@@ -1723,35 +1694,12 @@ async fn prepare_reserved_direct_materialization(
         member_payload,
     )?;
     attach_member_join_cell_contract(&mut peer_member_event, peer)?;
-    let main_strand_grant_id = crate::ids::generate("grant");
-    let main_strand_grant_payload = json!({
-        "grant_id": main_strand_grant_id,
-        "grant": {
-            "id": main_strand_grant_id,
-            "schema": "ak.schema.capability.v1",
-            "realm_id": realm_id,
-            "issuer": actor,
-            "subject": actor,
-            "actions": [arkret_wire::events::EventKind::STRAND_CREATE],
-            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest()
-                .map_err(|error| AppError::internal(format!("capability registry unavailable: {error}")))?,
-            "resources": [{
-                "kind": "realm",
-                "realm_id": realm_id,
-                "match_scope": "realm_wide"
-            }],
-            "issued_at": reserved.created_at,
-            "proofs": []
-        }
-    });
-    let main_strand_grant_event = unsigned_direct_materialization_event(
-        state,
-        actor,
-        &crate::ids::generate_event_id(),
-        realm_id,
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
-        main_strand_grant_payload,
-    )?;
+    // The peer join is a member of the atomic genesis unit, so it speaks for
+    // the Realm through the staged authority root the create Event registers
+    // (`realm-and-space.md` section 2.5). There is no genesis grant to cite,
+    // and the service still never signs a participant Event on the client's
+    // behalf.
+    peer_member_event.authorization_ref = Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned());
     let strand_payload =
         direct_strand_create_payload(realm_scope, main_strand_id, actor, reserved.created_at)
             .map_err(AppError::internal)?;
@@ -1866,10 +1814,8 @@ async fn prepare_reserved_direct_materialization(
         claimed_keypackage: claim,
         claim_receipt,
         realm_event,
-        founding_grant_event,
         creator_member_event,
         peer_member_event,
-        main_strand_grant_event,
         main_strand_event,
         binding_event,
     };
@@ -2365,6 +2311,11 @@ pub(super) fn direct_realm_create_payload(
         trust_domain,
         arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
         arkret_wire::notary::NotaryValue::single_did(service_notary_did),
+        // The create-locked registry basis of the Realm's authority root. It is
+        // a `state_root` leaf input, so it is the author's own embedded
+        // snapshot rather than something a receiver may re-infer.
+        arkret_policy::current_capability_action_registry_digest()
+            .map_err(|_| "capability action registry unavailable")?,
         created_at,
     );
     serde_json::to_value(payload).map_err(|_| "direct realm create payload serialization failed")

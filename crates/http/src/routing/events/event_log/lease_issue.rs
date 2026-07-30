@@ -298,55 +298,52 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
     {
         return Ok(None);
     }
-    let (realm_id, actor_id, self_principal_pcr_bootstrap, ordinary_realm_bootstrap) =
-        if events.len() == 2
-            && events.get(1).is_some_and(|event| {
-                event.kind.as_str() == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
-            })
-        {
-            arkret_bootstrap::validate_self_principal_bootstrap_unit(
-                &events[0],
-                &events[1],
-                &genesis_cell_write_projector,
+    let (realm_id, actor_id, self_principal_pcr_bootstrap) = if events.len() == 2
+        && events.get(1).is_some_and(|event| {
+            event.kind.as_str() == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+        }) {
+        arkret_bootstrap::validate_self_principal_bootstrap_unit(
+            &events[0],
+            &events[1],
+            &genesis_cell_write_projector,
+        )
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::SchemaViolation,
+                format!("invalid self-principal anchor unit: {error}"),
             )
-            .map_err(|error| {
+            .with_status(StatusCode::BAD_REQUEST)
+        })?;
+        (
+            events[0].realm_id.as_str().to_owned(),
+            events[0].actor_id.as_str().to_owned(),
+            true,
+        )
+    } else if events.len() == 1
+        && events[0].executed_by.as_ref() != Some(&events[0].actor_id)
+        && arkret_bootstrap::materialize_managed_agent_pcr_control(
+            events,
+            &genesis_cell_write_projector,
+        )
+        .is_ok()
+    {
+        (
+            events[0].realm_id.as_str().to_owned(),
+            events[0].actor_id.as_str().to_owned(),
+            false,
+        )
+    } else {
+        let unit = arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(events).map_err(
+            |error| {
                 AppError::new(
                     ErrorCode::SchemaViolation,
-                    format!("invalid self-principal anchor unit: {error}"),
+                    format!("invalid Realm anchor unit: {error}"),
                 )
                 .with_status(StatusCode::BAD_REQUEST)
-            })?;
-            (
-                events[0].realm_id.as_str().to_owned(),
-                events[0].actor_id.as_str().to_owned(),
-                true,
-                false,
-            )
-        } else if events.len() == 1
-            && events[0].executed_by.as_ref() != Some(&events[0].actor_id)
-            && arkret_bootstrap::materialize_managed_agent_pcr_control(
-                events,
-                &genesis_cell_write_projector,
-            )
-            .is_ok()
-        {
-            (
-                events[0].realm_id.as_str().to_owned(),
-                events[0].actor_id.as_str().to_owned(),
-                false,
-                false,
-            )
-        } else {
-            let unit = arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(events)
-                .map_err(|error| {
-                    AppError::new(
-                        ErrorCode::SchemaViolation,
-                        format!("invalid Realm anchor unit: {error}"),
-                    )
-                    .with_status(StatusCode::BAD_REQUEST)
-                })?;
-            (unit.realm_id, unit.actor_id, false, true)
-        };
+            },
+        )?;
+        (unit.realm_id, unit.actor_id, false)
+    };
     let event_digests = events
         .iter()
         .map(|event| {
@@ -395,7 +392,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
                 None
             },
             self_principal_pcr_bootstrap,
-            ordinary_realm_bootstrap,
+            authority_root: None,
         },
         basis,
     }))

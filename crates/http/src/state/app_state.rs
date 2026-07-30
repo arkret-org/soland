@@ -1041,10 +1041,7 @@ impl AppState {
         // Build the hydrated views off-lock (the async DB reads must not hold
         // a std::sync Mutex guard across `.await`), then merge under a short
         // synchronous critical section.
-        let realm_updates = self
-            .persistence
-            .hydrate_realm_directory(&self.service_id)
-            .await;
+        let realm_updates = self.persistence.hydrate_realm_directory().await;
         for (_, entry) in realm_updates.entries_iter() {
             self.realm_directory.upsert(entry.clone());
         }
@@ -1081,7 +1078,6 @@ impl AppState {
         self.persistence
             .hydrate_projection(
                 &self.projections,
-                &self.authorization,
                 &RuntimeHydrationProjectionAdapter,
                 hydrated_realm_ids.clone(),
             )
@@ -1623,10 +1619,6 @@ mod membership_hydration_tests {
 
     use super::*;
 
-    fn test_authorization() -> AuthorizationService {
-        AuthorizationService::new(Arc::new(SolandAuthzEngine::new()))
-    }
-
     #[test]
     fn app_state_uses_the_bootstrap_resolved_signing_seed() {
         let config = AppConfig::test_default();
@@ -1941,15 +1933,9 @@ mod membership_hydration_tests {
             .expect("init genesis");
 
         let mut proj = ProjectionState::new();
-        let authz = test_authorization();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &authz,
-            &RuntimeHydrationProjectionAdapter,
-        )
-        .await
-        .expect("hydrate projections");
+        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
+            .await
+            .expect("hydrate projections");
 
         // KeyPackage projection is rebuilt → the claim selector can find it.
         let kp = proj
@@ -2083,14 +2069,9 @@ mod membership_hydration_tests {
         assert_eq!(appended, ProjectionEventAppendOutcome::Inserted);
 
         let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &test_authorization(),
-            &RuntimeHydrationProjectionAdapter,
-        )
-        .await
-        .expect("hydrate active-series projection");
+        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
+            .await
+            .expect("hydrate active-series projection");
 
         let pointer = proj
             .key_backup_active_series(actor, "mls_history")
@@ -2143,7 +2124,6 @@ mod membership_hydration_tests {
             hydrate_projections_from_persistence(
                 &store,
                 &mut poisoned,
-                &test_authorization(),
                 &RuntimeHydrationProjectionAdapter,
             )
             .await
@@ -2225,14 +2205,9 @@ mod membership_hydration_tests {
 
         let mut proj = ProjectionState::new();
         assert!(!proj.agent_has_authorized_key(agent_id));
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &test_authorization(),
-            &RuntimeHydrationProjectionAdapter,
-        )
-        .await
-        .expect("hydrate agent-key authorization");
+        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
+            .await
+            .expect("hydrate agent-key authorization");
 
         assert!(proj.agent_has_authorized_key(agent_id));
         assert_eq!(
@@ -2276,14 +2251,9 @@ mod membership_hydration_tests {
             .expect("put realm metadata");
 
         let mut proj = ProjectionState::new();
-        hydrate_projections_from_persistence(
-            &store,
-            &mut proj,
-            &test_authorization(),
-            &RuntimeHydrationProjectionAdapter,
-        )
-        .await
-        .expect("hydrate projections");
+        hydrate_projections_from_persistence(&store, &mut proj, &RuntimeHydrationProjectionAdapter)
+            .await
+            .expect("hydrate projections");
 
         let hydrated = proj.realm_states.get(realm_id).expect("realm rehydrated");
         assert_eq!(hydrated.owner.as_deref(), Some(owner));

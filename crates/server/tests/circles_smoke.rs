@@ -55,6 +55,7 @@ fn seed_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: &str, owne
                     "schema": "ak.schema.realm.v1",
                     "title": "Test Realm",
                     "created_by": owner,
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "default_discoverability": "public",
                     "encryption_profile": "none",
                 }
@@ -75,6 +76,7 @@ fn seed_encrypted_realm(state: &mut ProjectionState, hlc: &ServerHlc, realm_id: 
                     "schema": "ak.schema.realm.v1",
                     "title": "Encrypted Test Realm",
                     "created_by": owner,
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "default_discoverability": "public",
                     "encryption_profile": "mls_rfc9420",
                 }
@@ -131,6 +133,7 @@ fn circle_create_writes_projection() {
                     "history_visibility": "joined",
                     "encryption_profile": "mls_rfc9420",
                     "created_by": ALICE,
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 }
             }),
         ),
@@ -165,6 +168,7 @@ fn circle_create_plaintext_under_e2ee_realm_rejected() {
                     "title": "Plaintext Ops",
                     "encryption_profile": "none",
                     "created_by": ALICE,
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 }
             }),
         ),
@@ -207,6 +211,7 @@ fn circle_content_floor_below_realm_rejected() {
                     "encryption_profile": "mls_rfc9420",
                     "content_encryption_floor": "allow_plaintext",
                     "created_by": ALICE,
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 }
             }),
         ),
@@ -235,6 +240,7 @@ fn circle_update_rejects_encryption_profile_patch() {
                     "title": "Ops",
                     "encryption_profile": "mls_rfc9420",
                     "created_by": ALICE,
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 }
             }),
         ),
@@ -424,6 +430,7 @@ fn assert_parent_membership_cascades_circle_membership(target_membership: &str) 
                         "realm_id": REALM_A,
                         "title": "Private Ops",
                         "created_by": ALICE,
+                        "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                         "encryption_profile": encryption_profile,
                     }
                 }),

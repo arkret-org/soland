@@ -189,7 +189,14 @@ pub(in crate::routing) struct RealmBootstrapBatchContext {
     pub(in crate::routing) actor_id: String,
     pub(in crate::routing) identity_anchor_event_id: Option<String>,
     pub(in crate::routing) self_principal_pcr_bootstrap: bool,
-    pub(in crate::routing) ordinary_realm_bootstrap: bool,
+    /// The genesis authority-root value this unit's `ak.realm.create` derives.
+    ///
+    /// Present only for an ordinary Realm genesis unit: it is the staged root
+    /// proof a follow-up Event cites through
+    /// `ak:cell:ak.component.realm.authority_root.v1:null` while no accepted
+    /// Seal covers the cell yet (`realm-and-space.md` section 2.5).
+    pub(in crate::routing) authority_root:
+        Option<arkret_policy::realm_bootstrap::RealmAuthorityRootValue>,
 }
 
 /// Closed authorization context for trusted internal protocol adapters. This
@@ -825,7 +832,7 @@ async fn submit_event_batch_outcome_with_leases(
                 actor_id,
                 identity_anchor_event_id: None,
                 self_principal_pcr_bootstrap: false,
-                ordinary_realm_bootstrap: false,
+                authority_root: None,
             });
         }
     }
@@ -874,7 +881,7 @@ async fn submit_event_batch_outcome_with_leases(
                         actor_id,
                         identity_anchor_event_id: None,
                         self_principal_pcr_bootstrap: false,
-                        ordinary_realm_bootstrap: false,
+                        authority_root: None,
                     });
                 }
             }
@@ -1666,22 +1673,8 @@ pub(crate) async fn submit_federation_events(
             );
             return;
         }
-        for (index, event) in events.iter().enumerate() {
-            let profile_result = if index == 1
-                && event_string_field_from_value(event, "kind").as_deref()
-                    == Some(arkret_wire::events::EventKind::CAPABILITY_GRANT)
-            {
-                // An ordinary Realm bootstrap cannot be federated without its
-                // mandatory founding grant. The bootstrap reducer below
-                // validates the closed grant shape and registry basis; the
-                // peer profile gate must not make that normative unit
-                // impossible merely because federation_minimal does not list
-                // aggregate capability actions as an extension surface.
-                profile_gate.enforce_realm_founding_grant(event)
-            } else {
-                profile_gate.enforce_event(event)
-            };
-            if let Err(rejection) = profile_result {
+        for event in &events {
+            if let Err(rejection) = profile_gate.enforce_event(event) {
                 render_error(
                     res,
                     StatusCode::BAD_REQUEST,
@@ -1752,7 +1745,7 @@ pub(crate) async fn submit_federation_events(
                 res,
                 StatusCode::CONFLICT,
                 "dependency_missing",
-                "the atomic Realm founding unit is waiting for dependencies",
+                "the atomic Realm genesis unit is waiting for dependencies",
             ),
             Err(error) => render_submit_one_error(res, error),
         }
@@ -2195,6 +2188,8 @@ mod managed_agent_pcr_batch_tests {
                 "object": {
                     "id": "ak:realm:01999999-0000-7000-8000-00000000cafe",
                     "created_by": "did:web:agent.example",
+                    "capability_action_registry_digest":
+                        arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "fields": {"purpose": "principal_control"},
                     "notary": {"kind": "single_did", "did": "did:web:agent.example"},
                 }

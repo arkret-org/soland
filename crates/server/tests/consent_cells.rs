@@ -440,6 +440,7 @@ async fn create_realm(
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 // This deployment hosts the Realm, so it is the Realm's
                 // notary: `notary.rs::is_authorized_for_notary_ops` only lets
                 // the service materialize accepted Seals for a `single_did`
@@ -457,83 +458,9 @@ async fn create_realm(
             }
         }),
     );
-    let create_event_id = arkret_wire::EventId::new(
-        create["event_id"]
-            .as_str()
-            .expect("Realm create fixture has an Event id")
-            .to_owned(),
-    )
-    .expect("Realm create fixture Event id is canonical");
-    let grant_id = ids::generate_grant_id();
-    let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant = serde_json::from_value(serde_json::json!({
-        "id": grant_id,
-        "schema": "ak.schema.capability.v1",
-        "realm_id": realm_id,
-        "issuer": actor,
-        "subject": actor,
-        "actions": [
-            "ak.realm.admin",
-            "ak.capability.grant",
-            "ak.capability.revoke",
-            "ak.realm_key.share"
-        ],
-        "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-        "resources": [{
-            "kind": "realm",
-            "realm_id": realm_id,
-            "match_scope": "realm_wide"
-        }],
-        "issued_at": created_at,
-        "proofs": []
-    }))
-    .expect("founding capability grant fixture decodes");
-    let verification_method = format!(
-        "{actor}#{}",
-        actor
-            .strip_prefix("did:key:")
-            .expect("founding grant actor uses did:key")
-    );
-    let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-    let mut grant_proof = arkret_wire::PayloadProof {
-        kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method,
-        payload_digest: grant.payload_digest().expect("founding grant digest"),
-        created_at: chrono::DateTime::parse_from_rfc3339(&created_at)
-            .expect("fixture created_at")
-            .with_timezone(&Utc),
-        domain: None,
-        audience: None,
-        proof_purpose: Some(arkret_wire::PayloadProofPurpose::IssuerAttestation),
-        jws: String::new(),
-    };
-    grant_proof.jws = arkret_signatures::sign_eddsa_detached_jws(
-        &signing_key,
-        &grant
-            .canonical_proof_binding_bytes(&grant_proof)
-            .expect("founding grant proof binding"),
-    )
-    .expect("founding grant proof signature");
-    grant.proofs.push(grant_proof);
-    let founding = signed_event_with_prev_refs(
-        seed,
-        actor,
-        &realm_id,
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
-        1,
-        serde_json::json!({
-            "grant_id": grant_id,
-            "grant": grant
-        }),
-        vec![create_event_id],
-        // `realm-and-space.md` §2.5 — the founding grant is the recognized
-        // `ak.realm.create` bootstrap followup, submitted in the genesis batch
-        // before any Seal of this Realm exists, so it carries no basis.
-        None,
-    );
     let mut response = TestClient::post("http://server/_arkret/self/events")
         .add_header("Authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({"events": [create, founding]}))
+        .json(&serde_json::json!({"events": [create]}))
         .send(app)
         .await;
     let status = response.status_code.expect("Realm bootstrap status");

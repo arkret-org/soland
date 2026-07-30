@@ -21,7 +21,7 @@ async fn submit_direct_materialization_without_mls(
     token: &str,
     draft: &Value,
 ) -> Value {
-    let mut bootstrap_drafts = vec![&draft["realm_event"], &draft["founding_grant_event"]];
+    let mut bootstrap_drafts = vec![&draft["realm_event"]];
     if !draft["creator_member_event"].is_null() {
         bootstrap_drafts.push(&draft["creator_member_event"]);
     }

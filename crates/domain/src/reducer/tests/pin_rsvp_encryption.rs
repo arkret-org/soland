@@ -57,6 +57,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
                     "schema": "ak.schema.realm.v1",
                     "title": "Product",
                     "created_by": "did:web:alice.example",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "encryption_profile": "mls_rfc9420"
                 }
             }),

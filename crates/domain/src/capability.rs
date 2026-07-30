@@ -365,7 +365,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn realm_wide_realm_selector_matches_founding_grant_contract() {
+    fn realm_wide_realm_selector_matches_owner_grant_contract() {
         let selector = serde_json::json!({
             "kind": "realm",
             "realm_id": "ak:realm:019f9000-0000-7000-8000-000000000001",

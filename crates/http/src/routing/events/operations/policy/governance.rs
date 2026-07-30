@@ -2,6 +2,12 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 
 use super::*;
 
+/// Actions that authorize a Realm join / membership review decision.
+///
+/// Kept in one place so the member-state review branches and the join
+/// application surfaces cannot drift into different action sets.
+pub(crate) const REALM_JOIN_REVIEW_ACTIONS: &[&str] = &["ak.realm.admin", "ak.realm.join.review"];
+
 pub(super) fn validate_direct_conversation_realm_policy(
     state: &AppState,
     operation: &Operation,
@@ -101,23 +107,16 @@ pub(super) async fn validate_member_state_policy(
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
-        let (owner, members) = realm_owner_and_members(state, realm_id).await;
-        for action in ["ak.realm.admin", "ak.realm.join.review"] {
-            if state
-                .authorization()
-                .check(soland_services::authorization::AuthorizationCheck {
-                    actor,
-                    action,
-                    resource: realm_id,
-                    realm_id,
-                    owner: owner.as_deref(),
-                    members: &members,
-                    resource_facets: &[],
-                })
-                .allowed
-            {
-                return Ok(());
-            }
+        if actor_governs_realm(
+            state,
+            realm_id,
+            actor,
+            REALM_JOIN_REVIEW_ACTIONS,
+            operation.created_at,
+        )
+        .await
+        {
+            return Ok(());
         }
         return Err("missing_capability");
     }
@@ -137,23 +136,16 @@ pub(super) async fn validate_member_state_policy(
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
-        let (owner, members) = realm_owner_and_members(state, realm_id).await;
-        for action in ["ak.realm.admin", "ak.realm.join.review"] {
-            if state
-                .authorization()
-                .check(soland_services::authorization::AuthorizationCheck {
-                    actor,
-                    action,
-                    resource: realm_id,
-                    realm_id,
-                    owner: owner.as_deref(),
-                    members: &members,
-                    resource_facets: &[],
-                })
-                .allowed
-            {
-                return Ok(());
-            }
+        if actor_governs_realm(
+            state,
+            realm_id,
+            actor,
+            REALM_JOIN_REVIEW_ACTIONS,
+            operation.created_at,
+        )
+        .await
+        {
+            return Ok(());
         }
         return Err("missing_capability");
     }
@@ -166,24 +158,19 @@ pub(super) async fn validate_member_state_policy(
         // paths keep working; direct client submits always carry `sender`.
         return Ok(());
     };
-    // P1 — an actor MAY ban iff they hold `ak.realm.admin` on this Realm
-    // (capabilities.md §16 — `ak.realm.admin` governs `ak.member.state`
-    // writes). This reads the projected capability grant index via
-    // SolandAuthzEngine::check; ownership alone is not an allow.
+    // capabilities.md section 16 - `ak.realm.admin` governs `ak.member.state`
+    // writes, and section 3.2 lets the Realm owner aggregate stand in for it.
+    // Both legs are resolved by the shared governance predicate; the
+    // discardable `realm_states[..].owner` mirror is never an allow.
     let realm_id = operation.realm_id.as_str();
-    let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if state
-        .authorization()
-        .check(soland_services::authorization::AuthorizationCheck {
-            actor,
-            action: "ak.realm.admin",
-            resource: realm_id,
-            realm_id,
-            owner: owner.as_deref(),
-            members: &members,
-            resource_facets: &[],
-        })
-        .allowed
+    if actor_governs_realm(
+        state,
+        realm_id,
+        actor,
+        &["ak.realm.admin"],
+        operation.created_at,
+    )
+    .await
     {
         return Ok(());
     }

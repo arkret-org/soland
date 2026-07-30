@@ -155,6 +155,42 @@ async fn validate_active_series_authority_before_commit(
     })
 }
 
+/// Route a bare ordinary `ak.realm.create` through the atomic genesis path.
+///
+/// `realm-and-space.md` section 2.5 makes the create Event the head of an
+/// atomic bootstrap unit whose only other members are the closed facet kinds;
+/// that unit may legitimately consist of the create alone, because genesis
+/// authority is the registered authority-root cell rather than a follow-up
+/// grant. The single-Event surface therefore delegates to exactly the
+/// transaction the batch surface runs, instead of admitting a create through
+/// the ordinary commit path where it would skip the shared unit validator and
+/// the staged all-or-nothing reducer.
+async fn submit_ordinary_realm_genesis(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let event_id = event_string_field_from_value(&envelope, "event_id").unwrap_or_default();
+    let outcome = super::realm_bootstrap::submit_realm_bootstrap_batch(
+        state,
+        session,
+        vec![envelope],
+        None,
+        authorization_leases,
+    )
+    .await?;
+    let duplicate = outcome
+        .duplicate
+        .iter()
+        .any(|candidate| candidate.as_str() == event_id);
+    Ok(SubmittedEventOutcome {
+        event_id,
+        duplicate,
+        outcome,
+    })
+}
+
 pub(in crate::routing) async fn submit_event_value(
     state: &AppState,
     session: &SessionRecord,
@@ -164,11 +200,7 @@ pub(in crate::routing) async fn submit_event_value(
         == Some(arkret_wire::events::EventKind::REALM_CREATE)
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
-        return Err(SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "realm_founding_grant_missing",
-        ));
+        return submit_ordinary_realm_genesis(state, session, envelope, None).await;
     }
     if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
         return Err(SubmitOneError::new(
@@ -194,7 +226,7 @@ pub(in crate::routing) async fn submit_event_value(
                 actor_id,
                 identity_anchor_event_id: None,
                 self_principal_pcr_bootstrap: false,
-                ordinary_realm_bootstrap: false,
+                authority_root: None,
             }],
             _ => Vec::new(),
         }
@@ -244,11 +276,13 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         == Some(arkret_wire::events::EventKind::REALM_CREATE)
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
-        return Err(SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "realm_founding_grant_missing",
-        ));
+        return submit_ordinary_realm_genesis(
+            state,
+            session,
+            envelope,
+            Some(std::slice::from_ref(&authorization_lease)),
+        )
+        .await;
     }
     if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
         return Err(SubmitOneError::new(
@@ -384,11 +418,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
         == Some(arkret_wire::events::EventKind::REALM_CREATE)
         && !batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope))
     {
-        return Err(SubmitOneError::new(
-            StatusCode::PRECONDITION_FAILED,
-            "failed_precondition",
-            "realm_founding_grant_missing",
-        ));
+        return submit_ordinary_realm_genesis(state, session, envelope, None).await;
     }
     if batch_contains_identity_anchor(std::slice::from_ref(&envelope)) {
         return Err(SubmitOneError::new(

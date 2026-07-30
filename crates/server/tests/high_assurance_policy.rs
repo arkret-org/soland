@@ -40,6 +40,7 @@ fn high_assurance_rejects_open_federation_at_create() {
         json!({
             "object": {
                 "created_by": "did:web:alice",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "title": "Compliance Vault",
                 "security_class": "high_assurance",
                 "federation_policy": "open",
@@ -69,6 +70,7 @@ fn high_assurance_accepts_closed_restricted_and_quarantine() {
             json!({
                 "object": {
                     "created_by": "did:web:alice",
+                    "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                     "title": "Compliance Vault",
                     "security_class": "high_assurance",
                     "federation_policy": *fp,
@@ -103,6 +105,7 @@ fn high_assurance_rejects_post_create_open_federation_update() {
         json!({
             "object": {
                 "created_by": "did:web:alice",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "title": "Compliance Vault",
                 "security_class": "high_assurance",
                 "federation_policy": "restricted",
@@ -164,6 +167,7 @@ fn realm_update_rejects_encryption_profile_patch() {
         json!({
             "object": {
                 "created_by": "did:web:alice",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "title": "Encrypted Room",
                 "encryption_profile": "mls_rfc9420",
             },
@@ -211,6 +215,7 @@ fn standard_realm_accepts_open_federation_policy() {
         json!({
             "object": {
                 "created_by": "did:web:alice",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "title": "Public Room",
                 "federation_policy": "open",
             },

@@ -125,6 +125,8 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
                 format!("sha256:{}", "1".repeat(64)),
                 arkret_bootstrap::DID_INCEPTION_REF_ROLE,
             ),
+            capability_action_registry_digest:
+                arkret_policy::current_capability_action_registry_digest().unwrap(),
             event_id: arkret_wire::EventId::new(new_prefixed_uuid7("ak:event:")).unwrap(),
             created_at,
             hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),

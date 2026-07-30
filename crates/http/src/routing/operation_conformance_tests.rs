@@ -202,6 +202,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "title": "Launch",
                 "trust_domain": "ak:trust_domain:local",
                 "created_by": "did:web:alice.example",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 "schema_refs": ["ak.schema.realm.v1"],
                 "default_discoverability": "invite_only",
                 "default_join_rule": "invite",

@@ -9,7 +9,6 @@ use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
 use soland_storage::{CanonicalEventRecord, PersistenceResult, RealmMetaRecord};
 
-use crate::authorization::AuthorizationService;
 use crate::events::{RealmDirectoryEntry, RealmDirectoryIndex};
 use crate::identity::CrossSigningRegistry;
 
@@ -469,7 +468,6 @@ fn canonical_prev_refers_to(record: &soland_storage::CanonicalEventRecord, event
 async fn hydrate_canonical_realm_bootstraps(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
-    authz: &AuthorizationService,
     hydration_hlc: &soland_domain::hlc::ServerHlc,
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
@@ -505,47 +503,12 @@ async fn hydrate_canonical_realm_bootstraps(
             {
                 break;
             }
-            let expected_kind = if unit.len() == 1 {
-                candidate.kind == arkret_wire::events::EventKind::CAPABILITY_GRANT
-            } else {
-                arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&candidate.kind)
-            };
-            if !expected_kind {
+            if !arkret_policy::realm_bootstrap::is_realm_bootstrap_followup_kind(&candidate.kind) {
                 break;
             }
             unit.push(candidate);
             previous_event_id = candidate.event_id.as_str();
             expected_seq = expected_seq.saturating_add(1);
-        }
-
-        // Principal-control genesis is a distinct [create, device.authorize]
-        // unit.  It still needs the create reducer for owner/member recovery,
-        // but must never be interpreted as an ordinary Realm bootstrap.
-        if unit.len() == 1 {
-            let Some(operation) = projection_adapter
-                .operation_from_canonical_record(&application_canonical_event(create))
-            else {
-                return Err(soland_storage::PersistenceError::Internal(format!(
-                    "Realm create {} cannot rebuild its projection operation",
-                    create.event_id
-                )));
-            };
-            match proj.apply(&operation, hydration_hlc) {
-                ProjectionEffect::Rejected { reason } => {
-                    return Err(soland_storage::PersistenceError::Internal(format!(
-                        "Realm create {} failed deterministic hydration: {reason}",
-                        create.event_id
-                    )));
-                }
-                ProjectionEffect::Ignored => {
-                    return Err(soland_storage::PersistenceError::Internal(format!(
-                        "Realm create {} was ignored during deterministic hydration",
-                        create.event_id
-                    )));
-                }
-                _ => {}
-            }
-            continue;
         }
 
         let typed_events = unit
@@ -566,7 +529,6 @@ async fn hydrate_canonical_realm_bootstraps(
         )?;
 
         let mut staged = proj.clone();
-        let mut founding_grant_id = None;
         for (index, record) in unit.iter().enumerate() {
             let Some(operation) = projection_adapter
                 .operation_from_canonical_record(&application_canonical_event(record))
@@ -589,9 +551,7 @@ async fn hydrate_canonical_realm_bootstraps(
                     record.event_id
                 ))
             })?;
-            let effect = if index == 1 {
-                staged.apply_validated_realm_founding_grant(&operation, operation.created_at)
-            } else if index > 1 && operation.object_kind.as_str().starts_with("ak.realm.") {
+            let effect = if index > 0 && operation.object_kind.as_str().starts_with("ak.realm.") {
                 staged.apply_validated_realm_bootstrap_facet(&operation, &cell_writes)
             } else {
                 staged.apply_projected(&operation, &cell_writes, hydration_hlc)
@@ -609,18 +569,10 @@ async fn hydrate_canonical_realm_bootstraps(
                         record.event_id
                     )));
                 }
-                ProjectionEffect::CapabilityGrantProjected { grant_id, .. } if index == 1 => {
-                    founding_grant_id = Some(grant_id);
-                }
                 _ => {}
             }
         }
         *proj = staged;
-        if let Some(grant_id) = founding_grant_id
-            && let Some(grant) = proj.effective_engine_grant(&grant_id)
-        {
-            authz.upsert_projected_grant(grant);
-        }
     }
     Ok(())
 }
@@ -691,7 +643,6 @@ pub async fn hydrate_canonical_realm_memberships(
 pub async fn hydrate_projections_from_persistence(
     persistence: &dyn soland_storage::PersistenceStore,
     proj: &mut ProjectionState,
-    authz: &AuthorizationService,
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
@@ -702,14 +653,8 @@ pub async fn hydrate_projections_from_persistence(
 
     let hydration_hlc = soland_domain::hlc::ServerHlc::new("soland:projection-hydration");
 
-    hydrate_canonical_realm_bootstraps(
-        persistence,
-        proj,
-        authz,
-        &hydration_hlc,
-        projection_adapter,
-    )
-    .await?;
+    hydrate_canonical_realm_bootstraps(persistence, proj, &hydration_hlc, projection_adapter)
+        .await?;
     hydrate_canonical_realm_memberships(persistence, proj, projection_adapter).await?;
     hydrate_sidecar_projections(persistence, proj, &hydration_hlc).await?;
 
@@ -1097,7 +1042,6 @@ pub async fn hydrate_projections_from_persistence(
 pub async fn hydrate_realms_from_canonical_events(
     persistence: &dyn soland_storage::PersistenceStore,
     realms: &mut RealmDirectoryIndex,
-    service_id: &str,
 ) {
     let Ok(events) = persistence.events().snapshot_all().await else {
         return;
@@ -1115,8 +1059,6 @@ pub async fn hydrate_realms_from_canonical_events(
             // stuck "waiting for a Welcome" forever. Mirrors the live
             // projection in `routing/events/projection/realm.rs`.
             hydrate_realm_member_state_event(realms, &record);
-        } else if record.kind == "ak.realm.alias" {
-            hydrate_realm_alias_event(realms, &record, service_id);
         } else if matches!(
             record.kind.as_str(),
             "ak.realm.history_visibility"
@@ -1126,66 +1068,6 @@ pub async fn hydrate_realms_from_canonical_events(
         ) {
             hydrate_realm_policy_event(persistence, &record).await;
         }
-    }
-}
-
-/// Replay one persisted `ak.realm.alias` Event into the rebuilt directory.
-///
-/// `ak.realm.alias` is the only wire carrier of a Realm alias
-/// (`discovery/object-addressing.md` §3.3), so the alias survives restart from
-/// this Event and never from the closed Realm object. Mirrors the live
-/// projection in `routing/events/projection/realm.rs::project_realm_alias`:
-/// a declaration under a foreign authority domain or an alias held by another
-/// Realm is dropped, and a `{"tombstone": true}` release clears the row.
-/// Records replay in persisted order, so the `ak.realm.create` that seeds the
-/// row is always applied first.
-pub fn hydrate_realm_alias_event(
-    realms: &mut RealmDirectoryIndex,
-    record: &CanonicalEventRecord,
-    service_id: &str,
-) {
-    let Some(realm_id) = event_record_realm_id(record) else {
-        return;
-    };
-    let Ok(realm_id) = RealmId::new(realm_id) else {
-        return;
-    };
-    let Some(payload) = record.envelope.get("payload") else {
-        return;
-    };
-    if payload.get("tombstone").and_then(Value::as_bool) == Some(true) {
-        if let Some(entry) = realms.get_mut(&realm_id) {
-            entry.alias = None;
-        }
-        return;
-    }
-    let Some(declared) = payload.get("alias").and_then(Value::as_str) else {
-        return;
-    };
-    let Ok(authority) =
-        arkret_models_collaboration::objects::realm_alias::RealmAlias::authority_domain_for_service(
-            service_id,
-        )
-    else {
-        return;
-    };
-    // The persisted value is already canonical; parse (not prepare) so a
-    // non-canonical byte sequence is dropped instead of being repaired.
-    let Ok(alias) = arkret_models_collaboration::objects::realm_alias::RealmAlias::parse(declared)
-    else {
-        return;
-    };
-    if alias.domain() != authority {
-        return;
-    }
-    let taken = realms.entries_iter().any(|(existing_id, existing)| {
-        existing_id != &realm_id && existing.alias.as_deref() == Some(alias.canonical())
-    });
-    if taken {
-        return;
-    }
-    if let Some(entry) = realms.get_mut(&realm_id) {
-        entry.alias = Some(alias.canonical().to_owned());
     }
 }
 
@@ -1371,10 +1253,6 @@ pub async fn hydrate_realm_create_event(
     entry.policy_revision = preview_policy_digest
         .clone()
         .unwrap_or_else(|| record.canonical_digest.clone());
-    // No alias is read from the create object: `realm.schema.json` is closed
-    // and declares none. The alias is rehydrated from the persisted
-    // `ak.realm.alias` Event by `hydrate_realm_alias_event`, which the caller
-    // replays in persisted order after this row exists.
     realms.upsert(entry);
 
     let meta = RealmMetaRecord {
@@ -1465,113 +1343,4 @@ pub fn event_record_realm_id(record: &CanonicalEventRecord) -> Option<String> {
 
 pub fn normalize_persisted_realm_id(id: &str) -> String {
     id.to_owned()
-}
-
-#[cfg(test)]
-mod realm_alias_hydration_tests {
-    use super::*;
-
-    const SERVICE_ID: &str = "did:web:soland.local";
-    const REALM_A: &str = "ak:realm:01964137-0000-7000-8000-00000000000a";
-    const REALM_B: &str = "ak:realm:01964137-0000-7000-8000-00000000000b";
-
-    fn seeded_directory() -> RealmDirectoryIndex {
-        let mut realms = RealmDirectoryIndex::default();
-        for realm_id in [REALM_A, REALM_B] {
-            realms.upsert(RealmDirectoryEntry::new(
-                RealmId::new(realm_id).unwrap(),
-                "seeded",
-            ));
-        }
-        realms
-    }
-
-    fn alias_record(realm_id: &str, payload: Value) -> CanonicalEventRecord {
-        CanonicalEventRecord {
-            event_id: "ak:event:01964137-0000-7000-8000-00000000000e".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
-            actor_seq: 5,
-            realm_id: Some(realm_id.to_owned()),
-            kind: "ak.realm.alias".to_owned(),
-            schema_id: String::new(),
-            canonical_digest: format!("sha256:{:064x}", 1),
-            canonical_bytes: Vec::new(),
-            envelope: serde_json::json!({"realm_id": realm_id, "payload": payload}),
-            received_at: chrono::Utc::now(),
-        }
-    }
-
-    fn alias_of(realms: &RealmDirectoryIndex, realm_id: &str) -> Option<String> {
-        realms
-            .get(&RealmId::new(realm_id).unwrap())
-            .and_then(|entry| entry.alias.clone())
-    }
-
-    #[test]
-    fn declaration_under_the_deployment_authority_is_replayed() {
-        let mut realms = seeded_directory();
-        hydrate_realm_alias_event(
-            &mut realms,
-            &alias_record(
-                REALM_A,
-                serde_json::json!({"alias": "general:soland.local"}),
-            ),
-            SERVICE_ID,
-        );
-        assert_eq!(
-            alias_of(&realms, REALM_A).as_deref(),
-            Some("general:soland.local")
-        );
-    }
-
-    #[test]
-    fn tombstone_releases_the_alias_and_frees_it_for_another_realm() {
-        let mut realms = seeded_directory();
-        let declaration = serde_json::json!({"alias": "general:soland.local"});
-        hydrate_realm_alias_event(
-            &mut realms,
-            &alias_record(REALM_A, declaration.clone()),
-            SERVICE_ID,
-        );
-        // While REALM_A holds the alias, REALM_B cannot take it over.
-        hydrate_realm_alias_event(
-            &mut realms,
-            &alias_record(REALM_B, declaration.clone()),
-            SERVICE_ID,
-        );
-        assert_eq!(alias_of(&realms, REALM_B), None);
-
-        hydrate_realm_alias_event(
-            &mut realms,
-            &alias_record(REALM_A, serde_json::json!({"tombstone": true})),
-            SERVICE_ID,
-        );
-        assert_eq!(alias_of(&realms, REALM_A), None);
-
-        hydrate_realm_alias_event(&mut realms, &alias_record(REALM_B, declaration), SERVICE_ID);
-        assert_eq!(
-            alias_of(&realms, REALM_B).as_deref(),
-            Some("general:soland.local"),
-            "a released alias becomes claimable by another Realm"
-        );
-    }
-
-    #[test]
-    fn foreign_authority_and_non_canonical_declarations_are_dropped() {
-        let mut realms = seeded_directory();
-        for payload in [
-            // Not this deployment's issuing authority.
-            serde_json::json!({"alias": "general:other.example"}),
-            // The `#` share sigil is display-only and never on the wire.
-            serde_json::json!({"alias": "#general:soland.local"}),
-            // A bare localpart is not a canonical alias.
-            serde_json::json!({"alias": "general"}),
-            // Uppercase is not the prepared canonical form; hydration must not
-            // repair a non-canonical persisted value.
-            serde_json::json!({"alias": "General:soland.local"}),
-        ] {
-            hydrate_realm_alias_event(&mut realms, &alias_record(REALM_A, payload), SERVICE_ID);
-            assert_eq!(alias_of(&realms, REALM_A), None);
-        }
-    }
 }

@@ -73,24 +73,10 @@ pub(super) async fn resolve_realm(
             .cloned()
             .collect()
     };
-    // Normalize the requested alias once under this deployment's authority
-    // domain, then match the entry's canonical alias — the projection of
-    // `ak.component.realm.alias.v1` (object-addressing.md §3.3) — rather than
-    // the human-readable title. A caller MAY send a display form (`#general`,
-    // a bare localpart); a foreign-domain alias resolves to nothing here
-    // because this deployment issues aliases only beneath its own authority.
-    let alias_query = body.alias.as_deref().and_then(|raw| {
-        let authority =
-            arkret_models_collaboration::objects::realm_alias::RealmAlias::authority_domain_for_service(
-                state.service_id(),
-            )
-            .ok()?;
-        arkret_models_collaboration::objects::realm_alias::RealmAlias::prepare_under_authority(
-            raw, &authority,
-        )
-        .ok()
-        .map(|alias| alias.canonical().to_owned())
-    });
+    // `ak.realm.alias` is not a registered Event kind and there is no
+    // `ak.component.realm.alias.v1` cell family, so no Realm can carry a
+    // projected alias and an alias-only request resolves to nothing.
+    let alias_query: Option<String> = None;
     let mut matched_realm = None;
     for entry in candidates {
         let matches_query = body
@@ -100,9 +86,7 @@ pub(super) async fn resolve_realm(
             || invite_realm_id
                 .as_deref()
                 .is_some_and(|id| id == entry.realm_id.as_str())
-            || alias_query
-                .as_deref()
-                .is_some_and(|want| entry.alias.as_deref() == Some(want));
+            || alias_query.is_some();
         if matches_query
             && realm_resolvable_to(
                 state,
@@ -343,7 +327,7 @@ pub(super) fn realm_preview_from_directory_entry(entry: &RealmDirectoryEntry) ->
     };
     RealmPreview {
         realm_id: entry.realm_id.clone(),
-        alias: entry.alias.clone(),
+        alias: None,
         title: Some(entry.title.clone()),
         avatar_blob_ref: None,
         organization_did: None,

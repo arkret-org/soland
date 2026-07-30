@@ -93,7 +93,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         actor_id: unit.actor_id.clone(),
         identity_anchor_event_id: None,
         self_principal_pcr_bootstrap: false,
-        ordinary_realm_bootstrap: true,
+        authority_root: Some(unit.authority_root.clone()),
     };
     let contexts = std::slice::from_ref(&context);
     let mut validated = Vec::with_capacity(envelopes.len());
@@ -208,20 +208,20 @@ pub(super) async fn submit_realm_bootstrap_batch(
         })
         .collect::<Result<Vec<_>, SubmitOneError>>()?;
     // Run the reducer against an application-owned clone in wire order. This
-    // is the genesis authority boundary: create establishes the staged Realm,
-    // then only the exact founding grant and closed facets can be applied.
+    // is the genesis authority boundary: create establishes the staged Realm
+    // together with its registered authority-root cell, then only the closed
+    // facet kinds can be applied. The create reducer's own authority-root
+    // reason codes are surfaced verbatim so a genesis that cannot establish an
+    // owner is distinguishable from an out-of-order unit.
     let staged_projection = state
         .projections()
         .stage_realm_bootstrap(&projected_operations)
         .map_err(|error| {
-            let operation = &operations[error.operation_index];
-            let code = if !error.ignored
-                && operation.object_kind.as_str()
-                    == arkret_wire::events::EventKind::CAPABILITY_GRANT
-            {
-                "invalid_realm_founding_grant"
-            } else {
-                "out_of_order_bootstrap"
+            let code = match error.reason.as_str() {
+                reason @ ("realm_authority_root_missing" | "realm_authority_root_conflict") => {
+                    reason
+                }
+                _ => "out_of_order_bootstrap",
             };
             SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
@@ -290,14 +290,9 @@ pub(super) async fn submit_realm_bootstrap_batch(
     }
     state.wake_control_seal_coordinator();
 
-    let founding_grant_id = state
+    state
         .projections()
         .install_staged_realm_bootstrap(staged_projection);
-    if let Some(grant_id) = founding_grant_id.as_deref() {
-        crate::routing::events::projection::refresh_authz_index_from_capability_grant_id(
-            state, grant_id,
-        );
-    }
     for operation in &operations {
         crate::routing::events::projection::ensure_projected_realm(
             state,

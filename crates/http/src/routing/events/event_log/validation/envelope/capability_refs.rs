@@ -28,6 +28,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     kind: &str,
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
+    realm_authority_root_authorized: bool,
 ) -> Result<DataEventQueryGrade, EventValidationError> {
     let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
     if !is_data_event {
@@ -278,18 +279,29 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // yields for this actor, never over a producer-chosen subset, and over the
     // cells the receiver itself derived, never over a producer-chosen write
     // list.
-    for cell in derived_cells {
-        let covering_grant = effective_by_id
-            .values()
-            .find(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell));
-        let Some(covering_grant) = covering_grant else {
-            return Err(event_validation_error(
-                StatusCode::FORBIDDEN,
-                "capability_denied",
-                format!("no capability at seal_ref covers action {kind} on derived cell {cell}"),
-            ));
-        };
-        used_grant_ids.insert(covering_grant.grant_id.clone());
+    // `capabilities.md` section 3.2 - an Event authored under the Realm
+    // authority root carries effective `ak.realm.owner`, which is not a grant
+    // and therefore has no `ak:grant:*` id to cover a derived cell with. The
+    // root claim itself (controller identity, accepted-Seal inclusion proof,
+    // registry basis, and whether the owner aggregate may author this Event
+    // kind at all) is validated by `realm_authority_root` before this gate
+    // runs; here it only replaces the per-cell grant search.
+    if !realm_authority_root_authorized {
+        for cell in derived_cells {
+            let covering_grant = effective_by_id
+                .values()
+                .find(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell));
+            let Some(covering_grant) = covering_grant else {
+                return Err(event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "capability_denied",
+                    format!(
+                        "no capability at seal_ref covers action {kind} on derived cell {cell}"
+                    ),
+                ));
+            };
+            used_grant_ids.insert(covering_grant.grant_id.clone());
+        }
     }
     validate_data_event_revocation_freshness(
         state,

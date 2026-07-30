@@ -98,6 +98,7 @@ mod envelope_core;
 mod features_schema;
 mod minimal_metadata_author;
 mod proofs;
+mod realm_authority_root;
 
 use applet::*;
 pub(in crate::routing::events::event_log) use capability_refs::validate_data_event_capability_refs;
