@@ -91,7 +91,7 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
             "scope": row.scope,
             "frontier": row.frontier,
             "events": row.events,
-            "created_at": row.created_at,
+            "created_at": arkret_canonical::normalize_timestamp_canonical(row.created_at),
             "proofs": row.proofs,
         }))
         .map_err(|error| {
@@ -268,7 +268,9 @@ async fn insert_event_batch_receipt(
     .bind::<Jsonb, _>(scope)
     .bind::<Jsonb, _>(frontier)
     .bind::<Jsonb, _>(events)
-    .bind::<Timestamptz, _>(receipt.created_at)
+    .bind::<Timestamptz, _>(arkret_canonical::normalize_timestamp_canonical(
+        receipt.created_at,
+    ))
     .bind::<Jsonb, _>(proofs)
     .bind::<Array<SqlUuid>, _>(event_ids)
     .execute(conn)
@@ -295,6 +297,19 @@ impl From<CanonicalEventRow> for CanonicalEventRecord {
         }
     }
 }
+
+fn identity_anchor_receipt_cardinality_is_valid(
+    record_count: usize,
+    proposal_receipt_count: usize,
+    reanchor_conflict: bool,
+) -> bool {
+    if reanchor_conflict {
+        proposal_receipt_count == 0
+    } else {
+        proposal_receipt_count == 0 || proposal_receipt_count == record_count
+    }
+}
+
 #[async_trait]
 impl EventStore for PgEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
@@ -414,10 +429,11 @@ impl EventStore for PgEventStore {
                 } else {
                     false
                 };
-                if (reanchor_conflict && !proposal_receipts_by_digest.is_empty())
-                    || (!reanchor_conflict
-                        && proposal_receipts_by_digest.len() != record_count)
-                {
+                if !identity_anchor_receipt_cardinality_is_valid(
+                    record_count,
+                    proposal_receipts_by_digest.len(),
+                    reanchor_conflict,
+                ) {
                     return Err(PersistenceError::Conflict(
                         "schema_violation: identity anchor receipt cardinality mismatch".to_owned(),
                     )
@@ -428,15 +444,10 @@ impl EventStore for PgEventStore {
                 }
                 for record in records {
                     insert_canonical_event(conn, &record).await.map_err(PersistenceError::database)?;
-                    if !reanchor_conflict {
-                        let proposal_receipt = proposal_receipts_by_digest
-                            .get(&record.canonical_digest)
-                            .ok_or_else(|| {
-                                PersistenceError::Conflict(
-                                    "schema_violation: identity anchor Event is missing proposal receipt"
-                                        .to_owned(),
-                                )
-                            })?;
+                    if !reanchor_conflict
+                        && let Some(proposal_receipt) =
+                            proposal_receipts_by_digest.get(&record.canonical_digest)
+                    {
                         insert_pending_control_event(conn, &record, proposal_receipt).await?;
                     }
                 }
@@ -724,5 +735,24 @@ impl EventStore for PgEventStore {
         .load::<CanonicalEventRow>(&mut *conn).await
         .map(|rows| rows.into_iter().map(CanonicalEventRecord::from).collect())
         .map_err(PersistenceError::database)
+    }
+}
+
+#[cfg(test)]
+mod identity_anchor_receipt_tests {
+    use super::identity_anchor_receipt_cardinality_is_valid;
+
+    #[test]
+    fn closed_anchor_units_accept_no_proposal_receipts() {
+        assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, false));
+        assert!(identity_anchor_receipt_cardinality_is_valid(2, 2, false));
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 1, false));
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 3, false));
+    }
+
+    #[test]
+    fn reanchor_conflict_cannot_attach_proposal_receipts() {
+        assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, true));
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 2, true));
     }
 }
