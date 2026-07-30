@@ -3,7 +3,8 @@
 
 use std::collections::BTreeSet;
 
-use arkret_identifiers::{AppletId, Did, EventId, GrantId, RealmId};
+use arkret_identifiers::{AppletId, Did, EventId, GrantId, Hash, RealmId};
+use arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind;
 use arkret_identity::DidDocument;
 use arkret_models_integration::{
     AppletApprovalRequest, AppletGhostActorMode, AppletInstallAppletId,
@@ -331,10 +332,17 @@ fn applet_delegation_constraints(
     record: &AppletRecord,
     package: &AppletPackage,
 ) -> Vec<crate::authz::Constraint> {
-    vec![crate::authz::Constraint::AppletDelegationBinding {
-        applet_id: record.applet_id.clone(),
-        executed_by: package.service_id.to_string(),
-        registration_epoch: package.registration_epoch.to_string(),
+    vec![crate::authz::Constraint::DelegationControl {
+        max_delegation_depth: None,
+        constraint_subkind: Some(GrantConstraintSubkind::AppletDelegation),
+        applet_id: Some(
+            AppletId::new(record.applet_id.clone()).expect("persisted applet id is typed"),
+        ),
+        executed_by: Some(package.service_id.clone()),
+        registration_epoch: Some(
+            Hash::new(package.registration_epoch.to_string())
+                .expect("validated registration epoch is typed"),
+        ),
     }]
 }
 

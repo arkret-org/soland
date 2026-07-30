@@ -966,12 +966,9 @@ fn evaluate_constraint(
             }
         }
         Constraint::DelegationControl { .. } => {
-            // Check delegation depth
-            None // v1: always pass (depth enforced at chain-walk level)
-        }
-        Constraint::AppletDelegationBinding { .. } => {
-            // Applet binding is checked by the Applet event reducer, where the
-            // installed package and registration epoch evidence are available.
+            // Depth is enforced at chain-walk time. The registered
+            // applet_delegation subkind is checked by the Applet Event
+            // reducer, where registration epoch evidence is available.
             None
         }
         Constraint::RateLimiting {

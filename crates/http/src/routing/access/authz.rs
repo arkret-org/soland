@@ -534,15 +534,7 @@ fn wire_constraint_from_authz_constraint(
         }
         Constraint::DelegationControl {
             max_delegation_depth,
-        } => {
-            let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::DelegationControl,
-                WireGrantConstraintEffect::Allow,
-            );
-            wire.max_delegation_depth = max_delegation_depth.map(u64::from);
-            Ok(wire)
-        }
-        Constraint::AppletDelegationBinding {
+            constraint_subkind,
             applet_id,
             executed_by,
             registration_epoch,
@@ -551,15 +543,11 @@ fn wire_constraint_from_authz_constraint(
                 WireGrantConstraintKind::DelegationControl,
                 WireGrantConstraintEffect::Allow,
             );
-            insert_constraint_extension(
-                &mut wire,
-                "x_soland_applet_delegation_binding",
-                json!({
-                    "applet_id": applet_id,
-                    "executed_by": executed_by,
-                    "registration_epoch": registration_epoch,
-                }),
-            )?;
+            wire.max_delegation_depth = max_delegation_depth.map(u64::from);
+            wire.constraint_subkind = constraint_subkind;
+            wire.applet_id = applet_id;
+            wire.executed_by = executed_by;
+            wire.registration_epoch = registration_epoch;
             Ok(wire)
         }
     }
