@@ -15,7 +15,7 @@ pub use arkret_lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, CallState, CallSummary, CapabilityDelegate,
     CapabilityDerived, CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant,
     ContactFactLog, CoveredSeals, CrossSigningPublish, CrossSigningReset, DeviceAuthorized,
-    DeviceListUpdate, DevicePushRoute, DirectConversationBinding, KeyBackupActiveSeries,
+    DeviceListUpdate, DirectConversationBinding, KeyBackupActiveSeries,
     MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
     NotaryCell, PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
     RealmDeliveryBindingPolicy, RealmDestroy, RealmDisappearingPolicy, RealmDiscovery, RealmFreeze,

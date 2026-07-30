@@ -526,6 +526,39 @@ pub(super) async fn validate_moderation_event_policy(
     Err("missing_capability")
 }
 
+pub(super) async fn validate_realm_policy_server_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_for_operation(operation)
+        != Some(arkret_wire::events::EventKind::REALM_POLICY_SERVER)
+    {
+        return Ok(());
+    }
+    let Some(actor) = operation.actor() else {
+        return Err("missing_capability");
+    };
+    let realm_id = operation.realm_id.as_str();
+    let (owner, members) = realm_owner_and_members(state, realm_id).await;
+    if state
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
+            actor: actor.as_str(),
+            action: arkret_wire::CapabilityActionId::POLICY_MANAGE,
+            resource: realm_id,
+            realm_id,
+            owner: owner.as_deref(),
+            members: &members,
+            resource_facets: &[],
+        })
+        .allowed
+    {
+        Ok(())
+    } else {
+        Err("missing_capability")
+    }
+}
+
 pub(super) async fn validate_call_recording_start_policy(
     state: &AppState,
     operation: &Operation,

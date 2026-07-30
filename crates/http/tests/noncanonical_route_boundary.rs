@@ -15,6 +15,7 @@ enum InventoryRecord {
         finding: String,
         source: String,
         initial_private_path_count: usize,
+        current_private_path_count: usize,
     },
     Route {
         methods: BTreeSet<String>,
@@ -70,24 +71,27 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
                 finding,
                 source,
                 initial_private_path_count,
+                current_private_path_count,
             } => Some((
                 schema,
                 audit_status,
                 finding,
                 source,
                 *initial_private_path_count,
+                *current_private_path_count,
             )),
             InventoryRecord::Route { .. } => None,
         })
         .expect("inventory metadata is required");
     assert_eq!(metadata.0, "soland.noncanonical_route_inventory.v1");
-    assert_eq!(metadata.1, "provisional_baseline");
+    assert_eq!(metadata.1, "closed");
     assert_eq!(
         metadata.2,
         "arkret-work/review/spec-done/2026-07-27-12-soland-noncanonical-route-boundary-audit.md"
     );
     assert_eq!(metadata.3, "crates/http/src/product_openapi_appendix.json");
     assert_eq!(metadata.4, 127);
+    assert_eq!(metadata.5, actual.len());
 
     let mut inventoried = BTreeMap::new();
     for record in records {
@@ -108,7 +112,7 @@ fn inventory_tracks_every_noncanonical_product_route_once() {
         assert!(
             matches!(
                 classification.as_str(),
-                "canonical_migration" | "operator_extraction" | "delete"
+                "product_surface" | "operator_extraction" | "development_only"
             ),
             "{path} has an invalid classification"
         );

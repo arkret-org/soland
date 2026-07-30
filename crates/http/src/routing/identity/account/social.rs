@@ -772,11 +772,12 @@ fn blocked_invite_policy_update(
     holder: &str,
     peer: &str,
 ) -> Option<arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy> {
+    let holder_did = Did::new(holder.to_owned()).ok()?;
     let peer_did = Did::new(peer.to_owned()).ok()?;
     let mut policy = state
         .contacts()
         .invite_policy(holder)
-        .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(holder));
+        .unwrap_or_else(|| InviteReceivePolicy::spec_default(holder_did));
     if policy.denied_subjects.iter().any(|did| did == &peer_did) {
         return None;
     }
@@ -801,10 +802,12 @@ pub(crate) async fn get_invite_receive_policy(
     // falling back to the recommended default when none is set.
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let actor_id = Did::new(session.actor.clone())
+        .map_err(|error| AppError::invalid_param(format!("invalid session principal: {error}")))?;
     let policy = state
         .contacts()
         .invite_policy(&session.actor)
-        .unwrap_or_else(|| crate::routing::invites::default_invite_receive_policy(&session.actor));
+        .unwrap_or_else(|| InviteReceivePolicy::spec_default(actor_id));
     json_ok(policy)
 }
 

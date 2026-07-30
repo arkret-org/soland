@@ -9,9 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_event_draft::Operation;
 use arkret_models_collaboration::objects::profiles::StrandTrackConfig;
-use arkret_models_collaboration::objects::read_receipts::ReadCursorPosition as ReadCursorPositionWire;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
-use arkret_wire::ReadCursorScope as ReadScopeWire;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -1138,15 +1136,7 @@ pub struct PollState {
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ReadMarkerState {
-    pub actor_id: String,
-    pub device_id: String,
-    pub realm_id: String,
-    pub read_scope: ReadScopeWire,
-    pub position: ReadCursorPositionWire,
-    pub updated_at: chrono::DateTime<chrono::Utc>,
-}
+pub type ReadMarkerState = arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 
 #[derive(Clone, Debug)]
 pub struct SolandRelationState {

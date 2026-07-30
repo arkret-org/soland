@@ -410,11 +410,10 @@ async fn export_realm(
     }
     let events = state
         .event_queries()
-        .projected_events()
+        .projected_events_for_realm(&realm_id)
         .await
-        .unwrap_or_default()
+        .map_err(|error| AppError::internal(format!("realm export failed: {error}")))?
         .into_iter()
-        .filter(|event| event.realm_id == realm_id)
         .map(|event| RealmExportEvent {
             event_id: event.event_id,
             realm_id: event.realm_id,

@@ -1023,11 +1023,9 @@ pub async fn chaos_operation(
         .find(|record| canonical_event_operation_id(record).as_deref() == Some(&operation_id));
     let projection_event = state
         .event_queries()
-        .projected_events()
+        .projected_event_by_operation_id(&operation_id)
         .await
-        .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?
-        .into_iter()
-        .find(|record| record.operation_id.as_deref() == Some(&operation_id));
+        .map_err(|error| AppError::new(ErrorCode::InternalError, error.to_string()))?;
     let canonical_json = canonical_event.as_ref().map(canonical_event_diagnostic);
     let projection_json = projection_event.as_ref().map(projection_event_diagnostic);
 

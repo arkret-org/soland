@@ -5,7 +5,7 @@
 //! Mounted on the protocol surface at `/_arkret/self/read-cursors*`.
 
 use arkret_event_draft::Operation;
-use arkret_identifiers::{DeviceId, Did, OperationId, RealmId};
+use arkret_identifiers::{DeviceId, Did, OperationId};
 use arkret_models_collaboration::objects::read_receipts::{
     ReadCursorAdvanceRequestBody, ReadCursorList, ReadCursorPosition, ReadMarkerOutcome,
 };
@@ -79,14 +79,14 @@ pub(super) async fn set_read_cursor(
             .read_cursors
             .values()
             .find(|marker| {
-                marker.actor_id == session.actor
-                    && marker.realm_id == realm_id.as_str()
+                marker.actor_id.as_str() == session.actor
+                    && marker.realm_id.as_str() == realm_id.as_str()
                     && marker.read_scope == body.read_scope
             })
             .cloned()
     }
     .ok_or_else(|| AppError::internal("accepted read cursor was not projected"))?;
-    let candidate_won = marker.device_id == session.device_id
+    let candidate_won = marker.device_id.as_str() == session.device_id
         && marker.position == body.position
         && marker.updated_at == read_at;
     if candidate_won {
@@ -107,17 +107,7 @@ pub(super) async fn set_read_cursor(
         )
         .await;
     }
-    json_ok(ReadMarkerOutcome {
-        realm_id: RealmId::new(marker.realm_id)
-            .map_err(|e| AppError::invalid_param(format!("stored realm_id: {e}")))?,
-        actor_id: Did::new(marker.actor_id)
-            .map_err(|e| AppError::invalid_param(format!("stored actor_id: {e}")))?,
-        device_id: DeviceId::new(marker.device_id)
-            .map_err(|e| AppError::invalid_param(format!("stored device_id: {e}")))?,
-        read_scope: marker.read_scope,
-        position: marker.position,
-        updated_at: marker.updated_at,
-    })
+    json_ok(marker)
 }
 
 #[endpoint(
@@ -140,22 +130,11 @@ pub(super) async fn get_read_cursors(
         proj.read_cursors
             .values()
             .filter(|m| {
-                m.actor_id == session.actor && (realm_id.is_empty() || m.realm_id == realm_id)
+                m.actor_id.as_str() == session.actor
+                    && (realm_id.is_empty() || m.realm_id.as_str() == realm_id)
             })
-            .map(|m| {
-                Ok(ReadMarkerOutcome {
-                    realm_id: RealmId::new(m.realm_id.clone())
-                        .map_err(|e| AppError::invalid_param(format!("stored realm_id: {e}")))?,
-                    actor_id: Did::new(m.actor_id.clone())
-                        .map_err(|e| AppError::invalid_param(format!("stored actor_id: {e}")))?,
-                    device_id: DeviceId::new(m.device_id.clone())
-                        .map_err(|e| AppError::invalid_param(format!("stored device_id: {e}")))?,
-                    read_scope: m.read_scope.clone(),
-                    position: m.position.clone(),
-                    updated_at: m.updated_at,
-                })
-            })
-            .collect::<Result<Vec<_>, AppError>>()?
+            .cloned()
+            .collect::<Vec<ReadMarkerOutcome>>()
     };
     json_ok(ReadCursorList { markers })
 }

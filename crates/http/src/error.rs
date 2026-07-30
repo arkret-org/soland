@@ -3,17 +3,6 @@
 //! Wire-form error codes are owned by `arkret_wire::ErrorCode`; this module
 //! only adds soland-specific Salvo rendering and typed endpoint plumbing.
 
-/// Soland-local rejection reasons that are not registered protocol reason codes.
-///
-/// Registered reasons and top-level errors are consumed directly through
-/// arkret_wire::ReasonCode and arkret_wire::ErrorCode.
-pub mod reasons {
-    pub const MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN: &str =
-        "member_identity_handle_field_forbidden";
-    pub const CLAIM_TYPE_UNSUPPORTED: &str = "claim_type_unsupported";
-    pub const HANDLE_CLAIM_SUBJECT_NOT_PRINCIPAL_DID: &str =
-        "handle_claim_subject_not_principal_did";
-}
 use salvo::async_trait;
 use salvo::http::StatusCode;
 use salvo::prelude::*;

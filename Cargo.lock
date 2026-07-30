@@ -338,6 +338,7 @@ dependencies = [
  "arkret-state",
  "arkret-wire",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]

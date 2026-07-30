@@ -285,6 +285,33 @@ pub(in crate::routing) async fn submit_account_data_event_value(
     .await
 }
 
+pub(in crate::routing) async fn submit_moderation_report_event_value(
+    state: &AppState,
+    session: &SessionRecord,
+    envelope: Value,
+    realm_id: &str,
+    reporter: &str,
+    target_ref: &str,
+) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let admission = InternalEventAdmission::moderation_report(
+        realm_id,
+        state.service_id().as_str(),
+        reporter,
+        target_ref,
+    );
+    submit_event_value_with_context(
+        state,
+        session,
+        envelope,
+        &[],
+        None,
+        Some(&admission),
+        None,
+        None,
+    )
+    .await
+}
+
 pub(in crate::routing) async fn submit_event_value_with_idempotency(
     state: &AppState,
     session: &SessionRecord,
@@ -777,6 +804,20 @@ pub(super) async fn submit_event_value_with_context(
             return Err(SubmitOneError::new(
                 StatusCode::PRECONDITION_FAILED,
                 reason.clone(),
+                reason,
+            ));
+        }
+        if let Err(reason) =
+            crate::routing::events::projection::validate_invite_cancel_pre_admission(
+                state,
+                &parsed.actor_id,
+                operation,
+            )
+            .await
+        {
+            return Err(SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                reason,
                 reason,
             ));
         }

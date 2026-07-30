@@ -1,3 +1,5 @@
+use serde_json::Value;
+
 use super::{
     Arc, BTreeMap, MorphProjectionRecord, MorphProjectionStore, Mutex, PersistenceResult,
     ProjectionEventAppendOutcome, ProjectionEventRecord, ProjectionEventStore, RealmMetaRecord,
@@ -222,6 +224,65 @@ impl ProjectionEventStore for MemoryProjectionEventStore {
             .lock()
             .iter()
             .filter(|event| event.event_kind == event_kind)
+            .cloned()
+            .collect())
+    }
+
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<ProjectionEventRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .iter()
+            .find(|event| event.event_id == event_id)
+            .cloned())
+    }
+
+    async fn get_by_operation_id(
+        &self,
+        operation_id: &str,
+    ) -> PersistenceResult<Option<ProjectionEventRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .iter()
+            .find(|event| event.operation_id.as_deref() == Some(operation_id))
+            .cloned())
+    }
+
+    async fn snapshot_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .iter()
+            .filter(|event| event.realm_id == realm_id)
+            .cloned()
+            .collect())
+    }
+
+    async fn snapshot_actor(
+        &self,
+        actor_id: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        Ok(self
+            .data
+            .lock()
+            .iter()
+            .filter(|event| {
+                event.sender.as_deref() == Some(actor_id)
+                    || event.payload.get("sender").and_then(Value::as_str) == Some(actor_id)
+                    || event.payload.get("actor_id").and_then(Value::as_str) == Some(actor_id)
+                    || event.payload.get("actor").and_then(Value::as_str) == Some(actor_id)
+                    || event
+                        .payload
+                        .get("object")
+                        .and_then(Value::as_object)
+                        .and_then(|object| object.get("created_by"))
+                        .and_then(Value::as_str)
+                        == Some(actor_id)
+            })
             .cloned()
             .collect())
     }

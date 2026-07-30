@@ -29,10 +29,10 @@
 //! set; downstream policy evaluators apply the local-override rule on
 //! top.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{ProjectionState, RealmInheritancePolicyState, RealmLinkState};
 
@@ -90,14 +90,6 @@ impl InheritanceMode {
 ///   spec §6.2 derived grants MUST NOT be wider than the source — at this layer we surface the
 ///   union; the policy evaluator applies the narrow-only intersection at decision time (see
 ///   `routing/access/policy.rs`).
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EffectivePolicy {
-    pub realm_id: String,
-    pub inheritance_mode: String,
-    pub inheritance_chain: Vec<String>,
-    pub effective_policy: Value,
-}
-
 /// Cap on the depth the DFS walks while assembling the inheritance
 /// chain. Spec §6.4 currently caps `max_depth` at 1, but the cap here
 /// is set higher so a misconfigured profile can't make the response
@@ -105,8 +97,7 @@ pub struct EffectivePolicy {
 /// us from infinite walks.
 pub const MAX_INHERITANCE_CHAIN: usize = 8;
 
-/// Compute the effective policy for `realm_id`. See [`EffectivePolicy`]
-/// for the returned shape.
+/// Compute the SDK effective-policy outcome for `realm_id`.
 ///
 /// Invariants:
 /// - Returns `inheritance_mode = "none"` and an empty `inheritance_chain` when the Realm has no
@@ -115,7 +106,10 @@ pub const MAX_INHERITANCE_CHAIN: usize = 8;
 ///   contribute nothing (spec §4 + §6.3).
 /// - Stops at [`MAX_INHERITANCE_CHAIN`] depth or upon revisiting a realm already in the chain;
 ///   general Realm Link graphs may contain cycles.
-pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> EffectivePolicy {
+pub fn effective_policy_for_realm(
+    state: &ProjectionState,
+    realm_id: &str,
+) -> arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome {
     let own = state.realm_inheritance_policy(realm_id);
     let inheritance_mode = if own.is_some() {
         InheritanceMode::Explicit
@@ -192,18 +186,37 @@ pub fn effective_policy_for_realm(state: &ProjectionState, realm_id: &str) -> Ef
     let (narrowed_policies, narrowed_capability_bundles) =
         narrowed_inheritance_intersection(state, realm_id);
 
-    let effective_policy = json!({
-        "allowed_policies": allowed_policies.into_iter().collect::<Vec<_>>(),
-        "allowed_capability_bundles": allowed_capability_bundles.into_iter().collect::<Vec<_>>(),
-        "narrowed_policies": narrowed_policies,
-        "narrowed_capability_bundles": narrowed_capability_bundles,
-    });
+    let effective_policy = BTreeMap::from([
+        (
+            "allowed_policies".to_owned(),
+            json!(allowed_policies.into_iter().collect::<Vec<_>>()),
+        ),
+        (
+            "allowed_capability_bundles".to_owned(),
+            json!(allowed_capability_bundles.into_iter().collect::<Vec<_>>()),
+        ),
+        ("narrowed_policies".to_owned(), json!(narrowed_policies)),
+        (
+            "narrowed_capability_bundles".to_owned(),
+            json!(narrowed_capability_bundles),
+        ),
+    ]);
 
-    EffectivePolicy {
-        realm_id: realm_id.to_owned(),
-        inheritance_mode: inheritance_mode.as_str().to_owned(),
-        inheritance_chain: chain,
+    arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome {
+        realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+            .expect("projected realm ids are validated"),
         effective_policy,
+        inheritance_chain: chain
+            .into_iter()
+            .map(|realm_id| {
+                arkret_identifiers::RealmId::new(realm_id)
+                    .expect("projected inheritance Realm ids are validated")
+            })
+            .collect(),
+        inheritance_mode: match inheritance_mode {
+            InheritanceMode::Explicit => arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyInheritanceMode::Explicit,
+            InheritanceMode::None => arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyInheritanceMode::None,
+        },
     }
 }
 
@@ -421,7 +434,8 @@ pub fn check_realm_link_admissible(
 mod tests {
     use arkret_event_draft::Operation;
     use arkret_identifiers::{OperationId, RealmId};
-    use serde_json::json;
+    use arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyInheritanceMode;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::hlc::ServerHlc;
@@ -619,16 +633,23 @@ mod tests {
         state.apply(&inherit_op(REALM_B, REALM_A, &["b.policy"]), &hlc);
 
         let ep = effective_policy_for_realm(&state, REALM_D);
-        assert_eq!(ep.inheritance_mode, "explicit");
+        assert_eq!(
+            ep.inheritance_mode,
+            RealmEffectivePolicyInheritanceMode::Explicit
+        );
         // Chain must include C (declared parent) and walk through B
         // (C's declared parent reachable via the governed_by edge).
         assert!(
-            ep.inheritance_chain.contains(&REALM_C.to_owned()),
+            ep.inheritance_chain
+                .iter()
+                .any(|realm_id| realm_id.as_str() == REALM_C),
             "expected REALM_C in chain: {:?}",
             ep.inheritance_chain
         );
         assert!(
-            ep.inheritance_chain.contains(&REALM_B.to_owned()),
+            ep.inheritance_chain
+                .iter()
+                .any(|realm_id| realm_id.as_str() == REALM_B),
             "expected REALM_B in chain (2-level walk): {:?}",
             ep.inheritance_chain
         );
@@ -661,9 +682,14 @@ mod tests {
         );
 
         let ep = effective_policy_for_realm(&state, REALM_D);
-        assert_eq!(ep.inheritance_mode, "explicit");
+        assert_eq!(
+            ep.inheritance_mode,
+            RealmEffectivePolicyInheritanceMode::Explicit
+        );
         assert!(
-            ep.inheritance_chain.contains(&REALM_C.to_owned()),
+            ep.inheritance_chain
+                .iter()
+                .any(|realm_id| realm_id.as_str() == REALM_C),
             "expected REALM_C in chain: {:?}",
             ep.inheritance_chain
         );
@@ -707,7 +733,8 @@ mod tests {
 
         let ep = effective_policy_for_realm(&state, REALM_D);
         assert_eq!(
-            ep.inheritance_mode, "none",
+            ep.inheritance_mode,
+            RealmEffectivePolicyInheritanceMode::None,
             "no inheritance_policy declared on D: {ep:?}"
         );
         assert!(

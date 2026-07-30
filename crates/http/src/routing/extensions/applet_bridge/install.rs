@@ -4,8 +4,11 @@
 use std::collections::BTreeSet;
 
 use arkret_identifiers::{AppletId, Did, EventId, GrantId, Hash, RealmId};
-use arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind;
 use arkret_identity::DidDocument;
+use arkret_models_collaboration::events_payloads::CapabilityGrantPayload;
+use arkret_models_collaboration::governance::grant_constraint::{
+    CapabilitySubject, GrantConstraintKind, GrantConstraintSubkind,
+};
 use arkret_models_integration::{
     AppletApprovalRequest, AppletGhostActorMode, AppletInstallAppletId,
     AppletInstallEffectiveStatus, AppletInstallOutcome, AppletInstallPlan,
@@ -13,7 +16,7 @@ use arkret_models_integration::{
     CapabilityConstraint, DeniedScope, E2eeEffect, E2eePolicy, EventSubmission, NamespaceConflict,
     ScopeGrant, WidgetEffect,
 };
-use arkret_wire::ScopeRef;
+use arkret_wire::{ResourceMatchScope, ResourceSelectorKind, ScopeRef};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -39,6 +42,7 @@ pub(super) async fn register_package_install(
     state: &AppState,
     owner_actor_id: &str,
     commit: AppletInstallRequestBody,
+    approved_scopes: Vec<ScopeGrant>,
     idempotency_key: String,
     body_digest: String,
     res: &mut Response,
@@ -48,7 +52,7 @@ pub(super) async fn register_package_install(
     let applet_id = package.applet_id.clone();
     let namespace = package_namespace(&package);
     let realm_id = effective_scope_realm_id(&commit.effective_scope);
-    let approved_actions = actions_from_approved_scopes(&commit.approved_scopes);
+    let approved_actions = actions_from_approved_scopes(&approved_scopes);
     let ghost_actors_allowed =
         ghost_actors_allowed_for_install(&package, &approved_actions, commit.actor_policy.as_ref());
 
@@ -92,15 +96,11 @@ pub(super) async fn register_package_install(
     }
 
     let now = chrono::Utc::now();
-    let registration_event_ref = EventId::new(ids::generate_event_id())
-        .map_err(|error| AppError::internal(format!("generated event id is invalid: {error}")))?;
-    let capability_grant_refs = approved_actions
+    let registration_event_ref = commit.registration_event.event_id.clone();
+    let capability_grant_refs = commit
+        .capability_grant_events
         .iter()
-        .map(|_| {
-            GrantId::new(ids::generate_grant_id()).map_err(|error| {
-                AppError::internal(format!("generated capability grant id is invalid: {error}"))
-            })
-        })
+        .map(capability_grant_id)
         .collect::<Result<Vec<_>, _>>()?;
     let e2ee_authorization_refs =
         e2ee_authorization_refs_for_install(&package, commit.e2ee_policy.as_ref())?;
@@ -245,19 +245,16 @@ async fn ensure_applet_e2ee_authorization_projections(
     if event_ids.is_empty() {
         return Ok(());
     }
-    let existing = state
-        .event_queries()
-        .projected_events()
-        .await
-        .map_err(|error| {
-            tracing::error!(%error, "applet install: failed to inspect e2ee authorization projection recovery");
-            AppError::internal("failed to inspect applet e2ee authorization projection")
-        })?
-        .into_iter()
-        .map(|event| event.event_id)
-        .collect::<BTreeSet<_>>();
     for event_id in event_ids {
-        if !existing.contains(event_id.as_str()) {
+        let existing = state
+            .event_queries()
+            .projected_event(event_id.as_str())
+            .await
+            .map_err(|error| {
+                tracing::error!(%error, "applet install: failed to inspect e2ee authorization projection recovery");
+                AppError::internal("failed to inspect applet e2ee authorization projection")
+            })?;
+        if existing.is_none() {
             append_applet_e2ee_authorization_projection(state, record, event_id.as_str()).await?;
         }
     }
@@ -271,14 +268,13 @@ async fn ensure_applet_registration_projection(
 ) -> Result<(), AppError> {
     let exists = state
         .event_queries()
-        .projected_events()
+        .projected_event(event_id)
         .await
         .map_err(|error| {
             tracing::error!(%error, %event_id, "applet install: failed to inspect registration projection recovery");
             AppError::internal("failed to inspect applet registration projection")
         })?
-        .into_iter()
-        .any(|event| event.event_id == event_id);
+        .is_some();
     if exists {
         return Ok(());
     }
@@ -969,6 +965,197 @@ fn validate_registration_epoch_evidence_for_document(
         .with_wire_code("applet_registration_epoch_signing_key_mismatch"));
     }
     Ok(evidence)
+}
+
+pub(super) fn approved_scopes_from_install_events(
+    commit: &AppletInstallRequestBody,
+    authenticated_actor: &str,
+) -> Result<Vec<ScopeGrant>, AppError> {
+    validate_formal_install_event(
+        &commit.registration_event,
+        authenticated_actor,
+        &commit.effective_scope,
+        arkret_wire::events::EventKind::APPLET_REGISTRATION,
+    )?;
+    let expected_registration = registration_payload_from_package(&commit.applet_package)?;
+    let registration_payload = serde_json::to_value(&commit.registration_event.payload)
+        .map_err(|error| AppError::internal(format!("registration payload serialize: {error}")))?;
+    if registration_payload != expected_registration {
+        return Err(AppError::invalid_param(
+            "registration_event payload does not match applet_package",
+        )
+        .with_wire_code("applet_registration_payload_mismatch"));
+    }
+
+    let requested = commit
+        .applet_package
+        .requested_scopes
+        .iter()
+        .cloned()
+        .collect::<BTreeSet<_>>();
+    let mut approved = BTreeSet::new();
+    for event in &commit.capability_grant_events {
+        validate_formal_install_event(
+            event,
+            authenticated_actor,
+            &commit.effective_scope,
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+        )?;
+        let payload: CapabilityGrantPayload =
+            serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
+                AppError::internal(format!("capability grant payload serialize: {error}"))
+            })?)
+            .map_err(|error| {
+                AppError::invalid_param(format!(
+                    "capability_grant_event payload is invalid: {error}"
+                ))
+                .with_wire_code("applet_capability_grant_invalid")
+            })?;
+        let grant = payload.grant.ok_or_else(|| {
+            AppError::invalid_param("capability_grant_event requires an embedded grant")
+                .with_wire_code("applet_capability_grant_invalid")
+        })?;
+        if payload.grant_id != grant.id || grant.issuer.as_str() != authenticated_actor {
+            return Err(AppError::invalid_param(
+                "capability grant id or issuer does not match the install actor",
+            )
+            .with_wire_code("applet_capability_grant_binding_mismatch"));
+        }
+        if !matches!(
+            &grant.subject,
+            CapabilitySubject::Did(subject)
+                if subject == &commit.applet_package.service_id
+        ) {
+            return Err(AppError::invalid_param(
+                "capability grant subject must equal the applet service_id",
+            )
+            .with_wire_code("applet_capability_grant_binding_mismatch"));
+        }
+        if grant.resources.len() != 1
+            || !resource_matches_effective_scope(&grant.resources[0], &commit.effective_scope)
+        {
+            return Err(AppError::invalid_param(
+                "capability grant resource widens the effective_scope",
+            )
+            .with_wire_code("applet_effective_scope_mismatch"));
+        }
+        let binding_matches = grant.constraints.iter().any(|constraint| {
+            constraint.constraint_kind == GrantConstraintKind::DelegationControl
+                && constraint.constraint_subkind == Some(GrantConstraintSubkind::AppletDelegation)
+                && constraint.applet_id.as_ref().map(AppletId::as_str)
+                    == Some(commit.applet_package.applet_id.as_str())
+                && constraint.executed_by.as_ref() == Some(&commit.applet_package.service_id)
+                && constraint.registration_epoch.as_ref()
+                    == Some(&commit.applet_package.registration_epoch)
+        });
+        if !binding_matches {
+            return Err(AppError::invalid_param(
+                "capability grant lacks the exact applet_delegation binding",
+            )
+            .with_wire_code("applet_delegation_binding_mismatch"));
+        }
+        if grant.proofs.is_empty()
+            || grant.proofs.iter().any(|proof| {
+                proof.validate_production().is_err()
+                    || grant.canonical_proof_binding_bytes(proof).is_err()
+            })
+        {
+            return Err(AppError::invalid_param(
+                "capability grant payload proof is missing or invalid",
+            )
+            .with_wire_code("applet_capability_grant_proof_invalid"));
+        }
+        for action in grant.actions {
+            if !requested.contains(&action) || !approved.insert(action) {
+                return Err(AppError::invalid_param(
+                    "capability grant contains an unrequested or duplicate action",
+                )
+                .with_wire_code("applet_capability_scope_invalid"));
+            }
+        }
+    }
+    if approved.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (realm_id, circle_ids) = match &commit.effective_scope {
+        ScopeRef::Realm { realm_id } => (realm_id.clone(), None),
+        ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } => (realm_id.clone(), Some(vec![circle_id.clone()])),
+        _ => {
+            return Err(AppError::invalid_param(
+                "unsupported applet effective scope",
+            ));
+        }
+    };
+    Ok(vec![ScopeGrant {
+        actions: approved.into_iter().collect(),
+        realm_ids: vec![realm_id],
+        circle_ids,
+        constraints: Vec::new(),
+    }])
+}
+
+fn validate_formal_install_event(
+    event: &arkret_wire::Event,
+    authenticated_actor: &str,
+    effective_scope: &ScopeRef,
+    expected_kind: &str,
+) -> Result<(), AppError> {
+    event.validate_for_submit_structural().map_err(|error| {
+        AppError::invalid_param(format!("formal install Event is invalid: {error}"))
+            .with_wire_code("applet_formal_event_invalid")
+    })?;
+    if event.kind.as_str() != expected_kind
+        || event.actor_id.as_str() != authenticated_actor
+        || &event.scope_ref != effective_scope
+        || event.realm_id.as_str() != effective_scope_realm_id(effective_scope)
+    {
+        return Err(AppError::invalid_param(
+            "formal install Event actor, kind, or effective_scope mismatch",
+        )
+        .with_wire_code("applet_formal_event_binding_mismatch"));
+    }
+    Ok(())
+}
+
+fn resource_matches_effective_scope(
+    resource: &arkret_wire::WireResourceSelector,
+    effective_scope: &ScopeRef,
+) -> bool {
+    match effective_scope {
+        ScopeRef::Realm { realm_id } => {
+            resource.kind == ResourceSelectorKind::Realm
+                && resource.realm_id.as_ref() == Some(realm_id)
+                && resource.circle_id.is_none()
+                && matches!(
+                    resource.match_scope,
+                    Some(ResourceMatchScope::RealmWide | ResourceMatchScope::Exact)
+                )
+        }
+        ScopeRef::Circle {
+            realm_id,
+            circle_id,
+        } => {
+            resource.kind == ResourceSelectorKind::Circle
+                && resource.realm_id.as_ref() == Some(realm_id)
+                && resource.circle_id.as_ref() == Some(circle_id)
+                && resource.match_scope == Some(ResourceMatchScope::Exact)
+        }
+        _ => false,
+    }
+}
+
+fn capability_grant_id(event: &arkret_wire::Event) -> Result<GrantId, AppError> {
+    let payload: CapabilityGrantPayload =
+        serde_json::from_value(serde_json::to_value(&event.payload).map_err(|error| {
+            AppError::internal(format!("capability grant payload serialize: {error}"))
+        })?)
+        .map_err(|error| {
+            AppError::invalid_param(format!("capability grant payload is invalid: {error}"))
+        })?;
+    Ok(payload.grant_id)
 }
 
 pub(super) fn approved_scopes_from_approval_request(

@@ -60,13 +60,8 @@ fn projection_event_ref(operation: &Operation) -> String {
         .to_owned()
 }
 
-#[derive(Clone, Debug)]
-pub struct EffectiveRealmPolicyView {
-    pub realm_id: String,
-    pub inheritance_mode: String,
-    pub inheritance_chain: Vec<String>,
-    pub effective_policy: Value,
-}
+pub type EffectiveRealmPolicyView =
+    arkret_models_collaboration::governance::realm_governance::RealmEffectivePolicyOutcome;
 
 pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
     soland_domain::reducer::morph_document_body(fields)
@@ -99,14 +94,7 @@ pub fn effective_policy_for_realm(
     projection: &ProjectionSnapshot,
     realm_id: &str,
 ) -> EffectiveRealmPolicyView {
-    let policy =
-        soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id);
-    EffectiveRealmPolicyView {
-        realm_id: policy.realm_id,
-        inheritance_mode: policy.inheritance_mode,
-        inheritance_chain: policy.inheritance_chain,
-        effective_policy: policy.effective_policy,
-    }
+    soland_domain::reducer::realm_links::effective_policy_for_realm(projection, realm_id)
 }
 
 pub trait EventSealCommitPort: Send + Sync {
@@ -181,15 +169,7 @@ pub struct AgentActionApprovalValidation {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct ReadMarkerView {
-    pub actor_id: String,
-    pub device_id: String,
-    pub realm_id: String,
-    pub read_scope: arkret_wire::ReadCursorScope,
-    pub position: arkret_models_collaboration::objects::read_receipts::ReadCursorPosition,
-    pub updated_at: DateTime<Utc>,
-}
+pub type ReadMarkerView = arkret_models_collaboration::objects::read_receipts::ReadMarkerOutcome;
 
 #[derive(Clone, Debug)]
 pub enum MlsProjectionEffect {
@@ -292,16 +272,7 @@ impl From<ProjectionEffect> for ProjectionEffectView {
             ProjectionEffect::Rejected { reason } => Self::Rejected { reason },
             ProjectionEffect::Ignored => Self::Ignored,
             ProjectionEffect::RealmKeyShareProjected { .. } => Self::RealmKeyShareProjected,
-            ProjectionEffect::ReadMarkerUpdated(marker) => {
-                Self::ReadMarkerUpdated(ReadMarkerView {
-                    actor_id: marker.actor_id,
-                    device_id: marker.device_id,
-                    realm_id: marker.realm_id,
-                    read_scope: marker.read_scope,
-                    position: marker.position,
-                    updated_at: marker.updated_at,
-                })
-            }
+            ProjectionEffect::ReadMarkerUpdated(marker) => Self::ReadMarkerUpdated(marker),
             ProjectionEffect::Mls(effect) => Self::Mls(match effect {
                 soland_domain::reducer::MlsEffect::KeyPackagePublished {
                     keypackage_id, ..
@@ -1892,6 +1863,20 @@ impl ProjectionService {
                 && row.consumed_at.is_none()
             {
                 row.claimed_by = Some("revoked".to_owned());
+                row.claimed_at = None;
+                row.claim_expires_at_unix_ms = None;
+            }
+        }
+    }
+
+    pub fn mark_key_packages_retired(&self, keypackage_ids: &[String]) {
+        let mut state = self.state.lock();
+        for keypackage_id in keypackage_ids {
+            if let Some(row) = state.mls_key_packages.get_mut(keypackage_id)
+                && row.claimed_by.is_none()
+                && row.consumed_at.is_none()
+            {
+                row.claimed_by = Some("retired".to_owned());
                 row.claimed_at = None;
                 row.claim_expires_at_unix_ms = None;
             }

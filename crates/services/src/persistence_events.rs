@@ -338,17 +338,6 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .collect())
     }
 
-    async fn projected_events(&self) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
-        Ok(self
-            .0
-            .projection_events()
-            .snapshot_all()
-            .await?
-            .into_iter()
-            .map(application_projected_event)
-            .collect())
-    }
-
     async fn projected_events_capped(
         &self,
         limit: usize,
@@ -357,6 +346,72 @@ impl crate::events::EventReadPort for PersistenceEventReader {
             .0
             .projection_events()
             .snapshot_capped(limit)
+            .await?
+            .into_iter()
+            .map(application_projected_event)
+            .collect())
+    }
+
+    async fn projected_event(
+        &self,
+        event_id: &str,
+    ) -> crate::ServiceResult<Option<crate::events::ProjectedEvent>> {
+        Ok(self
+            .0
+            .projection_events()
+            .get(event_id)
+            .await?
+            .map(application_projected_event))
+    }
+
+    async fn projected_event_by_operation_id(
+        &self,
+        operation_id: &str,
+    ) -> crate::ServiceResult<Option<crate::events::ProjectedEvent>> {
+        Ok(self
+            .0
+            .projection_events()
+            .get_by_operation_id(operation_id)
+            .await?
+            .map(application_projected_event))
+    }
+
+    async fn projected_events_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
+        Ok(self
+            .0
+            .projection_events()
+            .snapshot_realm(realm_id)
+            .await?
+            .into_iter()
+            .map(application_projected_event)
+            .collect())
+    }
+
+    async fn projected_events_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
+        Ok(self
+            .0
+            .projection_events()
+            .snapshot_actor(actor_id)
+            .await?
+            .into_iter()
+            .map(application_projected_event)
+            .collect())
+    }
+
+    async fn projected_events_for_kind(
+        &self,
+        event_kind: &str,
+    ) -> crate::ServiceResult<Vec<crate::events::ProjectedEvent>> {
+        Ok(self
+            .0
+            .projection_events()
+            .snapshot_kind(event_kind)
             .await?
             .into_iter()
             .map(application_projected_event)
@@ -942,6 +997,9 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                     crate::events::ClaimMlsKeyPackageTarget::Group(group_id) => {
                         soland_storage::MlsKeyPackageClaimTarget::Group(group_id)
                     }
+                    crate::events::ClaimMlsKeyPackageTarget::Retire => {
+                        soland_storage::MlsKeyPackageClaimTarget::Retire
+                    }
                     crate::events::ClaimMlsKeyPackageTarget::Revoke => {
                         soland_storage::MlsKeyPackageClaimTarget::Revoke
                     }
@@ -1089,7 +1147,7 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 .mls_key_packages()
                 .try_claim(soland_storage::MlsKeyPackageClaim {
                     id: &row.id,
-                    target: soland_storage::MlsKeyPackageClaimTarget::Revoke,
+                    target: soland_storage::MlsKeyPackageClaimTarget::Retire,
                     intended_realm_id: None,
                     ssk_generation: None,
                     device_authorize_event_id: None,

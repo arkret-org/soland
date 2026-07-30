@@ -2112,7 +2112,7 @@ pub(crate) async fn retire_device_keypackages(
             .mls_key_packages()
             .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
                 id: &row.id,
-                target: soland_services::events::ClaimMlsKeyPackageTarget::Revoke,
+                target: soland_services::events::ClaimMlsKeyPackageTarget::Retire,
                 intended_realm_id: None,
                 ssk_generation: None,
                 device_authorize_event_id: None,
@@ -2128,7 +2128,7 @@ pub(crate) async fn retire_device_keypackages(
         {
             state
                 .projections()
-                .mark_key_packages_revoked(std::slice::from_ref(&row.id));
+                .mark_key_packages_retired(std::slice::from_ref(&row.id));
             retired += 1;
         }
     }

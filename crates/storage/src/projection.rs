@@ -140,6 +140,15 @@ pub trait ProjectionEventStore: Send + Sync {
         &self,
         event_kind: &str,
     ) -> PersistenceResult<Vec<ProjectionEventRecord>>;
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<ProjectionEventRecord>>;
+    async fn get_by_operation_id(
+        &self,
+        operation_id: &str,
+    ) -> PersistenceResult<Option<ProjectionEventRecord>>;
+    async fn snapshot_realm(&self, realm_id: &str)
+    -> PersistenceResult<Vec<ProjectionEventRecord>>;
+    async fn snapshot_actor(&self, actor_id: &str)
+    -> PersistenceResult<Vec<ProjectionEventRecord>>;
     /// SOL-SEC-04 — bounded variant of [`snapshot_all`] that pushes a `LIMIT`
     /// into the query so a single (federation-reachable) request cannot load
     /// the entire `projection_events` table into memory. Returns at most

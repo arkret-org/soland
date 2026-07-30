@@ -1078,9 +1078,7 @@ async fn range_completeness_for_query(
         RangeCompletenessAttestationWitnessAttestation,
         RangeCompletenessAttestationWitnessAttestationWitnessesItem,
     };
-    use arkret_signatures::{
-        Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite,
-    };
+    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite};
     use arkret_wire::{
         Event, EventId, EventKind, EventRequirements, Hash, PayloadProofPurpose, PayloadSigner,
         Proof, ScopeRef, proof_kind,

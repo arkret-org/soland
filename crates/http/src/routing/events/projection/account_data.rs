@@ -112,8 +112,8 @@ pub(super) async fn read_cursor_reducer_context_operation(
             .read_cursors
             .values()
             .find(|marker| {
-                marker.actor_id == actor_id
-                    && marker.realm_id == operation.realm_id.as_str()
+                marker.actor_id.as_str() == actor_id
+                    && marker.realm_id.as_str() == operation.realm_id.as_str()
                     && marker.read_scope == read_scope
             })
             .map(|marker| marker.position.event_id.to_string())
@@ -267,17 +267,13 @@ pub(super) async fn fanout_projection_effect_private_update(
     else {
         return;
     };
-    if source_device_id.is_empty() || marker.actor_id != origin {
+    if source_device_id.is_empty() || marker.actor_id.as_str() != origin {
         return;
     }
-    let origin_device = if marker.device_id.is_empty() {
-        source_device_id
-    } else {
-        marker.device_id.as_str()
-    };
+    let origin_device = marker.device_id.as_str();
     fanout_actor_private_update(
         state,
-        &marker.actor_id,
+        marker.actor_id.as_str(),
         origin_device,
         READ_MARKER_UPDATE_TYPE,
         json!({

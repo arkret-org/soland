@@ -516,11 +516,109 @@ impl ProjectionState {
             device_id: device_id.to_owned(),
             push_route: push_route.to_owned(),
         };
+        let private_registry = match arkret_lattice_registry::build_actor_private_registry() {
+            Ok(registry) => registry,
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: format!("push_route_private_registry_unavailable:{error}"),
+                };
+            }
+        };
+        let derived_subject = match private_registry.derive_subject(
+            arkret_wire::events::EventKind::DEVICE_PUSH_ROUTE,
+            principal_id,
+            &operation.payload,
+        ) {
+            Ok(subject) => subject,
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: format!("push_route_private_subject_invalid:{error}"),
+                };
+            }
+        };
+        let expected_subject = match arkret_wire::composite_subject(&[
+            recipient_service_id,
+            principal_id,
+            device_id,
+            push_route,
+        ]) {
+            Ok(subject) => subject,
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: format!("push_route_private_subject_invalid:{error}"),
+                };
+            }
+        };
+        if derived_subject != expected_subject {
+            return ProjectionEffect::Rejected {
+                reason: "push_route_private_subject_mismatch".to_owned(),
+            };
+        }
 
         let revoked = payload
             .get("revoked")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+
+        let incoming_value = serde_json::json!({
+            "recipient_service_id": recipient_service_id,
+            "principal_id": principal_id,
+            "device_id": device_id,
+            "push_route": push_route,
+            "push_target_id": payload.get("push_target_id").cloned().unwrap_or(Value::Null),
+            "push_gateway_did": payload.get("push_gateway_did").cloned().unwrap_or(Value::Null),
+            "encryption_key": payload.get("encryption_key").cloned().unwrap_or(Value::Null),
+            "capabilities": payload.get("capabilities").cloned().unwrap_or_else(|| serde_json::json!([])),
+            "revoked": revoked,
+        });
+        let current = self.push_routes.get(&subject).map(|value| {
+            arkret_lattice_registry::ActorPrivateCandidate {
+                value: serde_json::json!({
+                    "recipient_service_id": &subject.recipient_service_id,
+                    "principal_id": &subject.principal_id,
+                    "device_id": &subject.device_id,
+                    "push_route": &subject.push_route,
+                    "push_target_id": &value.push_target_id,
+                    "push_gateway_did": &value.push_gateway_did,
+                    "encryption_key": &value.encryption_key,
+                    "capabilities": &value.capabilities,
+                    "revoked": value.revoked,
+                }),
+                revision: None,
+                expected_revision: None,
+                causal_order: None,
+                hlc: None,
+                device_id: None,
+            }
+        });
+        let incoming = arkret_lattice_registry::ActorPrivateCandidate {
+            value: incoming_value,
+            revision: None,
+            expected_revision: None,
+            causal_order: None,
+            hlc: None,
+            device_id: None,
+        };
+        match private_registry.apply(
+            "ak.private.device.push_route.v1",
+            current.as_ref(),
+            incoming,
+        ) {
+            Ok(
+                arkret_lattice_registry::ActorPrivateMergeOutcome::Accepted(_)
+                | arkret_lattice_registry::ActorPrivateMergeOutcome::Unchanged(_),
+            ) => {}
+            Ok(arkret_lattice_registry::ActorPrivateMergeOutcome::Conflict) => {
+                return ProjectionEffect::Rejected {
+                    reason: "push_route_cas_conflict".to_owned(),
+                };
+            }
+            Err(error) => {
+                return ProjectionEffect::Rejected {
+                    reason: format!("push_route_private_merge_failed:{error}"),
+                };
+            }
+        }
 
         if revoked {
             let mut previous = self
@@ -607,23 +705,9 @@ impl ProjectionState {
     }
 
     fn store_push_route_cell(&mut self, subject: PushRouteSubject, value: PushRouteCellValue) {
-        if let Some(cell_ref) = push_route_cell_ref(&subject) {
-            self.cells.insert(
-                cell_ref,
-                CellState::Value(serde_json::json!({
-                    "recipient_service_id": &subject.recipient_service_id,
-                    "principal_id": &subject.principal_id,
-                    "device_id": &subject.device_id,
-                    "push_route": &subject.push_route,
-                    "push_target_id": &value.push_target_id,
-                    "push_gateway_did": &value.push_gateway_did,
-                    "encryption_key": &value.encryption_key,
-                    "capabilities": &value.capabilities,
-                    "revoked": value.revoked,
-                    "revoked_targets": &value.revoked_targets,
-                })),
-            );
-        }
+        // Actor-private routes are deliberately absent from `cells`: that map
+        // feeds Realm CBA/Seal/state-root resolution. The recipient Principal
+        // Server keeps this CAS register only in its private projection.
         self.push_routes.insert(subject, value);
     }
 

@@ -162,3 +162,31 @@
 - Prevention dimension: idempotency identity must follow the operation contract. Event-external
   publication evidence may change without changing the canonical proposal or extending its
   original receipt deadline.
+
+## 2026-07-30 — capability fanout accepted unverified placeholder proofs
+
+- Surface: deployment-private coauth → soland capability grant/revoke fanout.
+- Regression: bearer authentication and a caller-supplied body digest were treated as sufficient;
+  the receiver only required a non-empty `proofs` array and accepted placeholder objects. The
+  producer also placed its private transport proof inside protocol payload fields.
+- Correction: the shared private envelope now carries a typed proof over the complete payload and
+  every security-relevant envelope field, including operation, issuer service, and Realm; soland
+  verifies its EdDSA detached JWS against the issuer service DID. Capability grants also carry the
+  canonical SDK `PayloadProof`, whose digest transcript and issuer signature are independently
+  verified. Grant and revoke operations retain only protocol-schema payload fields; private issuer
+  and Event context stays in the fanout envelope.
+- Prevention dimension: private S2S envelopes and protocol payload proofs are separate trust
+  layers; tests and DTOs must reject empty, malformed, incorrectly bound, or unverified proofs.
+
+## 2026-07-30 — request paths scanned the complete durable projection
+
+- Surface: Realm lookup/export, MIMI binding, retention, applet installation, account lifecycle,
+  sync, conformance, and capability fanout queries.
+- Regression: request handlers loaded every projected event and filtered in memory; some paths
+  converted storage failures into empty results. Cost grew with global history and failures could
+  masquerade as valid absence.
+- Correction: projection storage and service ports now expose targeted ID, operation, Realm,
+  actor, and kind queries with PostgreSQL predicates and matching memory implementations. Request
+  handlers use those bounded queries and critical lookup failures propagate.
+- Prevention dimension: online handlers must not expose an unbounded `projected_events()` API;
+  new lookup shapes require a storage predicate and an explicit error policy.

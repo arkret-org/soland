@@ -1146,12 +1146,12 @@ async fn state_events_for_realm(
 ) -> (Vec<arkret_wire::Event>, i64) {
     let events = state
         .event_queries()
-        .projected_events()
+        .projected_events_for_realm(realm_id)
         .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|event| event.realm_id == realm_id)
-        .collect::<Vec<_>>();
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, realm_id, "failed to load Realm projection events for sync");
+            Vec::new()
+        });
     // `history_visibility=joined` limits historical data-plane Events.  It
     // must not hide the current encryption contract from an active member:
     // without the create-locked mechanism and effective policy-components

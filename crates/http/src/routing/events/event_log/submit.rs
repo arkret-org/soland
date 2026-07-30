@@ -195,6 +195,10 @@ enum InternalEventBinding {
         owner: String,
         key: String,
     },
+    ModerationReport {
+        reporter: String,
+        target_ref: String,
+    },
     AppletFormal {
         event_id: String,
     },
@@ -241,6 +245,24 @@ impl InternalEventAdmission {
             binding: InternalEventBinding::AccountData {
                 owner: owner.into(),
                 key: key.into(),
+            },
+        }
+    }
+
+    pub(in crate::routing) fn moderation_report(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        reporter: impl Into<String>,
+        target_ref: impl Into<String>,
+    ) -> Self {
+        Self {
+            realm_id: realm_id.into(),
+            actor_id: actor_id.into(),
+            kind: arkret_wire::events::EventKind::SELF_MODERATION_REPORT.to_owned(),
+            device_id: "moderation-report-service".to_owned(),
+            binding: InternalEventBinding::ModerationReport {
+                reporter: reporter.into(),
+                target_ref: target_ref.into(),
             },
         }
     }
@@ -329,6 +351,14 @@ impl InternalEventAdmission {
                             && payload.get("key").and_then(Value::as_str) == Some(key.as_str())
                     })
                 }
+                InternalEventBinding::ModerationReport {
+                    reporter,
+                    target_ref,
+                } => object.get("payload").is_some_and(|payload| {
+                    payload.get("reporter").and_then(Value::as_str) == Some(reporter.as_str())
+                        && payload.get("target_ref").and_then(Value::as_str)
+                            == Some(target_ref.as_str())
+                }),
                 InternalEventBinding::AppletFormal { event_id } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
@@ -2015,7 +2045,7 @@ pub(in crate::routing::events::event_log) use value::submit_event_value_with_ide
 use value::*;
 pub(in crate::routing) use value::{
     submit_account_data_event_value, submit_event_value, submit_initial_event_submission,
-    submit_mimi_event_value,
+    submit_mimi_event_value, submit_moderation_report_event_value,
 };
 
 #[cfg(test)]

@@ -78,7 +78,11 @@ pub(super) fn validate_pre_schema_wire_shape(
 fn wire_rejection_to_validation_error(
     rejection: soland_http::wire_validators::WireRejection,
 ) -> EventValidationError {
-    event_validation_error(StatusCode::BAD_REQUEST, rejection.reason, rejection.message)
+    event_validation_error(
+        StatusCode::BAD_REQUEST,
+        arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+        rejection.message,
+    )
 }
 
 pub(super) fn validate_conflict_repair_event_payload(

@@ -10,8 +10,12 @@ use super::*;
 pub(super) async fn latest_mimi_room_binding(
     state: &AppState,
     room_id: &str,
-) -> Option<MimiRoomBindingProjection> {
-    let entries = state.event_queries().projected_events().await.ok()?;
+) -> Result<Option<MimiRoomBindingProjection>, AppError> {
+    let entries = state
+        .event_queries()
+        .projected_events_for_kind(arkret_wire::events::EventKind::MIMI_ROOM_BINDING)
+        .await
+        .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
     // Walk in reverse so the most-recently-recorded binding wins.
     for entry in entries.iter().rev() {
         if entry.event_kind != "ak.mimi.room_binding" {
@@ -36,7 +40,7 @@ pub(super) async fn latest_mimi_room_binding(
             .and_then(Value::as_str)
             .and_then(|uri| uri.rsplit('/').next().map(str::to_owned));
         if payload_room.as_deref() == Some(room_id) || binding_room.as_deref() == Some(room_id) {
-            let realm_id = entry
+            let Some(realm_id) = entry
                 .payload
                 .get("binding_scope")
                 .and_then(|s| s.get("realm_id"))
@@ -48,21 +52,27 @@ pub(super) async fn latest_mimi_room_binding(
                         .and_then(Value::as_str)
                 })
                 .or_else(|| entry.payload.get("realm_id").and_then(Value::as_str))
-                .or_else(|| binding_payload.get("realm_id").and_then(Value::as_str))?;
-            return Some(MimiRoomBindingProjection {
+                .or_else(|| binding_payload.get("realm_id").and_then(Value::as_str))
+            else {
+                continue;
+            };
+            return Ok(Some(MimiRoomBindingProjection {
                 event_id: entry.event_id.clone(),
                 realm_id: realm_id.to_owned(),
                 binding: binding.clone(),
-            });
+            }));
         }
     }
-    None
+    Ok(None)
 }
 
-pub(super) async fn mimi_bound_realm_id(state: &AppState, room_id: &str) -> Option<String> {
+pub(super) async fn mimi_bound_realm_id(
+    state: &AppState,
+    room_id: &str,
+) -> Result<Option<String>, AppError> {
     latest_mimi_room_binding(state, room_id)
         .await
-        .map(|binding| binding.realm_id)
+        .map(|binding| binding.map(|binding| binding.realm_id))
 }
 
 pub(super) fn enforce_mimi_submit_binding(
@@ -181,7 +191,7 @@ pub(super) async fn enforce_mimi_room_binding_transition(
     next_binding: &Value,
 ) -> Result<(), AppError> {
     let next_status = mimi_room_binding_status(next_binding)?;
-    let previous = latest_mimi_room_binding(state, room_id).await;
+    let previous = latest_mimi_room_binding(state, room_id).await?;
     let previous_status = match previous.as_ref() {
         Some(previous) => Some(mimi_room_binding_status(&previous.binding)?),
         None => None,

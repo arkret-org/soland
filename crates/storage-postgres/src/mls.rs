@@ -128,6 +128,7 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         const REVOKED_CLAIM_SENTINEL: &str = "revoked";
         let group_id = match target {
             MlsKeyPackageClaimTarget::Group(group_id) => group_id,
+            MlsKeyPackageClaimTarget::Retire => "retired",
             MlsKeyPackageClaimTarget::Revoke => REVOKED_CLAIM_SENTINEL,
         };
         let mut conn = pg_conn(&self.pool)
@@ -136,23 +137,24 @@ impl MlsKeyPackageStore for PgMlsKeyPackageStore {
         let ssk_generation = db_ssk_generation(ssk_generation)?;
         sql_query(
             "UPDATE mls_key_packages \
-             SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN claimed_by_mls_group_id ELSE $2 END, \
-                 last_resort_realm_id = CASE WHEN last_resort AND $2 <> 'revoked' THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
+             SET claimed_by_mls_group_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN claimed_by_mls_group_id ELSE $2 END, \
+                 last_resort_realm_id = CASE WHEN last_resort AND $2 NOT IN ('revoked', 'retired') THEN COALESCE(last_resort_realm_id, $3) ELSE last_resort_realm_id END, \
                  ssk_generation = COALESCE($4, ssk_generation), \
                  device_authorize_event_id = COALESCE($5, device_authorize_event_id), \
                  agent_key_authorize_event_id = COALESCE($6, agent_key_authorize_event_id), \
-                 claimed_at = CASE WHEN $2 = 'revoked' THEN NULL WHEN last_resort THEN claimed_at ELSE $7 END, \
-                 claim_expires_at_unix_ms = CASE WHEN $2 = 'revoked' THEN NULL WHEN last_resort THEN claim_expires_at_unix_ms ELSE $8 END, \
+                 claimed_at = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claimed_at ELSE $7 END, \
+                 claim_expires_at_unix_ms = CASE WHEN $2 IN ('revoked', 'retired') THEN NULL WHEN last_resort THEN claim_expires_at_unix_ms ELSE $8 END, \
                  consumed_at = NULL \
              WHERE id = $1 \
-               AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id <> 'revoked') \
-               AND (claimed_by_mls_group_id IS NULL \
+               AND (claimed_by_mls_group_id IS NULL OR claimed_by_mls_group_id NOT IN ('revoked', 'retired')) \
+               AND (($2 = 'retired' AND NOT last_resort AND claimed_by_mls_group_id IS NULL) \
+                    OR ($2 <> 'retired' AND (claimed_by_mls_group_id IS NULL \
                     OR claimed_by_mls_group_id = $2 \
-                    OR (last_resort AND $2 <> 'revoked')) \
+                    OR (last_resort AND $2 <> 'revoked')))) \
                AND ($4 IS NULL OR ssk_generation = $4) \
                AND ($5 IS NULL OR device_authorize_event_id = $5) \
                AND ($6 IS NULL OR agent_key_authorize_event_id = $6) \
-               AND ($2 = 'revoked' OR (lifetime_not_after > $7 \
+               AND ($2 IN ('revoked', 'retired') OR (lifetime_not_after > $7 \
                     AND ($8 IS NULL OR ($8 > $7 * 1000 AND $8 <= lifetime_not_after * 1000)))) \
                AND ((NOT last_resort) OR $2 = 'revoked' OR (last_resort_realm_id IS NULL AND $3 IS NOT NULL) OR last_resort_realm_id = $3) \
              RETURNING id, keypackage_ref, keypackage_digest, actor_id, device_id, \

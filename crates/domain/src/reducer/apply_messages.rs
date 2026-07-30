@@ -836,20 +836,21 @@ impl ProjectionState {
             .payload
             .get("actor_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+            .and_then(|value| arkret_identifiers::Did::new(value.to_owned()).ok());
         let device_id = operation
             .payload
             .get("device_id")
             .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_owned();
+            .and_then(|value| arkret_identifiers::DeviceId::new(value.to_owned()).ok());
         let realm_id = operation
             .payload
             .get("realm_id")
             .and_then(|v| v.as_str())
             .unwrap_or(operation.realm_id.as_str())
             .to_owned();
+        let Some(realm_id) = arkret_identifiers::RealmId::new(realm_id).ok() else {
+            return ProjectionEffect::Ignored;
+        };
         let Some(read_scope) = operation
             .payload
             .get("read_scope")
@@ -873,19 +874,23 @@ impl ProjectionState {
             return ProjectionEffect::Ignored;
         };
 
-        if actor_id.is_empty() {
+        let (Some(actor_id), Some(device_id)) = (actor_id, device_id) else {
             return ProjectionEffect::Ignored;
-        }
+        };
 
         let marker = ReadMarkerState {
+            realm_id: realm_id.clone(),
             actor_id: actor_id.clone(),
             device_id,
-            realm_id: realm_id.clone(),
             read_scope: read_scope.clone(),
             position,
             updated_at: now,
         };
-        let key = (realm_id, actor_id, read_scope_key(&read_scope));
+        let key = (
+            realm_id.to_string(),
+            actor_id.to_string(),
+            read_scope_key(&read_scope),
+        );
         if let Some(existing) = self.read_cursors.get(&key) {
             let relation = read_cursor_causal_relation(operation);
             if !read_cursor_candidate_wins(existing, &marker, relation) {
@@ -894,7 +899,7 @@ impl ProjectionState {
         }
         self.read_cursors.insert(key, marker.clone());
         self.observe_message_read_for_expiry(
-            &marker.actor_id,
+            marker.actor_id.as_str(),
             marker.position.event_id.as_str(),
             marker.position.hlc.as_str(),
             now,

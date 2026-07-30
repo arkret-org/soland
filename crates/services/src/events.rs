@@ -828,8 +828,24 @@ pub trait EventReadPort: Send + Sync {
     ) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn accepted_event(&self, event_id: &str) -> ServiceResult<Option<AcceptedEvent>>;
     async fn accepted_events(&self) -> ServiceResult<Vec<AcceptedEvent>>;
-    async fn projected_events(&self) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn projected_events_capped(&self, limit: usize) -> ServiceResult<Vec<ProjectedEvent>>;
+    async fn projected_event(&self, event_id: &str) -> ServiceResult<Option<ProjectedEvent>>;
+    async fn projected_event_by_operation_id(
+        &self,
+        operation_id: &str,
+    ) -> ServiceResult<Option<ProjectedEvent>>;
+    async fn projected_events_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> ServiceResult<Vec<ProjectedEvent>>;
+    async fn projected_events_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> ServiceResult<Vec<ProjectedEvent>>;
+    async fn projected_events_for_kind(
+        &self,
+        event_kind: &str,
+    ) -> ServiceResult<Vec<ProjectedEvent>>;
     async fn append_projected_event(
         &self,
         event: ProjectedEvent,
@@ -1187,15 +1203,45 @@ impl EventQueryService {
         self.events.accepted_events().await
     }
 
-    pub async fn projected_events(&self) -> ServiceResult<Vec<ProjectedEvent>> {
-        self.events.projected_events().await
-    }
-
     pub async fn projected_events_capped(
         &self,
         limit: usize,
     ) -> ServiceResult<Vec<ProjectedEvent>> {
         self.events.projected_events_capped(limit).await
+    }
+
+    pub async fn projected_event(&self, event_id: &str) -> ServiceResult<Option<ProjectedEvent>> {
+        self.events.projected_event(event_id).await
+    }
+
+    pub async fn projected_event_by_operation_id(
+        &self,
+        operation_id: &str,
+    ) -> ServiceResult<Option<ProjectedEvent>> {
+        self.events
+            .projected_event_by_operation_id(operation_id)
+            .await
+    }
+
+    pub async fn projected_events_for_realm(
+        &self,
+        realm_id: &str,
+    ) -> ServiceResult<Vec<ProjectedEvent>> {
+        self.events.projected_events_for_realm(realm_id).await
+    }
+
+    pub async fn projected_events_for_actor(
+        &self,
+        actor_id: &str,
+    ) -> ServiceResult<Vec<ProjectedEvent>> {
+        self.events.projected_events_for_actor(actor_id).await
+    }
+
+    pub async fn projected_events_for_kind(
+        &self,
+        event_kind: &str,
+    ) -> ServiceResult<Vec<ProjectedEvent>> {
+        self.events.projected_events_for_kind(event_kind).await
     }
 
     pub async fn append_projected_event(
@@ -1415,6 +1461,7 @@ pub struct ClaimMlsKeyPackageCommand<'a> {
 
 pub enum ClaimMlsKeyPackageTarget<'a> {
     Group(&'a str),
+    Retire,
     Revoke,
 }
 

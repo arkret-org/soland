@@ -89,7 +89,7 @@ impl SolandEventsSubmitRequestBody {
             ));
         }
         let expected_reducer_digest =
-            arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST;
+            crate::routing::federation::federation_reducer_profile_digest();
         let actual_reducer_digest = binding.reducer_profile_digest.to_string();
         if actual_reducer_digest != expected_reducer_digest {
             return Err((

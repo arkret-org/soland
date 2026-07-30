@@ -317,9 +317,10 @@ impl AgentStore for MemoryAgentStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arkret_models_collaboration::agent_operations::AgentLifecycleState;
     use arkret_wire::{DidUrl, OpaqueLocalId};
+
+    use super::*;
 
     fn pending_agent() -> AgentPrincipalRecord {
         let now = Utc::now();
@@ -429,7 +430,12 @@ mod tests {
             authorized_at: Utc::now(),
         };
 
-        assert!(!store.activate_runtime_if_current(&activation).await.unwrap());
+        assert!(
+            !store
+                .activate_runtime_if_current(&activation)
+                .await
+                .unwrap()
+        );
         store
             .put_pairing_commit_intent_if_compatible(&AgentPairingCommitIntent {
                 agent_id: activation.agent_id.clone(),
@@ -442,13 +448,14 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
-        assert!(store.activate_runtime_if_current(&activation).await.unwrap());
+        assert!(
+            store
+                .activate_runtime_if_current(&activation)
+                .await
+                .unwrap()
+        );
 
-        let stored = store
-            .get("did:web:agent.example")
-            .await
-            .unwrap()
-            .unwrap();
+        let stored = store.get("did:web:agent.example").await.unwrap().unwrap();
         assert!(stored.pending_pairing_commit_intent.is_none());
         assert_eq!(
             stored.paired_request_digest.as_deref(),

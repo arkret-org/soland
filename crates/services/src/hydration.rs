@@ -1208,13 +1208,15 @@ pub fn hydrate_applet_install_grants(
             resource: portal_realm_id.to_owned(),
             actions: vec![action.to_owned()],
             capability_action_registry_digest: None,
-            constraints: vec![arkret_policy::authz::delegation::GrantConstraint::DelegationControl {
-                max_delegation_depth: None,
-                constraint_subkind: Some(GrantConstraintSubkind::AppletDelegation),
-                applet_id: AppletId::new(package.applet_id.clone()).ok(),
-                executed_by: Some(package.service_id.clone()),
-                registration_epoch: Hash::new(package.registration_epoch.to_string()).ok(),
-            }],
+            constraints: vec![
+                arkret_policy::authz::delegation::GrantConstraint::DelegationControl {
+                    max_delegation_depth: None,
+                    constraint_subkind: Some(GrantConstraintSubkind::AppletDelegation),
+                    applet_id: AppletId::new(package.applet_id.clone()).ok(),
+                    executed_by: Some(package.service_id.clone()),
+                    registration_epoch: Hash::new(package.registration_epoch.to_string()).ok(),
+                },
+            ],
             revoked: false,
             created_at: registered_at,
             delegated_from: None,

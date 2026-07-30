@@ -96,9 +96,28 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     }
 
     let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id)?;
+    let basis_seal = state
+        .projections()
+        .seal_by_id(&seal_id)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "stale_seal_ref",
+                format!("DataEvent seal_ref lookup failed during freshness check: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "stale_seal_ref",
+                "DataEvent seal_ref disappeared during freshness check",
+            )
+        })?;
     validate_data_event_covered_seals(&realm, &seal_id, object, &state_at_ref)?;
     let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
-    let auth_time = data_event_auth_time(object);
+    // Grant lifecycle is a property of the signed control basis. Receiver wall
+    // time and the producer's DataEvent timestamp are not replay-safe inputs.
+    let auth_time = basis_seal.sealed_at;
     let historical_snapshot: Vec<crate::authz::Grant> =
         historical_grants.values().cloned().collect();
     let effective_by_id =
@@ -154,7 +173,6 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent authorized_by grant {grant_id} has invalid scope"),
             ));
         }
-        validate_data_event_joined_capability_view(state, realm_id, grant_id)?;
         if !effective_by_id.contains_key(grant_id) {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -179,6 +197,146 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("no capability at seal_ref covers action {kind} on derived cell {cell}"),
             ));
         }
+    }
+    validate_data_event_revocation_freshness(
+        state,
+        &realm,
+        &basis_seal,
+        actor_id,
+        realm_id,
+        kind,
+        derived_cells,
+        &data_event_authorized_by_refs(object)?,
+        &state_at_ref,
+    )?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn validate_data_event_revocation_freshness(
+    state: &AppState,
+    realm: &RealmId,
+    basis_seal: &arkret_wire::Seal,
+    actor_id: &str,
+    realm_id: &str,
+    kind: &str,
+    derived_cells: &[String],
+    authorized_by: &[String],
+    basis_state: &std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::CellState,
+    >,
+) -> Result<(), EventValidationError> {
+    let basis_grants = data_event_grants_from_state_at_ref(basis_state);
+    let effective_basis = effective_historical_grants_for_subject(
+        &basis_grants,
+        actor_id,
+        realm_id,
+        basis_seal.sealed_at,
+    );
+    let high_risk = effective_basis.values().any(|grant| {
+        grant.actions.iter().any(|action| {
+            arkret_schema::capability_action(action).is_some_and(|descriptor| {
+                descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High
+                    && (action == kind
+                        || descriptor
+                            .target_event_kinds
+                            .iter()
+                            .any(|target| *target == kind))
+            })
+        })
+    });
+    let freshness_window_ms = basis_state
+        .values()
+        .filter_map(|cell| match cell {
+            arkret_state::lattice::CellState::Value(value) => Some(value),
+            arkret_state::lattice::CellState::Bottom(_) => None,
+        })
+        .find_map(|value| {
+            value
+                .get("revocation_freshness_window_ms")
+                .and_then(Value::as_u64)
+        })
+        .unwrap_or(86_400_000);
+
+    let mut pending = state
+        .projections()
+        .seal_successors(realm, &basis_seal.id)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "stale_seal_ref",
+                format!("DataEvent revocation successor lookup failed: {error}"),
+            )
+        })?;
+    let mut visited = std::collections::BTreeSet::new();
+    let mut invalidating = Vec::new();
+    while let Some(seal_id) = pending.pop() {
+        if !visited.insert(seal_id.clone()) {
+            continue;
+        }
+        pending.extend(
+            state
+                .projections()
+                .seal_successors(realm, &seal_id)
+                .map_err(|error| {
+                    event_validation_error(
+                        StatusCode::PRECONDITION_FAILED,
+                        "stale_seal_ref",
+                        format!("DataEvent revocation successor traversal failed: {error}"),
+                    )
+                })?,
+        );
+        let Some(seal) = state.projections().seal_by_id(&seal_id).map_err(|error| {
+            event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "stale_seal_ref",
+                format!("DataEvent revocation Seal lookup failed: {error}"),
+            )
+        })?
+        else {
+            return Err(event_validation_error(
+                StatusCode::PRECONDITION_FAILED,
+                "stale_seal_ref",
+                "DataEvent revocation successor is unavailable",
+            ));
+        };
+        let successor_state = data_event_state_at_seal_ref(state, realm, &seal_id)?;
+        let grants = data_event_grants_from_state_at_ref(&successor_state);
+        let effective =
+            effective_historical_grants_for_subject(&grants, actor_id, realm_id, seal.sealed_at);
+        let refs_live = authorized_by
+            .iter()
+            .all(|grant_id| effective.contains_key(grant_id));
+        let cells_covered = derived_cells.iter().all(|cell| {
+            effective
+                .values()
+                .any(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell))
+        });
+        if !refs_live || !cells_covered {
+            invalidating.push(seal);
+        }
+    }
+    invalidating.sort_by(|left, right| {
+        left.sealed_at
+            .cmp(&right.sealed_at)
+            .then_with(|| left.id.as_str().cmp(right.id.as_str()))
+    });
+    let Some(revocation_seal) = invalidating.first() else {
+        return Ok(());
+    };
+    let distance_ms = (revocation_seal.sealed_at - basis_seal.sealed_at)
+        .num_milliseconds()
+        .max(0) as u64;
+    if high_risk || distance_ms > freshness_window_ms {
+        return Err(event_validation_error(
+            StatusCode::PRECONDITION_FAILED,
+            "stale_seal_ref",
+            format!(
+                "DataEvent authorization was revoked by successor Seal {} (distance_ms={distance_ms}, window_ms={freshness_window_ms})",
+                revocation_seal.id
+            ),
+        ));
     }
     Ok(())
 }
@@ -225,105 +383,6 @@ fn data_event_authorized_by_refs(
         authorized_by.push(id.to_owned());
     }
     Ok(authorized_by)
-}
-
-pub(super) fn validate_data_event_joined_capability_view(
-    state: &AppState,
-    realm_id: &str,
-    grant_id: &str,
-) -> Result<(), EventValidationError> {
-    let cell_ref = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-    ))
-    .map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "DataEvent capability_ref could not be mapped to a capability cell",
-        )
-    })?;
-    let realm = RealmId::new(realm_id.to_owned()).map_err(|_| {
-        event_validation_error(
-            StatusCode::BAD_REQUEST,
-            "schema_violation",
-            "DataEvent realm_id must be a valid ak:realm id",
-        )
-    })?;
-    let leaves = state
-        .projections()
-        .realm_seal_leaves(&realm)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                format!("DataEvent joined control leaves unavailable: {error}"),
-            )
-        })?;
-    if !leaves.is_empty() {
-        let joined_state = state
-            .projections()
-            .effective_state_at(&leaves, &realm)
-            .map_err(|error| {
-                event_validation_error(
-                    StatusCode::PRECONDITION_FAILED,
-                    "stale_seal_ref",
-                    format!("DataEvent joined control view could not be resolved: {error}"),
-                )
-            })?;
-        match joined_state.get(&cell_ref) {
-            Some(arkret_state::lattice::CellState::Bottom(_)) => {
-                return Err(event_validation_error(
-                    StatusCode::PRECONDITION_FAILED,
-                    "failed_bottom",
-                    "capability cell is bottom in joined control view",
-                ));
-            }
-            Some(cell_state) => {
-                let joined_grants = data_event_grants_from_state_at_ref(&joined_state);
-                let current = soland_services::projection::engine_grant_from_capability_cell_state(
-                    grant_id, cell_state,
-                )
-                .or_else(|| joined_grants.get(grant_id).cloned());
-                let Some(current) = current else {
-                    return Err(event_validation_error(
-                        StatusCode::PRECONDITION_FAILED,
-                        "stale_seal_ref",
-                        format!(
-                            "DataEvent capability_ref {grant_id} is absent from joined control view"
-                        ),
-                    ));
-                };
-                let snapshot: Vec<crate::authz::Grant> = joined_grants.values().cloned().collect();
-                if current.revoked
-                    || crate::authz::grant_revoked_upstream(&snapshot, grant_id, chrono::Utc::now())
-                {
-                    return Err(event_validation_error(
-                        StatusCode::PRECONDITION_FAILED,
-                        "stale_seal_ref",
-                        format!(
-                            "DataEvent capability_ref {grant_id} is revoked in joined control view"
-                        ),
-                    ));
-                }
-            }
-            None => {
-                return Err(event_validation_error(
-                    StatusCode::PRECONDITION_FAILED,
-                    "stale_seal_ref",
-                    format!(
-                        "DataEvent capability_ref {grant_id} is missing from joined control view"
-                    ),
-                ));
-            }
-        }
-    }
-    // DataEvent authorization MUST be evaluated against the seal_ref pre-state
-    // (the joined control view resolved from sealed leaves above), never the
-    // live authz index or live projection. A grant that was valid in the sealed
-    // pre-state but later revoked in the live index must still authorize the
-    // historical DataEvent. Upstream steps already reject grants revoked within
-    // the seal_ref pre-state, so no live-plane fallback is applied here.
-    Ok(())
 }
 
 pub(super) fn data_event_state_at_seal_ref(
@@ -533,17 +592,6 @@ pub(super) fn effective_historical_grants_for_subject(
         })
         .map(|grant| (grant.grant_id.clone(), grant.clone()))
         .collect()
-}
-
-pub(super) fn data_event_auth_time(
-    object: &serde_json::Map<String, Value>,
-) -> chrono::DateTime<chrono::Utc> {
-    object
-        .get("created_at")
-        .and_then(Value::as_str)
-        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
-        .map(|value| value.with_timezone(&chrono::Utc))
-        .unwrap_or_else(chrono::Utc::now)
 }
 
 pub(super) fn grant_covers_data_event_effect(

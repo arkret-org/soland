@@ -31,40 +31,137 @@ pub(super) async fn validate_accountability_profile_policy(
     let Some(principal_id) = profile_principal_id(operation) else {
         return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
     };
-    let now = chrono::Utc::now();
-    let accepted_events = state
-        .event_queries()
-        .canonical_events()
-        .await
-        .unwrap_or_default();
+    let frozen_basis = accountability_frozen_basis(state, operation)?;
     for issuer in accountable_principal_ids {
-        let in_batch = operations.iter().any(|candidate| {
-            accountability_grant_operation_active_for(
-                candidate,
-                operation.realm_id.as_str(),
-                &issuer,
-                &principal_id,
-                now,
-            )
+        let matching_batch = operations
+            .iter()
+            .filter(|candidate| {
+                kinds::canonical_kind_string(candidate) == "ak.identity.accountability_grant"
+                    && candidate.realm_id == operation.realm_id
+                    && accountability_grant_operation_signed_by(candidate, &issuer)
+                    && accountability_grant_matches(&candidate.payload, &issuer, &principal_id)
+            })
+            .collect::<Vec<_>>();
+        // Security-barrier reduction is revoke-wins inside an atomic unit:
+        // an active historical/batch value can never mask a matching terminal
+        // value submitted alongside the profile.
+        if matching_batch.iter().any(|candidate| {
+            candidate
+                .payload
+                .get("grant_status")
+                .and_then(Value::as_str)
+                != Some("active")
+        }) {
+            return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+        }
+        let batch_active = matching_batch.iter().any(|candidate| {
+            let verification_time = frozen_basis
+                .as_ref()
+                .map(|(_, time)| *time)
+                .or_else(|| accountability_grant_proof_time(&candidate.payload));
+            verification_time.is_some_and(|time| {
+                accountability_grant_value_active_for(
+                    &candidate.payload,
+                    &issuer,
+                    &principal_id,
+                    time,
+                )
+            })
         });
-        let accepted = accepted_events.iter().any(|record| {
-            if record.kind != "ak.identity.accountability_grant" {
-                return false;
-            }
-            if record.realm_id.as_deref() != Some(operation.realm_id.as_str()) {
-                return false;
-            }
-            if !accountability_grant_envelope_signed_by(record, &issuer) {
-                return false;
-            }
-            let payload = record.envelope.get("payload").unwrap_or(&record.envelope);
-            accountability_grant_value_active_for(payload, &issuer, &principal_id, now)
+        let basis_active = frozen_basis.as_ref().is_some_and(|(basis, time)| {
+            basis.values().any(|cell| {
+                let arkret_state::lattice::CellState::Value(value) = cell else {
+                    return false;
+                };
+                accountability_grant_value_active_for(value, &issuer, &principal_id, *time)
+            })
         });
-        if !in_batch && !accepted {
+        if !batch_active && !basis_active {
             return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
         }
     }
     Ok(())
+}
+
+type FrozenAccountabilityBasis = (
+    std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+fn accountability_frozen_basis(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<Option<FrozenAccountabilityBasis>, &'static str> {
+    let Some(leaves) = operation
+        .payload
+        .pointer("/seal_basis/leaves")
+        .and_then(Value::as_array)
+    else {
+        return Ok(None);
+    };
+    if leaves.is_empty() {
+        return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+    }
+    let realm = arkret_identifiers::RealmId::new(operation.realm_id.to_string())
+        .map_err(|_| arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)?;
+    let mut seal_ids = Vec::with_capacity(leaves.len());
+    let mut verification_time: Option<chrono::DateTime<chrono::Utc>> = None;
+    for leaf in leaves {
+        let seal_id = leaf
+            .as_str()
+            .and_then(|value| arkret_identifiers::SealId::new(value.to_owned()).ok())
+            .ok_or(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)?;
+        let seal = state
+            .projections()
+            .seal_by_id(&seal_id)
+            .map_err(|_| arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)?
+            .ok_or(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)?;
+        if seal.realm_id != realm {
+            return Err(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING);
+        }
+        verification_time =
+            Some(verification_time.map_or(seal.sealed_at, |at| at.max(seal.sealed_at)));
+        seal_ids.push(seal_id);
+    }
+    let resolved = state
+        .projections()
+        .effective_state_at(&seal_ids, &realm)
+        .map_err(|_| arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)?;
+    Ok(Some((
+        resolved,
+        verification_time.ok_or(arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING)?,
+    )))
+}
+
+fn accountability_grant_matches(value: &Value, issuer: &str, subject: &str) -> bool {
+    let mut grant_value = value.clone();
+    if let Some(object) = grant_value.as_object_mut() {
+        for field in [
+            "event_id",
+            "sender",
+            "hlc",
+            "executed_by",
+            "authorization_ref",
+            "seal_basis",
+            "seal_ref",
+            "preconditions",
+            "effects",
+        ] {
+            object.remove(field);
+        }
+    }
+    serde_json::from_value::<
+        arkret_models_collaboration::governance::accountability::AccountabilityGrantPayload,
+    >(grant_value)
+    .is_ok_and(|grant| grant.issuer.as_str() == issuer && grant.subject.as_str() == subject)
+}
+
+fn accountability_grant_proof_time(value: &Value) -> Option<chrono::DateTime<chrono::Utc>> {
+    value
+        .pointer("/proof/created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
+        .map(|value| value.with_timezone(&chrono::Utc))
 }
 
 pub(super) fn profile_body_value(operation: &Operation) -> &Value {
@@ -104,19 +201,6 @@ pub(super) fn profile_accountable_principal_ids(operation: &Operation) -> Vec<St
         .unwrap_or_default()
 }
 
-pub(super) fn accountability_grant_operation_active_for(
-    operation: &Operation,
-    realm_id: &str,
-    issuer: &str,
-    subject: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> bool {
-    kinds::canonical_kind_string(operation) == "ak.identity.accountability_grant"
-        && operation.realm_id.as_str() == realm_id
-        && accountability_grant_operation_signed_by(operation, issuer)
-        && accountability_grant_value_active_for(&operation.payload, issuer, subject, now)
-}
-
 pub(super) fn accountability_grant_operation_signed_by(
     operation: &Operation,
     issuer: &str,
@@ -127,18 +211,6 @@ pub(super) fn accountability_grant_operation_signed_by(
         .or_else(|| operation.payload.get("sender"))
         .and_then(Value::as_str)
         == Some(issuer)
-}
-
-pub(super) fn accountability_grant_envelope_signed_by(
-    record: &soland_services::events::CanonicalEventRecord,
-    issuer: &str,
-) -> bool {
-    record
-        .envelope
-        .get("executed_by")
-        .and_then(Value::as_str)
-        .unwrap_or(record.actor_id.as_str())
-        == issuer
 }
 
 pub(super) fn accountability_grant_value_active_for(

@@ -1073,7 +1073,9 @@ pub fn describe(
                     serde_json::json!(crate::routing::TUS_EXTENSIONS),
                 ),
         ],
-        supported_reducer_profiles: vec!["ak.reducer.v1".to_owned()],
+        supported_reducer_profiles: vec![
+            crate::routing::federation::FEDERATION_REDUCER_PROFILE_ID.to_owned(),
+        ],
         supported_schema_profiles: vec!["ak.schema.core.v1".to_owned()],
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),

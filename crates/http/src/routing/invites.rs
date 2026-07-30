@@ -3,19 +3,14 @@
 //! Implements the v1 private invite delivery endpoint and the body-only
 //! online locator resolver from `sync/invite-addressing.md`.
 
-// NOTE: `arkret_models_collaboration::governance::invite_addressing::DisclosurePolicy` at the crate
-// root resolves to the auth/DID-proof type (re-exported explicitly), which shadows the
-// invite-addressing one from the `model::*` glob. Import the
-// invite-addressing variant via its `model` module path to disambiguate.
 use arkret_canonical as canonical;
 use arkret_identifiers::{Did, Hash, InviteLocatorId};
 use arkret_models_collaboration::governance::invite_addressing::{
-    DisclosedOutcome, DisclosureLevel, DisclosurePolicy, IntroductionEvidence,
-    InviteDeliveryOutcome, InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody,
-    InviteLocatorIssueOutcome, InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody,
-    InviteLocatorRevokeOutcome, InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody,
-    InviteLocatorStatus, InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof,
-    PrincipalLocatorProofPurpose,
+    DisclosedOutcome, DisclosureLevel, IntroductionEvidence, InviteDeliveryOutcome,
+    InviteDeliveryOutcomeStatus, InviteDeliveryRequestBodyBody, InviteLocatorIssueOutcome,
+    InviteLocatorIssueRequestBody, InviteLocatorResolveRequestBody, InviteLocatorRevokeOutcome,
+    InviteLocatorRevokeRequestBody, InviteLocatorRotateRequestBody, InviteLocatorStatus,
+    InviteReceivePolicy, PrincipalLocator, PrincipalLocatorProof, PrincipalLocatorProofPurpose,
 };
 use arkret_models_collaboration::governance::member_delivery_binding_candidate::{
     CandidateIntent, CandidateValidationContext, MemberDeliveryBindingCandidate,
@@ -266,7 +261,8 @@ async fn peer_invites_submit(
         .ok_or_else(|| super::events::peer::schema_violation("invite_event.actor_id is required"))?
         .to_owned();
     let inviter = actor.clone();
-    let subject = delivery.invite_address.subject_id.as_str().to_owned();
+    let subject_id = delivery.invite_address.subject_id.clone();
+    let subject = subject_id.as_str().to_owned();
     let source_service_id = required_header(req, HEADER_SOURCE_SERVICE_ID)?;
 
     // Spec invite-addressing.md §5..§8 — resolve the subject's private
@@ -274,7 +270,7 @@ async fn peer_invites_submit(
     // `consent_grant` to `explicit_address` when the grant cannot be
     // verified), then apply blocklist + allowlist + behavior to pick a
     // receive action and a graded-disclosure outcome.
-    let policy = resolve_invite_receive_policy(state, &subject);
+    let policy = resolve_invite_receive_policy(state, &subject_id);
     let decision = evaluate_invite_receive(
         state,
         &policy,
@@ -815,55 +811,18 @@ pub(crate) struct ReceiveDecision {
     pub(crate) disclosed_outcome: Option<DisclosedOutcome>,
 }
 
-/// Spec invite-addressing.md §5 — the recommended default
-/// `invite_receive_policy` applied to subjects without an explicit
-/// override: `consent_grant` is allowlisted (so already-consented
-/// contacts can invite without a locator URL), explicit addresses are
-/// quarantined, unknown invites dropped, and disclosure is
-/// `high_trust=outcome / low_trust=opaque`.
-pub(crate) fn default_invite_receive_policy(subject: &str) -> InviteReceivePolicy {
-    InviteReceivePolicy {
-        schema: arkret_wire::constants::INVITE_RECEIVE_POLICY_SCHEMA.to_owned(),
-        subject_id: Did::new(subject.to_owned()).unwrap_or_else(|_| {
-            // did:webvh-only red line: placeholder is never a did:web literal.
-            Did::new("did:webvh:invalid.invalid".to_owned()).expect("placeholder did")
-        }),
-        holder_allowed_introduction_kinds: vec![
-            "locator_ref".to_owned(),
-            "consent_grant".to_owned(),
-            "shared_realm".to_owned(),
-        ],
-        explicit_address_behavior: InviteReceiveAction::Quarantine,
-        handle_claim_behavior: Some(InviteReceiveAction::Quarantine),
-        unknown_invites: UnknownInviteAction::Drop,
-        allowed_handle_domains: Vec::new(),
-        denied_handle_domains: Vec::new(),
-        trusted_handle_issuers: Vec::new(),
-        trusted_directory_services: Vec::new(),
-        trusted_realm_ids: Vec::new(),
-        trusted_principal_services: Vec::new(),
-        denied_principal_services: Vec::new(),
-        denied_subjects: Vec::new(),
-        disclosure: Some(DisclosurePolicy {
-            high_trust: Some(DisclosureLevel::Outcome),
-            discovery_trust: Some(DisclosureLevel::Opaque),
-            low_trust: Some(DisclosureLevel::Opaque),
-        }),
-    }
-}
-
 /// Read the subject's private `invite_receive_policy`, falling back to the
 /// recommended default. `denied_subjects` written by
 /// `ak.self.contact.command.tombstone(block_peer)` are merged from the in-memory
 /// override store.
 pub(crate) fn resolve_invite_receive_policy(
     state: &AppState,
-    subject: &str,
+    subject: &Did,
 ) -> InviteReceivePolicy {
     state
         .contacts()
-        .invite_policy(subject)
-        .unwrap_or_else(|| default_invite_receive_policy(subject))
+        .invite_policy(subject.as_str())
+        .unwrap_or_else(|| InviteReceivePolicy::spec_default(subject.clone()))
 }
 
 /// Spec invite-addressing.md §2/§5/§5.1/§7-8 — the full receive decision.
@@ -891,7 +850,10 @@ pub(crate) fn directory_handle_claim_resolve_allowed(
     let Some(handle) = handle_claim.handle.clone() else {
         return false;
     };
-    let policy = resolve_invite_receive_policy(state, subject);
+    let Ok(subject_id) = Did::new(subject.to_owned()) else {
+        return false;
+    };
+    let policy = resolve_invite_receive_policy(state, &subject_id);
     let decision = match intent {
         Some(DirectoryIntent::ContactRequest) => {
             let evidence = ContactIntroductionEvidence::HandleClaim {

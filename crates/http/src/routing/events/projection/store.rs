@@ -142,14 +142,15 @@ async fn ordered_projected_events_for_realms(
     state: &AppState,
     realm_ids: &BTreeSet<String>,
 ) -> anyhow::Result<Vec<ProjectionEventRecord>> {
-    let mut events = state
-        .event_queries()
-        .projected_events()
-        .await
-        .unwrap_or_default()
-        .into_iter()
-        .filter(|event| realm_ids.contains(&event.realm_id))
-        .collect::<Vec<_>>();
+    let mut events = Vec::new();
+    for realm_id in realm_ids {
+        events.extend(
+            state
+                .event_queries()
+                .projected_events_for_realm(realm_id)
+                .await?,
+        );
+    }
     if events.is_empty() {
         return Ok(events);
     }

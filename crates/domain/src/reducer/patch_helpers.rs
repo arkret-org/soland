@@ -8,10 +8,9 @@
 use std::collections::BTreeMap;
 
 use arkret_event_draft::Operation;
-use arkret_identifiers::CellRef;
 use serde_json::Value;
 
-use super::{DocumentVersionProjection, PushRouteCellValue, PushRouteSubject, StrandProjection};
+use super::{DocumentVersionProjection, PushRouteCellValue, StrandProjection};
 
 /// `morph.md` §4.1 S3 — the opt-in Realm profile id that permits breaking /
 /// transformation schema migrations. Mirrors
@@ -160,20 +159,6 @@ pub(crate) fn empty_push_route_cell() -> PushRouteCellValue {
         revoked: false,
         revoked_targets: Vec::new(),
     }
-}
-
-pub(crate) fn push_route_cell_ref(subject: &PushRouteSubject) -> Option<CellRef> {
-    let cell_subject = arkret_wire::composite_subject(&[
-        subject.recipient_service_id.as_str(),
-        subject.principal_id.as_str(),
-        subject.device_id.as_str(),
-        subject.push_route.as_str(),
-    ])
-    .ok()?;
-    CellRef::new(format!(
-        "ak:cell:ak.component.device.push_route.v1:{cell_subject}"
-    ))
-    .ok()
 }
 
 pub(crate) fn object_field_string(

@@ -814,6 +814,80 @@ impl ProjectionEventStore for PgProjectionEventStore {
         .map_err(PersistenceError::database)
     }
 
+    async fn get(&self, event_id: &str) -> PersistenceResult<Option<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE event_id = $1 LIMIT 1",
+        )
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(event_id))
+        .get_result::<ProjectionEventRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(ProjectionEventRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn get_by_operation_id(
+        &self,
+        operation_id: &str,
+    ) -> PersistenceResult<Option<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE operation_id = $1 ORDER BY id DESC LIMIT 1",
+        )
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(operation_id))
+        .get_result::<ProjectionEventRow>(&mut *conn)
+        .await
+        .optional()
+        .map(|row| row.map(ProjectionEventRecord::from))
+        .map_err(PersistenceError::database)
+    }
+
+    async fn snapshot_realm(
+        &self,
+        realm_id: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events WHERE realm_id = $1 ORDER BY id",
+        )
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(realm_id))
+        .load::<ProjectionEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn snapshot_actor(
+        &self,
+        actor_id: &str,
+    ) -> PersistenceResult<Vec<ProjectionEventRecord>> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "SELECT event_id, realm_id, event_kind, operation_kind, operation_id, sender_id AS sender, payload, created_at, received_at \
+             FROM projection_events \
+             WHERE sender_id = $1 OR payload ->> 'sender' = $1 OR payload ->> 'actor_id' = $1 \
+                OR payload ->> 'actor' = $1 OR payload -> 'object' ->> 'created_by' = $1 \
+             ORDER BY id",
+        )
+        .bind::<Text, _>(actor_id)
+        .load::<ProjectionEventRow>(&mut *conn)
+        .await
+        .map(|rows| rows.into_iter().map(ProjectionEventRecord::from).collect())
+        .map_err(PersistenceError::database)
+    }
+
     async fn snapshot_capped(&self, limit: usize) -> PersistenceResult<Vec<ProjectionEventRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await

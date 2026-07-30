@@ -292,6 +292,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_applet_registration_authz(state, operation).await?;
         validate_call_recording_start_policy(state, operation).await?;
         validate_moderation_event_policy(state, operation).await?;
+        validate_realm_policy_server_policy(state, operation).await?;
         validate_set_default_strand_policy(state, operation).await?;
         validate_realm_organization_policy(state, operation).await?;
         validate_history_visibility_policy(state, operation).await?;

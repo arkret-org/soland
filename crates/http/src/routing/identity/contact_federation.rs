@@ -353,7 +353,12 @@ async fn peer_contacts_submit(
             AppError::internal(format!("contact payload encode failed: {error}"))
         })?;
         validate_contact_introduction_evidence_digest(&payload_value, evidence)?;
-        let policy = crate::routing::invites::resolve_invite_receive_policy(state, &subject_id);
+        let subject_did = Did::new(subject_id.clone()).map_err(|error| {
+            super::super::events::peer::schema_violation(format!(
+                "invalid contact subject_id: {error}"
+            ))
+        })?;
+        let policy = crate::routing::invites::resolve_invite_receive_policy(state, &subject_did);
         let decision = crate::routing::invites::evaluate_contact_receive(
             state,
             &policy,

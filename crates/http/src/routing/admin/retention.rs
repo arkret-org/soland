@@ -148,11 +148,10 @@ async fn sweep_retention_policy(
     let cutoff = now - Duration::seconds(policy.ttl_seconds);
     let events = state
         .event_queries()
-        .projected_events()
+        .projected_events_for_realm(&realm_id)
         .await
-        .unwrap_or_default()
+        .map_err(|error| AppError::internal(format!("retention scan failed: {error}")))?
         .into_iter()
-        .filter(|event| event.realm_id == realm_id)
         .filter(|event| event.event_kind == arkret_wire::events::EventKind::MESSAGE_CREATE)
         .collect::<Vec<_>>();
     let examined = events.len();

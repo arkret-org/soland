@@ -31,6 +31,145 @@ pub(super) fn protocol_router() -> Router {
     Router::new().push(Router::with_path("moderation/report").post(moderation_report))
 }
 
+pub(crate) async fn persist_canonical_moderation_report_event(
+    state: &AppState,
+    realm_id: &str,
+    reporter: &str,
+    target_ref: &str,
+    payload: Value,
+) -> Result<String, AppError> {
+    if payload.get("realm_id").and_then(Value::as_str) != Some(realm_id)
+        || payload.get("reporter").and_then(Value::as_str) != Some(reporter)
+        || payload.get("target_ref").and_then(Value::as_str) != Some(target_ref)
+    {
+        return Err(AppError::internal(
+            "moderation Event payload disagrees with its admission binding",
+        ));
+    }
+    let service_event_lock = crate::routing::events::event_log::service_event_authoring_lock();
+    let _service_event_guard = service_event_lock.lock().await;
+    let service_actor = state.service_id().as_str();
+    let records = state
+        .event_queries()
+        .canonical_events_for_realm_actor(realm_id, service_actor)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!("moderation Event frontier lookup failed: {error}"))
+        })?;
+    let max_actor_seq = records.iter().map(|record| record.actor_seq).max();
+    let actor_seq = max_actor_seq
+        .map(|value| {
+            value.checked_add(1).ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::FrontierSequenceExhausted,
+                    "moderation Event actor sequence is exhausted",
+                )
+                .with_status(StatusCode::CONFLICT)
+            })
+        })
+        .transpose()?
+        .unwrap_or(0);
+    let realm_id = RealmId::new(realm_id.to_owned())
+        .map_err(|error| AppError::internal(format!("moderation Realm id invalid: {error}")))?;
+    let service_did = Did::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let created_at = now();
+    let mut event = arkret_wire::Event::new_with_id_at(
+        EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
+            .map_err(|error| AppError::internal(format!("moderation Event id invalid: {error}")))?,
+        arkret_wire::events::EventKind::SELF_MODERATION_REPORT,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        service_did.clone(),
+        actor_seq,
+        arkret_identifiers::Hlc::new(state.hlc().now())
+            .map_err(|error| AppError::internal(format!("moderation HLC invalid: {error}")))?,
+        payload,
+        created_at,
+    )
+    .map_err(|error| AppError::internal(format!("moderation Event build failed: {error}")))?;
+    if let Some(max_actor_seq) = max_actor_seq {
+        event.prev_refs = records
+            .iter()
+            .filter(|record| record.actor_seq == max_actor_seq)
+            .map(|record| {
+                EventId::new(record.event_id.clone()).map_err(|error| {
+                    AppError::internal(format!("moderation predecessor invalid: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        event
+            .prev_refs
+            .sort_by(|left, right| left.as_str().cmp(right.as_str()));
+        event.prev_refs.dedup();
+    }
+    let seal = crate::notary::ensure_realm_seal_head(state, &realm_id)
+        .map_err(|error| {
+            AppError::internal(format!("moderation Realm Seal lookup failed: {error}"))
+        })?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FrontierUnavailable,
+                "moderation target Realm has no accepted Seal",
+            )
+            .with_status(StatusCode::SERVICE_UNAVAILABLE)
+        })?;
+    event.seal_ref = Some(seal.id);
+    event.auth_context = Some(arkret_wire::AuthContext {
+        did: service_did.clone(),
+        key_id: "notary-key".to_owned(),
+        key_epoch: 0,
+        credential_epoch: None,
+    });
+    let verification_method = format!("{}#notary-key", state.service_id());
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        service_did,
+        verification_method.clone(),
+    );
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(created_at),
+    )
+    .map_err(|error| AppError::internal(format!("moderation Event signing failed: {error}")))?;
+    let event_id = event.event_id.to_string();
+    let session = soland_services::identity::SessionIdentityState {
+        token_hash: "moderation-report-service".to_owned(),
+        actor: state.service_id().clone(),
+        device_id: "moderation-report-service".to_owned(),
+        audience: state.service_id().clone(),
+        session_public_key: None,
+        agent_session: None,
+        expires_at: created_at + chrono::Duration::minutes(5),
+        created_at,
+        revoked_at: None,
+    };
+    let envelope = serde_json::to_value(event).map_err(|error| {
+        AppError::internal(format!("moderation Event serialize failed: {error}"))
+    })?;
+    crate::routing::events::event_log::submit_moderation_report_event_value(
+        state,
+        &session,
+        envelope,
+        realm_id.as_str(),
+        reporter,
+        target_ref,
+    )
+    .await
+    .map_err(|error| {
+        AppError::new(
+            ErrorCode::InvalidParam,
+            format!("moderation Event admission failed: {}", error.message),
+        )
+        .with_status(error.status)
+        .with_wire_code(error.code)
+    })?;
+    Ok(event_id)
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct ModerationReportSafety {
     pub effective_scope: Value,
@@ -635,7 +774,6 @@ async fn moderation_report(
     // `routed_to` carries bare DIDs only (spec pattern forbids fragments).
     let moderation_role = format!("{}#moderation", state.service_id());
     let mut report_fields = serde_json::Map::new();
-    report_fields.insert("report_id".to_owned(), json!(report_id));
     report_fields.insert("realm_id".to_owned(), json!(realm_id));
     report_fields.insert("effective_scope".to_owned(), safety.effective_scope);
     report_fields.insert("target_ref".to_owned(), json!(target_ref));
@@ -653,6 +791,16 @@ async fn moderation_report(
     if let Some(franking_proof) = safety.franking_proof {
         report_fields.insert("franking_proof".to_owned(), franking_proof);
     }
+    let report_event_id = persist_canonical_moderation_report_event(
+        state,
+        &realm_id,
+        &reporter,
+        &target_ref,
+        Value::Object(report_fields.clone()),
+    )
+    .await?;
+    report_fields.insert("report_id".to_owned(), json!(report_id));
+    report_fields.insert("event_id".to_owned(), json!(report_event_id));
     report_fields.insert("created_at".to_owned(), json!(now()));
     let report_payload = Value::Object(report_fields);
     if let Err(error) = state
@@ -704,7 +852,11 @@ async fn moderation_report(
         state,
         Some(&session.actor),
         "moderation.report",
-        json!({"report_id": report_id.clone(), "id": queue_item_ref}),
+        json!({
+            "report_id": report_id.clone(),
+            "event_id": report_event_id,
+            "id": queue_item_ref
+        }),
         "submitted",
     )
     .await;

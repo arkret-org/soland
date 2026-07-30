@@ -312,7 +312,7 @@ fn federation_binding_accepts_registry_reducer_profile_digest() {
             delivery_binding_frontier: vec![event_id],
             destination_service_kind: "principal_server".to_owned(),
             reducer_profile_digest: arkret_identifiers::Hash::new(
-                arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST,
+                crate::routing::federation::federation_reducer_profile_digest(),
             )
             .unwrap(),
         },

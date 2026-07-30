@@ -542,7 +542,7 @@ pub(super) async fn erase_account(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let actor = session.actor.clone();
-    let affected_realms = affected_erasure_realms_for_actor(state, &actor).await;
+    let affected_realms = affected_erasure_realms_for_actor(state, &actor).await?;
 
     append_audit_log(
         state,
@@ -768,17 +768,22 @@ async fn append_audit_redaction_marker(state: &AppState, actor: &str) {
     .await;
 }
 
-async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec<String> {
+async fn affected_erasure_realms_for_actor(
+    state: &AppState,
+    actor: &str,
+) -> Result<Vec<String>, AppError> {
     let mut realms = std::collections::BTreeSet::new();
     for event in state
         .event_queries()
-        .projected_events()
+        .projected_events_for_actor(actor)
         .await
-        .unwrap_or_default()
+        .map_err(|error| {
+            AppError::internal(format!(
+                "failed to resolve affected erasure realms: {error}"
+            ))
+        })?
     {
-        if projection_event_belongs_to_actor(&event, actor) {
-            realms.insert(event.realm_id);
-        }
+        realms.insert(event.realm_id);
     }
     {
         let projection = state.projections().snapshot();
@@ -788,24 +793,7 @@ async fn affected_erasure_realms_for_actor(state: &AppState, actor: &str) -> Vec
             }
         }
     }
-    realms.into_iter().collect()
-}
-
-fn projection_event_belongs_to_actor(
-    event: &soland_services::events::ProjectedEvent,
-    actor: &str,
-) -> bool {
-    event.sender.as_deref() == Some(actor)
-        || event.payload.get("sender").and_then(Value::as_str) == Some(actor)
-        || event.payload.get("actor_id").and_then(Value::as_str) == Some(actor)
-        || event.payload.get("actor").and_then(Value::as_str) == Some(actor)
-        || event
-            .payload
-            .get("object")
-            .and_then(Value::as_object)
-            .and_then(|object| object.get("created_by"))
-            .and_then(Value::as_str)
-            == Some(actor)
+    Ok(realms.into_iter().collect())
 }
 
 fn realm_erasure_receipt(

@@ -65,18 +65,23 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             claimed_at,
             claim_expires_at_unix_ms,
         } = claim;
-        let (group_id, revoking) = match target {
-            MlsKeyPackageClaimTarget::Group(group_id) => (group_id, false),
-            MlsKeyPackageClaimTarget::Revoke => ("revoked", true),
+        let (group_id, terminal_without_claim, retiring) = match target {
+            MlsKeyPackageClaimTarget::Group(group_id) => (group_id, false, false),
+            MlsKeyPackageClaimTarget::Retire => ("retired", true, true),
+            MlsKeyPackageClaimTarget::Revoke => ("revoked", true, false),
         };
         let mut state = self.state.lock();
         let Some(row) = state.rows.get_mut(id) else {
             return Ok(None);
         };
-        if row.claimed_by_mls_group_id.as_deref() == Some("revoked") {
+        if matches!(
+            row.claimed_by_mls_group_id.as_deref(),
+            Some("revoked" | "retired")
+        ) || retiring && (row.last_resort || row.claimed_by_mls_group_id.is_some())
+        {
             return Ok(None);
         }
-        if !revoking
+        if !terminal_without_claim
             && (claimed_at >= row.lifetime_not_after
                 || claim_expires_at_unix_ms.is_some_and(|expires_at_unix_ms| {
                     expires_at_unix_ms <= claimed_at.saturating_mul(1000)
@@ -89,7 +94,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             .claimed_by_mls_group_id
             .as_deref()
             .is_some_and(|claimed| claimed != group_id)
-            && !(row.last_resort && !revoking)
+            && !(row.last_resort && !terminal_without_claim)
         {
             // Already claimed by a different group — CAS loser path. A repeat
             // claim by the same group is idempotent renewal (mirrors the
@@ -111,7 +116,7 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         {
             return Ok(None);
         }
-        if row.last_resort && !revoking {
+        if row.last_resort && !terminal_without_claim {
             let Some(realm_id) = intended_realm_id else {
                 return Ok(None);
             };
@@ -128,8 +133,8 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             return Ok(Some(row.clone()));
         }
         row.claimed_by_mls_group_id = Some(group_id.to_owned());
-        row.claimed_at = (!revoking).then_some(claimed_at);
-        row.claim_expires_at_unix_ms = if revoking {
+        row.claimed_at = (!terminal_without_claim).then_some(claimed_at);
+        row.claim_expires_at_unix_ms = if terminal_without_claim {
             None
         } else {
             claim_expires_at_unix_ms

@@ -7,13 +7,11 @@
 //! `ak.schema.handle_claim.v1`. Any envelope still carrying one of these
 //! fields — at the payload top level or inside the plaintext
 //! `identity_payload.member_identity` carrier — MUST be rejected as a
-//! `schema_violation` with reason
-//! `member_identity_handle_field_forbidden`.
+//! `schema_violation`.
 
 use serde_json::Value;
 
 use super::WireRejection;
-use crate::error::reasons;
 
 /// Fields that MemberIdentity / its update payload MUST NOT carry post-R3.2.
 const FORBIDDEN_HANDLE_FIELDS: &[&str] = &["primary_handle", "handles", "verified_handle"];
@@ -39,13 +37,10 @@ fn deny_forbidden_fields(object: &Value, location: &str) -> Result<(), WireRejec
     };
     for field in FORBIDDEN_HANDLE_FIELDS {
         if map.contains_key(*field) {
-            return Err(WireRejection::new(
-                reasons::MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN,
-                format!(
-                    "{location}.{field} is forbidden; MemberIdentity no longer carries handle \
-                     lifecycle (use ak.schema.handle_claim.v1)"
-                ),
-            ));
+            return Err(WireRejection::new(format!(
+                "{location}.{field} is forbidden; MemberIdentity no longer carries handle \
+                 lifecycle (use ak.schema.handle_claim.v1)"
+            )));
         }
     }
     Ok(())
@@ -79,8 +74,7 @@ mod tests {
             "segment": "member_identity",
             "primary_handle": "alice:acme.example"
         });
-        let err = validate_member_identity_update_payload(&payload).unwrap_err();
-        assert_eq!(err.reason, reasons::MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN);
+        assert!(validate_member_identity_update_payload(&payload).is_err());
     }
 
     #[test]
@@ -94,14 +88,12 @@ mod tests {
                 }
             }
         });
-        let err = validate_member_identity_update_payload(&payload).unwrap_err();
-        assert_eq!(err.reason, reasons::MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN);
+        assert!(validate_member_identity_update_payload(&payload).is_err());
     }
 
     #[test]
     fn rejects_verified_handle() {
         let payload = json!({"verified_handle": {"handle": "alice:acme.example"}});
-        let err = validate_member_identity_update_payload(&payload).unwrap_err();
-        assert_eq!(err.reason, reasons::MEMBER_IDENTITY_HANDLE_FIELD_FORBIDDEN);
+        assert!(validate_member_identity_update_payload(&payload).is_err());
     }
 }

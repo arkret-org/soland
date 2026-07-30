@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 // re-declare these shapes locally.
 use soland_contracts::integration::capability_fanout::{
     CapabilityFanoutAuthzState, CapabilityFanoutBody, CapabilityFanoutResponse,
+    capability_fanout_proof_transcript,
 };
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
@@ -23,6 +24,7 @@ const DIGEST_HEADER: &str = "x-arkret-capability-fanout-digest";
 #[derive(Clone, Debug)]
 struct CapabilityFanoutDraft {
     operation: Operation,
+    issuer_service_id: String,
     event_id: String,
     event_kind: String,
     operation_name: String,
@@ -70,15 +72,14 @@ async fn submit_fanout(
     super::validate_canonical_json_value(&body_value).map_err(AppError::invalid_param)?;
     let body: CapabilityFanoutBody = serde_json::from_value(body_value)
         .map_err(|error| AppError::bad_json(format!("invalid capability fanout body: {error}")))?;
+    validate_fanout_proofs(state, &body).await?;
     let draft = build_projectable_operation(idempotency_key(req), body)?;
 
     let duplicate = projection_event_duplicate(state, &draft).await?;
     if !duplicate {
         crate::routing::events::projection::project_accepted_operations_from_device(
             state,
-            draft.operation.payload["issuer_service_id"]
-                .as_str()
-                .unwrap_or_default(),
+            &draft.issuer_service_id,
             SOURCE_DEVICE_ID,
             std::slice::from_ref(&draft.operation),
         )
@@ -142,7 +143,9 @@ fn validate_header_digest(req: &Request, body: &Value) -> Result<(), AppError> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     else {
-        return Ok(());
+        return Err(AppError::invalid_param(
+            "x-arkret-capability-fanout-digest is required",
+        ));
     };
     let actual = arkret_canonical::canonical_sha256(body)
         .map_err(|error| AppError::invalid_param(format!("fanout body digest failed: {error}")))?;
@@ -150,6 +153,125 @@ fn validate_header_digest(req: &Request, body: &Value) -> Result<(), AppError> {
         return Err(AppError::invalid_param(
             "x-arkret-capability-fanout-digest does not match body",
         ));
+    }
+    Ok(())
+}
+
+async fn validate_fanout_proofs(
+    state: &AppState,
+    body: &CapabilityFanoutBody,
+) -> Result<(), AppError> {
+    if body.proofs.is_empty() {
+        return Err(AppError::invalid_param(
+            "capability fanout proofs are required",
+        ));
+    }
+
+    let transcript = capability_fanout_proof_transcript(
+        &body.operation,
+        &body.issuer_service_id,
+        &body.event_kind,
+        &body.event_id,
+        &body.capability_grant_id,
+        body.realm_id.as_str(),
+        &body.payload,
+    );
+    let transcript_digest = arkret_canonical::canonical_sha256(&transcript)
+        .map_err(|error| AppError::invalid_param(format!("fanout proof digest: {error}")))?;
+    let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript)
+        .map_err(|error| AppError::invalid_param(format!("fanout proof transcript: {error}")))?;
+
+    for proof in &body.proofs {
+        if proof.kind != arkret_wire::proof_kind::DETACHED_JWS
+            || proof.alg != "EdDSA"
+            || proof.event_digest.as_str() != transcript_digest
+        {
+            return Err(AppError::unauthenticated(
+                "capability fanout proof binding is invalid",
+            ));
+        }
+        let method_did = arkret_identity::verification_method_did(&proof.verification_method)
+            .map_err(|_| {
+                AppError::unauthenticated("capability fanout verification method is invalid")
+            })?;
+        if method_did.as_str() != body.issuer_service_id {
+            return Err(AppError::unauthenticated(
+                "capability fanout proof issuer does not match issuer_service_id",
+            ));
+        }
+        crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+            &transcript_bytes,
+            proof.jws.as_str(),
+            proof.verification_method.as_str(),
+            &body.issuer_service_id,
+            state,
+        )
+        .await
+        .map_err(|error| {
+            tracing::debug!(%error, "capability fanout proof verification failed");
+            AppError::unauthenticated("capability fanout proof verification failed")
+        })?;
+    }
+    if body.operation == "grant" {
+        validate_protocol_grant_proofs(state, body).await?;
+    }
+    Ok(())
+}
+
+async fn validate_protocol_grant_proofs(
+    state: &AppState,
+    body: &CapabilityFanoutBody,
+) -> Result<(), AppError> {
+    let payload: arkret_models_collaboration::events_payloads::capability::CapabilityGrantPayload =
+        serde_json::from_value(body.payload.clone()).map_err(|error| {
+            AppError::invalid_param(format!("invalid capability grant payload: {error}"))
+        })?;
+    let grant = payload
+        .grant
+        .ok_or_else(|| AppError::invalid_param("payload.grant is required"))?;
+    if grant.proofs.is_empty() {
+        return Err(AppError::invalid_param("payload.grant.proofs is required"));
+    }
+    for proof in &grant.proofs {
+        proof.validate().map_err(|error| {
+            AppError::invalid_param(format!("invalid capability grant proof: {error}"))
+        })?;
+        if proof.kind != arkret_wire::proof_kind::DETACHED_JWS
+            || proof.alg != "EdDSA"
+            || proof.proof_purpose != Some(arkret_wire::PayloadProofPurpose::IssuerAttestation)
+        {
+            return Err(AppError::unauthenticated(
+                "capability grant proof metadata is invalid",
+            ));
+        }
+        let method_did = arkret_identity::verification_method_did(&proof.verification_method)
+            .map_err(|_| {
+                AppError::unauthenticated("capability grant verification method is invalid")
+            })?;
+        if method_did != grant.issuer || method_did.as_str() != body.issuer_service_id {
+            return Err(AppError::unauthenticated(
+                "capability grant proof issuer does not match issuer_service_id",
+            ));
+        }
+        let binding = grant
+            .canonical_proof_binding_bytes(proof)
+            .map_err(|error| {
+                AppError::unauthenticated(format!(
+                    "capability grant proof binding is invalid: {error}"
+                ))
+            })?;
+        crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+            &binding,
+            &proof.jws,
+            &proof.verification_method,
+            &body.issuer_service_id,
+            state,
+        )
+        .await
+        .map_err(|error| {
+            tracing::debug!(%error, "capability grant proof verification failed");
+            AppError::unauthenticated("capability grant proof verification failed")
+        })?;
     }
     Ok(())
 }
@@ -163,6 +285,7 @@ fn build_projectable_operation(
     let event_kind = body.event_kind;
     let event_id = body.event_id;
     let capability_grant_id = body.capability_grant_id;
+    let fanout_realm_id = body.realm_id;
     let principal_server_count = body.principal_servers.len();
     if body.kind != FANOUT_KIND {
         return Err(AppError::invalid_param(
@@ -195,29 +318,25 @@ fn build_projectable_operation(
         .as_object_mut()
         .ok_or_else(|| AppError::invalid_param("payload must be an object"))?;
     require_payload_grant_id(payload_object, &capability_grant_id)?;
-    match payload_object.get("event_id").and_then(Value::as_str) {
-        Some(existing) if existing != event_id => {
-            return Err(AppError::invalid_param(
-                "payload.event_id does not match event_id",
-            ));
-        }
-        Some(_) => {}
-        None => {
-            payload_object.insert("event_id".to_owned(), Value::String(event_id.clone()));
-        }
-    }
-    payload_object.insert(
-        "issuer_service_id".to_owned(),
-        Value::String(issuer_service_id.clone()),
-    );
 
-    let (realm_id, subject) = match operation_name.as_str() {
+    let subject = match operation_name.as_str() {
         "grant" => {
-            validate_grant_payload(payload_object, &capability_grant_id, &issuer_service_id)?
+            let (payload_realm_id, subject) =
+                validate_grant_payload(payload_object, &capability_grant_id, &issuer_service_id)?;
+            if payload_realm_id != fanout_realm_id.as_str() {
+                return Err(AppError::invalid_param(
+                    "payload.grant.realm_id does not match realm_id",
+                ));
+            }
+            subject
         }
-        "revoke" => validate_revoke_payload(payload_object)?,
+        "revoke" => {
+            validate_revoke_payload(payload_object)?;
+            None
+        }
         _ => unreachable!("operation checked above"),
     };
+    let realm_id = fanout_realm_id.into_string();
     let operation_id = operation_id_for_event_id(&event_id)?;
     let realm = RealmId::new(realm_id.clone())
         .map_err(|_| AppError::invalid_param("realm_id must be a ak:realm id"))?;
@@ -231,6 +350,7 @@ fn build_projectable_operation(
 
     Ok(CapabilityFanoutDraft {
         operation,
+        issuer_service_id,
         event_id,
         event_kind,
         operation_name,
@@ -349,17 +469,14 @@ fn validate_grant_payload(
     Ok((realm_id.to_owned(), Some(subject.to_owned())))
 }
 
-fn validate_revoke_payload(
-    payload: &serde_json::Map<String, Value>,
-) -> Result<(String, Option<String>), AppError> {
-    let realm_id = payload
-        .get("realm_id")
-        .and_then(Value::as_str)
-        .ok_or_else(|| AppError::invalid_param("payload.realm_id is required"))?;
-    RealmId::new(realm_id.to_owned())
-        .map_err(|_| AppError::invalid_param("payload.realm_id must be a ak:realm id"))?;
-    require_non_empty_proofs(payload, "payload.proofs")?;
-    Ok((realm_id.to_owned(), None))
+fn validate_revoke_payload(payload: &serde_json::Map<String, Value>) -> Result<(), AppError> {
+    serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::capability::CapabilityRevokePayload,
+    >(Value::Object(payload.clone()))
+    .map_err(|error| {
+        AppError::invalid_param(format!("invalid capability revoke payload: {error}"))
+    })?;
+    Ok(())
 }
 
 fn require_non_empty_proofs(
@@ -390,17 +507,19 @@ async fn projection_event_duplicate(
 ) -> Result<bool, AppError> {
     let existing = state
         .event_queries()
-        .projected_events()
+        .projected_event(&draft.event_id)
         .await
-        .map_err(|error| AppError::internal(format!("projection event lookup failed: {error}")))?
-        .into_iter()
-        .find(|record| record.event_id == draft.event_id);
+        .map_err(|error| AppError::internal(format!("projection event lookup failed: {error}")))?;
     let Some(existing) = existing else {
         return Ok(false);
     };
-    if existing.event_kind != draft.event_kind {
+    if existing.event_kind != draft.event_kind
+        || existing.realm_id != draft.realm_id
+        || existing.operation_id.as_deref() != Some(draft.operation.operation_id.as_str())
+        || existing.payload != draft.operation.payload
+    {
         return Err(AppError::conflict(
-            "event_id already exists with a different event_kind",
+            "event_id already exists with different capability fanout content",
         ));
     }
     Ok(true)
@@ -494,6 +613,7 @@ mod tests {
             event_kind: arkret_wire::events::EventKind::CAPABILITY_GRANT.to_owned(),
             event_id: EVENT.to_owned(),
             capability_grant_id: GRANT.to_owned(),
+            realm_id: RealmId::new(REALM).unwrap(),
             payload: json!({
                 "grant_id": GRANT,
                 "grant": {
@@ -508,6 +628,7 @@ mod tests {
                     "proofs": [{ "kind": "detached_jws" }]
                 }
             }),
+            proofs: Vec::new(),
             principal_servers: Vec::new(),
         }
     }
@@ -527,7 +648,8 @@ mod tests {
             draft.operation.operation_id.to_string(),
             "ak:operation:01970000-0000-7000-8000-000000000001"
         );
-        assert_eq!(draft.operation.payload["event_id"], EVENT);
+        assert!(draft.operation.payload.get("event_id").is_none());
+        assert!(draft.operation.payload.get("issuer_service_id").is_none());
     }
 
     #[test]

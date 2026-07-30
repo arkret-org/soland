@@ -28,9 +28,8 @@ use arkret_models_collaboration::governance::realm_governance::{
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY as FIELD_ORGANIZATION_POLICY_MERGE_STRATEGY,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL as FIELD_OVERRIDE_REQUIRES_ORGANIZATION_APPROVAL,
     REALM_EFFECTIVE_MODERATION_POLICY_FIELD_POLICY_MERGE_STRATEGY as FIELD_POLICY_MERGE_STRATEGY,
-    RealmEffectivePolicyInheritanceMode, RealmEffectivePolicyOutcome, RealmLinkCreateRequestBody,
-    RealmLinkDirection, RealmLinkEntry, RealmLinkKind, RealmLinkList, RealmLinkMutationOutcome,
-    RealmLinkStatus,
+    RealmEffectivePolicyOutcome, RealmLinkCreateRequestBody, RealmLinkDirection, RealmLinkEntry,
+    RealmLinkKind, RealmLinkList, RealmLinkMutationOutcome, RealmLinkStatus,
 };
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
@@ -372,39 +371,9 @@ async fn get_effective_policy(
     let organization_policy = organizations::effective_policy_value_for_realm(state, &realm_id)
         .map_err(|error| AppError::internal(format!("organization effective policy: {error}")))?;
     let projection = state.projections().snapshot();
-    let ep = effective_policy_for_realm(&projection, &realm_id);
-    let mut effective_policy = match ep.effective_policy {
-        Value::Object(map) => map.into_iter().collect::<BTreeMap<_, _>>(),
-        _ => {
-            return Err(AppError::internal(
-                "effective policy projection must be a JSON object",
-            ));
-        }
-    };
-    merge_organization_effective_policy(&mut effective_policy, organization_policy);
-    let inheritance_mode = match ep.inheritance_mode.as_str() {
-        "explicit" => RealmEffectivePolicyInheritanceMode::Explicit,
-        "none" => RealmEffectivePolicyInheritanceMode::None,
-        other => {
-            return Err(AppError::internal(format!(
-                "effective policy inheritance_mode: {other}"
-            )));
-        }
-    };
-    json_ok(RealmEffectivePolicyOutcome {
-        realm_id: RealmId::new(ep.realm_id)
-            .map_err(|e| AppError::internal(format!("effective policy realm_id: {e}")))?,
-        effective_policy,
-        inheritance_chain: ep
-            .inheritance_chain
-            .into_iter()
-            .map(|id| {
-                RealmId::new(id)
-                    .map_err(|e| AppError::internal(format!("inheritance_chain realm_id: {e}")))
-            })
-            .collect::<Result<Vec<_>, _>>()?,
-        inheritance_mode,
-    })
+    let mut outcome = effective_policy_for_realm(&projection, &realm_id);
+    merge_organization_effective_policy(&mut outcome.effective_policy, organization_policy);
+    json_ok(outcome)
 }
 
 fn merge_organization_effective_policy(

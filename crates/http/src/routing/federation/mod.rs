@@ -15,6 +15,13 @@ pub use well_known::well_known_arkret_router;
 
 use super::{AuthArgs, now, sync_token};
 
+pub(crate) const FEDERATION_REDUCER_PROFILE_ID: &str = "ak.profile.federation_minimal.v1";
+
+pub(crate) fn federation_reducer_profile_digest() -> &'static str {
+    arkret_policy::generated::profiles::reducer_profile_digest(FEDERATION_REDUCER_PROFILE_ID)
+        .expect("the embedded spec registry contains the federation reducer profile")
+}
+
 /// RFC 9530 `Content-Digest` structured-field value over `bytes`:
 /// `sha-256=:<base64(SHA256(bytes))>:`.
 ///

@@ -163,6 +163,62 @@ pub(super) async fn project_invite_cancel_operation(
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
 }
 
+/// Validate the frozen invite lifecycle predicates that must hold before an
+/// `ak.invite.cancel` Event is accepted into the durable log.
+///
+/// Projection-time rejection is too late: once the Event is durable, skipping
+/// the lifecycle/member projection would permanently split the two cells.
+pub(in crate::routing::events) async fn validate_invite_cancel_pre_admission(
+    state: &AppState,
+    origin: &str,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    if kinds::canonical_kind_string(operation) != arkret_wire::events::EventKind::INVITE_CANCEL {
+        return Ok(());
+    }
+    let invite_id =
+        invite_acceptance_ref_for_operation(operation).ok_or("reducer_projection_failed")?;
+    let record = state
+        .realm_invites()
+        .get(&invite_id)
+        .await
+        .map_err(|_| "reducer_projection_failed")?
+        .ok_or("reducer_projection_failed")?;
+    if record.realm_id != operation.realm_id.as_str() {
+        return Err("reducer_projection_failed");
+    }
+    if record.third_party_id.is_some() {
+        return Err("invite_kind_requires_revoke");
+    }
+    let invitee = record
+        .invitee
+        .as_deref()
+        .ok_or("reducer_projection_failed")?;
+    if operation.payload.get("invitee").and_then(Value::as_str) != Some(invitee) {
+        return Err("reducer_projection_failed");
+    }
+    if !matches!(
+        record.status.as_str(),
+        "pending" | "claimed" | "send_failed"
+    ) || !state
+        .projections()
+        .invite_member_is_invited(record.realm_id.as_str(), invitee)
+    {
+        return Err("reducer_projection_failed");
+    }
+    let terminal_status = invite_terminal_transition_target(operation, &invite_id)
+        .ok_or("reducer_projection_failed")?;
+    let expected_status = if invitee == origin.trim() {
+        "rejected"
+    } else {
+        "revoked"
+    };
+    if terminal_status != expected_status {
+        return Err("reducer_projection_failed");
+    }
+    Ok(())
+}
+
 pub(super) async fn project_invite_revoke_operation(
     state: &AppState,
     origin: &str,
@@ -962,8 +1018,9 @@ pub(super) async fn project_plaintext_visible_services_operation(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
+
+    use super::*;
 
     #[tokio::test]
     async fn shared_invite_create_reconciles_exact_private_delivery_before_replay() {

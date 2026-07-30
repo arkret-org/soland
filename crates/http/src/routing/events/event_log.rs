@@ -101,6 +101,7 @@ pub(in crate::routing) use submit::{
     service_event_authoring_lock, submit_account_data_event_value, submit_event_value,
     submit_ghost_provision_batch, submit_initial_event_submission,
     submit_initial_identity_anchor_batch, submit_mimi_event_value,
+    submit_moderation_report_event_value,
 };
 use submit::{
     EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,

@@ -57,6 +57,7 @@ pub enum PersistedKeyPackageClaimState {
         claim_expires_at_unix_ms: Option<i64>,
         consumed_at: i64,
     },
+    Retired,
     Revoked,
 }
 
@@ -75,6 +76,7 @@ pub fn classify_key_package_lifecycle(
     consumed_at: Option<i64>,
 ) -> Result<PersistedKeyPackageLifecycle, String> {
     const REVOKED_CLAIM_SENTINEL: &str = "revoked";
+    const RETIRED_CLAIM_SENTINEL: &str = "retired";
 
     let reuse_policy = if last_resort {
         PersistedKeyPackageReusePolicy::LastResort {
@@ -100,6 +102,18 @@ pub fn classify_key_package_lifecycle(
                 );
             }
             PersistedKeyPackageClaimState::Revoked
+        }
+        Some(RETIRED_CLAIM_SENTINEL) => {
+            if last_resort
+                || claimed_at.is_some()
+                || claim_expires_at_unix_ms.is_some()
+                || consumed_at.is_some()
+            {
+                return Err(
+                    "retired KeyPackage must be ordinary, unused, and timestamp-free".to_owned(),
+                );
+            }
+            PersistedKeyPackageClaimState::Retired
         }
         Some(group_id) if last_resort => {
             return Err(format!(
@@ -287,6 +301,7 @@ pub enum PeerKeyPackageClaimAttemptResult {
 
 pub enum MlsKeyPackageClaimTarget<'a> {
     Group(&'a str),
+    Retire,
     Revoke,
 }
 
