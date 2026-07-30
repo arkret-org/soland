@@ -4,7 +4,6 @@ use arkret_identifiers::{CircleId, Did, OperationId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
-use arkret_models_integration::applet::AppletPackage;
 use arkret_wire::{Event, PlaintextDataClassKind};
 use serde_json::Value;
 use soland_domain::reducer::ProjectionState;
@@ -717,8 +716,8 @@ pub async fn hydrate_projections_from_persistence(
     projection_adapter: &dyn HydrationProjectionAdapter,
 ) -> soland_storage::PersistenceResult<()> {
     use soland_domain::reducer::{
-        AppletProjection, KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage,
-        MlsWelcome, MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
+        KeyPackageLifetime, MlsCommitEpoch, MlsCommitEpochKey, MlsKeyPackage, MlsWelcome,
+        MorphProjection, ObjectLifecycleState, SpaceContainerLifecycleState,
         SpaceContainerProjection, StrandProjection,
     };
 
@@ -966,52 +965,6 @@ pub async fn hydrate_projections_from_persistence(
             );
         }
     }
-    if let Ok(rows) = persistence.applets().list().await {
-        for row in rows {
-            let applet_id = row
-                .get("applet_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned);
-            let namespace = row
-                .get("namespace")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
-            let Some(package_value) = row.get("package").filter(|value| !value.is_null()).cloned()
-            else {
-                continue;
-            };
-            let Ok(package) = serde_json::from_value::<AppletPackage>(package_value) else {
-                if let Some(applet_id) = &applet_id {
-                    tracing::warn!(%applet_id, "skipping applet projection row with invalid package during hydrate");
-                }
-                continue;
-            };
-            let registered_at = row
-                .get("registered_at")
-                .cloned()
-                .and_then(|value| {
-                    serde_json::from_value::<chrono::DateTime<chrono::Utc>>(value).ok()
-                })
-                .unwrap_or_else(chrono::Utc::now);
-            let projection = AppletProjection {
-                service_id: package.service_id.to_string(),
-                namespace,
-                manifest: Some(serde_json::json!(package.manifest_snapshot())),
-                capabilities: row
-                    .get("capabilities")
-                    .and_then(|value| serde_json::to_value(value).ok()),
-                registered_at,
-                updated_at: registered_at,
-            };
-            proj.applets
-                .insert(projection.service_id.clone(), projection.clone());
-            if let Some(applet_id) = applet_id {
-                proj.applets.insert(applet_id, projection);
-            }
-        }
-    }
-
     // MLS KeyPackage projection — the claim selector reads ONLY this in-memory
     // map (`routing/mls.rs`), so without this rehydration the admin can never
     // claim a joined invitee's KeyPackage after a restart and admission stalls

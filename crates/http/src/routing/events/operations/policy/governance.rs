@@ -101,9 +101,6 @@ pub(super) async fn validate_member_state_policy(
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
-        if realm_owner_matches(state, realm_id, actor).await {
-            return Ok(());
-        }
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         for action in ["ak.realm.admin", "ak.realm.join.review"] {
             if state
@@ -140,9 +137,6 @@ pub(super) async fn validate_member_state_policy(
             return Ok(());
         }
         let realm_id = operation.realm_id.as_str();
-        if realm_owner_matches(state, realm_id, actor).await {
-            return Ok(());
-        }
         let (owner, members) = realm_owner_and_members(state, realm_id).await;
         for action in ["ak.realm.admin", "ak.realm.join.review"] {
             if state
@@ -172,15 +166,10 @@ pub(super) async fn validate_member_state_policy(
         // paths keep working; direct client submits always carry `sender`.
         return Ok(());
     };
-    if realm_owner_matches(state, operation.realm_id.as_str(), actor).await {
-        return Ok(());
-    }
-    // P1 — a non-owner MAY ban iff they hold `ak.realm.admin` on this Realm
+    // P1 — an actor MAY ban iff they hold `ak.realm.admin` on this Realm
     // (capabilities.md §16 — `ak.realm.admin` governs `ak.member.state`
-    // writes). The owner implicitly holds admin and already returned above;
-    // this reads the projected capability grant index via
-    // SolandAuthzEngine::check. fail-closed: anything other than an explicit
-    // allow keeps the `missing_capability` rejection.
+    // writes). This reads the projected capability grant index via
+    // SolandAuthzEngine::check; ownership alone is not an allow.
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
@@ -270,8 +259,8 @@ async fn native_agent_controlled_by(
 }
 
 /// COT-06-004 — capability gate for `ak.realm.set_default_strand`. Mirrors the
-/// ban / moderation gates: the actor MUST own the Realm or hold
-/// `ak.realm.set_default_strand` (or the broader `ak.realm.admin`) on it.
+/// ban / moderation gates: the actor MUST hold `ak.realm.set_default_strand`
+/// (or the broader `ak.realm.admin`) on it.
 /// fail-closed `missing_capability` otherwise. Peer/service-originated
 /// federation operations (no `sender`) stay accepted for convergence/backfill.
 pub(super) async fn validate_set_default_strand_policy(
@@ -292,9 +281,6 @@ pub(super) async fn validate_set_default_strand_policy(
         return Ok(());
     };
     let realm_id = operation.realm_id.as_str();
-    if realm_owner_matches(state, realm_id, actor).await {
-        return Ok(());
-    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ak.realm.admin` aggregates Realm governance, so
@@ -369,9 +355,9 @@ pub(super) async fn verify_realm_organization_proof_signature(
 
 /// SOL-ORG-03 — two-sided authorization gate for `ak.realm.organization`.
 ///
-///   - **Realm side**: the actor admitting the statement into Realm history MUST own the Realm or
-///     hold `ak.realm.admin` on it. A plain OIDC human session only proves the executor's identity;
-///     it does not by itself create organization principal control, so the executor still needs the
+///   - **Realm side**: the actor admitting the statement into Realm history MUST hold
+///     `ak.realm.admin` on it. A plain OIDC human session only proves the executor's identity; it
+///     does not by itself create organization principal control, so the executor still needs the
 ///     Realm-admin capability. fail-closed `missing_capability` otherwise.
 ///   - **Organization side**: the statement MUST pass the SDK fail-closed verifier. Delegated
 ///     issuer roles (`governance_service` / `account_authority`) require a `delegation_ref`;
@@ -407,7 +393,7 @@ pub(super) async fn validate_realm_organization_policy(
         verify_realm_organization_proof_signature(state, &payload).await?;
     }
 
-    // Realm side — owner or `ak.realm.admin`. The executor identity comes from
+    // Realm side — explicit `ak.realm.admin`. The executor identity comes from
     // the envelope sender / authorization.executed_by; a bare OIDC session is
     // not sufficient on its own.
     let Some(actor) = operation.actor() else {
@@ -415,9 +401,6 @@ pub(super) async fn validate_realm_organization_policy(
     };
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
-    if realm_owner_matches(state, realm_id, actor).await {
-        return Ok(());
-    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()
@@ -441,7 +424,8 @@ pub(super) async fn validate_realm_organization_policy(
 /// `/_arkret/self/events` (content-moderation.md §2.6 / §5.5; capability-
 /// action-registry.json). Mirrors [`validate_member_state_policy`]'s ban
 /// gate: the actor MUST hold the matching moderation capability action on the
-/// Realm, or own the Realm. fail-closed `missing_capability` otherwise.
+/// Realm. Realm ownership alone is not a capability; fail closed with
+/// `missing_capability` otherwise.
 ///
 /// Action mapping (capability-action-registry.json and policy-server.md):
 /// - `ak.moderation.decision`            → governance policy action or narrow decision action
@@ -498,9 +482,6 @@ pub(super) async fn validate_moderation_event_policy(
     }
 
     let realm_id = operation.realm_id.as_str();
-    if realm_owner_matches(state, realm_id, actor).await {
-        return Ok(());
-    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if kind == arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT
         && members.iter().any(|member| member == actor)

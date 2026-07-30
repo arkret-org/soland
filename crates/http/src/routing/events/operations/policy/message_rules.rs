@@ -189,13 +189,13 @@ pub(super) fn validate_circle_scope_membership(
 
 /// applet-integration.md §4 / §4b — installing an Applet into a Realm is gated
 /// by the machine-readable `ak.realm.admin` capability: the actor submitting a
-/// `ak.applet.registration` MUST own the target Realm or hold an active
-/// `ak.realm.admin` grant covering it, else reject `applet_registration_unauthorized`.
+/// `ak.applet.registration` MUST hold an active `ak.realm.admin` grant
+/// covering it, else reject `applet_registration_unauthorized`.
 ///
 /// The dedicated install aggregate (`POST /_arkret/self/applets/install`)
 /// validates and submits the caller-signed registration Event through the same
 /// admission path as a raw `/_arkret/self/events` submission. Both paths
-/// therefore apply this owner/admin gate without an internal bypass.
+/// therefore apply this capability gate without an internal bypass.
 pub(super) async fn validate_applet_registration_authz(
     state: &AppState,
     operation: &Operation,
@@ -210,9 +210,6 @@ pub(super) async fn validate_applet_registration_authz(
     };
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
-    if realm_owner_matches(state, realm_id, actor).await {
-        return Ok(());
-    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()
@@ -367,10 +364,8 @@ pub(crate) fn realm_ids_match(a: &str, b: &str) -> bool {
 /// soland evaluates the window at admission time. The rules:
 ///
 /// - The window only bites when a grant authorizing the relevant `.own` action carries a `temporal`
-///   window field. With no such grant the action is unbounded (default member / owner behaviour is
-///   unchanged).
-/// - Holding the broader `ak.message.revise` / `ak.message.redact` capability (or `*`), or being
-///   the Realm owner, lifts the window entirely (admin override).
+///   window field. A matching grant without such a constraint is unbounded.
+/// - Holding the broader `ak.message.revise` / `ak.message.redact` capability lifts the window.
 /// - `message_redact_window` is authoritative for redact; otherwise redact shares the edit window
 ///   unless `redact_after_window_allowed` is set.
 pub(super) async fn validate_message_edit_redact_window_policy(
@@ -393,11 +388,6 @@ pub(super) async fn validate_message_edit_redact_window_policy(
     };
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
-
-    // Realm owner is exempt from the .own window (admin override).
-    if realm_owner_matches(state, realm_id, actor).await {
-        return Ok(());
-    }
 
     // Resolve the target Message's creation time.
     let target_ref = if is_redact {

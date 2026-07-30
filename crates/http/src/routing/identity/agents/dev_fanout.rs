@@ -577,7 +577,7 @@ mod tests {
     }
 
     #[test]
-    fn self_realm_owner_reconciles_before_capability_fanout() {
+    fn self_realm_owner_reconciles_without_implying_capability() {
         let state = AppState::new(crate::config::AppConfig::test_default(), Db { pool: None });
         let realm_id = "ak:realm:019f5548-2d3c-751b-90d6-f262c6feacea";
         let controller = "did:webvh:z6mkfixture:example.test:users:alice";
@@ -591,7 +591,14 @@ mod tests {
         .expect("durable owner should repair the missing projection");
 
         let projection = state.projections().snapshot();
-        assert!(projection.issuer_has_projected_capability(
+        assert_eq!(
+            projection
+                .realm_states
+                .get(realm_id)
+                .and_then(|realm| realm.owner.as_deref()),
+            Some(controller)
+        );
+        assert!(!projection.issuer_has_projected_capability(
             controller,
             realm_id,
             ACTION_MESSAGE_CREATE,

@@ -389,7 +389,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "applet registration",
             kind: arkret_wire::events::EventKind::APPLET_REGISTRATION,
             // applet_registration_payload is now a CLOSED class (additionalProperties=false)
-            // with 14 required fields; the generic fallback no longer applies since the
+            // with required fields; the generic fallback no longer applies since the
             // exact def exists in the current spec.
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
@@ -403,6 +403,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "receive_signals": false,
                 "rate_limited": true,
                 "requested_scopes": ["read"],
+                "claimed_profiles": [
+                    "ak.profile.applet_bridge.v1",
+                    "ak.profile.applet_service.v1"
+                ],
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "webhook_auth": {"key_ref": "did:web:applet.example"},
                 "proof": {"signature": "c2ln"},
@@ -425,6 +429,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "receive_signals": false,
                 "rate_limited": true,
                 "requested_scopes": ["read"],
+                "claimed_profiles": [
+                    "ak.profile.applet_bridge.v1",
+                    "ak.profile.applet_service.v1"
+                ],
                 "registration_epoch": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
                 "webhook_auth": {"key_ref": "did:web:applet.example"},
                 "proof": {"signature": "c2ln"},

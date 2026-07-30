@@ -713,8 +713,8 @@ async fn applet_registration_requires_realm_admin() {
     // machine-readable `ak.realm.admin` capability. The dedicated install
     // aggregate checks this in its handler, but a raw submit via
     // `/_arkret/self/events` reaches `apply_applet_registration` with no authz of
-    // its own — this gate closes that bypass. The Realm owner may register; an
-    // outsider without `ak.realm.admin` may not.
+    // its own — this gate closes that bypass. Realm ownership alone is not a
+    // capability; an active `ak.realm.admin` grant is required.
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-a99e70000001";
     let owner = "did:web:alice.example";
@@ -763,13 +763,33 @@ async fn applet_registration_requires_realm_admin() {
         )
     };
 
-    // Realm owner may register an Applet.
+    let err = validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
+        .await
+        .unwrap_err();
+    assert_eq!(err, "applet_registration_unauthorized");
+
+    state
+        .authorization()
+        .upsert_projected_grant(arkret_policy::authz::delegation::Grant {
+            grant_id: "ak:grant:01904100-0000-7000-8000-000000000a02".to_owned(),
+            realm_id: realm_id.to_owned(),
+            issuer: owner.to_owned(),
+            subject: owner.to_owned(),
+            resource: realm_id.to_owned(),
+            actions: vec!["ak.realm.admin".to_owned()],
+            capability_action_registry_digest: Some(
+                arkret_policy::current_capability_action_registry_digest().unwrap(),
+            ),
+            constraints: Vec::new(),
+            revoked: false,
+            created_at: now,
+            delegated_from: None,
+            expires_at: None,
+        });
     validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
         .await
         .unwrap();
 
-    // An outsider without `ak.realm.admin` is rejected fail-closed — closing the
-    // `/_arkret/self/events` bypass of the install-handler gate.
     let err = validate_operation_policy(&state, std::slice::from_ref(&registration(outsider)))
         .await
         .unwrap_err();

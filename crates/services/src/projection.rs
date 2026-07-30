@@ -24,7 +24,7 @@ use parking_lot::Mutex;
 use serde_json::Value;
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{
-    AppletProjection, MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
+    MlsRemoveObligation, MlsWelcomeQueueKey, ProjectionEffect, ProjectionState,
     SolandMembershipState, SolandRealmState,
 };
 use soland_storage::{JoinApplicationRecord, PersistenceResult, PersistenceStore};
@@ -1688,30 +1688,6 @@ impl ProjectionService {
         self.state
             .lock()
             .reload_cells_from_store(realm_id, self.cell_store(), self.cell_registry())
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn cache_applet(
-        &self,
-        service_id: String,
-        applet_id: String,
-        namespace: String,
-        manifest: Option<Value>,
-        capabilities: Option<Value>,
-        registered_at: DateTime<Utc>,
-        updated_at: DateTime<Utc>,
-    ) {
-        let projection = AppletProjection {
-            service_id: service_id.clone(),
-            namespace,
-            manifest,
-            capabilities,
-            registered_at,
-            updated_at,
-        };
-        let mut state = self.state.lock();
-        state.applets.insert(service_id, projection.clone());
-        state.applets.insert(applet_id, projection);
     }
 
     pub fn key_backup_active_series(

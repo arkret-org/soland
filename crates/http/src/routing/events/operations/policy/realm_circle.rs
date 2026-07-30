@@ -35,10 +35,9 @@ pub(super) fn validate_realm_lifecycle_write_gate(
 
 /// `morph.md` §4.1 S3 — the actor MUST hold the high-tier
 /// `ak.morph.schema_migrate` capability at the event frontier. Missing
-/// capability yields `capability_denied`. Realm owners are implicitly
-/// authorized (mirrors the other Realm-object capability gates). The opt-in
-/// profile gate and CAS are enforced by the state-aware preflight; this check
-/// is the capability conjunct only.
+/// capability yields `capability_denied`. Realm ownership does not substitute
+/// for the grant. The opt-in profile gate and CAS are enforced by the
+/// state-aware preflight; this check is the capability conjunct only.
 pub(super) async fn validate_morph_schema_migrate_authz(
     state: &AppState,
     operation: &Operation,
@@ -48,9 +47,6 @@ pub(super) async fn validate_morph_schema_migrate_authz(
     };
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if owner.as_deref() == Some(actor) {
-        return Ok(());
-    }
     if state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {

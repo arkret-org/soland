@@ -602,14 +602,6 @@ impl ProjectionState {
         action: &str,
         resource: &str,
     ) -> bool {
-        if self
-            .realm_states
-            .get(realm_id)
-            .and_then(|realm| realm.owner.as_deref())
-            .is_some_and(|owner| owner == issuer)
-        {
-            return true;
-        }
         const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
         let resource_expr = self.authz_resource_expr(realm_id, resource);
         self.cells.iter().any(|(cell_ref, cell_state)| {
@@ -638,14 +630,6 @@ impl ProjectionState {
         action: &str,
         resource: &str,
     ) -> bool {
-        if self
-            .realm_states
-            .get(realm_id)
-            .and_then(|realm| realm.owner.as_deref())
-            .is_some_and(|owner| owner == subject)
-        {
-            return true;
-        }
         let Some(grant) = self.effective_engine_grant(grant_id) else {
             return false;
         };
@@ -662,13 +646,6 @@ impl ProjectionState {
 
     pub fn projected_capability_holder_count(&self, realm_id: &str, action: &str) -> usize {
         let mut holders = std::collections::BTreeSet::new();
-        if let Some(owner) = self
-            .realm_states
-            .get(realm_id)
-            .and_then(|realm| realm.owner.as_deref())
-        {
-            holders.insert(owner.to_owned());
-        }
         const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
         let resource_expr = self.authz_resource_expr(realm_id, realm_id);
         for (cell_ref, cell_state) in &self.cells {
@@ -692,6 +669,84 @@ impl ProjectionState {
         holders.len()
     }
 
+    fn applet_non_event_grant_authority_matches(
+        &self,
+        issuer: &str,
+        realm_id: &str,
+        action: &str,
+        resource: &str,
+        body: &Value,
+    ) -> bool {
+        let Some(subject) = body.get("subject").and_then(Value::as_str) else {
+            return false;
+        };
+        let Some(registration) = self.applets.get(subject) else {
+            return false;
+        };
+        let Some(registration_scope_ref) = registration.registration_scope_ref.as_ref() else {
+            return false;
+        };
+        let resources = value_array_field(body, "resources");
+        let resource_selectors = value_array_field(body, "resource_selectors");
+        if resources.len() != 1
+            || !resource_selectors.is_empty()
+            || resources.first() != Some(registration_scope_ref)
+        {
+            return false;
+        }
+        let Some(constraints) = body.get("constraints").and_then(Value::as_array) else {
+            return false;
+        };
+
+        registration.claimed_profiles.iter().any(|profile_id| {
+            let Some(rule) =
+                arkret_schema::generated::profile_requirements::non_event_grant_authority_rule(
+                    profile_id, action,
+                )
+            else {
+                return false;
+            };
+            if rule.required_registration_event_kind
+                != arkret_wire::events::EventKind::APPLET_REGISTRATION
+                || rule.required_claimed_profile != profile_id
+                || rule.subject_binding != "registration.service_id"
+                || rule.scope_binding != "grant.resource_exact_registration_scope"
+                || rule.epoch_binding != "constraint.registration_epoch_exact_registration"
+                || rule.requested_action_binding != "grant.action_in_registration.requested_scopes"
+                || registration.service_id != subject
+                || !registration
+                    .capabilities
+                    .as_ref()
+                    .and_then(Value::as_array)
+                    .is_some_and(|actions| {
+                        actions
+                            .iter()
+                            .any(|candidate| candidate.as_str() == Some(action))
+                    })
+                || !self.issuer_has_projected_capability(
+                    issuer,
+                    realm_id,
+                    rule.issuer_action,
+                    resource,
+                )
+            {
+                return false;
+            }
+            constraints.iter().any(|constraint| {
+                constraint.get("constraint_kind").and_then(Value::as_str)
+                    == Some(rule.required_constraint_kind)
+                    && constraint.get("constraint_subkind").and_then(Value::as_str)
+                        == Some(rule.required_constraint_subkind)
+                    && constraint.get("applet_id").and_then(Value::as_str)
+                        == Some(registration.applet_id.as_str())
+                    && constraint.get("executed_by").and_then(Value::as_str)
+                        == Some(registration.service_id.as_str())
+                    && constraint.get("registration_epoch").and_then(Value::as_str)
+                        == Some(registration.registration_epoch.as_str())
+            })
+        })
+    }
+
     fn validate_grant_issuer_upper_bound(&self, operation: &Operation) -> Result<(), &'static str> {
         if let Some(parent_grant_id) = grant_parent_ref(&operation.payload) {
             return self.validate_delegated_grant_issuer_upper_bound(operation, parent_grant_id);
@@ -706,7 +761,11 @@ impl ProjectionState {
         }
         for action in &actions {
             for resource in &resources {
-                if !self.issuer_has_projected_capability(&issuer, realm_id, action, resource) {
+                if !self.issuer_has_projected_capability(&issuer, realm_id, action, resource)
+                    && !self.applet_non_event_grant_authority_matches(
+                        &issuer, realm_id, action, resource, body,
+                    )
+                {
                     return Err("grant_exceeds_issuer_authority");
                 }
             }
@@ -1410,6 +1469,7 @@ mod agent_key_tests {
     const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a1";
     const GRANT_2: &str = "ak:grant:01970000-0000-7000-8000-0000000000a2";
     const GRANT_3: &str = "ak:grant:01970000-0000-7000-8000-0000000000a3";
+    const FOUNDING_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000a0";
 
     fn op(object_kind: &str, payload: serde_json::Value) -> Operation {
         Operation {
@@ -1450,7 +1510,7 @@ mod agent_key_tests {
         })
     }
 
-    fn seed_realm_owner(state: &mut ProjectionState) {
+    fn seed_realm_authority(state: &mut ProjectionState) {
         let now = chrono::Utc::now();
         state.realm_states.insert(
             REALM.to_owned(),
@@ -1471,6 +1531,21 @@ mod agent_key_tests {
                 active_profiles: Vec::new(),
             },
         );
+        let mut founding = grant_payload(
+            FOUNDING_GRANT,
+            "did:web:alice.example",
+            "did:web:alice.example",
+            json!(["ak.realm.admin", "ak.message.create"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
+        );
+        founding["grant"]["capability_action_registry_digest"] =
+            json!(arkret_policy::current_capability_action_registry_digest().unwrap());
+        let effect =
+            state.apply_validated_realm_founding_grant(&op("capability_grant", founding), now);
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
     }
 
     #[test]
@@ -1621,7 +1696,7 @@ mod agent_key_tests {
     #[test]
     fn root_grant_without_issuer_upper_bound_is_rejected() {
         let mut state = ProjectionState::default();
-        seed_realm_owner(&mut state);
+        seed_realm_authority(&mut state);
         let effect = state.apply_capability_grant(
             &op(
                 "capability_grant",
@@ -1645,7 +1720,7 @@ mod agent_key_tests {
     #[test]
     fn root_grant_is_limited_to_issuer_effective_authority() {
         let mut state = ProjectionState::default();
-        seed_realm_owner(&mut state);
+        seed_realm_authority(&mut state);
         let effect = state.apply_capability_grant(
             &op(
                 "capability_grant",
@@ -1700,10 +1775,136 @@ mod agent_key_tests {
         ));
     }
 
+    fn project_bridge_registration(state: &mut ProjectionState) {
+        let effect = state.apply_applet_registration(
+            &op(
+                "applet_registration",
+                json!({
+                    "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
+                    "service_id": "did:web:bridge.example",
+                    "namespace": "bridge",
+                    "claimed_profiles": [
+                        "ak.profile.applet_service.v1",
+                        "ak.profile.applet_bridge.v1"
+                    ],
+                    "requested_scopes": ["ak.applet.ghost.provision"],
+                    "registration_epoch": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+                    "accepted_scope_ref": { "kind": "realm", "realm_id": REALM },
+                }),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::AppletProjectionUpdated { .. }
+        ));
+    }
+
+    fn bridge_grant_payload() -> serde_json::Value {
+        let mut payload = grant_payload(
+            GRANT_2,
+            "did:web:alice.example",
+            "did:web:bridge.example",
+            json!(["ak.applet.ghost.provision"]),
+            json!([{ "kind": "realm", "realm_id": REALM }]),
+        );
+        payload["grant"]["constraints"] = json!([{
+            "constraint_kind": "delegation_control",
+            "constraint_subkind": "applet_delegation",
+            "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
+            "executed_by": "did:web:bridge.example",
+            "registration_epoch": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+        }]);
+        payload
+    }
+
+    #[test]
+    fn applet_bridge_non_event_grant_uses_exact_profile_rule() {
+        let mut state = ProjectionState::default();
+        seed_realm_authority(&mut state);
+        project_bridge_registration(&mut state);
+        let effect = state.apply_capability_grant(
+            &op("capability_grant", bridge_grant_payload()),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+    }
+
+    #[test]
+    fn realm_owner_without_admin_grant_cannot_issue_applet_non_event_grant() {
+        let mut state = ProjectionState::default();
+        let now = chrono::Utc::now();
+        state.realm_states.insert(
+            REALM.to_owned(),
+            SolandRealmState {
+                realm_id: REALM.to_owned(),
+                owner: Some("did:web:alice.example".to_owned()),
+                title: None,
+                deleted: false,
+                archived: false,
+                frozen: false,
+                freeze_expires_at: None,
+                created_at: now,
+                updated_at: now,
+                trust_domain: None,
+                terminal_state: None,
+                successor_realm_id: None,
+                default_strand_id: None,
+                active_profiles: Vec::new(),
+            },
+        );
+        project_bridge_registration(&mut state);
+        let effect =
+            state.apply_capability_grant(&op("capability_grant", bridge_grant_payload()), now);
+        assert!(matches!(
+            effect,
+            crate::reducer::ProjectionEffect::Rejected { reason }
+                if reason == "grant_exceeds_issuer_authority"
+        ));
+    }
+
+    #[test]
+    fn applet_bridge_non_event_grant_rejects_profile_and_binding_mutations() {
+        let mut state = ProjectionState::default();
+        seed_realm_authority(&mut state);
+        project_bridge_registration(&mut state);
+        let base = bridge_grant_payload();
+        let mut mutations = Vec::new();
+
+        let mut wrong_subject = base.clone();
+        wrong_subject["grant"]["subject"] = json!("did:web:other.example");
+        mutations.push(wrong_subject);
+        let mut wrong_epoch = base.clone();
+        wrong_epoch["grant"]["constraints"][0]["registration_epoch"] =
+            json!("sha256:2222222222222222222222222222222222222222222222222222222222222222");
+        mutations.push(wrong_epoch);
+        let mut wrong_applet = base.clone();
+        wrong_applet["grant"]["constraints"][0]["applet_id"] =
+            json!("ak:applet:01970000-0000-7000-8000-0000000000b1");
+        mutations.push(wrong_applet);
+        let mut wrong_subkind = base.clone();
+        wrong_subkind["grant"]["constraints"][0]["constraint_subkind"] =
+            json!("max_delegation_depth");
+        mutations.push(wrong_subkind);
+        let mut widened_scope = base;
+        widened_scope["grant"]["resources"] = json!(["*"]);
+        mutations.push(widened_scope);
+
+        for payload in mutations {
+            assert_eq!(
+                state.validate_grant_issuer_upper_bound(&op("capability_grant", payload)),
+                Err("grant_exceeds_issuer_authority")
+            );
+        }
+    }
+
     #[test]
     fn delegated_grant_cannot_outlive_parent_expiry() {
         let mut state = ProjectionState::default();
-        seed_realm_owner(&mut state);
+        seed_realm_authority(&mut state);
         let parent_expiry = chrono::Utc::now() + chrono::Duration::hours(1);
         let child_expiry = parent_expiry + chrono::Duration::hours(1);
         let mut parent = grant_payload(
@@ -1744,7 +1945,7 @@ mod agent_key_tests {
     #[test]
     fn delegated_grant_from_revoked_parent_is_rejected() {
         let mut state = ProjectionState::default();
-        seed_realm_owner(&mut state);
+        seed_realm_authority(&mut state);
         let parent = grant_payload(
             GRANT,
             "did:web:alice.example",
@@ -1881,7 +2082,7 @@ mod delegation_cycle_tests {
         // Project g_b delegated from root g_a, so the chain is g_a <- g_b.
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
-        proj.apply_capability_grant(
+        proj.apply_validated_realm_founding_grant(
             &root_grant_op(G_A, "did:web:alice.example", "did:web:alice.example"),
             chrono::Utc::now(),
         );
@@ -1919,7 +2120,7 @@ mod delegation_cycle_tests {
     fn delegated_grant_must_decrement_parent_depth() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
-        proj.apply_capability_grant(
+        proj.apply_validated_realm_founding_grant(
             &root_grant_op_with_constraints(
                 G_A,
                 "did:web:alice.example",
@@ -1953,7 +2154,7 @@ mod delegation_cycle_tests {
     fn delegated_grant_rejects_when_parent_depth_exhausted() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
-        proj.apply_capability_grant(
+        proj.apply_validated_realm_founding_grant(
             &root_grant_op_with_constraints(
                 G_A,
                 "did:web:alice.example",
@@ -1991,6 +2192,7 @@ mod federation_revoke_fanout_tests {
     const OWNER: &str = "did:web:alice.example";
     const PEER_SERVICE_ID: &str = "did:web:beta.example";
     const GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d1";
+    const FOUNDING_GRANT: &str = "ak:grant:01970000-0000-7000-8000-0000000000d0";
 
     fn capability_op(operation_id: &str, kind: &str, payload: serde_json::Value) -> Operation {
         Operation::create(
@@ -2001,7 +2203,7 @@ mod federation_revoke_fanout_tests {
         )
     }
 
-    fn seed_realm_owner(state: &mut ProjectionState) {
+    fn seed_realm_authority(state: &mut ProjectionState) {
         let now = chrono::Utc::now();
         state.realm_states.insert(
             REALM.to_owned(),
@@ -2022,6 +2224,29 @@ mod federation_revoke_fanout_tests {
                 active_profiles: Vec::new(),
             },
         );
+        let registry_digest = arkret_policy::current_capability_action_registry_digest()
+            .expect("embedded capability action registry");
+        let founding = capability_op(
+            "ak:operation:01970000-0000-7000-8000-0000000000a0",
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            json!({
+                "grant_id": FOUNDING_GRANT,
+                "grant": {
+                    "id": FOUNDING_GRANT,
+                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "realm_id": REALM,
+                    "issuer": OWNER,
+                    "subject": OWNER,
+                    "actions": ["ak.realm.admin"],
+                    "capability_action_registry_digest": registry_digest,
+                    "resources": [{ "kind": "realm", "realm_id": REALM }],
+                }
+            }),
+        );
+        assert!(matches!(
+            state.apply_validated_realm_founding_grant(&founding, now),
+            ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
     }
 
     fn delivery_binding_grant_payload() -> serde_json::Value {
@@ -2049,7 +2274,7 @@ mod federation_revoke_fanout_tests {
     #[test]
     fn revoking_service_delegation_marks_peer_delivery_revoked() {
         let mut state = ProjectionState::default();
-        seed_realm_owner(&mut state);
+        seed_realm_authority(&mut state);
         let now = chrono::Utc::now();
 
         // Before any grant: nothing revoked.

@@ -2,9 +2,8 @@
 //!
 //! Evaluates grants to determine whether an actor may perform an action
 //! on a resource within a scope. Default rules:
-//! - Owner gets ordinary Realm-level actions
-//! - Circle-local management actions require explicit Circle-scoped grants
-//! - Explicit grants authorize non-owner actors
+//! - Active explicit grants authorize actors
+//! - Realm ownership and membership never imply a capability
 //!
 //! ## G3.S2 — policy server integration
 //!
@@ -79,8 +78,8 @@ impl SolandAuthzEngine {
         }
     }
 
-    /// Create a new owner-issued (root) grant. Use [`Self::create_delegated_grant`]
-    /// when the issuer is a non-owner re-delegating a capability they hold.
+    /// Create a new root grant after the caller has validated issuer authority.
+    /// Use [`Self::create_delegated_grant`] for re-delegation.
     pub fn create_grant(
         &self,
         realm_id: String,
@@ -326,9 +325,7 @@ impl SolandAuthzEngine {
 
     /// Check if an actor can perform an action on a resource.
     ///
-    /// Default rules (when no explicit grants exist):
-    /// - Owner of the realm → all registered Realm-level actions allowed
-    /// - Everyone else → denied
+    /// When no explicit active grant matches, authorization is denied.
     #[allow(clippy::too_many_arguments)]
     pub fn check(
         &self,
@@ -336,8 +333,8 @@ impl SolandAuthzEngine {
         action: &str,
         resource: &str,
         realm_id: &str,
-        owner: Option<&str>,
-        members: &[String],
+        _owner: Option<&str>,
+        _members: &[String],
         resource_facets: &[String],
     ) -> AuthzResult {
         if let Err(reason) = validate_runtime_capability_action(action) {
@@ -437,33 +434,6 @@ impl SolandAuthzEngine {
             &snapshot, actor, action, resource, realm_id, now,
         );
 
-        // Default rules. Circle-local management deliberately does not use the
-        // owner shortcut: Realm ownership/admin handoff must not imply
-        // membership, audit, or management over existing Circle scopes.
-        if circle_local_management_action_requires_explicit_grant(action) {
-            if has_revoked_upstream_grant {
-                return AuthzResult {
-                    allowed: false,
-                    reason: arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM.to_owned(),
-                    reason_detail: None,
-                    grants: Vec::new(),
-                };
-            }
-            return AuthzResult {
-                allowed: false,
-                reason: default_deny_reason(action).to_owned(),
-                reason_detail: None,
-                grants: Vec::new(),
-            };
-        }
-        if owner.is_some_and(|o| o == actor) {
-            return AuthzResult {
-                allowed: true,
-                reason: "owner".to_owned(),
-                reason_detail: None,
-                grants: Vec::new(),
-            };
-        }
         if has_revoked_upstream_grant {
             return AuthzResult {
                 allowed: false,
@@ -472,8 +442,6 @@ impl SolandAuthzEngine {
                 grants: Vec::new(),
             };
         }
-
-        let _ = members;
 
         AuthzResult {
             allowed: false,
@@ -545,16 +513,6 @@ fn matching_request_has_revoked_upstream_grant(
             && resource_matches(&grant.resource, resource)
             && grant_revoked_upstream(snapshot, &grant.grant_id, now)
     })
-}
-
-fn circle_local_management_action_requires_explicit_grant(action: &str) -> bool {
-    matches!(
-        action,
-        "ak.circle.manage"
-            | "ak.circle.member.manage"
-            | "ak.circle.member.add.others"
-            | "ak.circle.audit"
-    )
 }
 
 /// Check if a grant resource pattern matches the requested resource.
@@ -1153,7 +1111,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owner_gets_all_actions() {
+    fn owner_without_explicit_grant_is_denied() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
@@ -1164,12 +1122,12 @@ mod tests {
             &[],
             &[],
         );
-        assert!(result.allowed);
-        assert_eq!(result.reason, "owner");
+        assert!(!result.allowed);
+        assert_eq!(result.reason, "no_strand_track_message_grant");
     }
 
     #[test]
-    fn unknown_action_denied_before_owner_default_allow() {
+    fn unknown_action_denied_for_owner_without_registry_entry() {
         let engine = SolandAuthzEngine::new();
         let result = engine.check(
             "did:web:alice",
