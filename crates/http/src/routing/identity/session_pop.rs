@@ -151,17 +151,28 @@ async fn enforce_session_pop(state: &AppState, req: &mut Request) -> Result<(), 
 
     // `content-digest` is mandatory only for body-bearing requests
     // (service-http-binding.md §2.5); a body-less signed GET need not carry it.
-    let policy = if body.is_empty() {
-        SignatureVerificationPolicy::new(vec![
+    let mut required_components = if body.is_empty() {
+        vec![
             Component::Method,
             Component::TargetUri,
             Component::Authority,
-        ])
-        .require_content_digest(false)
+        ]
     } else {
-        SignatureVerificationPolicy::service_ingest().require_content_digest(true)
+        vec![
+            Component::Method,
+            Component::TargetUri,
+            Component::Authority,
+            Component::Header("content-digest".to_owned()),
+        ]
+    };
+    for header_name in ["idempotency-key", "x-arkret-wait-for"] {
+        if req.headers().contains_key(header_name) {
+            required_components.push(Component::Header(header_name.to_owned()));
+        }
     }
-    .max_clock_skew_seconds(MAX_CLOCK_SKEW_SECONDS);
+    let policy = SignatureVerificationPolicy::new(required_components)
+        .require_content_digest(!body.is_empty())
+        .max_clock_skew_seconds(MAX_CLOCK_SKEW_SECONDS);
 
     let verified = verify_signed_http_message(
         &method,

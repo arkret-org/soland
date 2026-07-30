@@ -261,6 +261,19 @@ pub(super) async fn put_key_backup(
 ) -> JsonResult<KeysBackupsReplaceOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
+    let idempotency_key = req
+        .headers()
+        .get("idempotency-key")
+        .and_then(|value| value.to_str().ok())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| AppError::invalid_param("Idempotency-Key is required for key-backup PUT"))?
+        .to_owned();
+    if idempotency_key.len() > 128 {
+        return Err(AppError::invalid_param(
+            "Idempotency-Key must not exceed 128 bytes",
+        ));
+    }
     let backup_id = backup_id.into_inner();
     if backup_id.trim().is_empty() {
         return Err(AppError::invalid_param("backup_id is required"));
@@ -278,6 +291,34 @@ pub(super) async fn put_key_backup(
     // type (matching `request_schema_ref: key-backup.schema.json`), so the
     // OpenAPI request contract is strong rather than `Value`.
     let backup = backup.into_inner();
+    let request_hash = arkret_canonical::canonical_sha256(&backup).map_err(|error| {
+        AppError::invalid_param(format!(
+            "key backup body is not canonical-hashable: {error}"
+        ))
+    })?;
+    match state
+        .jobs()
+        .idempotency_record(&session.actor, &idempotency_key)
+        .await
+        .map_err(|error| AppError::internal(format!("idempotency lookup failed: {error}")))?
+    {
+        Some(record) if record.request_hash == request_hash => {
+            let outcome = serde_json::from_value(record.response_body).map_err(|error| {
+                AppError::internal(format!(
+                    "stored key-backup replay outcome is invalid: {error}"
+                ))
+            })?;
+            return json_ok(outcome);
+        }
+        Some(_) => {
+            return Err(AppError::new(
+                ErrorCode::DuplicateConflict,
+                "Idempotency-Key was reused with a different key-backup body",
+            )
+            .with_status(StatusCode::CONFLICT));
+        }
+        None => {}
+    }
     validate_key_backup_body_typed(&typed_backup_id, &session.actor, &backup)?;
     if backup.is_first_did_recovery_backup() && !backup.satisfies_first_did_recovery_backup_gate() {
         return Err(AppError::new(
@@ -311,11 +352,20 @@ pub(super) async fn put_key_backup(
         .map_err(|error| AppError::internal(format!("key backup lookup failed: {error}")))?;
     let duplicate = key_backup_idempotent_retry(existing.as_ref(), &session.actor, &backup_value)?;
     if duplicate {
-        return json_ok(KeysBackupsReplaceOutcome {
+        let outcome = KeysBackupsReplaceOutcome {
             status: KeyBackupPutStatus::Duplicate,
             backup_id: typed_backup_id,
             ciphertext_digest,
-        });
+        };
+        persist_key_backup_idempotency(
+            state,
+            &session.actor,
+            &idempotency_key,
+            &request_hash,
+            &outcome,
+        )
+        .await;
+        return json_ok(outcome);
     }
     enforce_key_backup_series_chain_typed(state, &session.actor, &backup).await?;
     state
@@ -354,15 +404,50 @@ pub(super) async fn put_key_backup(
         )
         .await;
     }
-    json_ok(KeysBackupsReplaceOutcome {
-        status: if duplicate {
-            KeyBackupPutStatus::Duplicate
-        } else {
-            KeyBackupPutStatus::Accepted
-        },
+    let outcome = KeysBackupsReplaceOutcome {
+        status: KeyBackupPutStatus::Accepted,
         backup_id: typed_backup_id,
         ciphertext_digest,
-    })
+    };
+    persist_key_backup_idempotency(
+        state,
+        &session.actor,
+        &idempotency_key,
+        &request_hash,
+        &outcome,
+    )
+    .await;
+    json_ok(outcome)
+}
+
+async fn persist_key_backup_idempotency(
+    state: &AppState,
+    principal_id: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+    outcome: &KeysBackupsReplaceOutcome,
+) {
+    let created_at = chrono::Utc::now();
+    let response_body = match serde_json::to_value(outcome) {
+        Ok(value) => value,
+        Err(error) => {
+            tracing::warn!(%error, idempotency_key, "key-backup replay outcome serialization failed");
+            return;
+        }
+    };
+    let record = soland_services::jobs::IdempotencyState {
+        principal_id: principal_id.to_owned(),
+        idempotency_key: idempotency_key.to_owned(),
+        service_id: state.service_id().clone(),
+        request_hash: request_hash.to_owned(),
+        response_status: StatusCode::OK.as_u16() as i32,
+        response_body,
+        created_at,
+        expires_at: created_at + chrono::Duration::hours(24),
+    };
+    if let Err(error) = state.jobs().store_idempotency_record(record).await {
+        tracing::warn!(%error, idempotency_key, "key-backup idempotency outcome persist failed");
+    }
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.self.keys.backups.query.list", tags("identity"))]

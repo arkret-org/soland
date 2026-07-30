@@ -569,38 +569,14 @@ pub(super) async fn erase_account(
         }
     }
 
-    // Revoke every device record so other surfaces (key delivery,
-    // device lookup) can treat the actor as a fully revoked principal.
-    let mut devices_revoked = 0usize;
-    let devices = state
-        .identities()
-        .devices_for_actor(&actor)
-        .await
-        .unwrap_or_default();
-    for mut device in devices {
-        if device.revoked_at.is_some() {
-            continue;
-        }
-        device.revoked_at = Some(now());
-        device.updated_at = now();
-        let _ = state
-            .identities()
-            .save_device(soland_services::identity::SaveDeviceCommand {
-                actor_id: actor.clone(),
-                device_id: device.device_id.clone(),
-                display_name: device.display_name.clone(),
-                device,
-            })
-            .await;
-        devices_revoked += 1;
-    }
-
-    let sessions_revoked = revoke_sessions_for_actor(state, &actor).await.unwrap_or(0);
+    let previous_state = state.account_lifecycle_state(&actor);
+    let fanout = run_account_deactivation_fanout(state, &actor).await?;
+    let sessions_revoked = fanout.sessions_revoked;
+    let devices_revoked = fanout.devices_revoked;
     // Spec: A.3 GDPR erasure cascade — remove the principal from every
     // Realm membership index so realm-scoped reads stop yielding the
     // actor without waiting for the projection rewrite worker.
     let memberships_removed = remove_realm_memberships_for_actor(state, &actor);
-    let previous_state = state.account_lifecycle_state(&actor);
     let changed_at = now();
     let lifecycle_record = AccountLifecycleState {
         state: "erasure_pending".to_owned(),
@@ -619,12 +595,12 @@ pub(super) async fn erase_account(
         changed_at,
         sessions_revoked,
         devices_revoked,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
+        fanout.applet_delegated_sessions_revoked,
+        fanout.keypackages_retired,
+        fanout.push_routes_revoked,
+        fanout.to_device_messages_dropped,
+        fanout.identity_link_cache_invalidated,
+        fanout.capability_cache_invalidated,
     )
     .await;
 

@@ -446,7 +446,7 @@ async fn resolve_enrollment_authority_designation_at(
     ))
 }
 
-async fn did_document_at(
+pub(super) async fn did_document_at(
     state: &AppState,
     did: &str,
     accepted_at: chrono::DateTime<chrono::Utc>,

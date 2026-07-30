@@ -234,7 +234,7 @@ impl ProjectionState {
         };
         if !matches!(
             decision_kind.as_str(),
-            "hard_deny" | "quarantine" | "require_review"
+            "hard_deny" | "quarantine" | "require_review" | "dismiss"
         ) {
             return ProjectionEffect::Rejected {
                 reason: "moderation_decision_kind_invalid".to_owned(),
@@ -254,6 +254,17 @@ impl ProjectionState {
             };
         };
         let realm_id = operation.realm_id.to_string();
+        if decision_kind == "dismiss" {
+            if !target_ref.starts_with("ak:event:") {
+                return ProjectionEffect::Rejected {
+                    reason: "moderation_dismiss_requires_report_event".to_owned(),
+                };
+            }
+            return ProjectionEffect::ModerationDecisionProjected {
+                decision_id,
+                realm_id,
+            };
+        }
         let Some(cell_ref) = Self::moderation_state_cell_ref(&target_ref) else {
             return ProjectionEffect::Rejected {
                 reason: "moderation_decision_cell_ref_invalid".to_owned(),

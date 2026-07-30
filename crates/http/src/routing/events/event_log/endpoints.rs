@@ -531,6 +531,8 @@ async fn resolve_events(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
+    body.validate()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
     if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
         return Err(AppError::new(
             ErrorCode::QuotaExceeded,
@@ -539,8 +541,10 @@ async fn resolve_events(
     }
     let service = state.event_queries();
     let mut found = Vec::new();
+    let mut seals = Vec::new();
     let mut missing = Vec::new();
-    for event_id in body.event_ids {
+    let include_payload = body.include_payload.unwrap_or(true);
+    for event_id in &body.event_ids {
         let event_id_string = event_id.to_string();
         match service
             .canonical_event(&event_id_string)
@@ -549,13 +553,57 @@ async fn resolve_events(
             .flatten()
         {
             Some(record) if event_visible_to_session(state, &record, &session).await => {
-                found.push(sdk_event_for_state(state, &record)?);
+                let mut event = sdk_event_for_state(state, &record)?;
+                if !include_payload {
+                    event.payload.clear();
+                }
+                found.push(event);
             }
             _ => missing.push(event_id_string),
         }
     }
+    if !body.event_digests.is_empty() {
+        let records = service
+            .canonical_events()
+            .await
+            .map_err(|error| AppError::internal(format!("events resolve: {error}")))?;
+        for digest in &body.event_digests {
+            let Some(record) = records
+                .iter()
+                .find(|record| record.canonical_digest == digest.as_str())
+            else {
+                missing.push(digest.to_string());
+                continue;
+            };
+            if !event_visible_to_session(state, record, &session).await {
+                missing.push(digest.to_string());
+                continue;
+            }
+            if !found
+                .iter()
+                .any(|event| event.event_id.as_str() == record.event_id)
+            {
+                let mut event = sdk_event_for_state(state, record)?;
+                if !include_payload {
+                    event.payload.clear();
+                }
+                found.push(event);
+            }
+        }
+    }
+    for seal_ref in &body.seal_refs {
+        match state.projections().seal_by_id(seal_ref) {
+            Ok(Some(seal))
+                if realm_has_member(state, seal.realm_id.as_str(), &session.actor).await =>
+            {
+                seals.push(seal);
+            }
+            _ => missing.push(seal_ref.to_string()),
+        }
+    }
     json_ok(EventsResolveOutcome {
         events: found,
+        seals,
         missing,
         unauthorized: Vec::new(),
     })

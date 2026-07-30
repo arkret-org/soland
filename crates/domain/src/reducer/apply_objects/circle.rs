@@ -50,7 +50,7 @@ impl ProjectionState {
         // uses.
         if self.realm_is_destroyed(&realm_id) {
             return ProjectionEffect::Rejected {
-                reason: "circle_realm_terminal".to_owned(),
+                reason: "realm_terminal_state".to_owned(),
             };
         }
         if !self.realm_states.contains_key(&realm_id) && self.realm_create_log(&realm_id).is_none()

@@ -347,13 +347,19 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .iter()
         .map(|event| event.event_id.clone())
         .collect::<Vec<_>>();
+    let cursor = match ids.last() {
+        Some(event_id) => Some(
+            super::super::super::sync::sync_barrier_token_for_event(state, session, event_id).await,
+        ),
+        None => None,
+    };
     let mut outcome = events_submit_outcome(
         EventsSubmitStatus::Accepted,
         ids,
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        Some(super::super::super::sync::sync_token_for_state(state).await),
+        cursor,
     );
     outcome.ingress_receipts = ingress_receipts;
     outcome.control_proposal_receipts = proposal_receipts;

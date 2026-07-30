@@ -272,37 +272,22 @@ pub async fn wait_for_sync_token(
         );
         return;
     };
-    let mut token_count = 0usize;
-    for token in header_value.split(',').map(str::trim) {
-        if token.is_empty() {
-            continue;
-        }
-        token_count += 1;
-        if !is_valid_sync_token(token) {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "invalid_param",
-                "X-Arkret-Wait-For must contain ak:cursor sync tokens",
-            );
-            return;
-        }
-    }
-    if token_count == 0 {
+    let token = header_value.trim();
+    if token.is_empty() || token.contains(',') || !is_valid_sync_token(token) {
         render_error(
             res,
             StatusCode::BAD_REQUEST,
             "invalid_param",
-            "X-Arkret-Wait-For must contain at least one sync token",
+            "X-Arkret-Wait-For must contain exactly one ak:cursor token",
         );
         return;
     }
-    res.headers_mut().insert(
-        salvo::http::header::HeaderName::from_static("x-arkret-wait-for-satisfied"),
-        "true".parse().unwrap(),
-    );
+    depot.insert_typed(WaitForSyncToken(token.to_owned()));
     ctrl.call_next(req, depot, res).await;
 }
+
+#[derive(Clone, Debug)]
+pub struct WaitForSyncToken(pub String);
 
 /// Unit tests for the `api_not_found` 404/405 disambiguation logic —
 /// specifically [`pattern_matches_path`] and the supporting helpers.

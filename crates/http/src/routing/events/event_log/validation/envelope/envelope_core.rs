@@ -396,6 +396,9 @@ async fn validate_event_envelope_with_ingress(
     if kind == "ak.device.authorize" {
         validate_device_enrollment_authority_binding(state, object, &actor_id).await?;
     }
+    if kind == arkret_wire::events::EventKind::ACCOUNT_STATUS {
+        validate_account_status_service_binding(state, object).await?;
+    }
     validate_audit_accessed_payload(&kind, object)?;
     // Round R2/R3 (T08) — cross_domain replay defence MUST run BEFORE the
     // signature check (verified below in `validate_event_proofs`). Aggressive

@@ -900,14 +900,13 @@ async fn submit_event_batch_outcome_with_leases(
     } else {
         EventsSubmitStatus::Accepted
     };
-    let mut outcome = events_submit_outcome(
-        status,
-        accepted,
-        duplicate,
-        rejected,
-        quarantine,
-        Some(super::super::sync::sync_token_for_state(state).await),
-    );
+    let cursor = if let Some(event_id) = accepted.last() {
+        Some(super::super::sync::sync_barrier_token_for_event(state, session, event_id).await)
+    } else {
+        None
+    };
+    let mut outcome =
+        events_submit_outcome(status, accepted, duplicate, rejected, quarantine, cursor);
     outcome.ingress_receipts = ingress_receipts;
     outcome.realm_actor_frontiers = realm_actor_frontiers.into_values().collect();
     Ok(outcome)

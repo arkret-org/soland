@@ -138,6 +138,7 @@ pub(crate) fn is_valid_event_id(value: &str) -> bool {
 
 pub(in crate::routing) async fn event_submit_response(
     state: &AppState,
+    session: &SessionRecord,
     status: EventsSubmitStatus,
     event_id: String,
     realm_actor_frontier: RealmActorFrontierView,
@@ -153,7 +154,7 @@ pub(in crate::routing) async fn event_submit_response(
         },
         Vec::new(),
         Vec::new(),
-        Some(super::super::sync::sync_token_for_state(state).await),
+        Some(super::super::sync::sync_barrier_token_for_event(state, session, &event_id).await),
     );
     outcome.realm_actor_frontiers = vec![realm_actor_frontier];
     SubmittedEventOutcome {

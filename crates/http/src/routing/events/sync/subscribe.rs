@@ -106,6 +106,25 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
         None => return,
     };
     let filter_value = sync_filter_value(body.filter.as_ref());
+    let wait_for_event_id =
+        if let Ok(wait_for) = depot.get_typed::<soland_http::openapi_routes::WaitForSyncToken>() {
+            match parse_and_validate_barrier_cursor(
+                &wait_for.0,
+                &state,
+                &session,
+                chrono::Utc::now().timestamp_millis(),
+            )
+            .await
+            {
+                Ok(event_id) => Some(event_id),
+                Err(error) => {
+                    render_account_cursor_error(res, error, true);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
     let subscribe_scope_key = account_subscribe_scope_key(req, Some(&session), &body);
     if reject_subscribe_reconnect(&state, &subscribe_scope_key, res) {
         return;
@@ -178,10 +197,31 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     // `set_presence`-style subscribe parameter exists and establishing or
     // replaying a subscription never triggers a server-side mutation.
 
-    // Subscribe to broadcast BEFORE building the initial snapshot so an
+    // Subscribe to broadcast BEFORE checking the barrier/building the initial snapshot so an
     // event landing between snapshot-build and long-poll subscribe is not
     // missed.
     let mut rx = state.subscribe_event_notifications();
+    if let Some(event_id) = wait_for_event_id.as_deref() {
+        if !wait_for_account_projection_barrier(&state, &mut rx, event_id).await {
+            let current = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
+            let envelope = arkret_wire::problem_details::ErrorEnvelope::new(
+                "temporarily_unavailable",
+                "account projection did not reach the requested barrier before timeout",
+            )
+            .with_request_id(arkret_identifiers::new_prefixed_uuid7("ak:request:"))
+            .with_detail(
+                "frontier",
+                current.cursor.map(Value::String).unwrap_or(Value::Null),
+            );
+            res.status_code(StatusCode::SERVICE_UNAVAILABLE);
+            res.render(Json(envelope));
+            return;
+        }
+        res.headers_mut().insert(
+            salvo::http::header::HeaderName::from_static("x-arkret-wait-for-satisfied"),
+            salvo::http::HeaderValue::from_static("true"),
+        );
+    }
     let response = build_sync_snapshot(&state, Some(&session), &body, &after_cursor).await;
     let initial_cursor = response.cursor.clone();
     let initial_has_delta = body.after.is_none() || !delta_is_empty(&response);
@@ -403,7 +443,63 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
         catchup: query_param(req, "catchup").and_then(|value| value.parse::<bool>().ok()),
         filter: query_param(req, "filter").and_then(|value| serde_json::from_str(&value).ok()),
         subscriptions: None,
-        wait_for: None,
+    }
+}
+
+async fn wait_for_account_projection_barrier(
+    state: &AppState,
+    rx: &mut tokio::sync::broadcast::Receiver<crate::state::EventNotification>,
+    event_id: &str,
+) -> bool {
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_millis(ACCOUNT_SUBSCRIBE_DEFAULT_WAIT_MS);
+    loop {
+        match state.event_queries().projected_event(event_id).await {
+            Ok(Some(_)) => return true,
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, event_id, "account barrier projection lookup failed");
+            }
+        }
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => return false,
+            notification = rx.recv() => match notification {
+                Ok(_) | Err(RecvError::Lagged(_)) => {}
+                Err(RecvError::Closed) => return false,
+            }
+        }
+    }
+}
+
+fn render_account_cursor_error(res: &mut Response, error: SyncCursorError, barrier: bool) {
+    let context = if barrier {
+        "X-Arkret-Wait-For"
+    } else {
+        "after"
+    };
+    match error {
+        SyncCursorError::Expired => soland_http::error::render_error_code(
+            soland_http::error::ErrorCode::CursorExpired,
+            res,
+            &format!("{context} cursor has expired"),
+        ),
+        SyncCursorError::Invalid(message) => soland_http::error::render_error_code(
+            soland_http::error::ErrorCode::InvalidParam,
+            res,
+            message,
+        ),
+        SyncCursorError::Mismatch(message) | SyncCursorError::Integrity(message) => {
+            soland_http::error::render_error_code(
+                soland_http::error::ErrorCode::CursorIntegrityInvalid,
+                res,
+                message,
+            )
+        }
+        SyncCursorError::Revoked => soland_http::error::render_error_code(
+            soland_http::error::ErrorCode::CursorRevoked,
+            res,
+            &format!("{context} cursor authority has been revoked"),
+        ),
     }
 }
 

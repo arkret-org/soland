@@ -964,14 +964,19 @@ async fn drain_store_forward(
     aa: AuthArgs,
     depot: &mut Depot,
     req: &mut Request,
+    res: &mut Response,
 ) -> JsonResult<DrainStoreForwardResponseBody> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     require_admin_principal(state, session)?;
     let mut guard = state.federation().sovereign_state();
     if !guard.upstream_available {
+        res.headers_mut().insert(
+            salvo::http::header::RETRY_AFTER,
+            salvo::http::HeaderValue::from_static("1"),
+        );
         return Err(AppError::capability_denied("upstream_unavailable")
-            .with_status(StatusCode::PRECONDITION_FAILED)
+            .with_status(StatusCode::SERVICE_UNAVAILABLE)
             .with_wire_code("upstream_unavailable"));
     }
     let now = chrono::Utc::now();

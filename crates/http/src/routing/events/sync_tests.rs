@@ -527,7 +527,6 @@ fn roster_body(audience: &str) -> SyncRequestBody {
             },
         ),
         subscriptions: None,
-        wait_for: None,
     }
 }
 

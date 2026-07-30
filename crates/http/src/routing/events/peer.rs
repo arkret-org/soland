@@ -6,9 +6,9 @@ use arkret_models_collaboration::event_sync::{
     EventsFrontierFederationPeerState, EventsSubmitFederationRequestBody, MAX_FEDERATED_EVENTS,
 };
 use arkret_models_collaboration::http_bodies::{
-    EventsQueryOutcome, EventsResolveOutcome, EventsResolveRequestBody,
+    EventsQueryOutcome, PeerEventsResolveOutcome, PeerEventsResolveRequestBody,
 };
-use arkret_wire::{SignalRelayOutcome, SignalRelayRequest};
+use arkret_wire::{CbaProofBundle, SignalRelayOutcome, SignalRelayRequest};
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
@@ -29,7 +29,7 @@ use crate::state::AppState;
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
 const MAX_PEER_EVENTS_QUERY_LIMIT: usize = 100;
-const MAX_PEER_EVENTS_RESOLVE: usize = 100;
+const MAX_PEER_EVENTS_RESOLVE: usize = 1024;
 
 #[derive(Debug, Serialize, salvo::oapi::ToSchema)]
 struct PeerEventsDescribeOutcome {
@@ -229,23 +229,18 @@ async fn peer_events_query_post(
 async fn peer_events_resolve(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<EventsResolveOutcome> {
+) -> JsonResult<PeerEventsResolveOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     validate_peer_request(state, req, true).await?;
-    let request = parse_json_body::<EventsResolveRequestBody>(
+    let request = parse_json_body::<PeerEventsResolveRequestBody>(
         req,
         "invalid ak.peer.events.query.resolve request body",
     )
     .await?;
+    request
+        .validate()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
     let source_service_id = source_service_id_from_request(req)?;
-    if request.event_ids.len() + request.event_digests.len() > MAX_PEER_EVENTS_RESOLVE {
-        return Err(AppError::new(
-            soland_http::error::ErrorCode::PayloadTooLarge,
-            "too many events requested",
-        )
-        .with_status(StatusCode::PAYLOAD_TOO_LARGE)
-        .with_wire_code("payload_too_large"));
-    }
     for digest in &request.event_digests {
         if !is_valid_hash_digest(digest.as_str()) {
             return Err(AppError::invalid_param(format!(
@@ -274,6 +269,9 @@ async fn peer_events_resolve(
     let mut found_ids = BTreeSet::new();
     let mut found_digests = BTreeSet::new();
     for record in records {
+        if record.realm_id.as_deref() != Some(request.realm_id.as_str()) {
+            continue;
+        }
         let id_match = requested_ids.contains(record.event_id.as_str());
         let digest_match = requested_digests.contains(record.canonical_digest.as_str());
         if !id_match && !digest_match {
@@ -290,22 +288,97 @@ async fn peer_events_resolve(
         }
         events.push(event);
     }
-    let mut missing = Vec::new();
-    for id in request.event_ids {
+    events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
+    let mut missing_event_ids = Vec::new();
+    for id in &request.event_ids {
         if !found_ids.contains(id.as_str()) {
-            missing.push(id.to_string());
+            missing_event_ids.push(id.clone());
         }
     }
-    for digest in request.event_digests {
+    let mut missing_event_digests = Vec::new();
+    for digest in &request.event_digests {
         if !found_digests.contains(digest.as_str()) {
-            missing.push(digest.to_string());
+            missing_event_digests.push(digest.clone());
         }
     }
-    json_ok(EventsResolveOutcome {
+    let mut cba_proof_bundles = Vec::new();
+    let mut missing_seal_refs = Vec::new();
+    for seal_ref in &request.seal_refs {
+        if !authz.frontier_visible_for_realm(request.realm_id.as_str()) {
+            missing_seal_refs.push(seal_ref.clone());
+            continue;
+        }
+        match peer_cba_bundle_for_seal(state, seal_ref) {
+            Ok(Some(bundle))
+                if bundle
+                    .seals
+                    .iter()
+                    .all(|seal| seal.realm_id == request.realm_id) =>
+            {
+                cba_proof_bundles.push(bundle);
+            }
+            _ => missing_seal_refs.push(seal_ref.clone()),
+        }
+    }
+    cba_proof_bundles.sort_by(|left, right| {
+        left.target_seal_ref
+            .as_str()
+            .cmp(right.target_seal_ref.as_str())
+    });
+    let outcome = PeerEventsResolveOutcome {
         events,
-        missing,
-        unauthorized: Vec::new(),
-    })
+        cba_proof_bundles,
+        missing_event_ids,
+        missing_event_digests,
+        missing_seal_refs,
+    };
+    outcome
+        .validate_structural()
+        .map_err(|error| AppError::internal(error.to_string()))?;
+    let response_bytes = arkret_canonical::canonical_json_bytes(&outcome)
+        .map_err(|error| AppError::internal(format!("peer resolve response: {error}")))?;
+    let budget = request.max_response_bytes.unwrap_or(8 * 1024 * 1024) as usize;
+    if response_bytes.len() > budget {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::LimitExceeded,
+            "peer dependency response exceeds max_response_bytes",
+        ));
+    }
+    json_ok(outcome)
+}
+
+fn peer_cba_bundle_for_seal(
+    state: &AppState,
+    target_seal_ref: &arkret_identifiers::SealId,
+) -> Result<Option<CbaProofBundle>, AppError> {
+    let mut pending = vec![target_seal_ref.clone()];
+    let mut by_id = BTreeMap::new();
+    while let Some(seal_id) = pending.pop() {
+        if by_id.contains_key(&seal_id) {
+            continue;
+        }
+        let Some(seal) = state.projections().seal_by_id(&seal_id).map_err(|error| {
+            AppError::internal(format!("peer resolve read Seal {seal_id}: {error}"))
+        })?
+        else {
+            return Ok(None);
+        };
+        pending.extend(seal.predecessor_refs.iter().cloned());
+        by_id.insert(seal_id, seal);
+    }
+    if by_id.len() > arkret_wire::cba_proof_bundle::MAX_BUNDLE_SEALS {
+        return Err(AppError::new(
+            soland_http::error::ErrorCode::LimitExceeded,
+            "peer Seal prerequisite closure exceeds the v1 limit",
+        ));
+    }
+    Ok(Some(CbaProofBundle {
+        target_seal_ref: target_seal_ref.clone(),
+        seals: by_id.into_values().collect(),
+        control_moves: Vec::new(),
+        inclusion_proofs: Vec::new(),
+        availability_proofs: Vec::new(),
+    }))
 }
 
 #[salvo::oapi::endpoint(operation_id = "ak.peer.events.query.frontier", tags("events"))]

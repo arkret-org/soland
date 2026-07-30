@@ -47,7 +47,6 @@ use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use parking_lot::Mutex;
-use serde::Serialize;
 use serde_json::Value;
 use soland_services::authorization::RealmPolicyServerConfig;
 use subtle::ConstantTimeEq as _;
@@ -637,46 +636,14 @@ impl PolicyClient {
     }
 }
 
-#[derive(Debug, Serialize)]
-struct PolicyDecisionTranscript<'a> {
-    kind: &'a str,
-    request_id: &'a str,
-    decision: &'a AuthzDecision,
-    bound_to: &'a PolicyCheckBoundTo,
-    freshness_state: &'a FreshnessState,
-    auth_state_digest: &'a Hash,
-    policy_frontier_digest: &'a Hash,
-    membership_frontier_digest: &'a Hash,
-    reason_code: &'a str,
-    expires_at: &'a str,
-    #[serde(skip_serializing_if = "<[_]>::is_empty")]
-    obligations: &'a [Value],
-}
-
 pub(crate) fn policy_decision_transcript_bytes(
-    request: &PolicyCheckRequestBody,
+    _request: &PolicyCheckRequestBody,
     response: &PolicyCheckOutcome,
 ) -> Result<Vec<u8>, PolicyClientError> {
-    let expires_at = format_canonical_rfc3339(&response.expires_at);
-    let transcript = PolicyDecisionTranscript {
-        kind: "ak.policy.check.transcript.v1",
-        request_id: request.request_id.as_str(),
-        decision: &response.decision,
-        bound_to: &response.bound_to,
-        freshness_state: &response.freshness_state,
-        auth_state_digest: &response.auth_state_digest,
-        policy_frontier_digest: &response.policy_frontier_digest,
-        membership_frontier_digest: &response.membership_frontier_digest,
-        reason_code: response.reason_code.as_str(),
-        expires_at: expires_at.as_str(),
-        obligations: &response.obligations,
-    };
-    arkret_canonical::canonical_json_bytes(&transcript)
-        .map_err(|e| PolicyClientError::BadResponse(format!("policy transcript canonicalize: {e}")))
-}
-
-fn format_canonical_rfc3339(ts: &chrono::DateTime<chrono::Utc>) -> String {
-    arkret_canonical::format_timestamp_canonical(*ts)
+    arkret_models_collaboration::governance::policy_check::policy_decision_transcript_bytes(
+        response,
+    )
+    .map_err(|e| PolicyClientError::BadResponse(format!("policy transcript canonicalize: {e}")))
 }
 
 fn decode_policy_signature(sig: &str) -> Result<Signature, PolicyClientError> {

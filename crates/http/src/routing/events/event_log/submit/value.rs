@@ -532,6 +532,7 @@ pub(super) async fn submit_event_value_with_context(
             let mut response = with_ingress_receipt(
                 event_submit_response(
                     state,
+                    session,
                     EventsSubmitStatus::Duplicate,
                     existing.event_id.clone(),
                     frontier,
@@ -759,6 +760,7 @@ pub(super) async fn submit_event_value_with_context(
                 message,
             ));
         }
+        preflight_moderation_dismiss(state, operation).await?;
         preflight_account_data_cas(state, operation).await?;
         if let Err(reason) =
             crate::routing::identity::agents::sidecar::validate_sidecar_mls_event_binding(
@@ -1558,6 +1560,7 @@ pub(super) async fn submit_event_value_with_context(
     let mut accepted_response = with_ingress_receipt(
         event_submit_response(
             state,
+            session,
             EventsSubmitStatus::Accepted,
             parsed.event_id.clone(),
             prospective_frontier,
@@ -1718,6 +1721,7 @@ pub(super) async fn submit_event_value_with_context(
                     let mut response = with_ingress_receipt(
                         event_submit_response(
                             state,
+                            session,
                             EventsSubmitStatus::Duplicate,
                             parsed.event_id.clone(),
                             frontier,
@@ -1792,9 +1796,10 @@ pub(super) async fn submit_event_value_with_context(
             state,
             &parsed.actor_id,
             &parsed.device_id,
-            &[operation],
+            std::slice::from_ref(&operation),
         )
         .await;
+        resolve_moderation_dismiss_queue_item(state, &operation, &parsed.event_id).await;
     }
     if let Some(event) = projected_event {
         let _ = state.publish_event_notification(crate::state::EventNotification::event(
@@ -1840,6 +1845,102 @@ pub(super) async fn submit_event_value_with_context(
     )
     .await;
     Ok(accepted_response)
+}
+
+async fn preflight_moderation_dismiss(
+    state: &AppState,
+    operation: &arkret_event_draft::Operation,
+) -> Result<(), SubmitOneError> {
+    if operation.object_kind.as_str() != arkret_wire::events::EventKind::MODERATION_DECISION
+        || operation.payload.get("decision").and_then(Value::as_str) != Some("dismiss")
+    {
+        return Ok(());
+    }
+    let target_ref = operation
+        .payload
+        .get("target_ref")
+        .and_then(|value| {
+            value
+                .as_str()
+                .or_else(|| value.get("id").and_then(Value::as_str))
+        })
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "moderation_dismiss_requires_report_event",
+            )
+        })?;
+    let report = state
+        .event_queries()
+        .canonical_event(target_ref)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("moderation report target lookup failed: {error}"),
+            )
+        })?;
+    if report.as_ref().is_none_or(|report| {
+        report.kind != arkret_wire::events::EventKind::SELF_MODERATION_REPORT
+            || report.realm_id.as_deref() != Some(operation.realm_id.as_str())
+    }) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "moderation_dismiss_requires_report_event",
+        ));
+    }
+    Ok(())
+}
+
+async fn resolve_moderation_dismiss_queue_item(
+    state: &AppState,
+    operation: &arkret_event_draft::Operation,
+    decision_event_id: &str,
+) {
+    if operation.object_kind.as_str() != arkret_wire::events::EventKind::MODERATION_DECISION
+        || operation.payload.get("decision").and_then(Value::as_str) != Some("dismiss")
+    {
+        return;
+    }
+    let Some(target_ref) = operation.payload.get("target_ref").and_then(|value| {
+        value
+            .as_str()
+            .or_else(|| value.get("id").and_then(Value::as_str))
+    }) else {
+        return;
+    };
+    let Ok(items) = state.governance().moderation_queue_items().await else {
+        tracing::warn!(target_ref, "moderation queue lookup failed after dismiss");
+        return;
+    };
+    for mut item in items {
+        let matches_report = item
+            .get("report")
+            .and_then(|report| report.get("event_id"))
+            .and_then(Value::as_str)
+            == Some(target_ref);
+        if !matches_report || item.get("status").and_then(Value::as_str) != Some("submitted") {
+            continue;
+        }
+        if let Some(object) = item.as_object_mut() {
+            object.insert("status".to_owned(), Value::String("resolved".to_owned()));
+            object.insert(
+                "resolution".to_owned(),
+                json!({
+                    "decision": "dismiss",
+                    "effective_verdict": "none",
+                    "decision_event_id": decision_event_id,
+                }),
+            );
+            object.insert("resolved_at".to_owned(), json!(now()));
+        }
+        if let Err(error) = state.governance().upsert_moderation_queue_item(item).await {
+            tracing::warn!(%error, target_ref, "moderation queue dismiss projection failed");
+        }
+    }
 }
 
 async fn preflight_account_data_cas(

@@ -48,6 +48,7 @@ pub enum SyncCursorError {
 }
 
 pub(crate) const STREAM_CURSOR_PURPOSE: &str = "stream";
+pub(crate) const BARRIER_CURSOR_PURPOSE: &str = "barrier";
 
 fn cursor_principal_device(session: Option<&SessionRecord>) -> (String, String) {
     let principal_id = session
@@ -184,6 +185,45 @@ pub(crate) async fn sync_token_for_events_query(
     cursor.encode().expect("SDK cursor encoding cannot fail")
 }
 
+pub(crate) async fn sync_barrier_token_for_event(
+    state: &AppState,
+    session: &SessionRecord,
+    event_id: &str,
+) -> String {
+    let issued_at = chrono::Utc::now();
+    let target = json!({ "event_id": event_id });
+    let binding = barrier_cursor_handle_binding(
+        &session.actor,
+        &session.device_id,
+        state.service_id(),
+        &target,
+    );
+    let handle = derive_cursor_handle(state.sync().cursor_hmac_key(), &binding);
+    let cursor = arkret_hlc::Cursor::new_at(issued_at, 60 * 60 * 1000)
+        .expect("one-hour barrier cursor is valid")
+        .with_barrier()
+        .with_stateful_handle(handle.clone());
+    let issued_at_ms = cursor.issued_at.timestamp_millis();
+    let expires_at_ms = cursor.expires_at.timestamp_millis();
+    upsert_sync_cursor_record(
+        state,
+        SyncCursorRecord {
+            handle,
+            principal_id: Some(session.actor.clone()),
+            device_id: Some(session.device_id.clone()),
+            service_id: state.service_id().clone(),
+            filter_digest: None,
+            purpose: BARRIER_CURSOR_PURPOSE.to_owned(),
+            positions: None,
+            target: Some(target),
+            issued_at_ms,
+            expires_at_ms,
+        },
+    )
+    .await;
+    cursor.encode().expect("SDK cursor encoding cannot fail")
+}
+
 pub(crate) async fn sync_token_for_state(state: &AppState) -> String {
     sync_token_for_state_positions(state, BTreeMap::new()).await
 }
@@ -293,6 +333,23 @@ pub(crate) fn events_query_cursor_handle_binding(
         "service_id": service_id,
         "filter_digest": filter_digest,
         "purpose": STREAM_CURSOR_PURPOSE,
+        "target": target,
+    });
+    arkret_canonical::canonical_json_bytes(&binding)
+        .unwrap_or_else(|_| binding.to_string().into_bytes())
+}
+
+fn barrier_cursor_handle_binding(
+    principal_id: &str,
+    device_id: &str,
+    service_id: &str,
+    target: &Value,
+) -> Vec<u8> {
+    let binding = json!({
+        "principal_id": principal_id,
+        "device_id": device_id,
+        "service_id": service_id,
+        "purpose": BARRIER_CURSOR_PURPOSE,
         "target": target,
     });
     arkret_canonical::canonical_json_bytes(&binding)
@@ -654,6 +711,64 @@ pub(crate) async fn parse_and_validate_events_query_cursor(
     Ok(EventsQueryCursor {
         event_id: target.to_owned(),
     })
+}
+
+pub(crate) async fn parse_and_validate_barrier_cursor(
+    token: &str,
+    state: &AppState,
+    session: &SessionRecord,
+    now_ms: i64,
+) -> Result<String, SyncCursorError> {
+    let cursor = decode_sync_cursor(token, now_ms)?;
+    if cursor.purpose != arkret_hlc::CursorPurpose::Barrier {
+        return Err(SyncCursorError::Invalid(
+            "X-Arkret-Wait-For requires a barrier cursor",
+        ));
+    }
+    if cursor_authority_revoked(state, token, Some(session), now_ms) {
+        return Err(SyncCursorError::Revoked);
+    }
+    let record = stored_sync_cursor_record_by_handle(state, cursor.h.as_str()).await?;
+    if record.expires_at_ms <= now_ms {
+        let _ = state.sync().delete_cursor(cursor.h.as_str()).await;
+        return Err(SyncCursorError::Integrity(
+            "barrier cursor handle has expired",
+        ));
+    }
+    if record.purpose != BARRIER_CURSOR_PURPOSE {
+        return Err(SyncCursorError::Integrity(
+            "cursor handle purpose does not match barrier",
+        ));
+    }
+    if record.principal_id.as_deref() != Some(session.actor.as_str()) {
+        return Err(SyncCursorError::Mismatch(
+            "barrier cursor principal does not match request actor",
+        ));
+    }
+    if record.device_id.as_deref() != Some(session.device_id.as_str()) {
+        return Err(SyncCursorError::Mismatch(
+            "barrier cursor device does not match request device",
+        ));
+    }
+    if record.service_id != *state.service_id() {
+        return Err(SyncCursorError::Mismatch(
+            "barrier cursor service does not match this service DID",
+        ));
+    }
+    let event_id = record
+        .target
+        .as_ref()
+        .and_then(|target| target.get("event_id"))
+        .and_then(Value::as_str)
+        .ok_or(SyncCursorError::Integrity(
+            "barrier cursor handle is missing target.event_id",
+        ))?;
+    if !event_id.starts_with("ak:event:") {
+        return Err(SyncCursorError::Integrity(
+            "barrier cursor target must be an event id",
+        ));
+    }
+    Ok(event_id.to_owned())
 }
 
 fn decode_sync_cursor(token: &str, now_ms: i64) -> Result<arkret_hlc::Cursor, SyncCursorError> {

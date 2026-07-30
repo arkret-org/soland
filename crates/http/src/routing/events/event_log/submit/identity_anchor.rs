@@ -438,18 +438,24 @@ pub(super) async fn submit_identity_anchor_batch(
             Vec::new(),
             Vec::new(),
             conflict_evidence,
-            Some(super::super::super::sync::sync_token_for_state(state).await),
+            None,
         );
         outcome.ingress_receipts = ingress_receipts;
         Ok(outcome)
     } else {
+        let cursor = super::super::super::sync::sync_barrier_token_for_event(
+            state,
+            session,
+            &second.event_id,
+        )
+        .await;
         let mut outcome = events_submit_outcome(
             EventsSubmitStatus::Accepted,
             vec![first.event_id, second.event_id],
             Vec::new(),
             Vec::new(),
             Vec::new(),
-            Some(super::super::super::sync::sync_token_for_state(state).await),
+            Some(cursor),
         );
         outcome.ingress_receipts = ingress_receipts;
         outcome.control_proposal_receipts = proposal_receipts;
@@ -669,13 +675,16 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         )
         .await;
     }
+    let cursor =
+        super::super::super::sync::sync_barrier_token_for_event(state, session, &second.event_id)
+            .await;
     let mut outcome = events_submit_outcome(
         EventsSubmitStatus::Accepted,
         vec![first.event_id, second.event_id],
         Vec::new(),
         Vec::new(),
         Vec::new(),
-        Some(super::super::super::sync::sync_token_for_state(state).await),
+        Some(cursor),
     );
     outcome.ingress_receipts = ingress_receipts;
     Ok(outcome)
@@ -770,7 +779,7 @@ pub(super) async fn identical_historical_retry(
             ids,
             Vec::new(),
             Vec::new(),
-            Some(super::super::super::sync::sync_token_for_state(state).await),
+            None,
         );
         for record in existing.iter().flatten() {
             let digest = Hash::new(record.canonical_digest.clone()).map_err(|error| {

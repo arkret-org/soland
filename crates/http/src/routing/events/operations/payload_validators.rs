@@ -755,6 +755,9 @@ pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'stati
 
     for field in ["object", "definition", "patch"] {
         if let Some(value) = operation.payload.get(field) {
+            if value.get("visibility").and_then(Value::as_str) == Some("private") {
+                return Err("private_view_requires_account_data");
+            }
             if contains_retired_field(value) {
                 return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
             }
@@ -764,6 +767,9 @@ pub(crate) fn validate_view_payload(operation: &Operation) -> Result<(), &'stati
                 return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
             }
         }
+    }
+    if operation.payload.get("visibility").and_then(Value::as_str) == Some("private") {
+        return Err("private_view_requires_account_data");
     }
     Ok(())
 }

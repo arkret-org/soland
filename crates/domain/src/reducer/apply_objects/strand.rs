@@ -342,6 +342,7 @@ impl ProjectionState {
         if next_tracks.is_empty() {
             return Err("strand_tracks_empty");
         }
+        validate_primary_track_transition(&strand.tracks, &next_tracks)?;
         Ok(())
     }
 
@@ -440,11 +441,18 @@ impl ProjectionState {
             };
         }
         match apply_strand_tracks_update_to_map(&strand.tracks, &operation.payload) {
-            Ok(tracks) if !tracks.is_empty() => strand.tracks = tracks,
-            Ok(_) => {
+            Ok(tracks) if tracks.is_empty() => {
                 return ProjectionEffect::Rejected {
                     reason: "strand_tracks_empty".to_owned(),
                 };
+            }
+            Ok(tracks) => {
+                if let Err(reason) = validate_primary_track_transition(&strand.tracks, &tracks) {
+                    return ProjectionEffect::Rejected {
+                        reason: reason.to_owned(),
+                    };
+                }
+                strand.tracks = tracks;
             }
             Err(reason) => {
                 return ProjectionEffect::Rejected {
@@ -727,7 +735,28 @@ fn validate_strand_tracks(
         arkret_models_collaboration::objects::profiles::validate_strand_track_name(track_id)
             .map_err(|_| "strand_track_name_invalid")?;
     }
+    arkret_models_collaboration::objects::profiles::resolve_primary_track(tracks, None)
+        .map_err(map_primary_track_error)?;
     Ok(())
+}
+
+fn validate_primary_track_transition(
+    previous: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+    next: &BTreeMap<String, arkret_models_collaboration::objects::profiles::StrandTrackConfig>,
+) -> Result<(), &'static str> {
+    arkret_models_collaboration::objects::profiles::validate_primary_track_transition(
+        previous, next, None,
+    )
+    .map_err(map_primary_track_error)
+}
+
+fn map_primary_track_error(error: arkret_wire::Error) -> &'static str {
+    let message = error.to_string();
+    if message.contains("track_disabled") {
+        "track_disabled"
+    } else {
+        "primary_track_required"
+    }
 }
 
 /// `schema_refs` as written on a create payload object.
