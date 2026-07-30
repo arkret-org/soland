@@ -304,6 +304,12 @@ pub enum ProjectionEffect {
     RealmPolicyServerTombstoned {
         realm_id: String,
     },
+    /// Two accepted `ak.realm.policy_server` Moves cited the same frozen basis
+    /// with different values; the cas-register cell joined to `⊥` and every
+    /// dependent read now fails closed until conflict recovery.
+    RealmPolicyServerConflicted {
+        realm_id: String,
+    },
     /// `ak.device.push_route` actor-private state projected into the
     /// per-recipient Principal Server push-route cell cache.
     PushRouteUpdated {

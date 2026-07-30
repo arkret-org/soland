@@ -20,9 +20,12 @@ use arkret_models_collaboration::governance::realm_governance::{
     RealmPolicyServerOnTimeout, RealmPolicyServerPayload,
 };
 use arkret_state::lattice::CellState;
+use serde_json::Value;
 use url::Url;
 
-use crate::reducer::{ProjectionEffect, ProjectionState, RealmPolicyServerConfig};
+use crate::reducer::{
+    ProjectionEffect, ProjectionState, RealmPolicyServerConfig, RealmPolicyServerHead,
+};
 
 /// Default `cache_ttl_seconds` per spec §2 (300).
 const DEFAULT_CACHE_TTL_SECONDS: u64 = 300;
@@ -34,6 +37,120 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 /// Default `on_timeout` — `fail_closed` aligns with spec §6 default
 /// for any Realm that does not opt-out.
 const DEFAULT_ON_TIMEOUT: &str = "fail_closed";
+
+const POLICY_SERVER_CELL_ID: &str = "ak:cell:ak.component.realm.policy_server.v1:null";
+
+/// The canonical cell value a raw policy-server payload denotes.
+///
+/// The reducer sees the same accepted Move more than once (admission
+/// projection, then Seal apply / cell reload) and the two paths attach
+/// different projection-context fields. Comparing raw payloads would read a
+/// replay as a conflicting sibling, so every head/basis comparison goes
+/// through the closed DTO: two payloads denote the same cell value exactly
+/// when they parse to the same `RealmPolicyServerPayload`.
+fn canonical_policy_server_value(payload: &Value) -> Option<Value> {
+    let parsed = serde_json::from_value::<RealmPolicyServerPayload>(payload.clone()).ok()?;
+    serde_json::to_value(parsed).ok()
+}
+
+/// The frozen basis a `ak.realm.policy_server` Move cites: the `head_eq`
+/// expected value of its policy-server cell precondition, or `None` for an
+/// initial write against the never-written cell.
+fn policy_server_move_basis(payload: &Value) -> Option<Value> {
+    let preconditions = payload.get("preconditions")?.as_array()?;
+    preconditions.iter().find_map(|precondition| {
+        let object = precondition.as_object()?;
+        if object.get("cell").and_then(Value::as_str) != Some(POLICY_SERVER_CELL_ID) {
+            return None;
+        }
+        let predicate = object.get("predicate")?.as_object()?;
+        if predicate.get("op").and_then(Value::as_str) != Some("head_eq") {
+            return None;
+        }
+        predicate
+            .get("value")
+            .and_then(canonical_policy_server_value)
+    })
+}
+
+enum PolicyServerHeadDecision {
+    Advance,
+    Idempotent,
+    SiblingConflict,
+}
+
+fn policy_server_head_decision(
+    head: Option<&RealmPolicyServerHead>,
+    move_basis: &Option<Value>,
+    new_value: &Value,
+) -> PolicyServerHeadDecision {
+    let Some(head) = head else {
+        return PolicyServerHeadDecision::Advance;
+    };
+    if new_value == &head.value {
+        return PolicyServerHeadDecision::Idempotent;
+    }
+    if move_basis == &head.basis {
+        return PolicyServerHeadDecision::SiblingConflict;
+    }
+    // A basis that names neither the current head nor the head's own basis is
+    // stale, but rejecting it here would duplicate — and could disagree with —
+    // the authoritative `head_eq` CAS gate in `check_move_preconditions`. The
+    // reducer's job on this cell is the one thing that gate cannot express:
+    // two accepted Moves on the SAME frozen basis join to bottom.
+    PolicyServerHeadDecision::Advance
+}
+
+fn join_policy_server_cell_bottom(
+    state: &mut ProjectionState,
+    realm_id: String,
+    operation: &Operation,
+    move_basis: Option<Value>,
+    new_value: Value,
+) -> ProjectionEffect {
+    let head = state
+        .realm_policy_server_heads
+        .get(&realm_id)
+        .expect("sibling conflict requires an accepted head");
+    let bottom = arkret_wire::Bottom {
+        kind: arkret_wire::BottomKind::Conflict,
+        cells: vec![
+            arkret_identifiers::CellRef::new(POLICY_SERVER_CELL_ID.to_owned())
+                .expect("policy-server cell id is a valid CellRef"),
+        ],
+        move_ids: Vec::new(),
+        seal_view: None,
+        heads: vec![
+            serde_json::json!({
+                "move_id": head.operation_id.as_str(),
+                "value": head.value,
+                "basis": head.basis,
+            }),
+            serde_json::json!({
+                "move_id": operation.operation_id.as_str(),
+                "value": new_value,
+                "basis": move_basis,
+            }),
+        ],
+        details: Some(arkret_wire::bottom_details([
+            (
+                "cell_family",
+                serde_json::json!("ak.component.realm.policy_server.v1"),
+            ),
+            (
+                "reason",
+                serde_json::json!("policy_server_same_basis_sibling_conflict"),
+            ),
+        ])),
+        escalated_at: None,
+    };
+    state.realm_null_subject_cells.insert(
+        (realm_id.clone(), POLICY_SERVER_CELL_ID.to_owned()),
+        CellState::Bottom(bottom),
+    );
+    state.realm_policy_servers.remove(&realm_id);
+    ProjectionEffect::RealmPolicyServerConflicted { realm_id }
+}
 
 /// Apply a declaration or durable value tombstone to the Realm policy-server cell.
 pub fn apply_realm_policy_server(
@@ -50,7 +167,55 @@ pub fn apply_realm_policy_server(
             };
         }
     };
-    let cell_id = "ak:cell:ak.component.realm.policy_server.v1:null".to_owned();
+    let cell_id = POLICY_SERVER_CELL_ID.to_owned();
+    let cell_key = (realm_id.clone(), cell_id.clone());
+    // `⊥` is sticky: once siblings joined to Bottom, later Moves cannot
+    // overwrite the conflict short of an explicit conflict-recovery flow.
+    if matches!(
+        state.realm_null_subject_cells.get(&cell_key),
+        Some(CellState::Bottom(_))
+    ) {
+        return ProjectionEffect::RealmPolicyServerConflicted { realm_id };
+    }
+    let move_basis = policy_server_move_basis(&operation.payload);
+    let canonical_value = match canonical_policy_server_value(&wire_payload) {
+        Some(value) => value,
+        None => {
+            return ProjectionEffect::Rejected {
+                reason: "policy_server_payload_invalid".to_owned(),
+            };
+        }
+    };
+    let head_decision = policy_server_head_decision(
+        state.realm_policy_server_heads.get(&realm_id),
+        &move_basis,
+        &canonical_value,
+    );
+    match head_decision {
+        PolicyServerHeadDecision::Advance => {}
+        PolicyServerHeadDecision::Idempotent => {
+            return match payload {
+                RealmPolicyServerPayload::Declaration(payload) => {
+                    ProjectionEffect::RealmPolicyServerProjected {
+                        realm_id,
+                        policy_server_did: payload.policy_server_did.to_string(),
+                    }
+                }
+                RealmPolicyServerPayload::Tombstone(_) => {
+                    ProjectionEffect::RealmPolicyServerTombstoned { realm_id }
+                }
+            };
+        }
+        PolicyServerHeadDecision::SiblingConflict => {
+            return join_policy_server_cell_bottom(
+                state,
+                realm_id,
+                operation,
+                move_basis,
+                canonical_value,
+            );
+        }
+    }
 
     let payload = match payload {
         RealmPolicyServerPayload::Declaration(payload) => payload,
@@ -60,6 +225,14 @@ pub fn apply_realm_policy_server(
                     reason: "policy_server_payload_invalid".to_owned(),
                 };
             }
+            state.realm_policy_server_heads.insert(
+                realm_id.clone(),
+                RealmPolicyServerHead {
+                    basis: move_basis,
+                    operation_id: operation.operation_id.to_string(),
+                    value: canonical_value,
+                },
+            );
             state
                 .realm_null_subject_cells
                 .insert((realm_id.clone(), cell_id), CellState::Value(wire_payload));
@@ -102,6 +275,14 @@ pub fn apply_realm_policy_server(
 
     let now = operation.created_at;
 
+    state.realm_policy_server_heads.insert(
+        realm_id.clone(),
+        RealmPolicyServerHead {
+            basis: move_basis,
+            operation_id: operation.operation_id.to_string(),
+            value: canonical_value,
+        },
+    );
     state
         .realm_null_subject_cells
         .insert((realm_id.clone(), cell_id), CellState::Value(wire_payload));
@@ -368,8 +549,17 @@ mod tests {
                 updated_at: now,
             });
 
-        let first =
-            apply_realm_policy_server(&mut state, &op(REALM_CHILD, json!({"tombstone": true})));
+        let tombstone_move = json!({
+            "tombstone": true,
+            "preconditions": [{
+                "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+                "predicate": {"op": "head_eq", "value": {
+                    "policy_server_did": "did:web:child.example.com",
+                    "policy_server_url": "https://child.example.com/_arkret/self/policy/check",
+                }},
+            }],
+        });
+        let first = apply_realm_policy_server(&mut state, &op(REALM_CHILD, tombstone_move.clone()));
         assert!(matches!(
             first,
             ProjectionEffect::RealmPolicyServerTombstoned { .. }
@@ -384,8 +574,7 @@ mod tests {
             Some(&json!({"tombstone": true}))
         );
 
-        let repeated =
-            apply_realm_policy_server(&mut state, &op(REALM_CHILD, json!({"tombstone": true})));
+        let repeated = apply_realm_policy_server(&mut state, &op(REALM_CHILD, tombstone_move));
         assert!(matches!(
             repeated,
             ProjectionEffect::RealmPolicyServerTombstoned { .. }

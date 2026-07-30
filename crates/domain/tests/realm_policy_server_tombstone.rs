@@ -59,10 +59,24 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
             updated_at: now,
         });
 
+    // Spec §2.2: a delete Move always cites the settled declaration through a
+    // `head_eq` precondition; the duplicate replay keeps the same frozen basis.
     for _ in 0..2 {
         let effect = apply_realm_policy_server(
             &mut state,
-            &operation(CHILD_REALM, json!({"tombstone": true})),
+            &operation(
+                CHILD_REALM,
+                json!({
+                    "tombstone": true,
+                    "preconditions": [{
+                        "cell": CELL_ID,
+                        "predicate": {"op": "head_eq", "value": {
+                            "policy_server_did": "did:web:child-policy.example",
+                            "policy_server_url": "https://child-policy.example/_arkret/self/policy/check"
+                        }},
+                    }],
+                }),
+            ),
         );
         assert!(matches!(
             effect,
@@ -82,6 +96,68 @@ fn tombstone_is_durable_idempotent_and_restores_org_fallback() {
         .expect("organization fallback");
     assert_eq!(effective.realm_id, ORG_REALM);
     assert!(!state.realm_policy_servers.contains_key(CHILD_REALM));
+}
+
+#[test]
+fn same_basis_replace_and_delete_siblings_join_bottom_in_either_order() {
+    let declaration = json!({
+        "policy_server_did": "did:web:child-policy.example",
+        "policy_server_url": "https://child-policy.example/_arkret/self/policy/check"
+    });
+    let replace = json!({
+        "policy_server_did": "did:web:next-policy.example",
+        "policy_server_url": "https://next-policy.example/_arkret/self/policy/check",
+        "preconditions": [{
+            "cell": CELL_ID,
+            "predicate": {"op": "head_eq", "value": declaration.clone()},
+        }],
+    });
+    let delete = json!({
+        "tombstone": true,
+        "preconditions": [{
+            "cell": CELL_ID,
+            "predicate": {"op": "head_eq", "value": declaration.clone()},
+        }],
+    });
+    for (first, second) in [
+        (replace.clone(), delete.clone()),
+        (delete.clone(), replace.clone()),
+    ] {
+        let mut state = ProjectionState::new();
+        apply_realm_policy_server(&mut state, &operation(CHILD_REALM, declaration.clone()));
+        apply_realm_policy_server(&mut state, &operation(CHILD_REALM, first));
+        let effect = apply_realm_policy_server(&mut state, &operation(CHILD_REALM, second));
+        assert!(matches!(
+            effect,
+            ProjectionEffect::RealmPolicyServerConflicted { .. }
+        ));
+        assert!(matches!(
+            state
+                .realm_null_subject_cells
+                .get(&(CHILD_REALM.to_owned(), CELL_ID.to_owned())),
+            Some(CellState::Bottom(_))
+        ));
+        assert_eq!(
+            state.try_realm_policy_server_config(CHILD_REALM),
+            Err("cell_bottom_state")
+        );
+        assert!(!state.realm_policy_servers.contains_key(CHILD_REALM));
+        // `⊥` is sticky: replaying either sibling cannot resurrect a value head.
+        let replay = apply_realm_policy_server(
+            &mut state,
+            &operation(CHILD_REALM, json!({"tombstone": true})),
+        );
+        assert!(matches!(
+            replay,
+            ProjectionEffect::RealmPolicyServerConflicted { .. }
+        ));
+        assert!(matches!(
+            state
+                .realm_null_subject_cells
+                .get(&(CHILD_REALM.to_owned(), CELL_ID.to_owned())),
+            Some(CellState::Bottom(_))
+        ));
+    }
 }
 
 #[test]

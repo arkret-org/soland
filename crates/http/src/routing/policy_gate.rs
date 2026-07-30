@@ -70,12 +70,69 @@ impl DidResolver for SharedDidResolver {
     }
 }
 
+/// The capability action the local gate checks for an Event of `event_kind`.
+///
+/// A kind may be governed by several registered actions (for example both
+/// `ak.realm.admin` and `ak.policy.manage` target `ak.realm.policy_server`);
+/// any one of them authorizes it, so pick the first the actor actually holds
+/// and otherwise fall back to the registry's first candidate so the denial
+/// names a real action rather than an unknown one. A kind with no registered
+/// governing action keeps its own string: the local engine then answers
+/// `capability_action_unknown`, which is the correct fail-closed verdict.
+fn local_capability_action_for(
+    state: &AppState,
+    actor_id: &str,
+    realm_id: &str,
+    event_kind: &str,
+) -> String {
+    let Ok(candidates) = arkret_schema::embedded_capability_actions_for_event_kind(event_kind)
+    else {
+        return event_kind.to_owned();
+    };
+    let Some(first) = candidates.first() else {
+        return event_kind.to_owned();
+    };
+    candidates
+        .iter()
+        .find(|action| {
+            state
+                .authorization()
+                .check(soland_services::authorization::AuthorizationCheck {
+                    actor: actor_id,
+                    action,
+                    resource: realm_id,
+                    realm_id,
+                    owner: Some(actor_id),
+                    members: &[],
+                    resource_facets: &[],
+                })
+                .allowed
+        })
+        .unwrap_or(first)
+        .clone()
+}
+
 pub(crate) async fn enforce_operation_policy_server(
     state: &AppState,
     actor_id: &str,
     operation: &Operation,
 ) -> Result<(), PolicyGateRejection> {
     let realm_id = operation.realm_id.as_str();
+    let operation_kind = kinds::canonical_kind_for_operation(operation)
+        .unwrap_or(operation.object_kind.as_str())
+        .to_owned();
+    // `authz/policy-server.md` §7 — the Policy Server grants nothing; it only
+    // narrows what capability authorization already allows. The Move that
+    // *declares or removes* the binding is therefore authorized by
+    // `ak.policy.manage` alone (§2.2). Routing it through the very service it
+    // configures would make an unreachable Policy Server permanently
+    // unrecoverable under the §6 fail-closed default: the delete that would
+    // clear the bad declaration is itself denied by the declaration. The spec
+    // requires a break-glass path for exactly this, and keeping the binding's
+    // own control surface on pure capability authorization is that path.
+    if operation_kind == arkret_wire::events::EventKind::REALM_POLICY_SERVER {
+        return Ok(());
+    }
     let realm_config = state
         .projections()
         .realm_policy_server_config(realm_id)
@@ -93,9 +150,15 @@ pub(crate) async fn enforce_operation_policy_server(
     };
 
     let policy_client = policy_client_for_state(state)?;
-    let action = kinds::canonical_kind_for_operation(operation)
-        .unwrap_or(operation.object_kind.as_str())
-        .to_owned();
+    let action = operation_kind;
+    // `authz/policy-server.md` §3 makes the remote check request carry the
+    // Event kind, but the local capability check speaks the capability-action
+    // namespace. The two coincide for a few kinds (`ak.message.create`) and
+    // diverge for most (`ak.realm.policy_server` is governed by
+    // `ak.policy.manage`), so resolve the kind through the registry instead of
+    // handing an Event kind to a capability check that would answer
+    // `capability_action_unknown`.
+    let capability_action = local_capability_action_for(state, actor_id, realm_id, &action);
     let resource = operation
         .object_id
         .as_deref()
@@ -114,7 +177,7 @@ pub(crate) async fn enforce_operation_policy_server(
     let decision = check_with_policy_server(
         state.authorization(),
         actor_id,
-        &action,
+        &capability_action,
         &resource,
         realm_id,
         Some(actor_id),

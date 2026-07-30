@@ -144,9 +144,9 @@ pub use projections::{
     PendingReplayEntry, PinProjection, PollOptionState, PollState, ProjectedMessageView,
     PushRouteCellValue, PushRouteSubject, ReactionState, ReadMarkerState,
     RealmInheritancePolicyState, RealmLinkState, RealmOrganizationStatementState,
-    RealmPolicyServerConfig, RedactionCellValue, RsvpHead, RsvpProjection, SidecarProjection,
-    SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState, SolandRelationState,
-    SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
+    RealmPolicyServerConfig, RealmPolicyServerHead, RedactionCellValue, RsvpHead, RsvpProjection,
+    SidecarProjection, SolandKeyBackupActiveSeries, SolandMembershipState, SolandRealmState,
+    SolandRelationState, SpaceContainerLifecycleState, SpaceContainerProjection, StrandProjection,
     StrandWatchProjection, message_expiry_projection_from_value,
     message_expiry_projection_from_value_with_anchor,
 };

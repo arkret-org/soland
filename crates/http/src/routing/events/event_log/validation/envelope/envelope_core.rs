@@ -107,7 +107,17 @@ async fn validate_event_envelope_with_ingress(
             "actor_id must be a DID",
         ));
     }
-    let managed_agent_delegation = if actor_id != session.actor {
+    // A closed internal adapter (policy-server self-management, moderation
+    // report, MIMI ingress, ...) authors the Event on behalf of the
+    // authenticated caller under the service's own session, so its
+    // `actor_id` is the caller while `session.actor` is the service.
+    // `InternalEventAdmission::matches` binds that pairing exactly — session
+    // actor, session device, Event actor, Realm, kind and the per-binding
+    // payload — so it has to be resolved before the generic actor/session
+    // equality gate below, not after it.
+    let is_authorized_internal_adapter =
+        internal_admission.is_some_and(|admission| admission.matches(session, object));
+    let managed_agent_delegation = if actor_id != session.actor && !is_authorized_internal_adapter {
         match crate::routing::identity::managed_agent_pcr::validate_delegated_agent_envelope(
             state,
             object,
@@ -130,7 +140,7 @@ async fn validate_event_envelope_with_ingress(
     } else {
         false
     };
-    if actor_id != session.actor && !managed_agent_delegation {
+    if actor_id != session.actor && !managed_agent_delegation && !is_authorized_internal_adapter {
         return Err(event_validation_error(
             StatusCode::FORBIDDEN,
             "actor_session_mismatch",
@@ -208,8 +218,6 @@ async fn validate_event_envelope_with_ingress(
 
     let realm_id = event_realm_id(object)?;
     let is_applet_delegated = object.get("applet_id").is_some();
-    let is_authorized_internal_adapter =
-        internal_admission.is_some_and(|admission| admission.matches(session, object));
     // The closed applet provisioning adapter has already verified the installed
     // registration, ghost namespace and provision request before constructing
     // this exact signed Event. Its first formal profile Event is authorized by

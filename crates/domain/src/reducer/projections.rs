@@ -28,6 +28,18 @@ pub struct CallFsmHead {
     pub value: String,
 }
 
+/// Latest accepted head of the per-Realm `ak.component.realm.policy_server.v1`
+/// cas-register cell, together with the frozen basis (the `head_eq` expected
+/// value) its Move cited. Two accepted Moves citing the same basis with
+/// different values are cas-register siblings and MUST join to `⊥` instead of
+/// resolving by arrival order (`authz/policy-server.md` §2.2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RealmPolicyServerHead {
+    pub basis: Option<Value>,
+    pub operation_id: String,
+    pub value: Value,
+}
+
 #[derive(Clone, Debug)]
 pub struct PendingReplayEntry {
     pub target_ref: String,

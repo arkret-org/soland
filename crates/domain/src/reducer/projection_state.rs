@@ -139,6 +139,10 @@ pub struct ProjectionState {
     /// Other canonical null-subject Realm facets keyed by
     /// `(realm_id, canonical_cell_ref)`.
     pub realm_null_subject_cells: BTreeMap<(String, String), CellState>,
+    /// Latest accepted policy-server cell head per Realm, carrying the frozen
+    /// basis its Move cited so same-basis siblings join to `⊥` instead of
+    /// last-writer-wins (`authz/policy-server.md` §2.2).
+    pub realm_policy_server_heads: BTreeMap<String, RealmPolicyServerHead>,
     /// Effective `default_join_rule`, keyed by Realm. This mirrors the
     /// bootstrap/create value and later sealed join-rule facet so admission
     /// can select the protocol's C-axis gates without inventing a Realm id
