@@ -29,7 +29,7 @@ and the project tracks Arkret v1 spec revisions.
 - HTTP-2: agent route canonicalised — `/agents/{id}/deactivate` only, no `/revoke` path remains.
 - HTTP-4: recovery policy / receipt endpoints (`POST /api/v1/identity/recovery-policy`, `POST /api/v1/identity/recovery-receipt`) mounted as 501 stubs in `src/routing/identity/recovery.rs`.
 - ERR-1: protocol reason codes are emitted from concrete validation and handler paths; obsolete round-scoped grouping helpers are not part of the runtime surface.
-- PROF-1: `ak.profile.media_service_binding.v1` and `ak.profile.accountable_principals.strict_reject.v1` advertised in `ak.server.query.describe.supported_profiles` (`src/wire.rs`); config-gating deferred to R3.1.
+- PROF-1: `ak.profile.media_service_binding.v1` advertised in `ak.server.query.describe.supported_profiles` (`src/wire.rs`).
 
 > No version tag, no crates.io / Docker Hub / npm publish — git commit only.
 

@@ -1,4 +1,5 @@
 use super::*;
+use crate::routing::events::event_log::DataEventQueryGrade;
 
 /// The registry projection evaluator for a bootstrap unit.
 ///
@@ -192,6 +193,9 @@ pub(in crate::routing) fn projection_operation_from_event(
     payload_object
         .entry("sender".to_owned())
         .or_insert_with(|| Value::String(parsed.actor_id.clone()));
+    if matches!(parsed.data_event_query_grade, DataEventQueryGrade::Stale) {
+        payload_object.insert("query_grade".to_owned(), Value::String("stale".to_owned()));
+    }
     if let Some(hlc) = envelope.get("hlc").and_then(Value::as_str) {
         payload_object
             .entry("hlc".to_owned())
@@ -386,6 +390,7 @@ pub(crate) fn projection_operation_from_canonical_record(
         authorized_refs,
         canonical_digest: record.canonical_digest.clone(),
         canonical_bytes: record.canonical_bytes.clone(),
+        data_event_query_grade: DataEventQueryGrade::Observed,
     };
     projection_operation_from_event(&parsed, &record.envelope)
 }
@@ -479,6 +484,7 @@ mod projection_operation_tests {
             authorized_refs: Vec::new(),
             canonical_digest: "sha256:test".to_owned(),
             canonical_bytes: Vec::new(),
+            data_event_query_grade: DataEventQueryGrade::Observed,
         }
     }
 

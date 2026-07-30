@@ -104,8 +104,8 @@ pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // `ak.identity.accountability_grant` (identity / reducer_input): issuer-signed
 //   endorsement that a subject DID is accountable to the issuer for a declared
 //   scope. Required to verify `Actor Profile.accountable_principal_ids[]`;
-//   reducer strips unverified DIDs from accountable_principal_ids (or rejects with
-//   `accountability_grant_missing`, per deployment policy). zh/models/actor.md §3.3.1.
+//   reducer rejects the complete profile Event with
+//   `accountability_grant_missing`; field stripping is not a v1 behavior.
 // `ak.morph.schema_migrate` (morph / reducer_input): one-shot Morph
 //   `schema_refs[]` evolution event with explicit compatibility class.
 //   zh/models/morph.md §4.1 S3.

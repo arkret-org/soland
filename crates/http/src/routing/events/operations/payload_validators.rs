@@ -44,6 +44,7 @@ pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
             "accepted_event_id",
             "envelope_causal_refs",
             "canonical_event_digest",
+            "query_grade",
             crate::routing::events::READ_CURSOR_CAUSAL_RELATION_CONTEXT,
         ] {
             object.remove(field);

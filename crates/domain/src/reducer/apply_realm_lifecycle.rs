@@ -1207,6 +1207,35 @@ impl ProjectionState {
                     Some(CellState::Value(Value::Object(existing))) => existing.clone(),
                     _ => serde_json::Map::new(),
                 };
+                if let Some(patch) = operation.payload.get("patch").and_then(Value::as_object) {
+                    for (path, patch_value) in patch {
+                        let field = path.strip_prefix("object.").unwrap_or(path);
+                        if field.contains('.') {
+                            continue;
+                        }
+                        match patch_value.as_object().and_then(|patch_op| {
+                            patch_op
+                                .get("$op")
+                                .and_then(Value::as_str)
+                                .map(|op| (op, patch_op.get("value")))
+                        }) {
+                            Some(("set", Some(next))) => {
+                                value.insert(field.to_owned(), next.clone());
+                            }
+                            Some(("unset" | "remove", _)) => {
+                                value.remove(field);
+                            }
+                            Some(_) => {
+                                return ProjectionEffect::Rejected {
+                                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                                };
+                            }
+                            None => {
+                                value.insert(field.to_owned(), patch_value.clone());
+                            }
+                        }
+                    }
+                }
                 if let Some(o) = owner.as_ref() {
                     value.insert("owner".to_owned(), Value::String(o.clone()));
                 }

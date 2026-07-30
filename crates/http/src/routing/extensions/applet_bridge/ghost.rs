@@ -203,25 +203,41 @@ pub(super) fn ensure_formal_ghost_provision_allowed(
 }
 
 pub(super) fn ghost_provision_authorization_ref(record: &AppletRecord) -> Result<String, AppError> {
-    let response = record.install_response.as_ref().ok_or_else(|| {
-        AppError::conflict("applet install projection is missing its outcome")
-            .with_wire_code("applet_install_projection_incomplete")
-    })?;
-    let index = record
+    if !record
         .capabilities
         .iter()
-        .position(|action| action == super::install::GHOST_PROVISION_ACTION)
-        .ok_or_else(|| {
-            AppError::capability_denied("applet install does not grant ak.applet.ghost.provision")
+        .any(|action| action == super::install::GHOST_PROVISION_ACTION)
+    {
+        return Err(AppError::capability_denied(
+            "applet install does not grant ak.applet.ghost.provision",
+        ));
+    }
+    for event in &record.capability_grant_events {
+        let payload = serde_json::from_value::<
+            arkret_models_collaboration::events_payloads::CapabilityGrantPayload,
+        >(serde_json::to_value(&event.payload).map_err(|error| {
+            AppError::internal(format!(
+                "stored Applet capability grant payload cannot be encoded: {error}"
+            ))
+        })?)
+        .map_err(|error| {
+            AppError::internal(format!(
+                "stored Applet capability grant payload is invalid: {error}"
+            ))
         })?;
-    response
-        .capability_grant_refs
-        .get(index)
-        .map(ToString::to_string)
-        .ok_or_else(|| {
-            AppError::conflict("applet ghost provisioning grant projection is incomplete")
-                .with_wire_code("applet_install_projection_incomplete")
-        })
+        if payload.grant.as_ref().is_some_and(|grant| {
+            grant
+                .actions
+                .iter()
+                .any(|action| action == super::install::GHOST_PROVISION_ACTION)
+        }) {
+            return Ok(payload.grant_id.to_string());
+        }
+    }
+    Err(
+        AppError::conflict("applet ghost provisioning grant projection is incomplete")
+            .with_wire_code("applet_install_projection_incomplete"),
+    )
 }
 
 pub(super) async fn validate_signed_ghost_provision_events(

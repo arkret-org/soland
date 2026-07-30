@@ -32,7 +32,6 @@ const ROUTE_APNS: &str = "apns_main";
 const ROUTE_FCM: &str = "fcm_voip";
 const PSEUDONYM_1: &str = "ak:pseudonym:push:01HYZ8Z000000000000000";
 const PSEUDONYM_2: &str = "ak:pseudonym:push:01HYZ8Z000000000000001";
-const PSEUDONYM_3: &str = "ak:pseudonym:push:01HYZ8Z000000000000002";
 const GATEWAY_DID: &str = "did:web:gateway.example";
 
 fn op(payload: Value) -> Operation {
@@ -227,10 +226,10 @@ fn push_route_cell_subject_isolated_by_recipient_service_id() {
     );
 }
 
-// ── 4. Revoke writes a new value to the SAME subject cell. ─────────────
+// ── 4. A different value for the same subject conflicts. ───────────────
 
 #[test]
-fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
+fn push_route_revoke_cannot_overwrite_existing_cas_value() {
     let mut state = state_pinned();
     let hlc = ServerHlc::new("test");
 
@@ -255,19 +254,10 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
         "revoked": true,
     }));
     match state.apply(&revoke, &hlc) {
-        ProjectionEffect::PushRouteUpdated {
-            ref subject,
-            action,
-        } => {
-            // Same subject as the activation — confirms the cell_subject
-            // contract.
-            assert_eq!(subject.recipient_service_id, SERVICE_ID_LOCAL);
-            assert_eq!(subject.principal_id, PRINCIPAL_A);
-            assert_eq!(subject.device_id, DEVICE_A);
-            assert_eq!(subject.push_route, ROUTE_APNS);
-            assert_eq!(action, "revoked");
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "push_route_cas_conflict");
         }
-        other => panic!("expected PushRouteUpdated{{revoked}}, got {other:?}"),
+        other => panic!("expected bottom-reject CAS conflict, got {other:?}"),
     }
 
     let cell = state
@@ -277,20 +267,15 @@ fn push_route_revoke_keeps_subject_and_appends_revoked_target() {
             DEVICE_A,
             ROUTE_APNS,
         ))
-        .expect("post-revoke cell must remain present (subject preserved)");
-    assert!(cell.revoked);
-    // Active pseudonym cleared from the cell; the retired pseudonym is
-    // recorded in `revoked_targets` so the Sync Service can fail-closed
-    // on stale targets.
-    assert!(cell.push_target_id.is_none());
-    assert_eq!(cell.revoked_targets, vec![PSEUDONYM_1.to_owned()]);
+        .expect("CAS winner must remain present");
+    assert!(!cell.revoked);
+    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_1));
 }
 
-// ── 5. Rotation: active → active with a new push_target_id retires the
-//        prior pseudonym. ─────────────────────────────────────────────
+// ── 5. Exact replay is idempotent; rotation must use a new subject. ─────
 
 #[test]
-fn push_route_rotation_appends_old_target_to_revoked_targets() {
+fn push_route_exact_replay_is_idempotent_and_rotation_conflicts() {
     let mut state = state_pinned();
     let hlc = ServerHlc::new("test");
 
@@ -304,7 +289,19 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
         )),
         &hlc,
     );
-    // Same subject, NEW pseudonym → rotation.
+    let replay = state.apply(
+        &op(active_payload(
+            SERVICE_ID_LOCAL,
+            PRINCIPAL_A,
+            DEVICE_A,
+            ROUTE_APNS,
+            PSEUDONYM_1,
+        )),
+        &hlc,
+    );
+    assert!(matches!(replay, ProjectionEffect::PushRouteUpdated { .. }));
+
+    // Same subject, different value is a bottom-reject CAS conflict.
     let effect = state.apply(
         &op(active_payload(
             SERVICE_ID_LOCAL,
@@ -316,10 +313,10 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
         &hlc,
     );
     match effect {
-        ProjectionEffect::PushRouteUpdated { action, .. } => {
-            assert_eq!(action, "rotated");
+        ProjectionEffect::Rejected { reason } => {
+            assert_eq!(reason, "push_route_cas_conflict");
         }
-        other => panic!("expected PushRouteUpdated{{rotated}}, got {other:?}"),
+        other => panic!("expected bottom-reject CAS conflict, got {other:?}"),
     }
 
     let cell = state
@@ -330,34 +327,9 @@ fn push_route_rotation_appends_old_target_to_revoked_targets() {
             ROUTE_APNS,
         ))
         .unwrap();
-    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_2));
-    assert_eq!(cell.revoked_targets, vec![PSEUDONYM_1.to_owned()]);
+    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_1));
+    assert!(cell.revoked_targets.is_empty());
     assert!(!cell.revoked);
-
-    // A third rotation retires PSEUDONYM_2 too.
-    let _ = state.apply(
-        &op(active_payload(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-            PSEUDONYM_3,
-        )),
-        &hlc,
-    );
-    let cell = state
-        .push_route_cell_value(&subject(
-            SERVICE_ID_LOCAL,
-            PRINCIPAL_A,
-            DEVICE_A,
-            ROUTE_APNS,
-        ))
-        .unwrap();
-    assert_eq!(cell.push_target_id.as_deref(), Some(PSEUDONYM_3));
-    assert_eq!(
-        cell.revoked_targets,
-        vec![PSEUDONYM_1.to_owned(), PSEUDONYM_2.to_owned()]
-    );
 }
 
 // ── 6. Active route missing push_target_id / push_gateway_did →

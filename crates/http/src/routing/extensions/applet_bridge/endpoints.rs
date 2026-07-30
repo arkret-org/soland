@@ -27,7 +27,7 @@ use super::ghost::{
 };
 use super::install::{
     append_portal_message, applet_response, approved_scopes_from_approval_request,
-    approved_scopes_from_install_events, build_install_plan, effective_scope_realm_id,
+    approved_scopes_from_formal_install_events, build_install_plan, effective_scope_realm_id,
     parse_manifest, portal_message_payload, register_package_install, register_verified_applet,
     require_realm_admin, validate_applet_package,
 };
@@ -214,12 +214,12 @@ async fn install_endpoint(
         .map_err(|error| AppError::internal(format!("install commit serialize: {error}")))?;
     let body_digest = super::install::canonical_digest(&body)?;
     validate_applet_package(state, &mut commit.applet_package)?;
-    let approved_scopes = approved_scopes_from_install_events(&commit, &session.actor)?;
+    let approved_scopes = approved_scopes_from_formal_install_events(&commit, &session.actor)?;
     let recomputed_plan = build_install_plan(
         state,
         &commit.applet_package,
         &commit.effective_scope,
-        approved_scopes.clone(),
+        approved_scopes,
     )
     .await?;
     if recomputed_plan.plan_digest != commit.plan_digest {
@@ -236,16 +236,9 @@ async fn install_endpoint(
     // `state.authorization().check` is authoritative here. fail-closed.
     require_realm_admin(state, &session.actor, &commit.effective_scope).await?;
 
-    let response = register_package_install(
-        state,
-        &session.actor,
-        commit,
-        approved_scopes,
-        idempotency_key,
-        body_digest,
-        res,
-    )
-    .await?;
+    let response =
+        register_package_install(state, &session, commit, idempotency_key, body_digest, res)
+            .await?;
     json_ok(response)
 }
 

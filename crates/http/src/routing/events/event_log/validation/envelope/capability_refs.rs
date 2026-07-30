@@ -1,4 +1,5 @@
 use super::*;
+use crate::routing::events::event_log::DataEventQueryGrade;
 
 /// Verify a DataEvent's authorization against the accepted governance basis at
 /// its `seal_ref`.
@@ -27,10 +28,10 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     kind: &str,
     object: &serde_json::Map<String, Value>,
     derived_cells: &[String],
-) -> Result<(), EventValidationError> {
+) -> Result<DataEventQueryGrade, EventValidationError> {
     let is_data_event = object.contains_key("seal_ref") || object.contains_key("auth_context");
     if !is_data_event {
-        return Ok(());
+        return Ok(DataEventQueryGrade::Observed);
     }
     if object.contains_key("seal_basis") {
         return Err(event_validation_error(
@@ -96,32 +97,31 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     }
 
     let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id)?;
-    let basis_seal = state
+    validate_data_event_covered_seals(&realm, &seal_id, object, &state_at_ref)?;
+    let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
+    let auth_time = state
         .projections()
         .seal_by_id(&seal_id)
         .map_err(|error| {
             event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                format!("DataEvent seal_ref lookup failed during freshness check: {error}"),
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent seal_ref lookup failed: {error}"),
             )
         })?
         .ok_or_else(|| {
             event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                "DataEvent seal_ref disappeared during freshness check",
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                "DataEvent seal_ref is not projected",
             )
-        })?;
-    validate_data_event_covered_seals(&realm, &seal_id, object, &state_at_ref)?;
-    let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
-    // Grant lifecycle is a property of the signed control basis. Receiver wall
-    // time and the producer's DataEvent timestamp are not replay-safe inputs.
-    let auth_time = basis_seal.sealed_at;
+        })?
+        .sealed_at;
     let historical_snapshot: Vec<crate::authz::Grant> =
         historical_grants.values().cloned().collect();
     let effective_by_id =
         effective_historical_grants_for_subject(&historical_grants, actor_id, realm_id, auth_time);
+    let mut used_grant_ids = std::collections::BTreeSet::new();
 
     // `refs[role=authorized_by]` is a critical semantic citation, not a
     // capability selector: it never widens the effective set, but an entry that
@@ -180,6 +180,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent authorized_by grant {grant_id} is expired or delegation-broken"),
             ));
         }
+        used_grant_ids.insert(grant_id.to_owned());
     }
 
     // Coverage is decided over the whole effective set the governance basis
@@ -187,158 +188,26 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // cells the receiver itself derived, never over a producer-chosen write
     // list.
     for cell in derived_cells {
-        if !effective_by_id
+        let covering_grant = effective_by_id
             .values()
-            .any(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell))
-        {
+            .find(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell));
+        let Some(covering_grant) = covering_grant else {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
                 format!("no capability at seal_ref covers action {kind} on derived cell {cell}"),
             ));
-        }
+        };
+        used_grant_ids.insert(covering_grant.grant_id.clone());
     }
     validate_data_event_revocation_freshness(
         state,
         &realm,
-        &basis_seal,
-        actor_id,
-        realm_id,
+        &seal_id,
         kind,
-        derived_cells,
-        &data_event_authorized_by_refs(object)?,
         &state_at_ref,
-    )?;
-    Ok(())
-}
-
-#[allow(clippy::too_many_arguments)]
-fn validate_data_event_revocation_freshness(
-    state: &AppState,
-    realm: &RealmId,
-    basis_seal: &arkret_wire::Seal,
-    actor_id: &str,
-    realm_id: &str,
-    kind: &str,
-    derived_cells: &[String],
-    authorized_by: &[String],
-    basis_state: &std::collections::BTreeMap<
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::CellState,
-    >,
-) -> Result<(), EventValidationError> {
-    let basis_grants = data_event_grants_from_state_at_ref(basis_state);
-    let effective_basis = effective_historical_grants_for_subject(
-        &basis_grants,
-        actor_id,
-        realm_id,
-        basis_seal.sealed_at,
-    );
-    let high_risk = effective_basis.values().any(|grant| {
-        grant.actions.iter().any(|action| {
-            arkret_schema::capability_action(action).is_some_and(|descriptor| {
-                descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High
-                    && (action == kind
-                        || descriptor
-                            .target_event_kinds
-                            .iter()
-                            .any(|target| *target == kind))
-            })
-        })
-    });
-    let freshness_window_ms = basis_state
-        .values()
-        .filter_map(|cell| match cell {
-            arkret_state::lattice::CellState::Value(value) => Some(value),
-            arkret_state::lattice::CellState::Bottom(_) => None,
-        })
-        .find_map(|value| {
-            value
-                .get("revocation_freshness_window_ms")
-                .and_then(Value::as_u64)
-        })
-        .unwrap_or(86_400_000);
-
-    let mut pending = state
-        .projections()
-        .seal_successors(realm, &basis_seal.id)
-        .map_err(|error| {
-            event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                format!("DataEvent revocation successor lookup failed: {error}"),
-            )
-        })?;
-    let mut visited = std::collections::BTreeSet::new();
-    let mut invalidating = Vec::new();
-    while let Some(seal_id) = pending.pop() {
-        if !visited.insert(seal_id.clone()) {
-            continue;
-        }
-        pending.extend(
-            state
-                .projections()
-                .seal_successors(realm, &seal_id)
-                .map_err(|error| {
-                    event_validation_error(
-                        StatusCode::PRECONDITION_FAILED,
-                        "stale_seal_ref",
-                        format!("DataEvent revocation successor traversal failed: {error}"),
-                    )
-                })?,
-        );
-        let Some(seal) = state.projections().seal_by_id(&seal_id).map_err(|error| {
-            event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                format!("DataEvent revocation Seal lookup failed: {error}"),
-            )
-        })?
-        else {
-            return Err(event_validation_error(
-                StatusCode::PRECONDITION_FAILED,
-                "stale_seal_ref",
-                "DataEvent revocation successor is unavailable",
-            ));
-        };
-        let successor_state = data_event_state_at_seal_ref(state, realm, &seal_id)?;
-        let grants = data_event_grants_from_state_at_ref(&successor_state);
-        let effective =
-            effective_historical_grants_for_subject(&grants, actor_id, realm_id, seal.sealed_at);
-        let refs_live = authorized_by
-            .iter()
-            .all(|grant_id| effective.contains_key(grant_id));
-        let cells_covered = derived_cells.iter().all(|cell| {
-            effective
-                .values()
-                .any(|grant| grant_covers_data_event_effect(state, grant, kind, realm_id, cell))
-        });
-        if !refs_live || !cells_covered {
-            invalidating.push(seal);
-        }
-    }
-    invalidating.sort_by(|left, right| {
-        left.sealed_at
-            .cmp(&right.sealed_at)
-            .then_with(|| left.id.as_str().cmp(right.id.as_str()))
-    });
-    let Some(revocation_seal) = invalidating.first() else {
-        return Ok(());
-    };
-    let distance_ms = (revocation_seal.sealed_at - basis_seal.sealed_at)
-        .num_milliseconds()
-        .max(0) as u64;
-    if high_risk || distance_ms > freshness_window_ms {
-        return Err(event_validation_error(
-            StatusCode::PRECONDITION_FAILED,
-            "stale_seal_ref",
-            format!(
-                "DataEvent authorization was revoked by successor Seal {} (distance_ms={distance_ms}, window_ms={freshness_window_ms})",
-                revocation_seal.id
-            ),
-        ));
-    }
-    Ok(())
+        &used_grant_ids,
+    )
 }
 
 /// `refs[]` entries carrying `role=authorized_by`.
@@ -383,6 +252,182 @@ fn data_event_authorized_by_refs(
         authorized_by.push(id.to_owned());
     }
     Ok(authorized_by)
+}
+
+fn validate_data_event_revocation_freshness(
+    state: &AppState,
+    realm: &RealmId,
+    seal_ref: &arkret_identifiers::SealId,
+    kind: &str,
+    state_at_ref: &std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::CellState,
+    >,
+    used_grant_ids: &std::collections::BTreeSet<String>,
+) -> Result<DataEventQueryGrade, EventValidationError> {
+    if used_grant_ids.is_empty() {
+        return Ok(DataEventQueryGrade::Observed);
+    }
+    let base_seal = state
+        .projections()
+        .seal_by_id(seal_ref)
+        .map_err(|error| stale_seal_ref_error(format!("seal_ref lookup failed: {error}")))?
+        .ok_or_else(|| stale_seal_ref_error("seal_ref is not projected"))?;
+    let configured_window = realm_revocation_freshness_window_ms(state_at_ref);
+    let effective_window =
+        if data_event_authorization_is_high_risk(state_at_ref, used_grant_ids, kind) {
+            0
+        } else {
+            configured_window
+        };
+
+    let mut queue = std::collections::VecDeque::from([seal_ref.clone()]);
+    let mut visited = std::collections::BTreeSet::new();
+    let mut first_revocation: Option<chrono::DateTime<chrono::Utc>> = None;
+    while let Some(current) = queue.pop_front() {
+        if !visited.insert(current.clone()) {
+            continue;
+        }
+        for successor in state
+            .projections()
+            .seal_successors(realm, &current)
+            .map_err(|error| {
+                stale_seal_ref_error(format!("Seal successor lookup failed: {error}"))
+            })?
+        {
+            if visited.contains(&successor) {
+                continue;
+            }
+            let successor_seal = state
+                .projections()
+                .seal_by_id(&successor)
+                .map_err(|error| {
+                    stale_seal_ref_error(format!("successor Seal lookup failed: {error}"))
+                })?
+                .ok_or_else(|| stale_seal_ref_error("successor Seal is not projected"))?;
+            let successor_state = state
+                .projections()
+                .effective_state_at(std::slice::from_ref(&successor), realm)
+                .map_err(|error| {
+                    stale_seal_ref_error(format!(
+                        "successor control view could not be resolved: {error}"
+                    ))
+                })?;
+            if used_grant_ids.iter().any(|grant_id| {
+                grant_invalid_in_state(&successor_state, grant_id, successor_seal.sealed_at)
+            }) {
+                first_revocation = Some(
+                    first_revocation.map_or(successor_seal.sealed_at, |current| {
+                        current.min(successor_seal.sealed_at)
+                    }),
+                );
+            } else {
+                queue.push_back(successor);
+            }
+        }
+    }
+
+    if let Some(revoked_at) = first_revocation {
+        let distance = revoked_at.signed_duration_since(base_seal.sealed_at);
+        if distance < chrono::Duration::zero() {
+            return Err(stale_seal_ref_error(
+                "revocation successor predates seal_ref signed time",
+            ));
+        }
+        let distance_ms = u64::try_from(distance.num_milliseconds()).unwrap_or(u64::MAX);
+        if distance_ms > effective_window || effective_window == 0 {
+            return Err(stale_seal_ref_error(format!(
+                "authorization was revoked {distance_ms}ms after seal_ref (window {effective_window}ms)"
+            )));
+        }
+        return Ok(DataEventQueryGrade::Stale);
+    }
+
+    // A revoked joined view without a descendant revocation means the revoke
+    // arrived on a concurrent branch. Such a branch has no linear distance and
+    // receives no grace window.
+    let leaves = state
+        .projections()
+        .realm_seal_leaves(realm)
+        .map_err(|error| stale_seal_ref_error(format!("joined leaves unavailable: {error}")))?;
+    if !leaves.is_empty() {
+        let joined = state
+            .projections()
+            .effective_state_at(&leaves, realm)
+            .map_err(|error| {
+                stale_seal_ref_error(format!("joined control view unavailable: {error}"))
+            })?;
+        if used_grant_ids
+            .iter()
+            .any(|grant_id| grant_invalid_in_state(&joined, grant_id, base_seal.sealed_at))
+        {
+            return Err(stale_seal_ref_error(
+                "authorization is revoked in a concurrent joined control view",
+            ));
+        }
+    }
+    Ok(DataEventQueryGrade::Observed)
+}
+
+fn grant_invalid_in_state(
+    state: &std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::CellState,
+    >,
+    grant_id: &str,
+    sealed_at: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    let grants = data_event_grants_from_state_at_ref(state);
+    let Some(grant) = grants.get(grant_id) else {
+        return true;
+    };
+    let snapshot = grants.values().cloned().collect::<Vec<_>>();
+    grant.revoked || crate::authz::grant_revoked_upstream(&snapshot, grant_id, sealed_at)
+}
+
+fn realm_revocation_freshness_window_ms(
+    state: &std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::CellState,
+    >,
+) -> u64 {
+    state
+        .values()
+        .filter_map(|cell| match cell {
+            arkret_state::lattice::CellState::Value(value) => value
+                .get("revocation_freshness_window_ms")
+                .and_then(Value::as_u64),
+            arkret_state::lattice::CellState::Bottom(_) => None,
+        })
+        .next()
+        .unwrap_or(86_400_000)
+}
+
+fn data_event_authorization_is_high_risk(
+    state: &std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::CellState,
+    >,
+    used_grant_ids: &std::collections::BTreeSet<String>,
+    kind: &str,
+) -> bool {
+    let grants = data_event_grants_from_state_at_ref(state);
+    used_grant_ids.iter().any(|grant_id| {
+        grants.get(grant_id).is_none_or(|grant| {
+            grant.actions.iter().any(|action| {
+                arkret_schema::capability_action(action)
+                    .map(|descriptor| {
+                        descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High
+                    })
+                    .unwrap_or(true)
+            })
+        })
+    }) || arkret_schema::capability_action(kind)
+        .is_some_and(|descriptor| descriptor.risk_tier == arkret_schema::CapabilityRiskTier::High)
+}
+
+fn stale_seal_ref_error(message: impl Into<String>) -> EventValidationError {
+    event_validation_error(StatusCode::PRECONDITION_FAILED, "stale_seal_ref", message)
 }
 
 pub(super) fn data_event_state_at_seal_ref(

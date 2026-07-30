@@ -102,6 +102,12 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
         .is_ok()
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::routing) enum DataEventQueryGrade {
+    Observed,
+    Stale,
+}
+
 #[derive(Debug)]
 pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) event_id: String,
@@ -115,6 +121,7 @@ pub(in crate::routing) struct ValidatedEventEnvelope {
     pub(in crate::routing) authorized_refs: Vec<String>,
     pub(in crate::routing) canonical_digest: String,
     pub(in crate::routing) canonical_bytes: Vec<u8>,
+    pub(in crate::routing) data_event_query_grade: DataEventQueryGrade,
 }
 
 #[derive(Debug)]

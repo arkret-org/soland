@@ -27,6 +27,7 @@ pub fn validate_operation_semantics(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     validate_cross_signing_reset_replay_batch(operations)?;
+    let mut realm_candidates = BTreeMap::<String, Value>::new();
     let mut active_series_heads = BTreeMap::<
         (String, String),
         arkret_models_collaboration::events_payloads::KeyBackupActiveSeriesHead,
@@ -55,12 +56,129 @@ pub fn validate_operation_semantics(
         validate_operation_patch_semantics(operation)?;
         validate_reaction_target_kind(kind, operation)?;
         validate_operation_payload_schema(kind, operation)?;
+        validate_realm_proposal_policy(state, operation, kind, &mut realm_candidates)?;
         if kind == arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES {
             validate_key_backup_active_series_transition(
                 state,
                 operation,
                 &mut active_series_heads,
             )?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_realm_proposal_policy(
+    state: &AppState,
+    operation: &Operation,
+    kind: &str,
+    candidates: &mut BTreeMap<String, Value>,
+) -> Result<(), &'static str> {
+    const POLICY_FIELDS: [&str; 3] = [
+        "proposal_decision_window_ms",
+        "proposal_absolute_deadline_ms",
+        "max_proposal_defers",
+    ];
+    let realm_id = operation.realm_id.as_str();
+    let candidate = if kind == arkret_wire::events::EventKind::REALM_CREATE {
+        operation
+            .payload
+            .get("object")
+            .cloned()
+            .ok_or("ak.realm.create operation requires payload.object")?
+    } else if kind == arkret_wire::events::EventKind::REALM_UPDATE {
+        let patch = operation
+            .payload
+            .get("patch")
+            .and_then(Value::as_object)
+            .ok_or("ak.realm.update operation requires patch")?;
+        if !patch.keys().any(|path| {
+            let path = path.strip_prefix("object.").unwrap_or(path);
+            POLICY_FIELDS.contains(&path)
+        }) {
+            return Ok(());
+        }
+        let mut candidate = candidates
+            .get(realm_id)
+            .cloned()
+            .or_else(|| {
+                state
+                    .projections()
+                    .snapshot()
+                    .realm_metadata_cell_value(realm_id)
+                    .cloned()
+            })
+            .ok_or("realm proposal policy update requires the frozen Realm pre-state")?;
+        apply_realm_top_level_patch(&mut candidate, patch)?;
+        candidate
+    } else {
+        return Ok(());
+    };
+
+    let mut wire_candidate = candidate.clone();
+    if let Some(object) = wire_candidate.as_object_mut() {
+        object.remove("operation_id");
+    }
+    let policy_value = |field: &str, default: u64| {
+        wire_candidate
+            .get(field)
+            .and_then(Value::as_u64)
+            .unwrap_or(default)
+    };
+    let duration = |field: &str, default: u64| {
+        i64::try_from(policy_value(field, default))
+            .map(chrono::Duration::milliseconds)
+            .map_err(|_| "Realm control proposal decision policy is invalid")
+    };
+    arkret_wire::ControlProposalDecisionPolicy {
+        receipt_sla: duration("receipt_sla_ms", 86_400_000)?,
+        decision_window: duration("proposal_decision_window_ms", 30_000)?,
+        absolute_horizon: duration("proposal_absolute_deadline_ms", 90_000)?,
+        max_defers: u8::try_from(policy_value("max_proposal_defers", 2))
+            .map_err(|_| "Realm control proposal decision policy is invalid")?,
+    }
+    .validate()
+    .map_err(|_| "Realm control proposal decision policy is invalid")?;
+    let realm: arkret_models_collaboration::objects::realm::Realm =
+        serde_json::from_value(wire_candidate)
+            .map_err(|_| "Realm candidate object violates ak.schema.realm.v1")?;
+    realm
+        .validate_kind_invariants()
+        .map_err(|_| "Realm candidate object violates ak.schema.realm.v1")?;
+    realm
+        .control_proposal_decision_policy()
+        .map_err(|_| "Realm control proposal decision policy is invalid")?;
+    candidates.insert(realm_id.to_owned(), candidate);
+    Ok(())
+}
+
+fn apply_realm_top_level_patch(
+    candidate: &mut Value,
+    patch: &serde_json::Map<String, Value>,
+) -> Result<(), &'static str> {
+    let object = candidate
+        .as_object_mut()
+        .ok_or("frozen Realm pre-state is not an object")?;
+    for (path, patch_value) in patch {
+        let field = path.strip_prefix("object.").unwrap_or(path);
+        if field.contains('.') {
+            continue;
+        }
+        match patch_value.as_object().and_then(|op| {
+            op.get("$op")
+                .and_then(Value::as_str)
+                .map(|kind| (kind, op.get("value")))
+        }) {
+            Some(("set", Some(value))) => {
+                object.insert(field.to_owned(), value.clone());
+            }
+            Some(("unset" | "remove", _)) => {
+                object.remove(field);
+            }
+            Some(_) => return Err("Realm patch operation is invalid"),
+            None => {
+                object.insert(field.to_owned(), patch_value.clone());
+            }
         }
     }
     Ok(())
