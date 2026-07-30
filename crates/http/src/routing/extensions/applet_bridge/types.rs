@@ -3,6 +3,7 @@
 use arkret_models_integration::{
     AppletInstallOutcome, AppletPackage, AppletRegistrationEpochEvidence, AppletWireNamespaces,
 };
+use arkret_wire::{Event, ScopeRef};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -18,6 +19,8 @@ pub struct AppletRecord {
     pub registry_did: String,
     pub bot_actor_id: String,
     pub portal_realm_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effective_scope: Option<ScopeRef>,
     pub capabilities: Vec<String>,
     pub manifest: AppletManifest,
     #[serde(default)]
@@ -51,6 +54,10 @@ pub struct AppletRecord {
     pub install_id: Option<String>,
     #[serde(default)]
     pub install_response: Option<AppletInstallOutcome>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub registration_event: Option<Event>,
+    #[serde(default)]
+    pub capability_grant_events: Vec<Event>,
     #[serde(default)]
     pub install_execution: Option<Value>,
     #[serde(default)]

@@ -522,7 +522,7 @@ pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // Applet protocol family.
 //
 // Spec `extensions/applet-integration.md` + event-kind-registry rows:
-//   `ak.applet.registration` → service_id + namespace + capabilities
+//   `ak.applet.registration` → service_id + namespaces + requested_scopes
 //   `ak.applet.discovery`    → service_id + manifest
 //   `ak.applet.bridge_error`            → session_id + errcode + message
 //
@@ -532,7 +532,10 @@ pub(crate) const STRAND_TRACKS_UPDATE_REQUIREMENTS: &[PayloadRequirement] = &[
 // the payload after admission.
 pub(crate) const APPLET_REGISTRATION_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("service_id", "applet registration requires service_id"),
-    PayloadRequirement::Required("namespace", "applet registration requires namespace"),
+    PayloadRequirement::Required(
+        "namespaces",
+        "applet registration requires namespace claims",
+    ),
 ];
 pub(crate) const APPLET_DISCOVERY_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("service_id", "applet discovery requires service_id"),

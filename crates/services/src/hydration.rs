@@ -1,7 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use arkret_identifiers::{AppletId, CircleId, Did, Hash, OperationId, RealmId};
-use arkret_models_collaboration::governance::grant_constraint::GrantConstraintSubkind;
+use arkret_identifiers::{CircleId, Did, OperationId, RealmId};
 use arkret_models_collaboration::governance::plaintext_visibility::PlaintextVisibleServicesPayload;
 use arkret_models_collaboration::objects::space::ChildScopePolicy;
 use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
@@ -1010,7 +1009,6 @@ pub async fn hydrate_projections_from_persistence(
             if let Some(applet_id) = applet_id {
                 proj.applets.insert(applet_id, projection);
             }
-            hydrate_applet_install_grants(authz, &row, &package, registered_at);
         }
     }
 
@@ -1157,64 +1155,6 @@ pub async fn hydrate_projections_from_persistence(
     // by the common-field-only Strand mirror that loaded above.
     hydrate_sidecar_context_projections(persistence, proj, &hydration_hlc).await?;
     Ok(())
-}
-
-pub fn hydrate_applet_install_grants(
-    authz: &AuthorizationService,
-    row: &Value,
-    package: &AppletPackage,
-    registered_at: chrono::DateTime<chrono::Utc>,
-) {
-    let status = row
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or_default();
-    if !matches!(status, "installed" | "partially_installed")
-        || row.get("revoked_at").is_some_and(|value| !value.is_null())
-    {
-        return;
-    }
-    let Some(owner_actor_id) = row.get("owner_actor_id").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(portal_realm_id) = row.get("portal_realm_id").and_then(Value::as_str) else {
-        return;
-    };
-    let Some(grant_ids) = row
-        .get("install_response")
-        .and_then(|value| value.get("capability_grant_refs"))
-        .and_then(Value::as_array)
-    else {
-        return;
-    };
-    let Some(actions) = row.get("capabilities").and_then(Value::as_array) else {
-        return;
-    };
-    for (grant_id, action) in grant_ids.iter().zip(actions.iter()) {
-        let (Some(grant_id), Some(action)) = (grant_id.as_str(), action.as_str()) else {
-            continue;
-        };
-        authz.upsert_projected_grant(arkret_policy::authz::delegation::Grant {
-            grant_id: grant_id.to_owned(),
-            realm_id: portal_realm_id.to_owned(),
-            issuer: owner_actor_id.to_owned(),
-            subject: package.service_id.to_string(),
-            resource: portal_realm_id.to_owned(),
-            actions: vec![action.to_owned()],
-            capability_action_registry_digest: None,
-            constraints: vec![arkret_policy::authz::delegation::GrantConstraint::DelegationControl {
-                max_delegation_depth: None,
-                constraint_subkind: Some(GrantConstraintSubkind::AppletDelegation),
-                applet_id: AppletId::new(package.applet_id.clone()).ok(),
-                executed_by: Some(package.service_id.clone()),
-                registration_epoch: Hash::new(package.registration_epoch.to_string()).ok(),
-            }],
-            revoked: false,
-            created_at: registered_at,
-            delegated_from: None,
-            expires_at: None,
-        });
-    }
 }
 
 pub async fn hydrate_realms_from_canonical_events(

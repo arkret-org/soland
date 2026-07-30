@@ -192,15 +192,10 @@ pub(super) fn validate_circle_scope_membership(
 /// `ak.applet.registration` MUST own the target Realm or hold an active
 /// `ak.realm.admin` grant covering it, else reject `applet_registration_unauthorized`.
 ///
-/// The dedicated install aggregate (`POST /_arkret/self/applets/install`) checks
-/// this in its own handler and persists the registration projection directly —
-/// it does NOT flow through this admission path. This gate closes the *bypass*:
-/// a raw `ak.applet.registration` submitted via `/_arkret/self/events` otherwise
-/// reaches `apply_applet_registration` with no authorization of its own.
-/// Registration staying `service_attested` (carrier authenticity) is orthogonal
-/// to "who may install" (§4) — both must hold. Mirrors the ban gate
-/// (`validate_member_state_policy`); peer / service-originated federation ops
-/// without a typed actor stay accepted for convergence.
+/// The dedicated install aggregate (`POST /_arkret/self/applets/install`)
+/// validates and submits the caller-signed registration Event through the same
+/// admission path as a raw `/_arkret/self/events` submission. Both paths
+/// therefore apply this owner/admin gate without an internal bypass.
 pub(super) async fn validate_applet_registration_authz(
     state: &AppState,
     operation: &Operation,
