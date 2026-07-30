@@ -193,6 +193,25 @@ fn policy_decision_transcript_bytes(
     arkret_canonical::canonical_json_bytes(&transcript).unwrap()
 }
 
+/// An authz engine holding an explicit `ak.event.read` grant for the test actor.
+///
+/// `authz.rs` — «Realm ownership and membership never imply a capability». These
+/// suites are about the REMOTE policy decision, so the local capability leg has
+/// to be satisfied by a real projected grant rather than by owner identity.
+fn engine_granting_event_read() -> AuthorizationService {
+    let engine = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
+    let grant = engine.create_grant(
+        REALM_ID.to_owned(),
+        "did:web:alice.example".to_owned(),
+        "did:web:alice.example".to_owned(),
+        "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
+        vec!["ak.event.read".to_owned()],
+        Vec::new(),
+    );
+    engine.upsert_projected_grant(grant);
+    engine
+}
+
 /// G3.S2 — soland calls coauth's `/policy/check` end-to-end. Asserts
 /// the mock receives the POST and the merged authz decision reflects
 /// the mock's `Allow` response.
@@ -227,7 +246,7 @@ async fn policy_server_integration_hits_mock() {
     )
     .with_private_network_egress(true)
     .with_policy_did_resolver(policy_resolver(&signing));
-    let engine = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
+    let engine = engine_granting_event_read();
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),
@@ -241,8 +260,6 @@ async fn policy_server_integration_hits_mock() {
     let decision = check_with_policy_server(
         &engine,
         "did:web:alice.example",
-        // Use the registered read capability so the LOCAL owner check passes
-        // before the remote policy decision is evaluated.
         "ak.event.read",
         "ak:realm:01904100-0000-7000-8000-000000000001",
         REALM_ID,
@@ -289,7 +306,7 @@ async fn policy_server_integration_timeout_fails_closed() {
         "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
     )
     .with_private_network_egress(true);
-    let engine = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
+    let engine = engine_granting_event_read();
 
     let mut ctx = RequestContext {
         realm_id: REALM_ID.to_owned(),

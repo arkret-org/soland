@@ -26,7 +26,10 @@ pub async fn assert_organization_registration_store_contract(
     store: &dyn OrganizationRegistrationStore,
     namespace: &str,
 ) {
-    let now = database_timestamp_now();
+    // Registration receipts serialize timestamps through the canonical
+    // millisecond wire format, so a sub-millisecond `now` would compare
+    // unequal after a durable JSON round-trip.
+    let now = arkret_canonical::normalize_timestamp_canonical(database_timestamp_now());
     let organization_id = test_did("zOrg", namespace);
     let first_admin = test_did("zAdmin", namespace);
     let second_admin = test_did("zAdminNext", namespace);
@@ -689,6 +692,49 @@ pub struct EventCommitContractStores<'a> {
     pub outbox: &'a dyn FederationOutboxStore,
 }
 
+fn canonical_wire_event_record(
+    event_id: &str,
+    actor_id: &str,
+    realm_id: &str,
+    actor_seq: u64,
+    now: chrono::DateTime<Utc>,
+) -> CanonicalEventRecord {
+    let event = arkret_wire::Event::new_with_id_at(
+        arkret_wire::EventId::new(event_id.to_owned()).expect("contract event id"),
+        "ak.message.create",
+        arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
+                .expect("contract realm id"),
+        },
+        Did::new(actor_id.to_owned()).expect("contract actor DID"),
+        actor_seq,
+        arkret_identifiers::Hlc::new(format!(
+            "{:012x}-0000-00000000",
+            now.timestamp_millis().max(0) as u64
+        ))
+        .expect("contract HLC"),
+        serde_json::json!({"body": "contract"}),
+        now,
+    )
+    .expect("contract wire event");
+    let canonical_digest = event.event_digest().expect("contract event digest");
+    let envelope = serde_json::to_value(&event).expect("contract wire event encodes");
+    let canonical_bytes =
+        arkret_canonical::canonical_json_bytes(&envelope).expect("contract canonical bytes");
+    CanonicalEventRecord {
+        event_id: event_id.to_owned(),
+        actor_id: actor_id.to_owned(),
+        actor_seq,
+        realm_id: Some(realm_id.to_owned()),
+        kind: "ak.message.create".to_owned(),
+        schema_id: "arkret://events/message/create/v1".to_owned(),
+        canonical_digest,
+        canonical_bytes,
+        envelope,
+        received_at: now,
+    }
+}
+
 pub async fn assert_event_commit_unit_of_work_contract(
     stores: EventCommitContractStores<'_>,
     namespace: &str,
@@ -702,18 +748,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let idempotency_key = format!("event-commit:{namespace}:{event_uuid}");
     let outbox_id = format!("outbox:{namespace}:{event_uuid}");
     let request = EventCommitRequest {
-        event: CanonicalEventRecord {
-            event_id: event_id.clone(),
-            actor_id: principal_id.clone(),
-            actor_seq: 0,
-            realm_id: Some(realm_id.clone()),
-            kind: "ak.message.create".to_owned(),
-            schema_id: "arkret://events/message/create/v1".to_owned(),
-            canonical_digest: format!("sha256:{event_uuid}"),
-            canonical_bytes: format!("event:{event_uuid}").into_bytes(),
-            envelope: serde_json::json!({"event_id": event_id}),
-            received_at: now,
-        },
+        event: canonical_wire_event_record(&event_id, &principal_id, &realm_id, 0, now),
         control_proposal_receipt: None,
         projections: vec![ProjectionEventRecord {
             event_id: event_id.clone(),
@@ -792,18 +827,7 @@ pub async fn assert_event_commit_unit_of_work_contract(
     let rollback_idempotency_key = format!("event-rollback:{namespace}:{rollback_uuid}");
     let rollback_outbox_id = format!("outbox-rollback:{namespace}:{rollback_uuid}");
     let failed = EventCommitRequest {
-        event: CanonicalEventRecord {
-            event_id: rollback_event_id.clone(),
-            actor_id: principal_id.clone(),
-            actor_seq: 1,
-            realm_id: Some(realm_id),
-            kind: "ak.message.create".to_owned(),
-            schema_id: "arkret://events/message/create/v1".to_owned(),
-            canonical_digest: format!("sha256:{rollback_uuid}"),
-            canonical_bytes: format!("event:{rollback_uuid}").into_bytes(),
-            envelope: serde_json::json!({"event_id": rollback_event_id}),
-            received_at: now,
-        },
+        event: canonical_wire_event_record(&rollback_event_id, &principal_id, &realm_id, 1, now),
         control_proposal_receipt: None,
         projections: vec![ProjectionEventRecord {
             event_id: rollback_event_id.clone(),

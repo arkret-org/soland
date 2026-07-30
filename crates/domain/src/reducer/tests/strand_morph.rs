@@ -721,8 +721,14 @@ fn strand_tracks_update_projects_discussion_enabled_state() {
         realm_id,
         serde_json::json!({
             "strand_id": strand_id,
+            // `strand-and-message.md` §4.6/§4.8 — closing the current primary
+            // track MUST hand primary to another active track in the SAME
+            // patch, so this disables `discussion` while promoting `synthesis`.
             "patch": {
-                "tracks.discussion.enabled": {"$op": "set", "value": false}
+                "tracks.discussion.enabled": {"$op": "set", "value": false},
+                "tracks.discussion.is_primary": {"$op": "set", "value": false},
+                "tracks.synthesis.enabled": {"$op": "set", "value": true},
+                "tracks.synthesis.is_primary": {"$op": "set", "value": true}
             },
             "sender": "did:web:alice.example",
         }),

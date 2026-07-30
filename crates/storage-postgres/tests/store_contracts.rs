@@ -16,6 +16,13 @@ use soland_storage_postgres::{
 
 static TEST_POOL: tokio::sync::OnceCell<Option<PgPool>> = tokio::sync::OnceCell::const_new();
 
+/// These contracts share one database and several of them exercise
+/// row/advisory locking (`lock_organization`, the event-commit unit of work).
+/// Running them concurrently against a single pool intermittently starves a
+/// connection and surfaces as `Database("connection closed")` or a spurious
+/// conflict, so each case holds this guard for its duration.
+static DB_GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
 async fn test_pool() -> Option<PgPool> {
     TEST_POOL
         .get_or_init(|| async { Db::from_env().await.expect("initialize test database").pool })
@@ -28,6 +35,7 @@ async fn postgres_adapter_satisfies_shared_idempotency_contract_when_configured(
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let store = PgIdempotencyStore { pool };
     let namespace = format!("postgres-contract-{}", uuid::Uuid::now_v7());
     assert_idempotency_store_contract(&store, &namespace).await;
@@ -38,6 +46,7 @@ async fn postgres_adapter_satisfies_proposal_member_receipt_contract_when_config
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let store = PgProposalMemberReceiptStore { pool };
     let namespace = format!("postgres-proposal-receipt-{}", uuid::Uuid::now_v7());
     assert_proposal_member_receipt_store_contract(&store, &namespace).await;
@@ -48,6 +57,7 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let unit_of_work = PgEventCommitUnitOfWork::new(pool.clone());
     let events = PgEventStore { pool: pool.clone() };
     let projections = PgProjectionEventStore { pool: pool.clone() };
@@ -72,6 +82,7 @@ async fn postgres_adapter_satisfies_mls_keypackage_retirement_contract_when_conf
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-retirement-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
     assert_mls_keypackage_retirement_contract(&store, &namespace).await;
@@ -91,6 +102,7 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let namespace = format!("postgres-last-resort-{}", uuid::Uuid::now_v7());
     let store = PgMlsKeyPackageStore { pool: pool.clone() };
     assert_last_resort_claim_ledger_contract(&store, &namespace).await;
@@ -158,6 +170,7 @@ async fn postgres_adapter_satisfies_organization_registration_contract_when_conf
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let store = PgOrganizationRegistrationStore::new(pool);
     let namespace = format!(
         "postgres-organization-registration-{}",
@@ -171,6 +184,7 @@ async fn postgres_account_data_cas_treats_an_absent_key_as_revision_zero_when_co
     let Some(pool) = test_pool().await else {
         return;
     };
+    let _db_guard = DB_GUARD.lock().await;
     let store = PgAccountDataStore { pool };
     let key = format!("client.postgres-cas.{}", uuid::Uuid::now_v7());
     let actor = "did:web:postgres-cas.example";
