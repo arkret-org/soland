@@ -276,6 +276,7 @@ async fn submit_join_application(
                     realm_id.as_str(),
                     &action,
                     realm_id.as_str(),
+                    body.receipt.submitted_at,
                 )
             {
                 return Err(failed_precondition(
@@ -474,6 +475,9 @@ async fn cancel_join_application(
 
 fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, bool, bool) {
     let snapshot = state.projections().snapshot();
+    // Read-model surface: the evaluation basis is the request instant, taken
+    // once here rather than inside the projection helpers.
+    let evaluated_at = chrono::Utc::now();
     let review_action = snapshot
         .realm_join_policy_review_capability(realm_id.as_str())
         .unwrap_or_else(|| REVIEW_ACTION_FALLBACK.to_owned());
@@ -482,12 +486,14 @@ fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, b
         realm_id.as_str(),
         &review_action,
         realm_id.as_str(),
+        evaluated_at,
     );
     let audit_reader = snapshot.issuer_has_projected_capability(
         actor,
         realm_id.as_str(),
         AUDIT_READ_ACTION,
         realm_id.as_str(),
+        evaluated_at,
     );
     let member = snapshot
         .member(realm_id.as_str(), actor)

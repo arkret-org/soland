@@ -365,7 +365,8 @@ fn grant_circle_action(
     actor: &str,
     action: &str,
 ) {
-    state.authorization().create_grant(
+    crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
@@ -384,7 +385,8 @@ fn grant_moderation_decision(
     realm_id: &arkret_identifiers::RealmId,
     actor: &str,
 ) {
-    state.authorization().create_grant(
+    crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
@@ -400,7 +402,8 @@ fn grant_call_action(
     actor: &str,
     action: &str,
 ) {
-    state.authorization().create_grant(
+    crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:owner.example".to_owned(),
         actor.to_owned(),
@@ -1266,7 +1269,8 @@ async fn act_on_behalf_agent_requires_participation_bit() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1299,7 +1303,8 @@ async fn act_on_behalf_agent_requires_authorization_ref_covering_action() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1363,7 +1368,8 @@ async fn act_on_behalf_agent_strand_write_requires_agent_context() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1430,7 +1436,8 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let envelope_grant = state.authorization().create_grant(
+    let envelope_grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1438,7 +1445,8 @@ async fn act_on_behalf_agent_relation_write_rejects_context_authorization_mismat
         vec![arkret_wire::events::EventKind::RELATION_CREATE.to_owned()],
         Vec::new(),
     );
-    let context_grant = state.authorization().create_grant(
+    let context_grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1510,7 +1518,8 @@ async fn act_on_behalf_agent_view_write_allows_valid_agent_context_and_approval(
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1549,7 +1558,8 @@ async fn act_on_behalf_agent_unknown_kind_rejects_authorization_action() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1587,7 +1597,8 @@ async fn reply_agent_unknown_kind_rejects_context_authorization_action() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1623,7 +1634,8 @@ async fn reply_agent_lifecycle_state_blocks_writes_even_with_participation() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -1662,7 +1674,8 @@ async fn reply_agent_projected_deactivation_blocks_writes_even_with_active_recor
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, false).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -2023,7 +2036,8 @@ async fn act_on_behalf_agent_allows_effective_selection_and_active_grant() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -2054,7 +2068,8 @@ async fn act_on_behalf_agent_requires_fresh_approval_request() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),
@@ -2087,7 +2102,8 @@ async fn act_on_behalf_agent_consumes_approval_nonce_once() {
     .unwrap();
     let agent = "did:web:agent.example";
     register_agent_selection(&state, &realm_id, agent, true, true).await;
-    let grant = state.authorization().create_grant(
+    let grant = crate::authz::install_projected_grant(
+        state.authorization(),
         realm_id.to_string(),
         "did:web:alice.example".to_owned(),
         agent.to_owned(),

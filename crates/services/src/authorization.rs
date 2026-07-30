@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use arkret_policy::authz::delegation::{Grant, GrantConstraint};
+use arkret_policy::authz::delegation::Grant;
 use chrono::{DateTime, Utc};
 
 #[derive(Clone, Debug)]
@@ -40,15 +40,6 @@ pub struct RealmPolicyServerConfigView {
 
 pub trait AuthorizationPort: Send + Sync {
     fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision;
-    fn create_grant(
-        &self,
-        realm_id: String,
-        issuer: String,
-        subject: String,
-        resource: String,
-        actions: Vec<String>,
-        constraints: Vec<GrantConstraint>,
-    ) -> Grant;
     fn upsert_projected_grant(&self, grant: Grant);
     fn mark_projected_grant_revoked(&self, grant_id: &str);
     fn mark_projected_grants_revoked_for_subject(&self, subject: &str) -> usize;
@@ -70,19 +61,6 @@ impl AuthorizationService {
 
     pub fn check(&self, request: AuthorizationCheck<'_>) -> AuthorizationDecision {
         self.port.check(request)
-    }
-
-    pub fn create_grant(
-        &self,
-        realm_id: String,
-        issuer: String,
-        subject: String,
-        resource: String,
-        actions: Vec<String>,
-        constraints: Vec<GrantConstraint>,
-    ) -> Grant {
-        self.port
-            .create_grant(realm_id, issuer, subject, resource, actions, constraints)
     }
 
     pub fn upsert_projected_grant(&self, grant: Grant) {

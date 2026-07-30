@@ -1556,18 +1556,6 @@ impl AuthorizationPort for SolandAuthzEngine {
         }
     }
 
-    fn create_grant(
-        &self,
-        realm_id: String,
-        issuer: String,
-        subject: String,
-        resource: String,
-        actions: Vec<String>,
-        constraints: Vec<arkret_policy::authz::delegation::GrantConstraint>,
-    ) -> arkret_policy::authz::delegation::Grant {
-        self.create_grant(realm_id, issuer, subject, resource, actions, constraints)
-    }
-
     fn upsert_projected_grant(&self, grant: arkret_policy::authz::delegation::Grant) {
         self.upsert_projected_grant(grant);
     }
@@ -2304,6 +2292,7 @@ mod membership_hydration_tests {
             realm_id,
             "ak.message.create",
             realm_id,
+            chrono::Utc::now(),
         ));
     }
 }

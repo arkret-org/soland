@@ -21,20 +21,21 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
-// `DelegationError`, and the chain-integrity / cascade / expiry helpers —
-// live in the SDK so inkson and sodmin admin can call them client-side. See
+// and the chain-integrity / expiry helpers — live in the SDK so inkson and
+// sodmin admin can call them client-side. See
 // `arkret_policy::authz::delegation`.
+//
+// Grant *authoring* (issuance, re-delegation, revoke cascade) is NOT mirrored
+// here: the accepted `ak.component.capability.grant.v1` cell projection in
+// `soland_domain::reducer::apply_capability` is the only place a grant comes
+// into existence, and this engine is strictly the read-side index over it.
 pub use arkret_policy::authz::delegation::{
-    AppletDelegationBindingError, DelegationError, Grant, GrantConstraint as Constraint,
-    GrantDecisionVerdict, GrantRequestDraft, delegation_chain_intact, grant_effective_expiry,
-    is_grant_expired, max_delegation_depth, resource_within, revoke_with_cascade,
-    validate_applet_delegation_binding,
+    AppletDelegationBindingError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict,
+    delegation_chain_intact, is_grant_expired, validate_applet_delegation_binding,
 };
 use parking_lot::Mutex;
 use serde::Serialize;
 use soland_services::authorization::{AuthorizationDecision, AuthorizationService};
-
-use crate::ids;
 
 const SELECTOR_SHORTHAND_MAX_BYTES: usize = 4096;
 const SELECTOR_TOKEN_MAX: usize = 256;
@@ -76,165 +77,6 @@ impl SolandAuthzEngine {
         Self {
             grants: Arc::new(Mutex::new(BTreeMap::new())),
         }
-    }
-
-    /// Create a new root grant after the caller has validated issuer authority.
-    /// Use [`Self::create_delegated_grant`] for re-delegation.
-    pub fn create_grant(
-        &self,
-        realm_id: String,
-        issuer: String,
-        subject: String,
-        resource: String,
-        actions: Vec<String>,
-        constraints: Vec<Constraint>,
-    ) -> Grant {
-        self.create_grant_with_options(
-            realm_id,
-            issuer,
-            subject,
-            resource,
-            actions,
-            None,
-            constraints,
-            None,
-            None,
-        )
-    }
-
-    /// Full-form constructor used by both root and delegated paths.
-    /// `expires_at` here is the top-level convenience denormalization; the
-    /// constraints[] temporal entry, if present, still wins on the stricter
-    /// side at check time.
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_grant_with_options(
-        &self,
-        realm_id: String,
-        issuer: String,
-        subject: String,
-        resource: String,
-        actions: Vec<String>,
-        capability_action_registry_digest: Option<arkret_identifiers::Hash>,
-        constraints: Vec<Constraint>,
-        delegated_from: Option<String>,
-        expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Grant {
-        let grant = Grant {
-            grant_id: ids::generate_grant_id(),
-            realm_id,
-            issuer,
-            subject,
-            resource,
-            actions,
-            capability_action_registry_digest,
-            constraints,
-            revoked: false,
-            created_at: chrono::Utc::now(),
-            delegated_from,
-            expires_at,
-        };
-        if grant_scope_valid(&grant).is_ok() {
-            self.grants
-                .lock()
-                .insert(grant.grant_id.clone(), grant.clone());
-        }
-        grant
-    }
-
-    /// Issue a delegated grant. Per capabilities.md §10:
-    /// - caller MUST be the subject of `parent_grant_id`
-    /// - delegated actions MUST be a subset of the parent's
-    /// - delegated expiry MUST NOT exceed the parent's
-    /// - resource MUST NOT widen the parent's scope
-    ///
-    /// Thin wrapper around [`arkret_policy::authz::delegation::create_delegated_grant`]:
-    /// the SDK helper does the pure validation work; this method snapshots the
-    /// engine's grant table, runs the check, assigns a server-issued grant id,
-    /// and persists. inkson / sodmin call the SDK helper directly for client-side
-    /// pre-validation (skipping the persist step).
-    #[allow(clippy::too_many_arguments)]
-    pub fn create_delegated_grant(
-        &self,
-        parent_grant_id: &str,
-        issuer: String,
-        subject: String,
-        resource: String,
-        actions: Vec<String>,
-        capability_action_registry_digest: Option<arkret_identifiers::Hash>,
-        constraints: Vec<Constraint>,
-        expires_at: Option<chrono::DateTime<chrono::Utc>>,
-    ) -> Result<Grant, DelegationError> {
-        let delegated_realm_id = {
-            // SOL-REL-01 / SOL-SOTA-01 — parking_lot mutex: no poisoning, so
-            // the authorization hot path cannot crash on a stale poison flag.
-            let grants = self.grants.lock();
-            grants
-                .get(parent_grant_id)
-                .map(|g| g.realm_id.clone())
-                .ok_or(DelegationError::ParentNotFound)?
-        };
-        let snapshot: Vec<Grant> = self.grants.lock().values().cloned().collect();
-        let request = GrantRequestDraft {
-            // Parent's realm_id is authoritative for delegated children
-            // (the wire `realm_id` argument is informational only; the SDK
-            // helper does not check it). Use the parent's so persisted
-            // child matches.
-            realm_id: delegated_realm_id,
-            issuer,
-            subject,
-            resource,
-            actions,
-            capability_action_registry_digest,
-            constraints,
-            expires_at,
-        };
-        let mut child = arkret_policy::authz::delegation::create_delegated_grant(
-            parent_grant_id,
-            &request,
-            &snapshot,
-            chrono::Utc::now(),
-        )?;
-        if validate_capability_actions(&child.actions).is_err() {
-            return Err(DelegationError::ActionsNotHeld {
-                offending: child.actions.clone(),
-            });
-        }
-        if validate_resource_pattern(&child.resource).is_err() {
-            return Err(DelegationError::ResourceOutOfScope);
-        }
-        // SDK leaves grant_id empty for caller-supplied id allocation.
-        child.grant_id = ids::generate_grant_id();
-        self.grants
-            .lock()
-            .insert(child.grant_id.clone(), child.clone());
-        Ok(child)
-    }
-
-    /// Revoke a grant and cascade to every delegated descendant.
-    /// Returns `(true, cascade_ids)` when the named grant existed, where
-    /// `cascade_ids` enumerates all descendants whose state flipped to
-    /// `revoked` as part of this call (does NOT include `grant_id` itself).
-    ///
-    /// The cascade *plan* (which ids would be revoked) comes from
-    /// [`arkret_policy::authz::delegation::revoke_with_cascade`]; this method
-    /// applies the resulting mutation to the engine's in-memory map.
-    pub fn revoke_grant_with_cascade(&self, grant_id: &str) -> (bool, Vec<String>) {
-        let mut grants = self.grants.lock();
-        if !grants.contains_key(grant_id) {
-            return (false, Vec::new());
-        }
-        // Mark target revoked first.
-        if let Some(grant) = grants.get_mut(grant_id) {
-            grant.revoked = true;
-        }
-        let snapshot: Vec<Grant> = grants.values().cloned().collect();
-        let cascade = revoke_with_cascade(&snapshot, grant_id);
-        for child_id in &cascade {
-            if let Some(child) = grants.get_mut(child_id) {
-                child.revoked = true;
-            }
-        }
-        (true, cascade)
     }
 
     /// P1 — projection-driven index maintenance.
@@ -456,6 +298,57 @@ impl Default for SolandAuthzEngine {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Test fixture — an already-resolved `Grant` shaped exactly like the one the
+/// capability-cell projection folds into the read index.
+///
+/// Tests use this instead of a service-side issuance API: soland has no such
+/// API, because a grant only exists once an accepted
+/// `ak.component.capability.grant.v1` cell projects it.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn projected_grant_fixture(
+    realm_id: String,
+    issuer: String,
+    subject: String,
+    resource: String,
+    actions: Vec<String>,
+    constraints: Vec<Constraint>,
+) -> Grant {
+    Grant {
+        grant_id: crate::ids::generate_grant_id(),
+        realm_id,
+        issuer,
+        subject,
+        resource,
+        actions,
+        capability_action_registry_digest: None,
+        constraints,
+        revoked: false,
+        created_at: chrono::Utc::now(),
+        delegated_from: None,
+        expires_at: None,
+    }
+}
+
+/// Install [`projected_grant_fixture`] through the same projection ingress the
+/// reducer-driven projection driver uses, and hand the grant back so the test
+/// can cite its `grant_id`.
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub fn install_projected_grant(
+    authz: &AuthorizationService,
+    realm_id: String,
+    issuer: String,
+    subject: String,
+    resource: String,
+    actions: Vec<String>,
+    constraints: Vec<Constraint>,
+) -> Grant {
+    let grant = projected_grant_fixture(realm_id, issuer, subject, resource, actions, constraints);
+    authz.upsert_projected_grant(grant.clone());
+    grant
 }
 
 fn default_deny_reason(action: &str) -> &'static str {
@@ -1110,6 +1003,29 @@ pub async fn check_with_policy_server(
 mod tests {
     use super::*;
 
+    /// Fold a projected grant into the read index, mirroring what the
+    /// capability-cell projection driver does for an accepted grant Event.
+    fn project(
+        engine: &SolandAuthzEngine,
+        realm_id: &str,
+        issuer: &str,
+        subject: &str,
+        resource: &str,
+        actions: &[&str],
+        constraints: Vec<Constraint>,
+    ) -> Grant {
+        let grant = projected_grant_fixture(
+            realm_id.to_owned(),
+            issuer.to_owned(),
+            subject.to_owned(),
+            resource.to_owned(),
+            actions.iter().map(|action| (*action).to_owned()).collect(),
+            constraints,
+        );
+        engine.upsert_projected_grant(grant.clone());
+        grant
+    }
+
     #[test]
     fn owner_without_explicit_grant_is_denied() {
         let engine = SolandAuthzEngine::new();
@@ -1145,15 +1061,17 @@ mod tests {
     #[test]
     fn unknown_action_grant_is_fail_closed() {
         let engine = SolandAuthzEngine::new();
-        let grant = engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.future.action".to_owned()],
+        // Even if such a grant somehow reached the read index, the check-time
+        // scope filter still refuses it — the index is never the authority.
+        let grant = project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.future.action"],
             vec![],
         );
-        assert!(engine.get_grant(&grant.grant_id).is_none());
         assert_eq!(
             validate_capability_actions(&grant.actions),
             Err(REASON_CAPABILITY_GRANT_ACTION_UNKNOWN)
@@ -1228,12 +1146,13 @@ mod tests {
     fn member_read_requires_explicit_grant() {
         let engine = SolandAuthzEngine::new();
         let members = vec!["did:web:bob".to_owned()];
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.strand.read".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.strand.read"],
             vec![],
         );
         let result = engine.check(
@@ -1252,12 +1171,13 @@ mod tests {
     #[test]
     fn explicit_grant_overrides_default() {
         let engine = SolandAuthzEngine::new();
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![],
         );
         let result = engine.check(
@@ -1276,22 +1196,24 @@ mod tests {
     #[test]
     fn explicit_deny_overrides_allow() {
         let engine = SolandAuthzEngine::new();
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
         );
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Deny,
             }],
@@ -1314,22 +1236,24 @@ mod tests {
         // Per spec B5: deny / quarantine / require_review are each
         // any-hit-wins; allow is the diagnostic fallback only.
         let engine = SolandAuthzEngine::new();
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::RequireReview,
             }],
         );
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Allow,
             }],
@@ -1346,12 +1270,13 @@ mod tests {
         assert!(!reviewed.allowed, "require_review must outrank allow");
         assert_eq!(reviewed.reason, "require_review");
 
-        engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![Constraint::Decision {
                 decision: GrantDecisionVerdict::Quarantine,
             }],
@@ -1372,15 +1297,16 @@ mod tests {
     #[test]
     fn revoked_grant_denied() {
         let engine = SolandAuthzEngine::new();
-        let grant = engine.create_grant(
-            "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:space:1".to_owned(),
-            vec!["ak.message.create".to_owned()],
+        let grant = project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
             vec![],
         );
-        engine.revoke_grant_with_cascade(&grant.grant_id);
+        engine.mark_projected_grant_revoked(&grant.grant_id);
         let result = engine.check(
             "did:web:bob",
             "ak.message.create",
@@ -1396,27 +1322,26 @@ mod tests {
     #[test]
     fn delegated_child_denied_with_upstream_revocation_reason() {
         let engine = SolandAuthzEngine::new();
-        let parent = engine.create_grant(
+        let parent = project(
+            &engine,
+            "ak:space:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:space:1",
+            &["ak.message.create"],
+            vec![],
+        );
+        let mut child = projected_grant_fixture(
             "ak:space:1".to_owned(),
-            "did:web:alice".to_owned(),
             "did:web:bob".to_owned(),
+            "did:web:carol".to_owned(),
             "ak:space:1".to_owned(),
             vec!["ak.message.create".to_owned()],
             vec![],
         );
-        let child = engine
-            .create_delegated_grant(
-                &parent.grant_id,
-                "did:web:bob".to_owned(),
-                "did:web:carol".to_owned(),
-                "ak:space:1".to_owned(),
-                vec!["ak.message.create".to_owned()],
-                None,
-                vec![],
-                None,
-            )
-            .expect("child grant should be valid before parent revoke");
-        engine.revoke_grant_with_cascade(&parent.grant_id);
+        child.delegated_from = Some(parent.grant_id.clone());
+        engine.upsert_projected_grant(child.clone());
+        engine.mark_projected_grant_revoked(&parent.grant_id);
         let result = engine.check(
             "did:web:carol",
             "ak.message.create",
@@ -1434,8 +1359,9 @@ mod tests {
         assert!(
             engine
                 .get_grant(&child.grant_id)
-                .is_some_and(|grant| grant.revoked),
-            "cascade marks the child revoked in the index"
+                .is_some_and(|grant| !grant.revoked),
+            "the child's own tombstone is only set by its own accepted revoke; \
+             the deny above comes from chain integrity, not from an index-side cascade"
         );
     }
 
@@ -1457,12 +1383,13 @@ mod tests {
     #[test]
     fn wildcard_action_grant_is_fail_closed() {
         let engine = SolandAuthzEngine::new();
-        engine.create_grant(
-            "ak:realm:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "ak:realm:1".to_owned(),
-            vec!["ak.pin.*".to_owned()],
+        project(
+            &engine,
+            "ak:realm:1",
+            "did:web:alice",
+            "did:web:bob",
+            "ak:realm:1",
+            &["ak.pin.*"],
             vec![],
         );
         let result = engine.check(
@@ -1481,12 +1408,13 @@ mod tests {
     #[test]
     fn bare_wildcard_resource_grant_is_fail_closed() {
         let engine = SolandAuthzEngine::new();
-        engine.create_grant(
-            "ak:realm:1".to_owned(),
-            "did:web:alice".to_owned(),
-            "did:web:bob".to_owned(),
-            "*".to_owned(),
-            vec!["ak.pin.add".to_owned()],
+        project(
+            &engine,
+            "ak:realm:1",
+            "did:web:alice",
+            "did:web:bob",
+            "*",
+            &["ak.pin.add"],
             vec![],
         );
         let result = engine.check(

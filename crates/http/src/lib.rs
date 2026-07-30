@@ -13,6 +13,7 @@ mod control_proposal;
 pub mod control_seal_coordinator;
 pub mod cursor;
 pub mod error;
+pub mod failpoints;
 pub mod gc;
 pub mod http_signature;
 pub mod ids;

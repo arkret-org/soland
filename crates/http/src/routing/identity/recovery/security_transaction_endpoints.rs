@@ -872,14 +872,13 @@ pub(crate) async fn backup_series_erase_command(
         .backup_erase_progress(&transaction_id)
         .await
         .map_err(security_transaction_service_error)?;
-    let test_fail_after_deletes = if state.config().development_mode && existing_progress.is_none()
-    {
-        std::env::var("SOLAND_TEST_ROTATION_ERASE_FAIL_AFTER")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-    } else {
-        None
-    };
+    // Crash-consistency fault injection. Only the first attempt of a
+    // transaction is armed, so the retry that must prove resumability runs the
+    // real storage path. Empty outside development mode.
+    let mut erase_failpoint = state.config().failpoints.scope(
+        crate::failpoints::FailpointId::BackupSeriesEraseDurableStep,
+        existing_progress.is_none(),
+    );
     if existing_progress.is_none() {
         for rotation in &binding.backup_rotations {
             for old in &rotation.old_backups {
@@ -940,14 +939,13 @@ pub(crate) async fn backup_series_erase_command(
             .map_err(security_transaction_service_error)?,
     };
 
-    let mut deleted_this_attempt = 0_usize;
     for result_index in 0..progress.outcome.series_results.len() {
         let remaining = progress.outcome.series_results[result_index]
             .remaining_backups
             .clone();
         let mut storage_failed = false;
         for old in remaining {
-            if test_fail_after_deletes.is_some_and(|limit| deleted_this_attempt >= limit) {
+            if erase_failpoint.trips_before_next_step() {
                 storage_failed = true;
                 continue;
             }
@@ -978,7 +976,7 @@ pub(crate) async fn backup_series_erase_command(
                 storage_failed = true;
                 continue;
             }
-            deleted_this_attempt += 1;
+            erase_failpoint.record_durable_step();
             let result = &mut progress.outcome.series_results[result_index];
             result
                 .remaining_backups

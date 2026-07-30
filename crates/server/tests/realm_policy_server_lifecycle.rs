@@ -318,7 +318,8 @@ async fn bootstrap_realm(state: &AppState, token: &str, realm_id: &str, slot: u8
 /// The founding grant deliberately excludes `ak.policy.manage`; register the
 /// explicit grant the admission gate requires in the shared authz engine.
 fn grant_policy_manage(state: &AppState, realm_id: &str) {
-    state.test_authz().create_grant(
+    soland_http::authz::install_projected_grant(
+        state.test_authz(),
         realm_id.to_owned(),
         ALICE.to_owned(),
         ALICE.to_owned(),

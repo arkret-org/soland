@@ -1130,7 +1130,8 @@ async fn webrtc_ban_blocks_removed_participant_token_reissue() {
 /// Grant `subject` a realm-scoped call capability (`action`) in the shared
 /// authz engine, mirroring what the capability-grant projection would fold in.
 fn grant_call_capability(state: &AppState, realm_id: &str, subject: &str, action: &str) {
-    state.test_authz().create_grant(
+    soland_http::authz::install_projected_grant(
+        state.test_authz(),
         realm_id.to_owned(),
         "did:web:alice.example".to_owned(),
         subject.to_owned(),

@@ -218,6 +218,7 @@ impl ProjectionState {
             realm_id,
             &action,
             realm_id,
+            receipt.reviewed_at,
         ) {
             return Err("capability_denied");
         }
@@ -227,6 +228,7 @@ impl ProjectionState {
             join_policy,
             receipt.reviewer_did.as_str(),
             &action,
+            receipt.reviewed_at,
         )
     }
 
@@ -449,13 +451,14 @@ fn join_policy_review_threshold(
     join_policy: &Value,
     reviewer: &str,
     action: &str,
+    evaluation_basis: DateTime<Utc>,
 ) -> Result<usize, &'static str> {
     match join_policy.get("reviewer_quorum") {
         None => Ok(1),
         Some(Value::String(value)) if value == "any" => Ok(1),
         Some(Value::String(value)) if value == "majority" || value == "all" => {
             let eligible = state
-                .projected_capability_holder_count(realm_id, action)
+                .projected_capability_holder_count(realm_id, action, evaluation_basis)
                 .max(1);
             Ok(if value == "all" {
                 eligible

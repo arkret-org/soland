@@ -200,7 +200,8 @@ fn policy_decision_transcript_bytes(
 /// to be satisfied by a real projected grant rather than by owner identity.
 fn engine_granting_event_read() -> AuthorizationService {
     let engine = AuthorizationService::new(Arc::new(SolandAuthzEngine::new()));
-    let grant = engine.create_grant(
+    soland_http::authz::install_projected_grant(
+        &engine,
         REALM_ID.to_owned(),
         "did:web:alice.example".to_owned(),
         "did:web:alice.example".to_owned(),
@@ -208,7 +209,6 @@ fn engine_granting_event_read() -> AuthorizationService {
         vec!["ak.event.read".to_owned()],
         Vec::new(),
     );
-    engine.upsert_projected_grant(grant);
     engine
 }
 

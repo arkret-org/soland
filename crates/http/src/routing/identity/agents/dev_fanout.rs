@@ -603,6 +603,7 @@ mod tests {
             realm_id,
             ACTION_MESSAGE_CREATE,
             realm_id,
+            chrono::Utc::now(),
         ));
     }
 

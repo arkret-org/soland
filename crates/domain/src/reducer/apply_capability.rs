@@ -254,6 +254,32 @@ pub fn engine_grant_from_capability_cell_state(
     engine_grant_from_cell_body(grant_id, body, revoked)
 }
 
+/// The single active-grant predicate for the accepted capability projection.
+///
+/// Realm pin, revocation tombstone, effective expiry (top-level `expires_at`
+/// and the `temporal` constraint, stricter side wins) and action / resource
+/// matching all live here so a fix to any one of them cannot be applied at one
+/// call site while another keeps admitting the grant. Callers layer their own
+/// usage constraint — a specific issuer, a named `grant_id`, or holder
+/// de-duplication — on top of this.
+///
+/// `resource_expr` MUST already be expanded through
+/// `ProjectionState::authz_resource_expr`; `evaluation_basis` is the caller's
+/// admission / evaluation timestamp.
+fn projected_grant_is_active_for(
+    grant: &crate::capability::Grant,
+    realm_id: &str,
+    action: &str,
+    resource_expr: &str,
+    evaluation_basis: chrono::DateTime<chrono::Utc>,
+) -> bool {
+    grant.realm_id == realm_id
+        && !grant.revoked
+        && !crate::capability::is_grant_expired(grant, evaluation_basis)
+        && grant.actions.iter().any(|candidate| candidate == action)
+        && crate::capability::resource_matches(&grant.resource, resource_expr)
+}
+
 #[cfg(test)]
 mod cba_capability_cell_tests {
     use arkret_state::lattice::CellState;
@@ -595,33 +621,47 @@ impl ProjectionState {
         }
     }
 
+    /// Every grant currently projected on a `ak.component.capability.grant.v1`
+    /// cell, resolved to its effective engine shape (latest add body + carried
+    /// revocation tombstone). No realm / action / resource / temporal filtering
+    /// happens here — that is [`projected_grant_is_active_for`]'s single
+    /// responsibility.
+    fn projected_capability_grants(&self) -> impl Iterator<Item = crate::capability::Grant> + '_ {
+        const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
+        self.cells.iter().filter_map(|(cell_ref, cell_state)| {
+            let grant_id = cell_ref.as_str().strip_prefix(CELL_PREFIX)?;
+            engine_grant_from_capability_cell_state(grant_id, cell_state)
+        })
+    }
+
+    /// Does `issuer` hold an active projected grant for `action` on `resource`?
+    ///
+    /// `evaluation_basis` is the caller's admission / evaluation timestamp; the
+    /// projection never reads the wall clock on its own.
     pub fn issuer_has_projected_capability(
         &self,
         issuer: &str,
         realm_id: &str,
         action: &str,
         resource: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
-        const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
         let resource_expr = self.authz_resource_expr(realm_id, resource);
-        self.cells.iter().any(|(cell_ref, cell_state)| {
-            let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
-                return false;
-            };
-            let Some(grant) = engine_grant_from_capability_cell_state(grant_id, cell_state) else {
-                return false;
-            };
-            grant.realm_id == realm_id
-                && grant.subject == issuer
-                && !grant.revoked
-                && grant
-                    .expires_at
-                    .is_none_or(|expires_at| expires_at > chrono::Utc::now())
-                && grant.actions.iter().any(|candidate| candidate == action)
-                && crate::capability::resource_matches(&grant.resource, &resource_expr)
+        self.projected_capability_grants().any(|grant| {
+            grant.subject == issuer
+                && projected_grant_is_active_for(
+                    &grant,
+                    realm_id,
+                    action,
+                    &resource_expr,
+                    evaluation_basis,
+                )
         })
     }
 
+    /// Same active-grant predicate as [`Self::issuer_has_projected_capability`],
+    /// additionally pinned to one named `grant_id` — used when a receipt cites
+    /// the specific grant it was issued under.
     pub fn projected_capability_grant_matches(
         &self,
         grant_id: &str,
@@ -629,46 +669,47 @@ impl ProjectionState {
         realm_id: &str,
         action: &str,
         resource: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         let Some(grant) = self.effective_engine_grant(grant_id) else {
             return false;
         };
         let resource_expr = self.authz_resource_expr(realm_id, resource);
-        grant.realm_id == realm_id
-            && grant.subject == subject
-            && !grant.revoked
-            && grant
-                .expires_at
-                .is_none_or(|expires_at| expires_at > chrono::Utc::now())
-            && grant.actions.iter().any(|candidate| candidate == action)
-            && crate::capability::resource_matches(&grant.resource, &resource_expr)
+        grant.subject == subject
+            && projected_grant_is_active_for(
+                &grant,
+                realm_id,
+                action,
+                &resource_expr,
+                evaluation_basis,
+            )
     }
 
-    pub fn projected_capability_holder_count(&self, realm_id: &str, action: &str) -> usize {
-        let mut holders = std::collections::BTreeSet::new();
-        const CELL_PREFIX: &str = "ak:cell:ak.component.capability.grant.v1:";
+    /// Distinct subjects holding an active realm-scoped grant for `action` —
+    /// the eligible-reviewer denominator for `majority` / `all` quorum.
+    pub fn projected_capability_holder_count(
+        &self,
+        realm_id: &str,
+        action: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
+    ) -> usize {
         let resource_expr = self.authz_resource_expr(realm_id, realm_id);
-        for (cell_ref, cell_state) in &self.cells {
-            let Some(grant_id) = cell_ref.as_str().strip_prefix(CELL_PREFIX) else {
-                continue;
-            };
-            let Some(grant) = engine_grant_from_capability_cell_state(grant_id, cell_state) else {
-                continue;
-            };
-            if grant.realm_id == realm_id
-                && !grant.revoked
-                && grant
-                    .expires_at
-                    .is_none_or(|expires_at| expires_at > chrono::Utc::now())
-                && grant.actions.iter().any(|candidate| candidate == action)
-                && crate::capability::resource_matches(&grant.resource, &resource_expr)
-            {
-                holders.insert(grant.subject);
-            }
-        }
-        holders.len()
+        self.projected_capability_grants()
+            .filter(|grant| {
+                projected_grant_is_active_for(
+                    grant,
+                    realm_id,
+                    action,
+                    &resource_expr,
+                    evaluation_basis,
+                )
+            })
+            .map(|grant| grant.subject)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len()
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn applet_non_event_grant_authority_matches(
         &self,
         issuer: &str,
@@ -676,6 +717,7 @@ impl ProjectionState {
         action: &str,
         resource: &str,
         body: &Value,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
     ) -> bool {
         let Some(subject) = body.get("subject").and_then(Value::as_str) else {
             return false;
@@ -728,6 +770,7 @@ impl ProjectionState {
                     realm_id,
                     rule.issuer_action,
                     resource,
+                    evaluation_basis,
                 )
             {
                 return false;
@@ -761,11 +804,20 @@ impl ProjectionState {
         }
         for action in &actions {
             for resource in &resources {
-                if !self.issuer_has_projected_capability(&issuer, realm_id, action, resource)
-                    && !self.applet_non_event_grant_authority_matches(
-                        &issuer, realm_id, action, resource, body,
-                    )
-                {
+                if !self.issuer_has_projected_capability(
+                    &issuer,
+                    realm_id,
+                    action,
+                    resource,
+                    operation.created_at,
+                ) && !self.applet_non_event_grant_authority_matches(
+                    &issuer,
+                    realm_id,
+                    action,
+                    resource,
+                    body,
+                    operation.created_at,
+                ) {
                     return Err("grant_exceeds_issuer_authority");
                 }
             }

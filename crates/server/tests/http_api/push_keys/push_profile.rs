@@ -854,7 +854,8 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     .await;
     assert_eq!(allowed.status_code, Some(StatusCode::OK));
 
-    state.test_authz().create_grant(
+    soland_http::authz::install_projected_grant(
+        state.test_authz(),
         DEMO_REALM_ID.to_owned(),
         bob.to_owned(),
         bob.to_owned(),

@@ -241,6 +241,10 @@ pub struct AppConfig {
     /// to fall back to.
     pub oidc_client_id: Option<String>,
     pub development_mode: bool,
+    /// Typed fault-injection points for durable-workflow crash-consistency
+    /// tests. Parsed once here from `SOLAND_FAILPOINTS` and always empty
+    /// unless `development_mode` is on. See [`crate::failpoints`].
+    pub failpoints: crate::failpoints::FailpointRegistry,
     pub session_grant_introspection_url: Option<String>,
     pub session_grant_introspection_bearer: Option<String>,
     pub did_resolver_allow_methods: Vec<String>,
@@ -719,6 +723,7 @@ impl AppConfig {
             account_authority_enrollment_did: None,
             oidc_client_id: None,
             development_mode: false,
+            failpoints: crate::failpoints::FailpointRegistry::disabled(),
             session_grant_introspection_url: None,
             session_grant_introspection_bearer: None,
             // Test fixtures intentionally allow bare `did:web` — the spec
@@ -994,6 +999,7 @@ impl AppConfig {
             })?;
         }
         let receive_policy_constraints = load_receive_policy_constraints()?;
+        let failpoints = crate::failpoints::FailpointRegistry::from_env(development_mode)?;
         let log_format = LogFormat::from_env(development_mode);
 
         Ok(Self {
@@ -1012,6 +1018,7 @@ impl AppConfig {
             account_authority_enrollment_did,
             oidc_client_id,
             development_mode,
+            failpoints,
             session_grant_introspection_url,
             session_grant_introspection_bearer,
             did_resolver_allow_methods,

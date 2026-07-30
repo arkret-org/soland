@@ -157,8 +157,30 @@ async fn resolve_service_identity(
         .map_err(|error| anyhow::anyhow!("reading persisted service identity failed: {error}"))?;
 
     let stored = if let Some(stored) = existing {
-        validate_stored_service_identity(persistence, config, key_store, &stored).await?;
-        if stored.identity.registration_key != configured_key {
+        // Detect drift BEFORE validating. The stored identity's signing and
+        // control keys are bound to the registration key it was minted under,
+        // so a deployment pointed at a database from a different public base
+        // fails inside validation with a bare "key not found" that reads like a
+        // keystore fault. Name the actual cause instead.
+        let drifted = stored.identity.registration_key != configured_key;
+        validate_stored_service_identity(persistence, config, key_store, &stored)
+            .await
+            .map_err(|error| {
+                if !drifted {
+                    return error;
+                }
+                anyhow::anyhow!(
+                    "service_identity_registration_key_drift: the persisted service identity {} was \
+                     minted for public base {}, but this process is configured for {}. Its identity \
+                     keys are bound to the original registration key, so validation failed with: \
+                     {error}. Point this deployment back at its original public base URL, or give a \
+                     genuinely new deployment its own database namespace.",
+                    stored.identity.service_id,
+                    stored.identity.registration_key.public_base(),
+                    configured_key.public_base(),
+                )
+            })?;
+        if drifted {
             tracing::warn!(
                 service_id = %stored.identity.service_id,
                 stored_public_base = %stored.identity.registration_key.public_base(),
