@@ -350,7 +350,7 @@ async fn submit_rotation_event_unit(
             AppError::invalid_param(format!("prepared rotation Event unit is invalid: {error}"))
                 .with_wire_code("schema_violation")
         })?;
-    let outcome = crate::routing::events::event_log::submit_initial_identity_anchor_batch(
+    let outcome = crate::routing::events::event_log::submit_initial_event_batch_outcome(
         state,
         session,
         request.events,

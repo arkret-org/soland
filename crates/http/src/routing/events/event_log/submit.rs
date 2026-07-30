@@ -628,7 +628,7 @@ pub(super) async fn submit_event_batch_outcome(
     submit_event_batch_outcome_with_leases(state, session, envelopes, None, None).await
 }
 
-pub(super) async fn submit_initial_event_batch_outcome(
+pub(in crate::routing) async fn submit_initial_event_batch_outcome(
     state: &AppState,
     session: &SessionRecord,
     submissions: Vec<arkret_wire::EventInitialSubmission>,
