@@ -1078,7 +1078,9 @@ async fn range_completeness_for_query(
         RangeCompletenessAttestationWitnessAttestation,
         RangeCompletenessAttestationWitnessAttestationWitnessesItem,
     };
-    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event};
+    use arkret_signatures::{
+        Ed25519PayloadSigner, SignEventOptions, sign_event_with_digest_suite,
+    };
     use arkret_wire::{
         Event, EventId, EventKind, EventRequirements, Hash, PayloadProofPurpose, PayloadSigner,
         Proof, ScopeRef, proof_kind,
@@ -1264,10 +1266,11 @@ async fn range_completeness_for_query(
         proofs: Vec::new(),
         requirements: EventRequirements::default(),
     };
-    sign_event(
+    sign_event_with_digest_suite(
         &mut attestation_event,
         &signer,
         &verification_method,
+        digest_suite,
         SignEventOptions::new().with_created_at(observed_at),
     )
     .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
