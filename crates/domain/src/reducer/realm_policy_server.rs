@@ -16,8 +16,10 @@
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 use arkret_event_draft::Operation;
+use arkret_models_collaboration::governance::realm_governance::{
+    RealmPolicyServerOnTimeout, RealmPolicyServerPayload,
+};
 use arkret_state::lattice::CellState;
-use serde_json::Value;
 use url::Url;
 
 use crate::reducer::{ProjectionEffect, ProjectionState, RealmPolicyServerConfig};
@@ -33,112 +35,83 @@ const DEFAULT_TIMEOUT_MS: u64 = 2000;
 /// for any Realm that does not opt-out.
 const DEFAULT_ON_TIMEOUT: &str = "fail_closed";
 
-/// Apply a `ak.realm.policy_server` event to projection state.
-///
-/// Payload schema (subset enforced here):
-/// ```json
-/// {
-///   "policy_server_did": "did:web:policy.example.com",
-///   "policy_server_url": "https://policy.example.com/_arkret/self/policy/check",
-///   "cache_ttl_seconds": 300,
-///   "timeout_ms": 2000,
-///   "on_timeout": "fail_closed"
-/// }
-/// ```
-///
-/// Older / longer-form payloads using `server_id` / `endpoint` (from
-/// `policy-server.md` §2 declaration) are accepted as aliases so
-/// administrators can submit either shape without a parallel
-/// translation in admin tooling.
+/// Apply a declaration or durable value tombstone to the Realm policy-server cell.
 pub fn apply_realm_policy_server(
     state: &mut ProjectionState,
     operation: &Operation,
 ) -> ProjectionEffect {
     let realm_id = operation.realm_id.to_string();
-    let payload = &operation.payload;
-
-    let Some(policy_server_did) = payload
-        .get("policy_server_did")
-        .or_else(|| payload.get("server_id"))
-        .and_then(Value::as_str)
-    else {
-        return ProjectionEffect::Rejected {
-            reason: "policy_server_did_missing".to_owned(),
-        };
+    let wire_payload = crate::reducer::projection_context_stripped_payload(&operation.payload);
+    let payload = match serde_json::from_value::<RealmPolicyServerPayload>(wire_payload.clone()) {
+        Ok(payload) => payload,
+        Err(_) => {
+            return ProjectionEffect::Rejected {
+                reason: "policy_server_payload_invalid".to_owned(),
+            };
+        }
     };
+    let cell_id = "ak:cell:ak.component.realm.policy_server.v1:null".to_owned();
+
+    let payload = match payload {
+        RealmPolicyServerPayload::Declaration(payload) => payload,
+        RealmPolicyServerPayload::Tombstone(tombstone) => {
+            if tombstone.validate().is_err() {
+                return ProjectionEffect::Rejected {
+                    reason: "policy_server_payload_invalid".to_owned(),
+                };
+            }
+            state
+                .realm_null_subject_cells
+                .insert((realm_id.clone(), cell_id), CellState::Value(wire_payload));
+            state.realm_policy_servers.remove(&realm_id);
+            return ProjectionEffect::RealmPolicyServerTombstoned { realm_id };
+        }
+    };
+    let policy_server_did = payload.policy_server_did.to_string();
     if policy_server_did.is_empty() {
         return ProjectionEffect::Rejected {
             reason: "policy_server_did_empty".to_owned(),
         };
     }
 
-    let Some(policy_server_url) = payload
-        .get("policy_server_url")
-        .or_else(|| payload.get("endpoint"))
-        .and_then(Value::as_str)
-    else {
-        return ProjectionEffect::Rejected {
-            reason: "policy_server_url_missing".to_owned(),
-        };
-    };
-    if !(policy_server_url.starts_with("http://") || policy_server_url.starts_with("https://")) {
+    let policy_server_url = payload.policy_server_url;
+    if !policy_server_url.starts_with("https://") {
         return ProjectionEffect::Rejected {
             reason: "policy_server_url_invalid_scheme".to_owned(),
         };
     }
-    if let Err(reason) = validate_policy_server_url(policy_server_url) {
+    if let Err(reason) = validate_policy_server_url(&policy_server_url) {
         return ProjectionEffect::Rejected {
             reason: reason.to_owned(),
         };
     }
 
     let cache_ttl_seconds = payload
-        .get("cache_ttl_seconds")
-        .and_then(Value::as_u64)
+        .cache_ttl_seconds
         .unwrap_or(DEFAULT_CACHE_TTL_SECONDS);
-    let timeout_ms = payload
-        .get("timeout_ms")
-        .and_then(Value::as_u64)
-        .unwrap_or(DEFAULT_TIMEOUT_MS);
+    let timeout_ms = payload.timeout_ms.unwrap_or(DEFAULT_TIMEOUT_MS);
     if timeout_ms == 0 {
         return ProjectionEffect::Rejected {
             reason: "policy_server_timeout_ms_zero".to_owned(),
         };
     }
-    let on_timeout = payload
-        .get("on_timeout")
-        .and_then(Value::as_str)
-        .unwrap_or(DEFAULT_ON_TIMEOUT);
-    if !matches!(on_timeout, "fail_closed" | "deny") {
-        return ProjectionEffect::Rejected {
-            reason: "policy_server_on_timeout_invalid".to_owned(),
-        };
-    }
+    let on_timeout = match payload.on_timeout {
+        Some(RealmPolicyServerOnTimeout::FailClosed) | None => DEFAULT_ON_TIMEOUT,
+        Some(RealmPolicyServerOnTimeout::Deny) => "deny",
+    };
 
     let now = operation.created_at;
 
-    // Null-subject Realm cells use the literal `null` wire subject and are
-    // scoped by the envelope Realm in the projection cache.
-    let cell_id = "ak:cell:ak.component.realm.policy_server.v1:null".to_owned();
-    let value = serde_json::json!({
-        "realm_id": realm_id,
-        "policy_server_did": policy_server_did,
-        "policy_server_url": policy_server_url,
-        "cache_ttl_seconds": cache_ttl_seconds,
-        "timeout_ms": timeout_ms,
-        "on_timeout": on_timeout,
-        "updated_at": arkret_canonical::format_timestamp_canonical(now),
-    });
     state
         .realm_null_subject_cells
-        .insert((realm_id.clone(), cell_id), CellState::Value(value));
+        .insert((realm_id.clone(), cell_id), CellState::Value(wire_payload));
 
     state.realm_policy_servers.insert(
         realm_id.clone(),
         RealmPolicyServerConfig {
             realm_id: realm_id.clone(),
-            policy_server_did: policy_server_did.to_owned(),
-            policy_server_url: policy_server_url.to_owned(),
+            policy_server_did: policy_server_did.clone(),
+            policy_server_url,
             cache_ttl_seconds,
             timeout_ms,
             on_timeout: on_timeout.to_owned(),
@@ -148,7 +121,7 @@ pub fn apply_realm_policy_server(
 
     ProjectionEffect::RealmPolicyServerProjected {
         realm_id,
-        policy_server_did: policy_server_did.to_owned(),
+        policy_server_did,
     }
 }
 
@@ -156,7 +129,7 @@ fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
     let Ok(url) = Url::parse(raw_url) else {
         return Err("policy_server_url_invalid");
     };
-    if !matches!(url.scheme(), "http" | "https") {
+    if url.scheme() != "https" {
         return Err("policy_server_url_invalid_scheme");
     }
     if !url.username().is_empty()
@@ -176,7 +149,7 @@ fn validate_policy_server_url(raw_url: &str) -> Result<(), &'static str> {
 mod tests {
     use arkret_event_draft::Operation;
     use arkret_identifiers::{OperationId, RealmId};
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
     use crate::reducer::RealmLinkState;
@@ -221,7 +194,8 @@ mod tests {
         }
 
         let cfg = state
-            .realm_policy_server_config(REALM_CHILD)
+            .try_realm_policy_server_config(REALM_CHILD)
+            .expect("resolvable policy-server chain")
             .expect("cached");
         assert_eq!(cfg.policy_server_did, "did:web:policy.example.com");
         assert_eq!(cfg.cache_ttl_seconds, 60);
@@ -273,7 +247,8 @@ mod tests {
         // CHILD has no row of its own, but the resolver should walk the
         // `governed_by` link and find ORG's policy server.
         let cfg = state
-            .realm_policy_server_config(REALM_CHILD)
+            .try_realm_policy_server_config(REALM_CHILD)
+            .expect("resolvable policy-server chain")
             .expect("org-fallback config");
         assert_eq!(cfg.realm_id, REALM_ORG);
         assert_eq!(cfg.policy_server_did, "did:web:org.example.com");
@@ -285,9 +260,9 @@ mod tests {
         // Missing both server_did and url.
         match apply_realm_policy_server(&mut state, &op(REALM_CHILD, json!({}))) {
             ProjectionEffect::Rejected { reason } => {
-                assert_eq!(reason, "policy_server_did_missing");
+                assert_eq!(reason, "policy_server_payload_invalid");
             }
-            other => panic!("expected Rejected(policy_server_did_missing), got {other:?}"),
+            other => panic!("expected Rejected(policy_server_payload_invalid), got {other:?}"),
         }
         // Missing URL but DID present.
         match apply_realm_policy_server(
@@ -298,9 +273,9 @@ mod tests {
             ),
         ) {
             ProjectionEffect::Rejected { reason } => {
-                assert_eq!(reason, "policy_server_url_missing");
+                assert_eq!(reason, "policy_server_payload_invalid");
             }
-            other => panic!("expected Rejected(policy_server_url_missing), got {other:?}"),
+            other => panic!("expected Rejected(policy_server_payload_invalid), got {other:?}"),
         }
         // Bad scheme.
         match apply_realm_policy_server(
@@ -331,9 +306,9 @@ mod tests {
             ),
         ) {
             ProjectionEffect::Rejected { reason } => {
-                assert_eq!(reason, "policy_server_on_timeout_invalid");
+                assert_eq!(reason, "policy_server_payload_invalid");
             }
-            other => panic!("expected Rejected(policy_server_on_timeout_invalid), got {other:?}"),
+            other => panic!("expected Rejected(policy_server_payload_invalid), got {other:?}"),
         }
         // Zero timeout.
         match apply_realm_policy_server(
@@ -352,5 +327,117 @@ mod tests {
             }
             other => panic!("expected Rejected(policy_server_timeout_ms_zero), got {other:?}"),
         }
+    }
+
+    #[test]
+    fn tombstone_removes_direct_config_and_restores_org_fallback() {
+        let mut state = ProjectionState::new();
+        apply_realm_policy_server(
+            &mut state,
+            &op(
+                REALM_ORG,
+                json!({
+                    "policy_server_did": "did:web:org.example.com",
+                    "policy_server_url": "https://org.example.com/_arkret/self/policy/check",
+                }),
+            ),
+        );
+        apply_realm_policy_server(
+            &mut state,
+            &op(
+                REALM_CHILD,
+                json!({
+                    "policy_server_did": "did:web:child.example.com",
+                    "policy_server_url": "https://child.example.com/_arkret/self/policy/check",
+                }),
+            ),
+        );
+        let now = chrono::Utc::now();
+        state
+            .realm_links
+            .entry(REALM_CHILD.to_owned())
+            .or_default()
+            .push(RealmLinkState {
+                realm_id: REALM_CHILD.to_owned(),
+                target_realm_id: REALM_ORG.to_owned(),
+                link_kind: "governed_by".to_owned(),
+                status: "active".to_owned(),
+                label: None,
+                commitment: None,
+                created_at: now,
+                updated_at: now,
+            });
+
+        let first =
+            apply_realm_policy_server(&mut state, &op(REALM_CHILD, json!({"tombstone": true})));
+        assert!(matches!(
+            first,
+            ProjectionEffect::RealmPolicyServerTombstoned { .. }
+        ));
+        let inherited = state
+            .try_realm_policy_server_config(REALM_CHILD)
+            .expect("resolvable policy-server chain")
+            .expect("organization fallback");
+        assert_eq!(inherited.realm_id, REALM_ORG);
+        assert_eq!(
+            state.realm_null_subject_cell_value(REALM_CHILD, "ak.component.realm.policy_server.v1"),
+            Some(&json!({"tombstone": true}))
+        );
+
+        let repeated =
+            apply_realm_policy_server(&mut state, &op(REALM_CHILD, json!({"tombstone": true})));
+        assert!(matches!(
+            repeated,
+            ProjectionEffect::RealmPolicyServerTombstoned { .. }
+        ));
+        assert_eq!(
+            state.realm_null_subject_cell_value(REALM_CHILD, "ak.component.realm.policy_server.v1"),
+            Some(&json!({"tombstone": true}))
+        );
+    }
+
+    #[test]
+    fn stale_policy_server_head_eq_is_rejected() {
+        let mut state = ProjectionState::new();
+        let first_value = json!({
+            "policy_server_did": "did:web:first.example",
+            "policy_server_url": "https://first.example/_arkret/self/policy/check",
+        });
+        apply_realm_policy_server(&mut state, &op(REALM_CHILD, first_value.clone()));
+
+        let mut replacement = op(
+            REALM_CHILD,
+            json!({
+                "policy_server_did": "did:web:second.example",
+                "policy_server_url": "https://second.example/_arkret/self/policy/check",
+            }),
+        );
+        replacement.payload["preconditions"] = json!([{
+            "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+            "predicate": {"op": "head_eq", "value": first_value},
+        }]);
+        assert_eq!(state.check_move_preconditions(&replacement), Ok(()));
+        apply_realm_policy_server(&mut state, &replacement);
+
+        let stale_delete = op(
+            REALM_CHILD,
+            json!({
+                "tombstone": true,
+                "preconditions": [{
+                    "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+                    "predicate": {
+                        "op": "head_eq",
+                        "value": {
+                            "policy_server_did": "did:web:first.example",
+                            "policy_server_url": "https://first.example/_arkret/self/policy/check",
+                        },
+                    },
+                }],
+            }),
+        );
+        assert_eq!(
+            state.check_move_preconditions(&stale_delete),
+            Err("failed_precondition")
+        );
     }
 }

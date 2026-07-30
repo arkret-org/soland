@@ -301,6 +301,9 @@ pub enum ProjectionEffect {
         realm_id: String,
         policy_server_did: String,
     },
+    RealmPolicyServerTombstoned {
+        realm_id: String,
+    },
     /// `ak.device.push_route` actor-private state projected into the
     /// per-recipient Principal Server push-route cell cache.
     PushRouteUpdated {

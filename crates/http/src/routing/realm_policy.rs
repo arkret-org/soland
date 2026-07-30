@@ -1,29 +1,31 @@
 //! G3.S2 — Realm policy server admin HTTP surface.
 //!
 //! Surfaces:
-//! - `GET /_soland/self/realms/{realm_id}/policy-server` — fetch the currently-projected
+//! - `GET /_arkret/self/realms/{realm_id}/policy-server` — fetch the currently-projected
 //!   `ak.realm.policy_server` config. Returns 404 if neither the realm nor its `governed_by`
 //!   ancestor chain has declared one.
-//! - `PUT /_soland/self/realms/{realm_id}/policy-server` — submit a `ak.realm.policy_server` Move.
-//!   Routes through the standard `accept_local_operations` pipeline so the reducer's validators
-//!   (URL scheme, on_timeout enum) run.
-//! - `DELETE /_soland/self/realms/{realm_id}/policy-server` — write a tombstoning Move so admins
-//!   can remove the per-realm policy server config (callers fall back to the `governed_by` chain or
-//!   the local-only capability check after this lands).
+//! - `PUT /_arkret/self/realms/{realm_id}/policy-server` — submit a `ak.realm.policy_server`
+//!   declaration. Routes through the standard `accept_local_operations` pipeline so the reducer's
+//!   validators (URL scheme, on_timeout enum) run.
+//! - `DELETE /_arkret/self/realms/{realm_id}/policy-server` — submit the durable
+//!   `{"tombstone":true}` value to the same CAS-register cell.
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.
 
 use arkret_event_draft::Operation;
-use arkret_identifiers::{OperationId, RealmId};
+use arkret_identifiers::{Did, OperationId, RealmId};
+use arkret_models_collaboration::governance::realm_governance::{
+    RealmPolicyServerOnTimeout, RealmPolicyServerPayload, RealmPolicyServerReplaceRequestBody,
+    RealmPolicyServerTombstonePayload, RealmPolicyServerView,
+};
+use arkret_state::lattice::CellState;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam};
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
-use serde_json::json;
 use soland_http::error::AppError;
 use soland_http::result::{EmptyResult, JsonResult, empty_ok, json_ok};
 
-use super::{AuthArgs, accept_local_operations};
+use super::{AuthArgs, accept_local_operations_with_policy_actor};
 use crate::ids;
 use crate::state::AppState;
 
@@ -34,33 +36,6 @@ pub(crate) fn router() -> Router {
             .put(put_realm_policy_server)
             .delete(delete_realm_policy_server),
     )
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct RealmPolicyServerOutcome {
-    pub realm_id: String,
-    pub policy_server_did: String,
-    pub policy_server_url: String,
-    pub cache_ttl_seconds: u64,
-    pub timeout_ms: u64,
-    pub on_timeout: String,
-    pub updated_at: String,
-    /// When `true`, the config was resolved via the org-fallback
-    /// chain (the realm itself had no row of its own).
-    pub from_org_fallback: bool,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-pub struct PutRealmPolicyServerRequestBody {
-    pub policy_server_did: String,
-    pub policy_server_url: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cache_ttl_seconds: Option<u64>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub timeout_ms: Option<u64>,
-    /// `fail_closed` (default) or `deny`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on_timeout: Option<String>,
 }
 
 #[endpoint(
@@ -74,26 +49,16 @@ async fn get_realm_policy_server(
     realm_id: PathParam<String>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RealmPolicyServerOutcome> {
+) -> JsonResult<RealmPolicyServerView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let _session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let view = state
         .projections()
         .realm_policy_server_config(&realm_id)
+        .map_err(policy_server_resolution_error)?
         .ok_or_else(|| AppError::not_found("no ak.realm.policy_server declared for this realm"))?;
-    let cfg = view.config;
-    let from_org_fallback = view.inherited_from_organization;
-    json_ok(RealmPolicyServerOutcome {
-        realm_id: cfg.realm_id,
-        policy_server_did: cfg.policy_server_did,
-        policy_server_url: cfg.policy_server_url,
-        cache_ttl_seconds: cfg.cache_ttl_seconds,
-        timeout_ms: cfg.timeout_ms,
-        on_timeout: cfg.on_timeout,
-        updated_at: arkret_canonical::format_timestamp_canonical(cfg.updated_at),
-        from_org_fallback,
-    })
+    json_ok(policy_server_view(view)?)
 }
 
 #[endpoint(
@@ -105,31 +70,30 @@ async fn get_realm_policy_server(
 async fn put_realm_policy_server(
     aa: AuthArgs,
     realm_id: PathParam<String>,
-    body: JsonBody<PutRealmPolicyServerRequestBody>,
+    body: JsonBody<RealmPolicyServerReplaceRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<RealmPolicyServerOutcome> {
+) -> JsonResult<RealmPolicyServerView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
     let body = body.into_inner();
 
-    let mut payload = json!({
-        "policy_server_did": body.policy_server_did,
-        "policy_server_url": body.policy_server_url,
-    });
-    if let Some(ttl) = body.cache_ttl_seconds {
-        payload["cache_ttl_seconds"] = json!(ttl);
-    }
-    if let Some(ms) = body.timeout_ms {
-        payload["timeout_ms"] = json!(ms);
-    }
-    if let Some(on_timeout) = body.on_timeout.as_ref() {
-        payload["on_timeout"] = json!(on_timeout);
-    }
-
     let realm_scope = RealmId::new(realm_id.clone())
         .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
+    validate_https_policy_server_url(&body.policy_server_url)?;
+    if body.timeout_ms == Some(0) {
+        return Err(AppError::invalid_param(
+            "policy server timeout_ms must be greater than zero",
+        ));
+    }
+    let mut payload = serde_json::to_value(&body)
+        .map_err(|error| AppError::internal(format!("policy server payload: {error}")))?;
+    let cell_key = policy_server_cell_key(&realm_id);
+    if let Some(prior) = direct_policy_server_cell_value(state, &cell_key)? {
+        attach_head_eq_precondition(&mut payload, prior)?;
+    }
     let op_id = OperationId::new(ids::generate_operation_id())
         .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
     let operation = Operation::create(
@@ -138,31 +102,25 @@ async fn put_realm_policy_server(
         arkret_wire::events::EventKind::REALM_POLICY_SERVER,
         payload,
     );
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
+    accept_local_operations_with_policy_actor(
+        state,
+        &session.actor,
+        std::slice::from_ref(&operation),
+    )
+    .await
+    .map_err(reducer_reject_to_app_error)?;
 
-    let projection = state.projections().snapshot();
-    let cfg = projection
-        .realm_policy_servers
-        .get(&realm_id)
-        .cloned()
+    let view = state
+        .projections()
+        .realm_policy_server_config(&realm_id)
+        .map_err(policy_server_resolution_error)?
         .ok_or_else(|| {
             AppError::new(
                 soland_http::error::ErrorCode::InternalError,
                 "policy_server projection vanished after accept",
             )
         })?;
-    json_ok(RealmPolicyServerOutcome {
-        realm_id: cfg.realm_id,
-        policy_server_did: cfg.policy_server_did,
-        policy_server_url: cfg.policy_server_url,
-        cache_ttl_seconds: cfg.cache_ttl_seconds,
-        timeout_ms: cfg.timeout_ms,
-        on_timeout: cfg.on_timeout,
-        updated_at: arkret_canonical::format_timestamp_canonical(cfg.updated_at),
-        from_org_fallback: false,
-    })
+    json_ok(policy_server_view(view)?)
 }
 
 #[endpoint(
@@ -180,30 +138,221 @@ async fn delete_realm_policy_server(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let realm_id = realm_id.into_inner();
+    let realm_scope = RealmId::new(realm_id.clone())
+        .map_err(|e| AppError::invalid_param(format!("realm_id: {e}")))?;
+    require_policy_manage(state, &session.actor, realm_scope.as_str()).await?;
 
-    // Tombstone marker payload — the reducer's validator rejects it as
-    // malformed (no did/url), but the cell write below will null the
-    // structured cache directly. We use the projection-side delete
-    // path for the tombstone effect.
-    if !state.projections().remove_realm_policy_server(&realm_id) {
-        return Err(AppError::not_found(
-            "no ak.realm.policy_server to tombstone for this realm",
+    let cell_key = policy_server_cell_key(&realm_id);
+    let prior = match direct_policy_server_cell_value(state, &cell_key)? {
+        Some(value) if is_policy_server_tombstone(&value) => {
+            return empty_ok();
+        }
+        Some(value) => value,
+        None => {
+            return Err(AppError::not_found(
+                "no direct ak.realm.policy_server declaration to tombstone for this realm",
+            ));
+        }
+    };
+
+    let op_id = OperationId::new(ids::generate_operation_id())
+        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
+    let mut payload = serde_json::to_value(RealmPolicyServerTombstonePayload::VALUE)
+        .map_err(|error| AppError::internal(format!("policy server tombstone payload: {error}")))?;
+    attach_head_eq_precondition(&mut payload, prior)?;
+    let operation = Operation::create(
+        op_id,
+        realm_scope,
+        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+        payload,
+    );
+    accept_local_operations_with_policy_actor(
+        state,
+        &session.actor,
+        std::slice::from_ref(&operation),
+    )
+    .await
+    .map_err(reducer_reject_to_app_error)?;
+
+    match state
+        .projections()
+        .snapshot()
+        .realm_null_subject_cells
+        .get(&cell_key)
+    {
+        Some(CellState::Value(value)) if is_policy_server_tombstone(value) => empty_ok(),
+        Some(CellState::Bottom(_)) => Err(policy_server_resolution_error("cell_bottom_state")),
+        _ => Err(AppError::internal(
+            "policy server tombstone projection vanished after accept",
+        )),
+    }
+}
+
+fn policy_server_view(
+    view: soland_services::authorization::RealmPolicyServerConfigView,
+) -> Result<RealmPolicyServerView, AppError> {
+    let cfg = view.config;
+    Ok(RealmPolicyServerView {
+        realm_id: RealmId::new(cfg.realm_id)
+            .map_err(|error| AppError::internal(format!("stored realm_id is invalid: {error}")))?,
+        policy_server_did: Did::new(cfg.policy_server_did).map_err(|error| {
+            AppError::internal(format!("stored policy_server_did is invalid: {error}"))
+        })?,
+        policy_server_url: cfg.policy_server_url,
+        cache_ttl_seconds: cfg.cache_ttl_seconds,
+        timeout_ms: cfg.timeout_ms,
+        on_timeout: match cfg.on_timeout.as_str() {
+            "fail_closed" => RealmPolicyServerOnTimeout::FailClosed,
+            "deny" => RealmPolicyServerOnTimeout::Deny,
+            _ => {
+                return Err(AppError::internal(
+                    "stored policy server timeout mode is invalid",
+                ));
+            }
+        },
+        updated_at: cfg.updated_at,
+        from_org_fallback: view.inherited_from_organization,
+    })
+}
+
+fn validate_https_policy_server_url(raw_url: &str) -> Result<(), AppError> {
+    let url = url::Url::parse(raw_url)
+        .map_err(|error| AppError::invalid_param(format!("policy_server_url: {error}")))?;
+    if url.scheme() != "https" {
+        return Err(AppError::invalid_param("policy_server_url must use https"));
+    }
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(AppError::invalid_param(
+            "policy_server_url must not contain credentials, query, or fragment",
         ));
     }
-    // Audit attribution: emit a tracing record so the deletion shows
-    // up in the policy_audit_obligation sink.
-    tracing::info!(
-        target: "policy_audit_obligation",
-        kind = "policy_server_tombstone",
-        realm_id = %realm_id,
-        actor = %session.actor,
-        "G3.S2: ak.realm.policy_server tombstoned"
+    if url.host_str().is_none() || url.path() != "/_arkret/self/policy/check" {
+        return Err(AppError::invalid_param(
+            "policy_server_url must target /_arkret/self/policy/check",
+        ));
+    }
+    Ok(())
+}
+
+fn policy_server_cell_key(realm_id: &str) -> (String, String) {
+    (
+        realm_id.to_owned(),
+        "ak:cell:ak.component.realm.policy_server.v1:null".to_owned(),
+    )
+}
+
+fn direct_policy_server_cell_value(
+    state: &AppState,
+    cell_key: &(String, String),
+) -> Result<Option<serde_json::Value>, AppError> {
+    let snapshot = state.projections().snapshot();
+    match snapshot.realm_null_subject_cells.get(cell_key) {
+        Some(CellState::Bottom(_)) => Err(policy_server_resolution_error("cell_bottom_state")),
+        Some(CellState::Value(value)) if is_policy_server_tombstone(value) => {
+            Ok(Some(value.clone()))
+        }
+        Some(CellState::Value(value))
+            if matches!(
+                serde_json::from_value::<RealmPolicyServerPayload>(value.clone()),
+                Ok(RealmPolicyServerPayload::Declaration(_))
+            ) && snapshot.realm_policy_servers.contains_key(&cell_key.0) =>
+        {
+            Ok(Some(value.clone()))
+        }
+        Some(CellState::Value(_)) => Err(policy_server_resolution_error(
+            "realm_policy_server_projection_missing",
+        )),
+        None if snapshot.realm_policy_servers.contains_key(&cell_key.0) => Err(
+            policy_server_resolution_error("realm_policy_server_projection_missing"),
+        ),
+        None => Ok(None),
+    }
+}
+
+fn is_policy_server_tombstone(value: &serde_json::Value) -> bool {
+    matches!(
+        serde_json::from_value::<RealmPolicyServerPayload>(value.clone()),
+        Ok(RealmPolicyServerPayload::Tombstone(tombstone)) if tombstone.validate().is_ok()
+    )
+}
+
+fn attach_head_eq_precondition(
+    payload: &mut serde_json::Value,
+    expected: serde_json::Value,
+) -> Result<(), AppError> {
+    let object = payload
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("policy server payload must be an object"))?;
+    object.insert(
+        "preconditions".to_owned(),
+        serde_json::json!([{
+            "cell": "ak:cell:ak.component.realm.policy_server.v1:null",
+            "predicate": {
+                "op": "head_eq",
+                "value": expected,
+            }
+        }]),
     );
-    empty_ok()
+    Ok(())
+}
+
+async fn require_policy_manage(
+    state: &AppState,
+    actor: &str,
+    realm_id: &str,
+) -> Result<(), AppError> {
+    let (owner, members) =
+        crate::routing::events::operations::realm_owner_and_members(state, realm_id).await;
+    if state
+        .authorization()
+        .check(soland_services::authorization::AuthorizationCheck {
+            actor,
+            action: arkret_wire::CapabilityActionId::POLICY_MANAGE,
+            resource: realm_id,
+            realm_id,
+            owner: owner.as_deref(),
+            members: &members,
+            resource_facets: &[],
+        })
+        .allowed
+    {
+        Ok(())
+    } else {
+        Err(AppError::capability_denied("missing_capability"))
+    }
 }
 
 fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
+    if reason == "projection_event_persistence_failed" {
+        return AppError::internal(reason).with_wire_code("internal_error");
+    }
+    if reason == "failed_precondition" {
+        return AppError::new(soland_http::error::ErrorCode::FailedPrecondition, reason)
+            .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+            .with_wire_code("failed_precondition");
+    }
     AppError::new(soland_http::error::ErrorCode::FailedPrecondition, reason)
         .with_status(salvo::http::StatusCode::UNPROCESSABLE_ENTITY)
         .with_wire_code(reason)
+}
+
+fn policy_server_resolution_error(reason: &'static str) -> AppError {
+    if reason == "cell_bottom_state" {
+        return AppError::new(
+            soland_http::error::ErrorCode::FailedPrecondition,
+            "realm policy-server cell is in Bottom",
+        )
+        .with_status(salvo::http::StatusCode::CONFLICT)
+        .with_wire_code("failed_bottom");
+    }
+    AppError::new(
+        soland_http::error::ErrorCode::FailedPrecondition,
+        format!("realm policy-server resolution failed closed: {reason}"),
+    )
+    .with_status(salvo::http::StatusCode::PRECONDITION_FAILED)
+    .with_wire_code("failed_precondition")
 }

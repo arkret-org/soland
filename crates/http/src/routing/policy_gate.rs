@@ -37,6 +37,22 @@ impl PolicyGateRejection {
             message: message.into(),
         }
     }
+
+    fn failed_precondition(code: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::PRECONDITION_FAILED,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
+    fn failed_bottom(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            code: "failed_bottom".to_owned(),
+            message: message.into(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -63,6 +79,14 @@ pub(crate) async fn enforce_operation_policy_server(
     let realm_config = state
         .projections()
         .realm_policy_server_config(realm_id)
+        .map_err(|reason| {
+            let message = format!("realm policy-server resolution failed closed: {reason}");
+            if reason == "cell_bottom_state" {
+                PolicyGateRejection::failed_bottom(message)
+            } else {
+                PolicyGateRejection::failed_precondition("failed_precondition", message)
+            }
+        })?
         .map(|view| view.config);
     let Some(realm_config) = realm_config else {
         return Ok(());

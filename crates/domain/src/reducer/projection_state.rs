@@ -764,7 +764,7 @@ impl ProjectionState {
         let Ok(cell_id) = CellRef::new(cell_ref.to_owned()) else {
             return false;
         };
-        let Some(value) = self.cell_value(&cell_id) else {
+        let Some(value) = self.realm_cell_value(realm_id, &cell_id) else {
             return expected.is_null();
         };
         if Self::observed_head_eq(value, expected) {
@@ -921,6 +921,21 @@ impl ProjectionState {
                 "ak:cell:ak.component.realm.policy_bundle.v1:null" => {
                     self.realm_policy_bundle_cells
                         .insert(realm_id.to_string(), resolved);
+                }
+                "ak:cell:ak.component.realm.policy_server.v1:null" => {
+                    let direct_binding_unavailable = match &resolved {
+                        CellState::Bottom(_) => true,
+                        CellState::Value(Value::Object(value)) => {
+                            value.len() == 1
+                                && value.get("tombstone").and_then(Value::as_bool) == Some(true)
+                        }
+                        CellState::Value(_) => false,
+                    };
+                    if direct_binding_unavailable {
+                        self.realm_policy_servers.remove(realm_id.as_str());
+                    }
+                    self.realm_null_subject_cells
+                        .insert((realm_id.to_string(), cell.as_str().to_owned()), resolved);
                 }
                 _ if cell.as_str().ends_with(":null") => {
                     self.realm_null_subject_cells

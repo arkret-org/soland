@@ -722,27 +722,51 @@ impl ProjectionState {
     /// `None` if neither the realm nor any ancestor declared a policy
     /// server. The walk caps at depth 8 and uses a visited set because
     /// general Realm Link graphs may contain cycles.
-    pub fn realm_policy_server_config(&self, realm_id: &str) -> Option<&RealmPolicyServerConfig> {
-        if let Some(cfg) = self.realm_policy_servers.get(realm_id) {
-            return Some(cfg);
-        }
-        // Org-level fallback: walk `governed_by` outbound links.
+    pub fn try_realm_policy_server_config(
+        &self,
+        realm_id: &str,
+    ) -> Result<Option<&RealmPolicyServerConfig>, &'static str> {
         let mut cursor = realm_id.to_owned();
+        let mut visited = std::collections::BTreeSet::new();
         for _ in 0..8 {
-            let next = self.realm_links.get(&cursor).and_then(|rows| {
-                rows.iter()
-                    .find(|r| r.link_kind == "governed_by" && r.status == "active")
-                    .map(|r| r.target_realm_id.clone())
-            })?;
-            if next == cursor {
-                return None;
+            if !visited.insert(cursor.clone()) {
+                return Err("realm_policy_server_governance_cycle");
             }
-            if let Some(cfg) = self.realm_policy_servers.get(&next) {
-                return Some(cfg);
+            let cell_id = "ak:cell:ak.component.realm.policy_server.v1:null".to_owned();
+            match self
+                .realm_null_subject_cells
+                .get(&(cursor.clone(), cell_id))
+            {
+                Some(CellState::Bottom(_)) => return Err("cell_bottom_state"),
+                Some(CellState::Value(value)) => {
+                    let is_tombstone = value.as_object().is_some_and(|object| {
+                        object.len() == 1
+                            && object.get("tombstone").and_then(Value::as_bool) == Some(true)
+                    });
+                    if !is_tombstone && !self.realm_policy_servers.contains_key(&cursor) {
+                        return Err("realm_policy_server_projection_missing");
+                    }
+                }
+                _ => {}
             }
-            cursor = next;
+            if let Some(config) = self.realm_policy_servers.get(&cursor) {
+                return Ok(Some(config));
+            }
+            let targets = self
+                .realm_links
+                .get(&cursor)
+                .into_iter()
+                .flatten()
+                .filter(|row| row.link_kind == "governed_by" && row.status == "active")
+                .map(|row| row.target_realm_id.as_str())
+                .collect::<std::collections::BTreeSet<_>>();
+            match targets.len() {
+                0 => return Ok(None),
+                1 => cursor = (*targets.first().expect("one governed_by target")).to_owned(),
+                _ => return Err("realm_policy_server_governance_ambiguous"),
+            }
         }
-        None
+        Err("realm_policy_server_governance_depth_exceeded")
     }
 
     /// Read the create-locked Realm encryption profile from the genesis

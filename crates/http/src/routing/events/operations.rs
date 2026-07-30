@@ -41,9 +41,9 @@ use crate::state::AppState;
 
 const ACTIVE_SERIES_ADMISSION_LOCK_SHARDS: usize = 256;
 
-/// Serialize every active-series compare-and-swap lane across local Event,
-/// generic Operation, and federation ingestion. Keeping this lock here avoids
-/// each ingress surface accidentally using a different mutex pool.
+/// Serialize every compare-and-swap lane across local Event, generic
+/// Operation, and federation ingestion. Keeping this lock here avoids each
+/// ingress surface accidentally using a different mutex pool.
 pub(crate) async fn lock_active_series_operations(
     operations: &[Operation],
 ) -> Vec<tokio::sync::OwnedMutexGuard<()>> {
@@ -60,22 +60,36 @@ pub(crate) async fn lock_active_series_operations(
     let mut shards = BTreeSet::new();
     for operation in operations {
         if kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            == Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
         {
-            continue;
+            let payload = projection_context_stripped_payload(&operation.payload);
+            let actor = payload
+                .get("actor_id")
+                .and_then(Value::as_str)
+                .unwrap_or("invalid");
+            let class = payload
+                .get("backup_kind")
+                .and_then(Value::as_str)
+                .unwrap_or("invalid");
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            format!("active-series\0{actor}\0{class}").hash(&mut hasher);
+            shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
         }
-        let payload = projection_context_stripped_payload(&operation.payload);
-        let actor = payload
-            .get("actor_id")
-            .and_then(Value::as_str)
-            .unwrap_or("invalid");
-        let class = payload
-            .get("backup_kind")
-            .and_then(Value::as_str)
-            .unwrap_or("invalid");
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        format!("{actor}\0{class}").hash(&mut hasher);
-        shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
+        if let Some(preconditions) = operation
+            .payload
+            .get("preconditions")
+            .and_then(Value::as_array)
+        {
+            for cell in preconditions
+                .iter()
+                .filter_map(|entry| entry.get("cell"))
+                .filter_map(Value::as_str)
+            {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                format!("cell-cas\0{}\0{cell}", operation.realm_id).hash(&mut hasher);
+                shards.insert((hasher.finish() as usize) % ACTIVE_SERIES_ADMISSION_LOCK_SHARDS);
+            }
+        }
     }
     let mut guards = Vec::with_capacity(shards.len());
     for shard in shards {

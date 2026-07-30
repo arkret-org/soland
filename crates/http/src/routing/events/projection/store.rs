@@ -166,12 +166,93 @@ pub async fn accept_local_operations(
     actor: &str,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
+    accept_local_operations_with_policy_context(
+        state, actor, operations, operations, operations, false,
+    )
+    .await
+}
+
+/// Validate policy against an actor-contextual copy while persisting the original operations.
+///
+/// Some closed protocol payloads intentionally carry no actor alias. Local HTTP authentication
+/// still has to reach the generic policy validator, but the contextual alias must never leak into
+/// the canonical event payload or its CAS-register value.
+pub async fn accept_local_operations_with_policy_actor(
+    state: &AppState,
+    actor: &str,
+    operations: &[Operation],
+) -> Result<(), &'static str> {
+    let mut policy_operations = operations.to_vec();
+    for operation in &mut policy_operations {
+        if operation.actor().is_none()
+            && let Some(payload) = operation.payload.as_object_mut()
+        {
+            payload.insert(
+                "sender".to_owned(),
+                serde_json::Value::String(actor.to_owned()),
+            );
+        }
+    }
+    let wire_operations = operations
+        .iter()
+        .map(|operation| {
+            let mut wire_operation = operation.clone();
+            wire_operation.payload =
+                crate::routing::events::projection_context_stripped_payload(&operation.payload);
+            wire_operation
+        })
+        .collect::<Vec<_>>();
+    accept_local_operations_with_policy_context(
+        state,
+        actor,
+        operations,
+        &policy_operations,
+        &wire_operations,
+        true,
+    )
+    .await
+}
+
+async fn accept_local_operations_with_policy_context(
+    state: &AppState,
+    actor: &str,
+    operations: &[Operation],
+    policy_operations: &[Operation],
+    projection_operations: &[Operation],
+    persist_before_projection: bool,
+) -> Result<(), &'static str> {
     let _active_series_guards =
         crate::routing::events::operations::lock_active_series_operations(operations).await;
+    {
+        let projection = state.projections().snapshot();
+        for operation in operations {
+            projection.check_move_preconditions(operation)?;
+        }
+    }
     validate_operation_semantics(state, operations)?;
     validate_content_encryption_floor(state, operations).await?;
-    validate_operation_policy(state, operations).await?;
-    project_accepted_operations(state, actor, operations).await;
+    validate_operation_policy(state, policy_operations).await?;
+    let mut inserted_events = Vec::new();
+    if persist_before_projection {
+        for operation in projection_operations {
+            let event = projection_event_from_operation(operation, Some(actor));
+            if append_projection_event(state, event.clone())
+                .await
+                .map_err(|_| "projection_event_persistence_failed")?
+                == soland_services::events::ProjectedEventAppendResult::Inserted
+            {
+                inserted_events.push(event);
+            }
+        }
+    }
+    project_accepted_operations(state, actor, projection_operations).await;
+    for event in inserted_events {
+        let _ = state.publish_event_notification(crate::state::EventNotification::event(
+            event.realm_id.clone(),
+            event.event_id.clone(),
+            projection_event_json(&event),
+        ));
+    }
     Ok(())
 }
 

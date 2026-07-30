@@ -1049,14 +1049,17 @@ impl ProjectionService {
     pub fn realm_policy_server_config(
         &self,
         realm_id: &str,
-    ) -> Option<RealmPolicyServerConfigView> {
+    ) -> Result<Option<RealmPolicyServerConfigView>, &'static str> {
         let state = self.state.lock();
         let direct = state.realm_policy_servers.get(realm_id);
         let (config, inherited_from_organization) = match direct {
             Some(config) => (config, false),
-            None => (state.realm_policy_server_config(realm_id)?, true),
+            None => match state.try_realm_policy_server_config(realm_id)? {
+                Some(config) => (config, true),
+                None => return Ok(None),
+            },
         };
-        Some(RealmPolicyServerConfigView {
+        Ok(Some(RealmPolicyServerConfigView {
             config: RealmPolicyServerConfig {
                 realm_id: config.realm_id.clone(),
                 policy_server_did: config.policy_server_did.clone(),
@@ -1067,7 +1070,7 @@ impl ProjectionService {
                 updated_at: config.updated_at,
             },
             inherited_from_organization,
-        })
+        }))
     }
 
     pub fn invite_claim_proof_context(
@@ -1771,18 +1774,6 @@ impl ProjectionService {
                 extra: row.extra.clone(),
             },
         )
-    }
-
-    pub fn remove_realm_policy_server(&self, realm_id: &str) -> bool {
-        let mut state = self.state.lock();
-        if state.realm_policy_servers.remove(realm_id).is_none() {
-            return false;
-        }
-        state.realm_null_subject_cells.remove(&(
-            realm_id.to_owned(),
-            "ak:cell:ak.component.realm.policy_server.v1:null".to_owned(),
-        ));
-        true
     }
 
     pub fn bind_circle_mls_group(
