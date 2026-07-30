@@ -166,6 +166,30 @@ pub(super) fn validate_conflict_repair_event_payload(
     Ok(())
 }
 
+/// Closed Principal Control Realm discriminator on an `ak.realm.create`
+/// object. `realm.schema.json` binds the two markers bidirectionally (a
+/// `fields.purpose = "principal_control"` object MUST carry the profile ref and
+/// vice versa), so both are required here; the remaining PCR genesis invariants
+/// are enforced by the self-principal bootstrap unit and, for managed Agent
+/// PCRs, by `identity::managed_agent_pcr::validate_agent_pcr_genesis_object`.
+fn declares_principal_control_realm(object: &serde_json::Map<String, Value>) -> bool {
+    let purpose_marker = object
+        .get("fields")
+        .and_then(Value::as_object)
+        .and_then(|fields| fields.get("purpose"))
+        .and_then(Value::as_str)
+        == Some("principal_control");
+    let profile_ref = object
+        .get("schema_refs")
+        .and_then(Value::as_array)
+        .is_some_and(|refs| {
+            refs.iter().any(|schema_ref| {
+                schema_ref.as_str() == Some(arkret_bootstrap::PRINCIPAL_CONTROL_REALM_PROFILE)
+            })
+        });
+    purpose_marker && profile_ref
+}
+
 pub(super) fn validate_realm_create_policy_constraints(
     kind: &str,
     payload: &Value,
@@ -193,8 +217,20 @@ pub(super) fn validate_realm_create_policy_constraints(
             reason,
         ));
     }
+    // `zh/governance/history-visibility.md` §3 requires an effective
+    // `ak.realm.history_sharing_policy` behind every `restricted` Realm — but a
+    // Principal Control Realm can never carry one: the
+    // `ak.profile.principal_control_realm.v1` event-kind policy is
+    // `allowlist_only` and does not admit `ak.realm.history_sharing_policy`,
+    // while the same profile's `realm_defaults` pin
+    // `history_visibility = "restricted"`. PCR genesis therefore satisfies the
+    // rule by profile, exactly like the self-principal bootstrap pair the batch
+    // context already recognises; the managed Agent PCR reaches this gate as an
+    // ordinary single delegated create, so the profile marker is what exempts
+    // it. Read-time key share stays fail-closed in `operations::policy_extra`.
     if history_visibility == "restricted"
         && !is_self_principal_pcr_bootstrap_create
+        && !declares_principal_control_realm(object)
         && object
             .get("history_sharing_policy")
             .and_then(Value::as_object)
@@ -387,6 +423,55 @@ mod tests {
         )
         .expect_err("ordinary restricted Realm must not receive the PCR exception");
         assert_eq!(error.code, "history_sharing_policy_missing");
+    }
+
+    #[test]
+    fn managed_agent_pcr_genesis_satisfies_restricted_history_by_profile() {
+        // The managed Agent PCR arrives as a single delegated `ak.realm.create`,
+        // so it never enters a self-principal bootstrap batch context. Its
+        // profile forbids `ak.realm.history_sharing_policy` outright, and the
+        // closed `ak.schema.realm.v1` object has no `history_sharing_policy`
+        // member to carry one — the profile markers are the exemption.
+        let payload = json!({
+            "object": {
+                "history_visibility": "restricted",
+                "encryption_profile": "mls_rfc9420",
+                "content_scheme": "mls_rfc9420",
+                "fields": {"purpose": "principal_control"},
+                "schema_refs": [
+                    "ak.schema.realm.v1",
+                    "ak.profile.principal_control_realm.v1"
+                ]
+            }
+        });
+        validate_realm_create_policy_constraints(
+            arkret_wire::events::EventKind::REALM_CREATE,
+            &payload,
+            false,
+        )
+        .expect("PCR genesis satisfies restricted history_visibility by profile");
+    }
+
+    #[test]
+    fn half_declared_principal_control_marker_keeps_the_restricted_requirement() {
+        // A Realm claiming the purpose without the profile ref (or the reverse)
+        // is not a PCR under the closed schema's bidirectional guard, so it must
+        // not inherit the exemption.
+        for object in [
+            json!({"history_visibility": "restricted", "fields": {"purpose": "principal_control"}}),
+            json!({
+                "history_visibility": "restricted",
+                "schema_refs": ["ak.profile.principal_control_realm.v1"]
+            }),
+        ] {
+            let error = validate_realm_create_policy_constraints(
+                arkret_wire::events::EventKind::REALM_CREATE,
+                &json!({"object": object}),
+                false,
+            )
+            .expect_err("a half-declared PCR marker must not unlock the exemption");
+            assert_eq!(error.code, "history_sharing_policy_missing");
+        }
     }
 
     #[test]
