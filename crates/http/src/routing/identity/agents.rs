@@ -513,6 +513,66 @@ mod tests {
         );
     }
 
+    fn bind_pairing_request_to_controller_device(
+        body: &mut AgentKeyPairRequestBody,
+        controller_id: &str,
+    ) {
+        let device_id = body.authorize_event.authorization_lease.device_id.as_str();
+        let mut proof = body.requested_scope_disclosure.proofs[0].clone();
+        proof.verification_method = format!("{controller_id}#{device_id}");
+        body.authorize_event.event.executed_by =
+            Some(Did::new(controller_id.to_owned()).expect("controller DID"));
+        body.authorize_event.event.proofs = vec![proof];
+    }
+
+    #[test]
+    fn service_pairing_preserves_the_controller_device_bound_by_the_signed_submission() {
+        let controller_id = "did:web:controller.example";
+        let mut body = key_pair_request_body(
+            "did:web:agent.example",
+            "did:web:agent.example#runtime-key",
+            "did:web:soland.example",
+        );
+        bind_pairing_request_to_controller_device(&mut body, controller_id);
+
+        let device_id = service_pairing_controller_device_id(&body, controller_id)
+            .expect("signed submission binds the service session device");
+
+        assert_eq!(
+            device_id,
+            body.authorize_event.authorization_lease.device_id.as_str()
+        );
+    }
+
+    #[test]
+    fn service_pairing_rejects_a_proof_from_a_different_controller_device() {
+        let controller_id = "did:web:controller.example";
+        let mut body = key_pair_request_body(
+            "did:web:agent.example",
+            "did:web:agent.example#runtime-key",
+            "did:web:soland.example",
+        );
+        bind_pairing_request_to_controller_device(&mut body, controller_id);
+        body.authorize_event.event.proofs[0].verification_method =
+            format!("{controller_id}#ak:device:01904100-0000-7000-8000-000000000099");
+
+        assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
+    }
+
+    #[test]
+    fn service_pairing_rejects_a_non_device_controller_proof() {
+        let controller_id = "did:web:controller.example";
+        let mut body = key_pair_request_body(
+            "did:web:agent.example",
+            "did:web:agent.example#runtime-key",
+            "did:web:soland.example",
+        );
+        bind_pairing_request_to_controller_device(&mut body, controller_id);
+        body.authorize_event.event.proofs[0].verification_method = format!("{controller_id}#key-1");
+
+        assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
+    }
+
     #[test]
     fn agent_view_projects_spec_shape_dropping_internal_columns() {
         let mut record = agent_record(

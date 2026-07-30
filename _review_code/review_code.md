@@ -127,3 +127,20 @@
   verification currently perform separate durable session lookups. Return a typed verified
   session binding from the first step and reuse it to eliminate duplicate I/O and prevent future
   validation drift.
+
+## 2026-07-30 — Agent projection S2S commit replaced the controller device binding
+
+- Surface: `POST /_arkret/gate/account/agent-key-pair` when Coauth forwards an approved request
+  under the deployment S2S credential.
+- Regression: the S2S adapter rebuilt a controller session with the fixed device id
+  `agent-pair-commit`. The supplied authorization lease was correctly bound to the real controller
+  device that signed `ak.agent.key.authorize`, so the shared initial-publication gate rejected every
+  valid approval with `authorization_lease_device_mismatch`.
+- Correction: the adapter now requires the typed Event actor and lease actor to equal the managed
+  Agent, requires `executed_by` to equal the claimed controller, and requires the first Event proof
+  verification method to equal `<controller DID>#<lease device_id>`. Only that exact signed device
+  id enters the narrow synthetic session; all lease, signature, lifecycle, delegation, PCR, and
+  reducer checks still run in the shared Event pipeline.
+- Prevention dimension: an authenticated relay may preserve a signed caller identity binding but
+  must neither invent one nor weaken its downstream validator. Boundary adapters need negative
+  tests for actor, executor, proof-method, and device-lease mismatches.

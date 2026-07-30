@@ -9,11 +9,15 @@ const ACTION_REACTION_ADD: &str = "ak.reaction.add";
 /// Narrow internal execution context used only after the caller has authenticated
 /// the deployment S2S credential and the handler has re-validated the claimed
 /// controller against the authoritative Agent record.
-pub(super) fn controller_service_session(controller_id: &str, state: &AppState) -> SessionRecord {
+pub(super) fn controller_service_session(
+    controller_id: &str,
+    device_id: &str,
+    state: &AppState,
+) -> SessionRecord {
     SessionRecord {
         token_hash: format!("agent-pair-commit:{controller_id}"),
         actor: controller_id.to_owned(),
-        device_id: "agent-pair-commit".to_owned(),
+        device_id: device_id.to_owned(),
         audience: state.service_id().clone(),
         session_public_key: None,
         agent_session: None,

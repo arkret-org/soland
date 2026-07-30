@@ -627,7 +627,9 @@ pub(super) async fn agent_key_pair(
                     "authorize_event.executed_by is required for delegated pairing",
                 )
             })?;
-        controller_service_session(controller_id.as_str(), state)
+        let controller_device_id =
+            service_pairing_controller_device_id(&body, controller_id.as_str())?;
+        controller_service_session(controller_id.as_str(), &controller_device_id, state)
     } else {
         aa.authenticated_session(state, req).await?
     };
@@ -819,6 +821,44 @@ pub(super) async fn agent_key_pair(
         authorized_event_ref,
         signing_key_binding: body.signing_key_binding,
     })
+}
+
+pub(super) fn service_pairing_controller_device_id(
+    body: &AgentKeyPairRequestBody,
+    controller_id: &str,
+) -> Result<String, AppError> {
+    let submission = &body.authorize_event;
+    if submission.event.actor_id != body.agent_id
+        || submission.authorization_lease.actor_id != body.agent_id
+    {
+        return Err(AppError::capability_denied(
+            "delegated pairing Event and authorization lease must name the managed Agent",
+        ));
+    }
+    if submission.event.executed_by.as_ref().map(Did::as_str) != Some(controller_id) {
+        return Err(AppError::capability_denied(
+            "delegated pairing Event executor must match the controller",
+        ));
+    }
+
+    let device_id = submission.authorization_lease.device_id.as_str();
+    let expected_verification_method = format!("{controller_id}#{device_id}");
+    let verification_method = submission
+        .event
+        .proofs
+        .first()
+        .map(|proof| proof.verification_method.as_str())
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "delegated pairing Event must carry a controller device proof",
+            )
+        })?;
+    if verification_method != expected_verification_method {
+        return Err(AppError::capability_denied(
+            "delegated pairing Event proof does not match the authorization lease device",
+        ));
+    }
+    Ok(device_id.to_owned())
 }
 
 /// The canonical `ak.component.agent.key.v1` cell for one `(agent_id, key_id)`
