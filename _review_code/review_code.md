@@ -112,3 +112,18 @@
   not close this regression class.
 - Detailed report:
   `../../arkret-work/docs/federation-event-delivery-reliability-improvement-report.md`.
+
+## 2026-07-30 — recovery backup unlock used the DID document instead of the recovery policy
+
+- Surface: `POST /_arkret/self/keys/backups/{backup_id}/unlock`.
+- Regression: the endpoint correctly required a verified recovery session but then resolved every
+  unlock signature through the principal DID document. In an all-devices-lost B-model recovery,
+  that document intentionally has no usable replacement-device method; the 24-word recovery key
+  is anchored by the signed recovery policy instead.
+- Correction: `recovery_unlock` signatures resolve the exact verification method accepted in the
+  session proof summary against the policy snapshot bound to that session. Ordinary
+  `principal_signing` proofs retain DID/device resolution.
+- Follow-up optimization: `enforce_recovery_session_binding_when_present` and signature
+  verification currently perform separate durable session lookups. Return a typed verified
+  session binding from the first step and reuse it to eliminate duplicate I/O and prevent future
+  validation drift.

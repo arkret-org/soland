@@ -78,6 +78,31 @@ pub(super) fn recovery_session_proof_kind_and_digest(
     ))
 }
 
+/// Resolve the recovery-policy key that authenticated this recovery session.
+/// Recovery-key possession is rooted in the signed policy, not in a DID
+/// document that may contain no device methods after every device is lost.
+pub(super) fn recovery_session_unlock_verifying_key(
+    record: &soland_services::identity::RecoverySessionState,
+    verification_method: &str,
+) -> Result<VerifyingKey, AppError> {
+    let summary = recovery_proof_summary(record).ok_or_else(|| {
+        AppError::capability_denied("recovery session has no verified proof summary")
+    })?;
+    if summary.get("kind").and_then(Value::as_str) != Some("recovery_unlock")
+        || summary.get("verification_method").and_then(Value::as_str) != Some(verification_method)
+    {
+        return Err(AppError::capability_denied(
+            "key backup unlock signature is not identified by the recovery key accepted for the session",
+        ));
+    }
+    let entry = resolve_recovery_key_entry(
+        &record.policy_payload,
+        verification_method,
+        record.created_at,
+    )?;
+    decode_recovery_key_public_key(&entry)
+}
+
 /// Spec-canonical recovery surface mounted under `/_arkret/root/identity`.
 ///
 /// The standard surface exposes recovery policy read/publish plus recovery

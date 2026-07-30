@@ -1132,7 +1132,7 @@ pub(super) async fn verify_recovery_unlock_proof(
 /// Resolve a non-revoked, in-window `recovery_keys[]` entry whose
 /// `verification_method` equals `recovery_secret_ref`, evaluated at `as_of`
 /// (the recovery session `created_at`).
-fn resolve_recovery_key_entry(
+pub(super) fn resolve_recovery_key_entry(
     policy_payload: &Value,
     recovery_secret_ref: &str,
     as_of: chrono::DateTime<chrono::Utc>,
@@ -1197,7 +1197,9 @@ fn recovery_key_entry_authoritative_at(
 /// recovery-policy entry. `verification_method` is only its stable DID URL;
 /// B-model principals intentionally do not need to publish this recovery-only
 /// key in their DID Document.
-fn decode_recovery_key_public_key(entry: &Map<String, Value>) -> Result<VerifyingKey, AppError> {
+pub(super) fn decode_recovery_key_public_key(
+    entry: &Map<String, Value>,
+) -> Result<VerifyingKey, AppError> {
     let multibase = entry
         .get("public_key_multibase")
         .and_then(Value::as_str)

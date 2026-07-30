@@ -44,7 +44,14 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
     match (claimed_generation, claimed_device_authorize_event_id) {
         (Some(generation), None) if generation >= 1 => {}
         (None, Some(event_id)) if !event_id.trim().is_empty() => {}
-        _ => return Err(key_backup_untrusted_signature()),
+        _ => {
+            return Err(AppError::new(
+                ErrorCode::InvalidSignature,
+                "key backup auth_data must carry exactly one accepted device trust anchor",
+            )
+            .with_status(StatusCode::UNAUTHORIZED)
+            .with_wire_code("untrusted_backup_signature"));
+        }
     }
 
     let principal = Did::new(actor_id.to_owned()).map_err(|_| key_backup_untrusted_signature())?;
@@ -61,9 +68,21 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
             })
             .await
             .map_err(|error| AppError::internal(format!("device lookup failed: {error}")))?
-            .ok_or_else(key_backup_untrusted_signature)?;
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::InvalidSignature,
+                    "key backup device-authorize trust anchor has no durable device record",
+                )
+                .with_status(StatusCode::UNAUTHORIZED)
+                .with_wire_code("untrusted_backup_signature")
+            })?;
         if record.revoked_at.is_some() || record.verification_state != "verified" {
-            return Err(key_backup_untrusted_signature());
+            return Err(AppError::new(
+                ErrorCode::InvalidSignature,
+                "key backup device-authorize trust anchor names an inactive device",
+            )
+            .with_status(StatusCode::UNAUTHORIZED)
+            .with_wire_code("untrusted_backup_signature"));
         }
         let projected_event_id = record
             .payload
@@ -71,7 +90,12 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
             .and_then(Value::as_str)
             .ok_or_else(key_backup_untrusted_signature)?;
         if projected_event_id != event_id {
-            return Err(key_backup_untrusted_signature());
+            return Err(AppError::new(
+                ErrorCode::InvalidSignature,
+                "key backup device-authorize event does not match the durable device projection",
+            )
+            .with_status(StatusCode::UNAUTHORIZED)
+            .with_wire_code("untrusted_backup_signature"));
         }
         let device_public_key = record
             .payload
@@ -84,7 +108,12 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
             device_public_key,
             verification_method,
         ) {
-            return Err(key_backup_untrusted_signature());
+            return Err(AppError::new(
+                ErrorCode::InvalidSignature,
+                "key backup verification method does not match the device-authorize key",
+            )
+            .with_status(StatusCode::UNAUTHORIZED)
+            .with_wire_code("untrusted_backup_signature"));
         }
         verify_key_backup_auth_data_signature(backup, device_public_key, signature_b64)?;
         return Ok(());
@@ -128,7 +157,14 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         let published = state
             .identities()
             .current_cross_signing(&principal)
-            .ok_or_else(key_backup_untrusted_signature)?;
+            .ok_or_else(|| {
+                AppError::new(
+                    ErrorCode::InvalidSignature,
+                    "key backup SSK trust anchor has no durable device record",
+                )
+                .with_status(StatusCode::UNAUTHORIZED)
+                .with_wire_code("untrusted_backup_signature")
+            })?;
         let published_generation = published.generation.get();
         // The device MUST participate in the cross-signed trust chain (a bootstrap
         // binding alone is not a cross-signing anchor) and that binding MUST chain
@@ -149,7 +185,12 @@ pub(super) async fn anchor_key_backup_auth_data_trust_root(
         &device_public_key,
         verification_method,
     ) {
-        return Err(key_backup_untrusted_signature());
+        return Err(AppError::new(
+            ErrorCode::InvalidSignature,
+            "key backup SSK trust anchor names an inactive device",
+        )
+        .with_status(StatusCode::UNAUTHORIZED)
+        .with_wire_code("untrusted_backup_signature"));
     }
     verify_key_backup_auth_data_signature(backup, &device_public_key, signature_b64)
 }
@@ -396,13 +437,31 @@ pub(super) async fn verify_key_backup_unlock_proof_signature(
             "key backup unlock proof canonicalization failed: {error}"
         ))
     })?;
-    let public_key = crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
-        .await
-        .map_err(|error| {
-            AppError::capability_denied(format!(
-                "key backup unlock proof verification method invalid: {error}"
-            ))
-        })?;
+    let proof_kind = required_proof_string(proof, "proof_kind")?;
+    let public_key = if proof_kind == "recovery_unlock" {
+        let recovery_session_id = required_proof_string(proof, "recovery_session_id")?;
+        let record = state
+            .recovery_sessions()
+            .session(recovery_session_id)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("recovery session lookup failed: {error}"))
+            })?
+            .ok_or_else(|| {
+                AppError::capability_denied(
+                    "key backup unlock proof recovery session record is missing",
+                )
+            })?;
+        super::super::recovery::recovery_session_unlock_verifying_key(&record, verification_method)?
+    } else {
+        crate::jws_verify::resolve_ed25519_pubkey_async(state, verification_method)
+            .await
+            .map_err(|error| {
+                AppError::capability_denied(format!(
+                    "key backup unlock proof verification method invalid: {error}"
+                ))
+            })?
+    };
     public_key.verify(&canonical, &signature).map_err(|_| {
         AppError::capability_denied("key backup unlock proof signature verification failed")
     })
