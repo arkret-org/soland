@@ -9,6 +9,13 @@ postgres_port := env_var_or_default("SOLAND_POSTGRES_PORT", "5432")
 postgres_user := env_var_or_default("SOLAND_POSTGRES_USER", "soland")
 postgres_password := env_var_or_default("SOLAND_POSTGRES_PASSWORD", "soland")
 postgres_db := env_var_or_default("SOLAND_POSTGRES_DB", "soland")
+# Cargo parallelism for the local gate. Windows and low-memory runners OOM the
+# linker at full parallelism: rustc fails to mmap an rlib with `os error 1455`
+# (the pagefile is too small), which surfaces as a *test* failure and sends
+# everyone chasing a bug that is not there. One job removes it. Raise this on a
+# machine with headroom.
+gate_jobs := env_var_or_default("SOLAND_GATE_JOBS", "1")
+gate_dir := env_var_or_default("SOLAND_GATE_DIR", "target/gate")
 export DATABASE_URL := database_url
 export SOLAND_DEVELOPMENT_MODE := env_var_or_default("SOLAND_DEVELOPMENT_MODE", "true")
 export RUST_LOG := env_var_or_default("RUST_LOG", "soland=info")
@@ -87,6 +94,18 @@ test:
 # long-running `just dev` process cannot lock its test binary on Windows.
 test-http-api:
     CARGO_TARGET_DIR=target/http-api cargo test --locked -p soland --test http_api --no-fail-fast
+
+# Run the local test gate with bounded parallelism and saved artifacts.
+#
+# The logic lives in `scripts/gate.sh` so it can be run and tested without
+# `just` installed; this recipe only supplies the tuning knobs. Read
+# `{{ gate_dir }}/summary.txt` for the verdict, never the terminal tail.
+#
+# Extra arguments go to `cargo test`:
+#
+#     just gate -p soland --test extensions_smoke
+gate *args:
+    SOLAND_GATE_JOBS={{ gate_jobs }} SOLAND_GATE_DIR={{ gate_dir }} sh scripts/gate.sh {{ args }}
 
 # Query the default health endpoint.
 health:
