@@ -1644,6 +1644,22 @@ fn insert_historical_data_event_grant(
     action: &str,
     revoked: bool,
 ) -> String {
+    insert_historical_data_event_grant_for_subject(
+        state,
+        grant_id,
+        action,
+        DATA_EVENT_ACTOR,
+        revoked,
+    )
+}
+
+fn insert_historical_data_event_grant_for_subject(
+    state: &AppState,
+    grant_id: &str,
+    action: &str,
+    subject: &str,
+    revoked: bool,
+) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
     let seal_id = data_event_seal_id();
     let move_id = data_event_move_id(0xab);
@@ -1654,7 +1670,7 @@ fn insert_historical_data_event_grant(
     let value = historical_data_event_grant_value(
         grant_id,
         action,
-        DATA_EVENT_ACTOR,
+        subject,
         "did:web:owner.example",
         revoked,
         None,
@@ -2119,6 +2135,53 @@ fn data_event_without_authorized_by_refs_uses_the_derived_capability_set() {
         &data_event_derived_cells(),
     )
     .expect("a DataEvent citing no grant is authorized by the basis at seal_ref");
+}
+
+#[test]
+fn applet_data_event_uses_exact_executed_by_grant_at_seal_ref() {
+    const APPLET_SERVICE: &str = "did:web:bridge.example";
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011d";
+    let seal_ref = insert_historical_data_event_grant_for_subject(
+        &state,
+        grant_id,
+        "ak.message.create",
+        APPLET_SERVICE,
+        false,
+    );
+    let mut object = data_event_object_with_refs(&seal_ref, vec![]);
+    object.insert(
+        "applet_id".to_owned(),
+        json!("ak:applet:01904100-0000-7000-8000-000000000001"),
+    );
+    object.insert("executed_by".to_owned(), json!(APPLET_SERVICE));
+    object.insert("authorization_ref".to_owned(), json!(grant_id));
+
+    validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+    )
+    .expect("Applet DataEvent must use its executor's exact install grant");
+
+    object.insert(
+        "authorization_ref".to_owned(),
+        json!("ak:grant:01904100-0000-7000-8000-000000000199"),
+    );
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+    )
+    .expect_err("another effective grant cannot substitute for authorization_ref");
+    assert_eq!(err.code, "authorization_ref_inactive");
+    assert!(err.message.contains("not projected at seal_ref"));
 }
 
 #[test]

@@ -1494,6 +1494,25 @@ impl AppState {
     pub fn test_has_current_cross_signing(&self, principal: &arkret_identifiers::Did) -> bool {
         self.identities.current_cross_signing(principal).is_some()
     }
+
+    /// Refresh one test fixture grant from the durable sealed-cell projection
+    /// into the runtime authorization index.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_refresh_grant_from_sealed_cells(
+        &self,
+        realm_id: &arkret_identifiers::RealmId,
+        grant_id: &str,
+    ) {
+        self.projections
+            .reload_cells_from_store(realm_id)
+            .expect("test fixture sealed cells reload");
+        let grant = self
+            .projections
+            .effective_engine_grant(grant_id)
+            .expect("test fixture sealed grant is effective");
+        self.authorization.upsert_projected_grant(grant);
+    }
 }
 
 struct RuntimeAdminSigningKeys(Arc<arkret_auth::AdminKeyStore>);

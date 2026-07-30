@@ -119,9 +119,100 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
         .sealed_at;
     let historical_snapshot: Vec<crate::authz::Grant> =
         historical_grants.values().cloned().collect();
-    let effective_by_id =
-        effective_historical_grants_for_subject(&historical_grants, actor_id, realm_id, auth_time);
+    // An Applet-originated act-on-behalf Event is signed and executed by the
+    // installed service while `actor_id` remains the accountable ghost/native
+    // principal. Formal install grants are normatively issued to that service
+    // (`applet-integration.md` §4b), so the CBA subject is `executed_by`.
+    // The Applet-specific validator independently proves the exact
+    // registration, namespace and epoch binding; selecting `executed_by` here
+    // must never become a generic delegation fallback.
+    let capability_subject = if object.contains_key("applet_id") {
+        object
+            .get("executed_by")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    arkret_wire::ReasonCode::EXECUTED_BY_MISSING,
+                    "applet-originated DataEvent requires executed_by",
+                )
+            })?
+    } else {
+        actor_id
+    };
+    let effective_by_id = effective_historical_grants_for_subject(
+        &historical_grants,
+        capability_subject,
+        realm_id,
+        auth_time,
+    );
     let mut used_grant_ids = std::collections::BTreeSet::new();
+
+    // Unlike an ordinary DataEvent, an Applet delegated write carries one
+    // mandatory, authoritative `authorization_ref`. It must itself be
+    // effective in the Event's frozen Seal view and cover every
+    // receiver-derived write; a different service grant in that view cannot
+    // substitute for the signed reference.
+    if object.contains_key("applet_id") {
+        let authorization_ref = object
+            .get("authorization_ref")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                event_validation_error(
+                    StatusCode::BAD_REQUEST,
+                    "authorization_ref_missing",
+                    "applet-originated DataEvent requires authorization_ref",
+                )
+            })?;
+        let stored = historical_grants.get(authorization_ref).ok_or_else(|| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_inactive",
+                format!(
+                    "applet authorization_ref {authorization_ref} is not projected at seal_ref"
+                ),
+            )
+        })?;
+        if stored.subject != capability_subject || stored.realm_id != realm_id {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_scope",
+                format!(
+                    "applet authorization_ref {authorization_ref} does not cover executor/realm"
+                ),
+            ));
+        }
+        if crate::authz::grant_revoked_upstream(&historical_snapshot, authorization_ref, auth_time)
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                arkret_wire::ReasonCode::GRANT_REVOKED_UPSTREAM,
+                format!("applet authorization_ref {authorization_ref} was revoked upstream"),
+            ));
+        }
+        if stored.revoked || !effective_by_id.contains_key(authorization_ref) {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_inactive",
+                format!(
+                    "applet authorization_ref {authorization_ref} is revoked, expired, or delegation-broken at seal_ref"
+                ),
+            ));
+        }
+        if derived_cells
+            .iter()
+            .any(|cell| !grant_covers_data_event_effect(state, stored, kind, realm_id, cell))
+        {
+            return Err(event_validation_error(
+                StatusCode::FORBIDDEN,
+                "authorization_ref_scope",
+                format!(
+                    "applet authorization_ref {authorization_ref} does not cover every derived DataEvent cell"
+                ),
+            ));
+        }
+        used_grant_ids.insert(authorization_ref.to_owned());
+    }
 
     // `refs[role=authorized_by]` is a critical semantic citation, not a
     // capability selector: it never widens the effective set, but an entry that
@@ -159,7 +250,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
                 format!("DataEvent authorized_by grant {grant_id} is revoked"),
             ));
         }
-        if stored.subject != actor_id || stored.realm_id != realm_id {
+        if stored.subject != capability_subject || stored.realm_id != realm_id {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
                 "capability_denied",
