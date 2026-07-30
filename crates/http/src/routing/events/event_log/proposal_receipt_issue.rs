@@ -82,13 +82,6 @@ pub(super) async fn issue_control_proposal_receipt(
         authority_set_ref.as_str(),
         verification_method
     );
-    let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {
-        AppError::new(
-            ErrorCode::SchemaViolation,
-            format!("proposal receipt request cannot be canonicalized: {error}"),
-        )
-        .with_status(StatusCode::BAD_REQUEST)
-    })?;
     match state
         .jobs()
         .proposal_member_receipt(&receipt_key)
@@ -99,7 +92,12 @@ pub(super) async fn issue_control_proposal_receipt(
                 format!("proposal receipt replay lookup failed: {error}"),
             )
         })? {
-        Some(record) if record.request_hash == request_hash => {
+        Some(record) => {
+            // The protocol replay identity is the proposal digest plus the
+            // authority set, not the complete publication-proof bytes. A
+            // durable client may refresh an expired AuthorizationLease while
+            // retrying the same signed Event; after the request has passed
+            // current admission above, return the immutable original receipt.
             let outcome = serde_json::from_value(record.response_body).map_err(|error| {
                 AppError::new(
                     ErrorCode::InternalError,
@@ -108,16 +106,16 @@ pub(super) async fn issue_control_proposal_receipt(
             })?;
             return json_ok(outcome);
         }
-        Some(_) => {
-            return Err(AppError::new(
-                ErrorCode::DuplicateConflict,
-                "proposal receipt identity was reused with different request bytes",
-            )
-            .with_status(StatusCode::CONFLICT));
-        }
         None => {}
     }
 
+    let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {
+        AppError::new(
+            ErrorCode::SchemaViolation,
+            format!("proposal receipt request cannot be canonicalized: {error}"),
+        )
+        .with_status(StatusCode::BAD_REQUEST)
+    })?;
     let policy = crate::control_proposal::control_proposal_policy(state, &realm_id, &[])
         .await
         .map_err(|error| {
@@ -180,13 +178,6 @@ pub(super) async fn issue_control_proposal_receipt(
             )
         })?
         .ok_or_else(|| AppError::internal("proposal receipt first outcome was not persisted"))?;
-    if accepted.request_hash != request_hash {
-        return Err(AppError::new(
-            ErrorCode::DuplicateConflict,
-            "proposal receipt identity was concurrently used with different request bytes",
-        )
-        .with_status(StatusCode::CONFLICT));
-    }
     json_ok(
         serde_json::from_value(accepted.response_body).map_err(|error| {
             AppError::internal(format!(

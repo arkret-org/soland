@@ -144,3 +144,21 @@
 - Prevention dimension: an authenticated relay may preserve a signed caller identity binding but
   must neither invent one nor weaken its downstream validator. Boundary adapters need negative
   tests for actor, executor, proof-method, and device-lease mismatches.
+
+## 2026-07-30 — proposal receipt replay identity included refreshable publication proofs
+
+- Surface: `ak.self.control_proposal_receipts.command.issue`.
+- Regression: the durable receipt key correctly used proposal digest, authority set and member
+  verification method, but a cache hit was returned only when the complete request hash also
+  matched. Reloading an interrupted publication can retain the identical signed Event while
+  refreshing its AuthorizationLease; Soland then rejected the same proposal identity with
+  `duplicate_conflict` instead of returning the immutable original member receipt.
+- Detection: the live Agent Direct Conversation crash/resume gate cut the MLS transaction after
+  receipt collection and retried it after reload with a fresh lease.
+- Correction: every request still passes current structural, envelope, lease, authority and CBA
+  validation, after which an existing proposal-digest/authority/member key returns its original
+  receipt regardless of refreshable publication-proof bytes. Concurrent first writers likewise
+  converge on the persisted first receipt.
+- Prevention dimension: idempotency identity must follow the operation contract. Event-external
+  publication evidence may change without changing the canonical proposal or extending its
+  original receipt deadline.
