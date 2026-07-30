@@ -984,6 +984,7 @@ pub fn describe(
             "org.arkret.soland.feature.events.describe".to_owned(),
             "org.arkret.soland.feature.events.submit".to_owned(),
             "org.arkret.soland.feature.events.read".to_owned(),
+            "events_query_range_completeness".to_owned(),
             "org.arkret.soland.feature.federation.transaction".to_owned(),
             "org.arkret.soland.feature.federation.operations".to_owned(),
             "org.arkret.soland.feature.sync.client_sync".to_owned(),

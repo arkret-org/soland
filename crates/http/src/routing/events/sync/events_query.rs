@@ -532,6 +532,7 @@ struct EventsQueryParts {
     order: String,
     limit: usize,
     filters: Option<Value>,
+    include_completeness: bool,
 }
 
 fn validate_events_query_order(order: &str) -> Result<(), soland_http::error::AppError> {
@@ -722,6 +723,12 @@ pub(crate) async fn events_query(
         .and_then(|value| value.parse::<usize>().ok())
         .unwrap_or(100)
         .clamp(1, 100);
+    let include_completeness = match query_param(req, "include_completeness") {
+        None => false,
+        Some(value) => value.parse::<bool>().map_err(|_| {
+            soland_http::error::AppError::invalid_param("include_completeness must be a boolean")
+        })?,
+    };
     let parts = EventsQueryParts {
         realms: super::super::query_param_all(req, "realms"),
         actors: super::super::query_param_all(req, "actors"),
@@ -730,6 +737,7 @@ pub(crate) async fn events_query(
         order: query_param(req, "order").unwrap_or_else(|| "default".to_owned()),
         limit,
         filters,
+        include_completeness,
     };
     events_query_impl(state, req, parts).await
 }
@@ -765,6 +773,7 @@ pub(crate) async fn events_query_post(
         filters: body
             .filters
             .map(|filters| Value::Object(filters.into_iter().collect())),
+        include_completeness: body.include_completeness.unwrap_or(false),
     };
     events_query_impl(state, req, parts).await
 }
@@ -855,6 +864,8 @@ async fn events_query_impl(
         .await;
         return soland_http::result::json_ok(response);
     }
+    let range_completeness =
+        range_completeness_for_query(state, session.as_ref(), &parts, &realms).await?;
     let mut accessible_realms: Vec<String> = Vec::with_capacity(realms.len());
     // encryption-and-audit.md §2.10.8 — realms the caller may scan ONLY as a
     // recovery recipient (non-member). Per-event visibility for these realms is
@@ -953,7 +964,7 @@ async fn events_query_impl(
                     prev_cursor: cursor_token.clone(),
                     next_cursor,
                     has_more: page.has_more,
-                    range_completeness: None,
+                    range_completeness: range_completeness.clone(),
                 });
             }
             Ok(None) => {}
@@ -973,7 +984,7 @@ async fn events_query_impl(
             prev_cursor: cursor_token.clone(),
             next_cursor: None,
             has_more: false,
-            range_completeness: None,
+            range_completeness,
         });
     }
 
@@ -1047,8 +1058,225 @@ async fn events_query_impl(
         prev_cursor: cursor_token.clone(),
         next_cursor,
         has_more: limited,
-        range_completeness: None,
+        range_completeness,
     })
+}
+
+async fn range_completeness_for_query(
+    state: &AppState,
+    session: Option<&SessionRecord>,
+    parts: &EventsQueryParts,
+    realms: &[String],
+) -> Result<
+    Option<arkret_models_collaboration::http_bodies::EventsRangeCompleteness>,
+    soland_http::error::AppError,
+> {
+    use arkret_models_collaboration::sync_frames::snapshot::{
+        RangeCompletenessAttestation, RangeCompletenessAttestationEventRange,
+        RangeCompletenessAttestationEventRangeFromFrontier,
+        RangeCompletenessAttestationEventRangeToFrontier,
+        RangeCompletenessAttestationWitnessAttestation,
+        RangeCompletenessAttestationWitnessAttestationWitnessesItem,
+    };
+    use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions, sign_event};
+    use arkret_wire::{
+        Event, EventId, EventKind, EventRequirements, Hash, PayloadProofPurpose, PayloadSigner,
+        Proof, ScopeRef, proof_kind,
+    };
+
+    if !parts.include_completeness
+        || realms.len() != 1
+        || !parts.actors.is_empty()
+        || parts.filters.is_some()
+    {
+        return Ok(None);
+    }
+    let Some(session) = session else {
+        return Ok(None);
+    };
+    let realm_id = RealmId::new(realms[0].clone())
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    if soland_services::identity::principal_control_realm_for_did(&session.actor)
+        != realm_id.as_str()
+    {
+        return Ok(None);
+    }
+
+    let records = state
+        .event_queries()
+        .canonical_events()
+        .await
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let mut accepted_events = records
+        .iter()
+        .filter(|record| record.realm_id.as_deref() == Some(realm_id.as_str()))
+        .map(|record| super::super::event_log::sdk_event_for_state(state, record))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    accepted_events.sort_by(|left, right| {
+        left.created_at
+            .cmp(&right.created_at)
+            .then_with(|| left.event_id.as_str().cmp(right.event_id.as_str()))
+    });
+    if accepted_events.len() < 2 {
+        return Ok(None);
+    }
+    let (from_frontier, to_frontier) =
+        arkret_state::full_realm_range_frontiers(&accepted_events)
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let range_events = arkret_state::full_realm_range_events(&accepted_events)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let actor_seq_ranges = arkret_state::range_completeness_actor_seq_ranges(&range_events)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    if actor_seq_ranges.is_empty() {
+        return Ok(None);
+    }
+    let digest_suite = state.projections().realm_digest_suite(realm_id.as_str());
+    let (root, covered_event_ids) =
+        arkret_state::range_completeness_root_with_suite(&range_events, digest_suite)
+            .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+
+    let issuer = arkret_identifiers::Did::new(state.service_id().clone())
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let verification_method = format!("{}#notary-key", issuer);
+    let observed_at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
+    let event_id = EventId::new(ids::generate_event_id())
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let attestation_id = event_id
+        .as_str()
+        .strip_prefix("ak:event:")
+        .map(|suffix| format!("ak:attestation:{suffix}"))
+        .ok_or_else(|| {
+            soland_http::error::AppError::internal(
+                "generated completeness Event id has no ak:event prefix",
+            )
+        })?;
+    let signer = Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        issuer.clone(),
+        verification_method.clone(),
+    );
+    let mut payload = RangeCompletenessAttestation {
+        attestation_id,
+        schema: "ak.schema.range_completeness_attestation.v1".to_owned(),
+        issuer: issuer.clone(),
+        issuer_role: "events_api".to_owned(),
+        realm_id: realm_id.clone(),
+        event_range: RangeCompletenessAttestationEventRange {
+            from_frontier: RangeCompletenessAttestationEventRangeFromFrontier {
+                realm_frontier: from_frontier,
+                extra: BTreeMap::new(),
+            },
+            to_frontier: RangeCompletenessAttestationEventRangeToFrontier {
+                realm_frontier: to_frontier.clone(),
+                extra: BTreeMap::new(),
+            },
+            actor_seq_ranges,
+        },
+        root,
+        count: covered_event_ids.len() as u64,
+        observed_at,
+        witness_attestation: RangeCompletenessAttestationWitnessAttestation {
+            kind: "single_source".to_owned(),
+            witnesses: vec![
+                RangeCompletenessAttestationWitnessAttestationWitnessesItem {
+                    issuer: issuer.clone(),
+                    verification_method: verification_method.clone(),
+                    controlling_organization: issuer.clone(),
+                    attested_at: Some(observed_at),
+                    extra: BTreeMap::new(),
+                },
+            ],
+        },
+        proofs: Vec::new(),
+    };
+    let mut unsigned_payload = serde_json::to_value(&payload)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    unsigned_payload
+        .as_object_mut()
+        .expect("typed completeness payload serializes as an object")
+        .remove("proofs");
+    let canonical_payload = arkret_canonical::canonical_json_bytes(&unsigned_payload)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let mut payload_proof = Proof {
+        kind: proof_kind::DETACHED_JWS.to_owned(),
+        verification_method: verification_method.clone(),
+        alg: "EdDSA".to_owned(),
+        event_digest: Hash::new(arkret_canonical::canonical::sha256_digest(
+            &canonical_payload,
+        ))
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
+        created_at: observed_at,
+        domain: None,
+        audience: None,
+        proof_purpose: Some(PayloadProofPurpose::IssuerAttestation),
+        jws: String::new(),
+    };
+    let proof_binding = payload_proof
+        .canonical_binding_bytes(&issuer)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let signature = signer
+        .sign_payload(&proof_binding)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    payload_proof.alg = signature.alg;
+    payload_proof.jws = signature.jws;
+    payload.proofs.push(payload_proof);
+
+    let payload = serde_json::to_value(payload)
+        .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    let Value::Object(payload) = payload else {
+        return Err(soland_http::error::AppError::internal(
+            "typed completeness payload is not an object",
+        ));
+    };
+    let actor_seq = accepted_events
+        .iter()
+        .filter(|event| event.actor_id == issuer)
+        .map(|event| event.actor_seq)
+        .max()
+        .map_or(0, |sequence| sequence.saturating_add(1));
+    let mut attestation_event = Event {
+        event_id: event_id.clone(),
+        kind: EventKind::AttestationRangeCompleteness,
+        realm_id: realm_id.clone(),
+        scope_ref: ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor_id: issuer,
+        executed_by: None,
+        authorization_ref: None,
+        applet_id: None,
+        external_ref: None,
+        actor_kind: None,
+        actor_seq,
+        created_at: observed_at,
+        hlc: None,
+        prev_refs: to_frontier,
+        refs: Vec::new(),
+        causal_refs: Vec::new(),
+        preconditions: Vec::new(),
+        seal_ref: None,
+        auth_context: None,
+        seal_basis: None,
+        payload: payload.into_iter().collect(),
+        redacts: None,
+        unsigned: BTreeMap::new(),
+        proofs: Vec::new(),
+        requirements: EventRequirements::default(),
+    };
+    sign_event(
+        &mut attestation_event,
+        &signer,
+        &verification_method,
+        SignEventOptions::new().with_created_at(observed_at),
+    )
+    .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
+    Ok(Some(
+        arkret_models_collaboration::http_bodies::EventsRangeCompleteness {
+            attestation_refs: vec![event_id],
+            attestations: vec![attestation_event],
+        },
+    ))
 }
 
 /// Per-event visibility for `events.query`. For ordinary (member) realm access
