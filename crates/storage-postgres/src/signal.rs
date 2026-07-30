@@ -82,11 +82,13 @@ struct SignalRelayWatermarkRow {
     delivered_through: i64,
 }
 
+/// Row shape for existence-only probes. The probe selects a constant rather
+/// than projecting a payload column it would immediately discard, and the
+/// marker is read back so no field goes unused.
 #[derive(QueryableByName)]
-struct SignalRelayDigestRow {
-    #[diesel(column_name = envelope_digest)]
-    #[diesel(sql_type = Text)]
-    _envelope_digest: String,
+struct SignalRelayExistsRow {
+    #[diesel(sql_type = BigInt)]
+    present: i64,
 }
 
 const SIGNAL_RELAY_COLUMNS: &str = "realm_id, position, scope_ref, sender_actor_id, \
@@ -181,17 +183,17 @@ impl SignalRelayStore for PgSignalRelayStore {
             .await
             .map_err(PersistenceError::database)?;
         let row = sql_query(
-            "SELECT envelope_digest FROM signal_relay \
+            "SELECT 1::bigint AS present FROM signal_relay \
              WHERE realm_id = $1 AND envelope_digest = $2 AND expires_at > NOW() \
              LIMIT 1",
         )
         .bind::<Text, _>(realm_id)
         .bind::<Text, _>(envelope_digest)
-        .get_result::<SignalRelayDigestRow>(&mut *conn)
+        .get_result::<SignalRelayExistsRow>(&mut *conn)
         .await
         .optional()
         .map_err(PersistenceError::database)?;
-        Ok(row.is_some())
+        Ok(row.is_some_and(|row| row.present == 1))
     }
 
     async fn prune_expired(&self) -> PersistenceResult<usize> {
