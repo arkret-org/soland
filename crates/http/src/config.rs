@@ -781,13 +781,6 @@ impl AppConfig {
             .parse()?;
         let public_base_url =
             std::env::var("SOLAND_PUBLIC_BASE_URL").unwrap_or_else(|_| format!("http://{bind}"));
-        if env_non_empty("SOLAND_SERVICE_ID").is_some() {
-            anyhow::bail!(
-                "SOLAND_SERVICE_ID is no longer accepted: service identity is resolved from the \
-                 durable service_identity record, Provider registration mapping, or verified \
-                 identity bundle"
-            );
-        }
         let first_provisioning = std::env::args().any(|arg| arg == "--first-provisioning")
             || env_bool("SOLAND_FIRST_PROVISIONING")?.unwrap_or(false);
         let tls_cert_path = env_non_empty("SOLAND_TLS_CERT_PATH").map(PathBuf::from);

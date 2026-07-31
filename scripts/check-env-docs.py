@@ -11,12 +11,6 @@ ROOT = Path(__file__).resolve().parents[1]
 ENV_PATTERN = re.compile(r"\bSOLAND_[A-Z0-9_]+\b")
 STRING_ENV_PATTERN = re.compile(r'"(SOLAND_[A-Z0-9_]+)"')
 
-# This name is deliberately read only to fail closed with a migration error.
-REMOVED_NAMES = {
-    "SOLAND_SERVICE_ID",
-}
-
-
 def rust_environment_names() -> set[str]:
     names: set[str] = set()
     for path in (ROOT / "crates").rglob("*.rs"):
@@ -25,7 +19,6 @@ def rust_environment_names() -> set[str]:
         name
         for name in names
         if not name.startswith(("SOLAND_TEST_", "SOLAND_TEST_CHAOS_"))
-        and name not in REMOVED_NAMES
     }
 
 
@@ -41,11 +34,7 @@ def main() -> int:
     code = rust_environment_names()
     docs = documented_environment_names()
     missing = sorted(code - docs)
-    stale = sorted(
-        name
-        for name in docs - code
-        if name not in REMOVED_NAMES and not name.endswith("_")
-    )
+    stale = sorted(name for name in docs - code if not name.endswith("_"))
     if missing or stale:
         if missing:
             print("Runtime variables missing from .env.example/DEPLOYMENT.md:")
