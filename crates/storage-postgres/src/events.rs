@@ -100,6 +100,26 @@ impl TryFrom<EventBatchReceiptRow> for EventBatchReceipt {
         })
     }
 }
+/// Serialization key for every writer of one Realm/actor Event stream.
+///
+/// PostgreSQL `text` rejects embedded NUL bytes, so the Realm component is
+/// length-prefixed and the transcript stays unambiguous without relying on a
+/// forbidden separator. Both the standard batch commit and the identity-anchor
+/// commit must derive the key here: they insert into the same rows, and a lock
+/// wider than one Realm/actor pair would serialize unrelated principals.
+pub(crate) fn realm_actor_lock_key(realm_id: &str, actor_id: &str) -> String {
+    format!("realm_actor:{}:{}{}", realm_id.len(), realm_id, actor_id)
+}
+
+async fn lock_realm_actor(conn: &mut AsyncPgConnection, lock_key: &str) -> PersistenceResult<()> {
+    sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+        .bind::<Text, _>(lock_key)
+        .execute(conn)
+        .await
+        .map(|_| ())
+        .map_err(PersistenceError::database)
+}
+
 async fn insert_canonical_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
@@ -195,12 +215,13 @@ async fn assert_identity_anchor_frontier(
     conn: &mut AsyncPgConnection,
     expected: &IdentityAnchorFrontierCas,
 ) -> PersistenceResult<()> {
+    // Every `state_seals` writer takes this same per-Realm advisory key before
+    // it inserts, rewires, or deletes a leaf, and the leaf query below is
+    // Realm-scoped on both the candidate and its successor. A table-level lock
+    // would additionally block seal commits for unrelated Realms, which is what
+    // made two independent principals serialize on one another.
     sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
         .bind::<Text, _>(&expected.realm_id)
-        .execute(&mut *conn)
-        .await
-        .map_err(PersistenceError::database)?;
-    sql_query("LOCK TABLE state_seals IN SHARE ROW EXCLUSIVE MODE")
         .execute(&mut *conn)
         .await
         .map_err(PersistenceError::database)?;
@@ -417,11 +438,37 @@ impl EventStore for PgEventStore {
             .await
             .map_err(PersistenceError::database)?;
         conn.transaction::<_, PgTransactionError, _>(async move |conn| {
+                // Own every Realm/actor stream this unit writes before reading
+                // it back. `commit_event_batch` takes the same keys, so the two
+                // commit paths exclude each other exactly where they touch the
+                // same rows. Keys are deduplicated and ordered so concurrent
+                // units can never acquire them in opposite orders.
+                let mut lock_keys = records
+                    .iter()
+                    .filter_map(|record| {
+                        record
+                            .realm_id
+                            .as_deref()
+                            .map(|realm_id| realm_actor_lock_key(realm_id, &record.actor_id))
+                    })
+                    .collect::<Vec<_>>();
+                if let Some(slot) = reanchor_slot.as_ref() {
+                    // The re-anchor slot scan spans the actor's whole history,
+                    // so it must also own the Realm/actor stream the re-anchor
+                    // Event itself belongs to even when that record is absent.
+                    lock_keys.extend(records.iter().filter_map(|record| {
+                        record
+                            .realm_id
+                            .as_deref()
+                            .map(|realm_id| realm_actor_lock_key(realm_id, &slot.actor_id))
+                    }));
+                }
+                lock_keys.sort_unstable();
+                lock_keys.dedup();
+                for lock_key in &lock_keys {
+                    lock_realm_actor(conn, lock_key).await?;
+                }
                 let reanchor_conflict = if let Some(slot) = reanchor_slot.as_ref() {
-                    sql_query("LOCK TABLE canonical_events IN SHARE ROW EXCLUSIVE MODE")
-                        .execute(&mut *conn)
-                        .await
-                        .map_err(PersistenceError::database)?;
                     let existing = sql_query(
                         "SELECT id, actor_id, actor_seq, realm_id, kind, schema_id, canonical_digest, canonical_bytes, envelope, received_at \
                          FROM canonical_events WHERE actor_id = $1 AND kind = 'ak.device.reanchor'",

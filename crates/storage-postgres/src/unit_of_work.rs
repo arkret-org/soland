@@ -7,7 +7,7 @@ use soland_storage::{
     EventCommitUnitOfWork, PersistenceError, PersistenceResult, ids, validate_actor_scope_commit,
 };
 
-use crate::events::CanonicalEventRow;
+use crate::events::{CanonicalEventRow, realm_actor_lock_key};
 use crate::{PgPool, PgTransactionError, pg_conn};
 
 #[derive(Clone)]
@@ -58,15 +58,7 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             let realm_id_value = request.event.realm_id.as_deref().ok_or_else(|| {
                 PersistenceError::Conflict("schema_violation: missing realm_id".to_owned())
             })?;
-            // PostgreSQL `text` rejects embedded NUL bytes. Length-prefix the
-            // Realm component so the lock transcript remains unambiguous
-            // without relying on a forbidden separator.
-            let scope_lock = format!(
-                "realm_actor:{}:{}{}",
-                realm_id_value.len(),
-                realm_id_value,
-                request.event.actor_id
-            );
+            let scope_lock = realm_actor_lock_key(realm_id_value, &request.event.actor_id);
             sql_query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
                 .bind::<Text, _>(&scope_lock)
                 .execute(conn)
