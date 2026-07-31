@@ -847,7 +847,7 @@ fn build_erasure_receipt_value(
     .map_err(|error| AppError::internal(format!("erasure retained stub digest: {error}")))?;
     let mut receipt = ErasureReceipt {
         receipt_id,
-        schema: ErasureReceipt::SCHEMA.to_owned(),
+        schema: arkret_wire::ERASURE_RECEIPT_SCHEMA.to_owned(),
         issuer,
         subject,
         scope,

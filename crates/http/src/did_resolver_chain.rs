@@ -227,13 +227,14 @@ impl SolandDidResolver {
             return external
                 .resolve_did_async(did)
                 .await
+                .map(|resolved| resolved.document)
                 .map_err(|error| IdentityError::Protocol(error.to_string()));
         }
         crate::metrics::record_did_resolve(
             did.method(),
             crate::metrics::DID_RESOLVE_SOURCE_SDK_CACHE,
         );
-        self.fallback.resolve_did(did)
+        self.fallback.resolve_did_document(did)
     }
 
     async fn fetch_verified_webvh_history(
@@ -378,9 +379,13 @@ impl DidResolver for SolandDidResolver {
         self.cached_document(did).is_some() || self.fallback.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
         if let Some(document) = self.cached_document(did) {
-            return Ok(document);
+            // A snapshot hit carries no method evidence: the durable record is a
+            // projection, not a resolution, so §5.2's degenerate form is honest
+            // here and `not_surfaced` would be a lie about a resolver that never
+            // ran.
+            return Ok(arkret_identity::ResolvedDid::proofless(document));
         }
         self.fallback.resolve_did(did)
     }
@@ -873,7 +878,9 @@ mod tests {
             .cache_application_webvh_record(record(1, 1))
             .expect("stale cache fill returns the current projection");
 
-        let resolved = resolver.resolve_did(&did).expect("snapshot resolve");
+        let resolved = resolver
+            .resolve_did_document(&did)
+            .expect("snapshot resolve");
         assert_eq!(
             resolved.verification_methods[&verification_method],
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[2u8; 32])

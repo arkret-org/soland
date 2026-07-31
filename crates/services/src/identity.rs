@@ -2904,7 +2904,7 @@ mod tests {
             false
         }
 
-        fn resolve_did(&self, _did: &Did) -> arkret_identity::Result<arkret_identity::DidDocument> {
+        fn resolve_did(&self, _did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
             Err(arkret_identity::IdentityError::Protocol(
                 "DID resolver is unused in this test".to_owned(),
             ))

@@ -130,10 +130,10 @@ pub(super) fn validate_ghost_actor_provision_request(
     path_applet_id: &str,
     provision: &GhostActorProvisionRequestBody,
 ) -> Result<(), AppError> {
-    if provision.schema != GhostActorProvisionRequestBody::SCHEMA {
+    if provision.schema != arkret_wire::GHOST_ACTOR_PROVISION_REQUEST_SCHEMA {
         return Err(AppError::invalid_param(format!(
             "schema must be {}",
-            GhostActorProvisionRequestBody::SCHEMA
+            arkret_wire::GHOST_ACTOR_PROVISION_REQUEST_SCHEMA
         )));
     }
     if provision.applet_id.as_str() != path_applet_id {
