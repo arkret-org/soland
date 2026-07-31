@@ -79,6 +79,9 @@ pub fn router_with_rate_limiter_and_request_size_config(
         // ahead of the Content-Length precheck (step 4), so this hoop precedes SecureMaxSize:
         // an encoded body must fail 415 on the coding, not 413 on a size it never legally had.
         .hoop(soland_http::content_encoding::RejectContentEncodingMiddleware)
+        .hoop(soland_http::canonical_body::RequestWireSizeLimitMiddleware::new(
+            max_request_size_bytes,
+        ))
         .hoop(SecureMaxSize::new(max_request_size_bytes))
         // Step 5: after the 16 MiB transport precheck, apply the independent
         // 8 MiB JCS-canonical operation-body bound to valid JSON.

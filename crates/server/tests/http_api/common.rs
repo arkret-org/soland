@@ -1203,7 +1203,7 @@ pub(crate) async fn move_event_to_actor_realm_frontier(
     // A DataEvent's `seal_ref` MUST resolve to a verified control-plane Seal of
     // this Realm (`event-auth-state-resolution.md` §4.3(1)), so the basis Seal
     // the envelope builder named has to be accepted before the Event is sent.
-    seed_test_realm_basis_seal(state, realm_id, actor);
+    seed_test_realm_basis_seal(state, realm_id, actor).await;
     let frontier_value: Value = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={actor}&realm_id={realm_id}"
     ))
@@ -1530,13 +1530,17 @@ pub(crate) async fn seed_verified_device_with_public_key(
 /// already covers `ak.message.create`; a second, explicit grant carries only
 /// the other actions instead of masking owner-message authorization with a
 /// duplicate.
-const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 8] = [
+const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
     "ak.morph.create",
     "ak.morph.update",
     "ak.relation.create",
     "ak.rsvp.set",
     "ak.space.create",
     "ak.strand.create",
+    // `non_event_surface` in the capability-action registry: it authorizes a
+    // read rather than an Event kind, and the authz check surface resolves it
+    // from the same effective grant set.
+    "ak.strand.read",
     "ak.strand.tracks.update",
     "ak.strand.update",
 ];
@@ -1587,21 +1591,99 @@ pub(crate) struct TestRealmBasis {
 /// `state_root` included — has been hashed. See the report note on
 /// `capability_refs.rs::validate_data_event_covered_seals`.
 static TEST_REALM_BASES: LazyLock<
-    std::sync::Mutex<std::collections::BTreeMap<(String, String), TestRealmBasis>>,
+    std::sync::Mutex<std::collections::BTreeMap<(String, String, String), TestRealmBasis>>,
 > = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
 
-fn test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
+fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
     TEST_REALM_BASES
         .lock()
         .expect("fixture basis cache")
-        .entry((realm_id.to_owned(), subject.to_owned()))
-        .or_insert_with(|| build_test_realm_basis(realm_id, subject))
+        .entry((realm_id.to_owned(), subject.to_owned(), notary.to_owned()))
+        .or_insert_with(|| build_test_realm_basis(realm_id, subject, notary))
         .clone()
+}
+
+/// The service DID every fixture Realm designates as its notary.
+///
+/// A Control Move submitted to `/_arkret/self/events` has its proposal receipt
+/// minted by this service, and `NotaryWorker::authority_set_ref_for_events`
+/// only issues one when the Realm's notary profile names the service. A fixture
+/// Realm notarised by its owner would be well-formed but unable to advance a
+/// single Control Move through the service that hosts it.
+pub(crate) fn fixture_notary_did() -> String {
+    soland_test_support::app_state(test_config())
+        .service_id()
+        .clone()
+}
+
+/// Store the Realm's canonical `ak.realm.create`.
+///
+/// The Control Proposal decision policy is read from this Event, so a Realm
+/// without one answers `quorum_unreachable` on every Control Move and
+/// `internal_error` on the governance-proof surfaces. A fixture that stands a
+/// Realm up out of band still owes it its genesis Event.
+pub(crate) async fn seed_realm_genesis_event(
+    state: &AppState,
+    realm_id: &str,
+    subject: &str,
+) -> arkret_identifiers::Hash {
+    let genesis_event_id = format!(
+        "ak:event:{}",
+        realm_id
+            .strip_prefix("ak:realm:")
+            .expect("fixture Realm id is typed")
+    );
+    // A Realm has exactly one canonical create and the store enforces that, so
+    // a fixture that seeds the same Realm twice must not write a second one.
+    let envelope = signed_canonical_event(
+        &genesis_event_id,
+        arkret_wire::events::EventKind::REALM_CREATE,
+        subject,
+        "01904100-0000-7000-8000-a11ce0000001",
+        realm_id,
+        0,
+        Vec::new(),
+        serde_json::json!({"object": {"id": realm_id, "created_by": subject}}),
+    );
+    let genesis_digest = arkret_identifiers::Hash::new(
+        serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+            .expect("fixture genesis Event decodes")
+            .event_digest()
+            .expect("fixture genesis Event digest"),
+    )
+    .expect("fixture genesis Event digest is a hash");
+    if state
+        .test_persistence()
+        .events()
+        .contains(&genesis_event_id)
+        .await
+        .expect("fixture Realm genesis lookup")
+    {
+        return genesis_digest;
+    }
+    state
+        .test_persistence()
+        .events()
+        .put(soland_storage::CanonicalEventRecord {
+            event_id: genesis_event_id.clone(),
+            actor_id: subject.to_owned(),
+            actor_seq: 0,
+            realm_id: Some(realm_id.to_owned()),
+            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest: genesis_digest.to_string(),
+            canonical_bytes: Vec::new(),
+            envelope,
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("fixture Realm genesis Event");
+    genesis_digest
 }
 
 /// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
 pub(crate) fn test_realm_basis_seal(realm_id: &str, subject: &str) -> arkret_wire::Seal {
-    test_realm_basis(realm_id, subject).seal
+    test_realm_basis(realm_id, subject, &fixture_notary_did()).seal
 }
 
 /// The fixture basis Seal an already-built Event cites.
@@ -1668,10 +1750,12 @@ static TEST_REALM_UNCOVERED_BASES: LazyLock<
     std::sync::Mutex<std::collections::BTreeMap<String, arkret_wire::Seal>>,
 > = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
 
-fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
+fn build_test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let issuer = Did::new(subject.to_owned()).expect("fixture grant issuer DID");
+    let notary = Did::new(notary.to_owned()).expect("fixture notary DID");
     let authority_root_move = fixture_move_id(realm_id, subject, "authority-root");
+    let notary_move = fixture_move_id(realm_id, subject, "notary");
     let owner_move = fixture_move_id(realm_id, subject, "owner-grant");
     let content_move = fixture_move_id(realm_id, subject, "content-grant");
     let covered_move = fixture_move_id(realm_id, subject, "mls-commit");
@@ -1697,6 +1781,33 @@ fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
                             ),
                         )
                         .expect("fixture authority-root value"),
+                    ),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        ),
+        // `event-kind-registry.json` gives `ak.realm.create` five cell writes,
+        // and `ak.component.notary.v1` is one of them — a genesis unit that
+        // omits it leaves the Realm with no proposal authority, so every
+        // Control Move against this basis answers `quorum_unreachable` before
+        // reaching the behaviour a test is actually asserting.
+        (
+            arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
+                .expect("fixture notary cell id"),
+            fixture_issued_op(
+                &issuer,
+                &notary_move,
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Set,
+                    tag: None,
+                    value: Some(
+                        serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
+                            notary.clone(),
+                        ))
+                        .expect("fixture notary value"),
                     ),
                     from: None,
                     to: None,
@@ -1752,6 +1863,7 @@ fn build_test_realm_basis(realm_id: &str, subject: &str) -> TestRealmBasis {
     // than a formatting choice.
     let mut delta = vec![
         authority_root_move.clone(),
+        notary_move.clone(),
         owner_move.clone(),
         content_move.clone(),
         covered_move.clone(),
@@ -1923,17 +2035,41 @@ fn fixture_grant_body(
 /// the Seal object and its sealed cell effects have to exist before the Event
 /// is admitted. The cell writes are OR-Set adds under a fixed tag, so repeating
 /// this for the same Realm/subject is idempotent.
-pub(crate) fn seed_test_realm_basis_seal(
+pub(crate) async fn seed_test_realm_basis_seal(
     state: &AppState,
     realm_id: &str,
     subject: &str,
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let basis = test_realm_basis(realm_id, subject);
+    let basis = test_realm_basis(realm_id, subject, state.service_id().as_str());
     state.test_put_seal(&basis.seal).unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
         .unwrap();
+    // Accepting a capability Event is what fills the authz index the
+    // `authz/check` surface reads. Sealing the basis directly skips that, so
+    // run the same refresh the accept path runs.
+    for (slug, actions, aggregate_admin) in [
+        (
+            "owner-grant",
+            soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS.as_slice(),
+            true,
+        ),
+        (
+            "content-grant",
+            FIXTURE_DATA_PLANE_GRANT_ACTIONS.as_slice(),
+            false,
+        ),
+    ] {
+        let grant_id = fixture_grant_id(realm_id, subject, slug);
+        let body = fixture_grant_body(&grant_id, realm_id, subject, actions, aggregate_admin);
+        if let Some(grant) =
+            soland_domain::reducer::engine_grant_from_cell_body(&grant_id, &body, false)
+        {
+            state.upsert_projected_grant_for_test(grant);
+        }
+    }
+    seed_realm_genesis_event(state, realm_id, subject).await;
     basis.seal.id
 }
 
@@ -1946,17 +2082,17 @@ pub(crate) fn seed_test_realm_basis_seal(
 /// state it covers in place first. Tests that instead make the *server*
 /// materialize the demo Realm's first canonical Seal must not call this — see
 /// [`test_realm_uncovered_basis_seal`].
-pub(crate) fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
-    seed_test_realm_basis_seal(state, DEMO_REALM_ID, "did:web:alice.example")
+pub(crate) async fn seed_demo_realm_basis(state: &AppState) -> arkret_wire::SealId {
+    seed_test_realm_basis_seal(state, DEMO_REALM_ID, "did:web:alice.example").await
 }
 
 /// Put an accepted Seal in `realm_id` so a Signal can name it as its Seal basis.
-pub(crate) fn seed_signal_basis_seal(
+pub(crate) async fn seed_signal_basis_seal(
     state: &AppState,
     realm_id: &str,
     subject: &str,
 ) -> arkret_wire::SealId {
-    seed_test_realm_basis_seal(state, realm_id, subject)
+    seed_test_realm_basis_seal(state, realm_id, subject).await
 }
 
 /// A bearer session plus the device signing key the Signal proof is made with.
@@ -2147,15 +2283,18 @@ pub(crate) async fn signal_subscribe_envelopes(
                 continue;
             }
             let value: Value = serde_json::from_str(line).expect("signal stream emits NDJSON");
-            // A `SignalEnvelope` has no `kind` member; the transport control
-            // frames are the only lines that do.
-            if value.get("kind").is_some() {
-                continue;
+            // `signal.md` §4.1 — every frame on this stream is tagged: the data
+            // frame is `{kind:"signal", envelope}` and the control frames are
+            // `heartbeat` / `drain` / `unauthorized`. Skipping every tagged line
+            // discards the data frames along with the control ones.
+            match value.get("kind").and_then(Value::as_str) {
+                Some("signal") => envelopes.push(
+                    serde_json::from_value(value["envelope"].clone())
+                        .expect("signal subscribe relays a verbatim SignalEnvelope"),
+                ),
+                Some("heartbeat" | "drain" | "unauthorized") => continue,
+                other => panic!("unexpected signal stream frame kind {other:?}: {value}"),
             }
-            envelopes.push(
-                serde_json::from_value(value)
-                    .expect("signal subscribe relays a verbatim SignalEnvelope"),
-            );
         }
     }
     envelopes

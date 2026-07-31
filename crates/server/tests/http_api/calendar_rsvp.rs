@@ -52,7 +52,7 @@ async fn submit(state: &AppState, token: &str, event: &Value) -> Value {
 async fn rsvp_carrying_a_producer_effect_array_is_rejected() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
 
     // Restates `rsvp_without_the_registered_cell_effect_is_rejected`. The old
     // premise — an RSVP that omits its registry effect fails closed — cannot be
@@ -73,7 +73,7 @@ async fn rsvp_carrying_a_producer_effect_array_is_rejected() {
 async fn rsvp_without_payload_entry_is_rejected() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
 
     // Restates `rsvp_effect_value_must_equal_the_payload_entry`. The registered
     // `effect_projection` is `set(payload.entry)`, so producer and payload can
@@ -100,7 +100,7 @@ async fn rsvp_without_payload_entry_is_rejected() {
 async fn rsvp_projects_exactly_the_registered_cell_write() {
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
 
     let event = rsvp_event("ak:event:01904100-0000-7000-8000-ca1e00000103", 1);
     // The write set is the receiver's own registry projection of `kind +

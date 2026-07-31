@@ -685,6 +685,9 @@ async fn broader_protocol_surface_returns_contract_shapes() {
 
     let state = soland_test_support::app_state(test_config());
     let token = dev_token(state.clone()).await;
+    // An authz check resolves the actor's effective grants from the accepted
+    // governance basis, so a Realm with no sealed basis denies every action.
+    seed_demo_realm_basis(&state).await;
     // service-http-binding.md account_auth: `self` authorization queries are
     // user-session operations, so the contract check must be authenticated.
     let authz: Value = TestClient::post("http://server/_arkret/self/authz/check")
@@ -699,7 +702,7 @@ async fn broader_protocol_surface_returns_contract_shapes() {
         .take_json()
         .await
         .unwrap();
-    assert_eq!(authz["decision"], "allow");
+    assert_eq!(authz["decision"], "allow", "{authz}");
     assert!(authz["matched_grants"].is_array());
     assert_eq!(
         authz["policy_results"][0]["actor_id"],

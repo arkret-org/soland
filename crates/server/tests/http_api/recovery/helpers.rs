@@ -873,7 +873,7 @@ pub(crate) async fn post_recovery_policy(
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();
     seed_realm_create_proposal_policy(&state, &realm, principal_id).await;
-    soland_test_support::cba_basis::seed_realm_basis(&state, &realm_id, principal_id, &[]);
+    soland_test_support::cba_basis::seed_realm_basis(&state, &realm_id, principal_id, &[]).await;
     let basis = soland_test_support::cba_basis::realm_basis_seal(&realm_id, principal_id, &[]);
     seed_local_notary_authority(&state, &realm, &basis);
     let prior = state

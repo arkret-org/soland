@@ -722,12 +722,13 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             .json(&commit_body)
             .send(&app)
             .await;
-        assert_eq!(
-            recovered.status_code,
-            Some(StatusCode::CREATED),
-            "fault plan {plan:?} did not recover"
-        );
+        let recovered_status = recovered.status_code;
         let recovered_body: Value = recovered.take_json().await.unwrap();
+        assert_eq!(
+            recovered_status,
+            Some(StatusCode::CREATED),
+            "fault plan {plan:?} did not recover: {recovered_body}"
+        );
         assert_eq!(recovered_body["status"], "complete");
 
         let mut replayed = TestClient::post("http://server/_arkret/self/agents")
@@ -739,11 +740,13 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         assert_eq!(replayed.take_json::<Value>().await.unwrap(), recovered_body);
 
         let agent_id = commit_body["agent_id"].as_str().unwrap();
+        // Each `provision_events` member is an `EventInitialSubmission`, so the
+        // Event id sits under its `event`, not at the submission root.
         let event_ids = [
-            commit_body["provision_events"]["accountability_grant"]["event_id"]
+            commit_body["provision_events"]["accountability_grant"]["event"]["event_id"]
                 .as_str()
                 .unwrap(),
-            commit_body["provision_events"]["selector_claim"]["event_id"]
+            commit_body["provision_events"]["selector_claim"]["event"]["event_id"]
                 .as_str()
                 .unwrap(),
         ];
@@ -826,6 +829,49 @@ async fn agent_provision_commit_requires_its_server_allocation() {
         serde_json::json!({}),
     )
     .unwrap();
+    // The commit body only has to be schema-valid to reach the allocation
+    // precondition this test is about; the lease is structural evidence, and
+    // this Agent has no server allocation to publish against in the first place.
+    let authorization_lease = serde_json::json!({
+        "authorization_lease_id": "ak:authorization_lease:01904100-0000-7000-8000-a9e07ea5e001",
+        "basis_ref": format!("ak:seal:sha256:{}", "0".repeat(64)),
+        "actor_id": accountability.actor_id,
+        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
+        "scope_ref": accountability.scope_ref,
+        "action": "ak.identity.accountability_grant",
+        "authorization_rule_id": "realm_admission",
+        "risk_tier": "low",
+        "issued_at": arkret_canonical::format_timestamp_canonical(now),
+        "expires_at": arkret_canonical::format_timestamp_canonical(
+            now + chrono::Duration::hours(4),
+        ),
+        "authority_set_ref": {
+            "authority_set_id": "ak.authority_set.realm_admission.v1",
+            "authority_set_digest": format!("sha256:{}", "0".repeat(64))
+        },
+        "authority_set_policy": {
+            "schema": arkret_wire::AUTHORITY_SET_POLICY_SCHEMA,
+            "authority_set_id": "ak.authority_set.realm_admission.v1",
+            "policy_kind": "realm_admission",
+            "scope_ref": accountability.scope_ref,
+            "source": {
+                "source_kind": "realm_control",
+                "source_ref": format!("ak:seal:sha256:{}", "0".repeat(64)),
+                "source_digest": format!("sha256:{}", "0".repeat(64)),
+                "generation_ref": "1"
+            },
+            "authorization_rules": [{
+                "rule_id": "realm_admission",
+                "issuer_role": "realm_admission",
+                "allowed_actions": ["ak.identity.accountability_grant"],
+                "issuers": [{
+                    "verification_method": "did:web:alice.example#device-key"
+                }],
+                "threshold": 1
+            }]
+        },
+        "proofs": []
+    });
     let app = app_from_state(state.clone());
     let mut response = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
@@ -842,16 +888,30 @@ async fn agent_provision_commit_requires_its_server_allocation() {
                 }],
                 "constraints": []
             },
+            // `agent_provision_events` carries `EventInitialSubmission`
+            // members, not bare Events: the Event is the signed fact and the
+            // lease is its separately verified publication evidence.
             "provision_events": {
-                "accountability_grant": accountability,
-                "selector_claim": selector
+                "accountability_grant": {
+                    "event": accountability,
+                    "authorization_lease": authorization_lease.clone()
+                },
+                "selector_claim": {
+                    "event": selector,
+                    "authorization_lease": authorization_lease
+                }
             }
         }))
         .send(&app)
         .await;
 
-    assert_eq!(response.status_code, Some(StatusCode::PRECONDITION_FAILED));
+    let provision_status = response.status_code;
     let body: Value = response.take_json().await.unwrap();
+    assert_eq!(
+        provision_status,
+        Some(StatusCode::PRECONDITION_FAILED),
+        "{body}"
+    );
     assert_eq!(
         body["error"]["details"]["reason_code"], "agent_provision_allocation_missing",
         "{body}"

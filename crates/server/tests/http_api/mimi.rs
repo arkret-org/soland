@@ -234,7 +234,7 @@ fn identifier_commitment(identifier: &str) -> String {
 #[tokio::test]
 async fn mimi_provider_facade_contracts_work() {
     let state = soland_test_support::app_state(test_config());
-    seed_test_realm_basis_seal(&state, DEMO_REALM_ID, state.service_id());
+    seed_test_realm_basis_seal(&state, DEMO_REALM_ID, state.service_id()).await;
     let service = app_from_state(state);
 
     let well_known: Value = TestClient::get("http://server/.well-known/mimi-protocol-directory")
@@ -452,8 +452,8 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
     let service = app_from_state(state.clone());
     let demo_realm = DEMO_REALM_ID;
     let custom_realm = "ak:realm:0196419b-0000-7000-8000-aaaaaaaaaaaa";
-    seed_test_realm_basis_seal(&state, demo_realm, state.service_id());
-    seed_test_realm_basis_seal(&state, custom_realm, state.service_id());
+    seed_test_realm_basis_seal(&state, demo_realm, state.service_id()).await;
+    seed_test_realm_basis_seal(&state, custom_realm, state.service_id()).await;
     let room_id = "01JSMIMI-P4-E2E";
     let group_id = "mimi-group-p4-001";
     let room_uri = mimi_room_uri(room_id);
@@ -580,11 +580,19 @@ async fn mimi_facade_writes_strand_into_canonical_reducer_chain() {
         .unwrap()
         .iter()
         .find(|event| {
+            // `moderation_report_payload` names the reported object `target_ref`;
+            // it has no `target_event_digest` member to match on.
             event_kind(event) == Some("ak.self.moderation.report")
-                && event["payload"]["target_event_digest"] == demo_realm
+                && event["payload"]["target_ref"] == demo_realm
         })
-        .expect("moderation.report event missing from projection log");
-    assert_eq!(report_event["actor_id"], "did:web:alice.example");
+        .unwrap_or_else(|| panic!("moderation.report event missing: {events_again}"));
+    // `mimi-interop.md` §11 is about *attribution*: the report must name the
+    // principal the facade resolved, not the provider that asserted it. The
+    // facade holds no key for that principal, so it authors the envelope under
+    // its own service DID and carries the resolved reporter in the payload.
+    // See `review/spec-open` for the unresolved half of this.
+    assert_eq!(report_event["payload"]["reporter"], "did:web:alice.example");
+    assert_eq!(report_event["actor_id"], *state.service_id());
 
     let custom_group_id = "mimi-group-p4-custom";
     let migrating_body = mimi_room_update_body(room_id, demo_realm, group_id, "hub", "migrating");
@@ -682,7 +690,7 @@ async fn mimi_facade_enforces_e2ee_boundary_and_quarantines_unknown_content() {
     let token = dev_token(state.clone()).await;
     let service = app_from_state(state.clone());
     let realm_id = DEMO_REALM_ID;
-    seed_test_realm_basis_seal(&state, realm_id, state.service_id());
+    seed_test_realm_basis_seal(&state, realm_id, state.service_id()).await;
     let room_id = "01JSMIMI-P75-POLICY";
     let group_id = "mimi-group-policy-001";
     let room_uri = mimi_room_uri(room_id);

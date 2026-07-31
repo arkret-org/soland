@@ -64,15 +64,21 @@ struct RealmBasis {
     ops: Vec<(CellRef, IssuedOp)>,
 }
 
-type BasisKey = (String, String, Vec<String>);
+type BasisKey = (String, String, String, Vec<String>);
 
 static REALM_BASES: LazyLock<Mutex<BTreeMap<BasisKey, RealmBasis>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
 
-fn realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str]) -> RealmBasis {
+fn realm_basis(
+    realm_id: &str,
+    subject: &str,
+    notary: &str,
+    data_plane_actions: &[&str],
+) -> RealmBasis {
     let key = (
         realm_id.to_owned(),
         subject.to_owned(),
+        notary.to_owned(),
         data_plane_actions
             .iter()
             .map(|action| (*action).to_owned())
@@ -82,13 +88,22 @@ fn realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str]) -> Re
         .lock()
         .expect("fixture basis cache")
         .entry(key)
-        .or_insert_with(|| build_realm_basis(realm_id, subject, data_plane_actions))
+        .or_insert_with(|| build_realm_basis(realm_id, subject, notary, data_plane_actions))
         .clone()
 }
 
 /// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
 pub fn realm_basis_seal(realm_id: &str, subject: &str, data_plane_actions: &[&str]) -> Seal {
-    realm_basis(realm_id, subject, data_plane_actions).seal
+    realm_basis(realm_id, subject, &fixture_notary_did(), data_plane_actions).seal
+}
+
+/// The service DID every fixture Realm designates as its notary.
+///
+/// A Control Move submitted to this service has its proposal receipt minted
+/// here, and `NotaryWorker::authority_set_ref_for_events` only issues one when
+/// the Realm's notary profile names the service.
+fn fixture_notary_did() -> String {
+    crate::app_state(crate::app_config()).service_id().clone()
 }
 
 /// The single-leaf `seal_basis` a Control Move of `realm_id` cites.
@@ -113,21 +128,108 @@ pub fn realm_basis_seal_basis(
 /// the Seal object and its sealed cell effects have to exist before the Event
 /// is admitted. The cell writes are OR-Set adds under a fixed tag, so repeating
 /// this for the same Realm/subject/action set is idempotent.
-pub fn seed_realm_basis(
+pub async fn seed_realm_basis(
     state: &AppState,
     realm_id: &str,
     subject: &str,
     data_plane_actions: &[&str],
 ) -> SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let basis = realm_basis(realm_id, subject, data_plane_actions);
+    let basis = realm_basis(realm_id, subject, state.service_id(), data_plane_actions);
     state
         .test_put_seal(&basis.seal)
         .expect("fixture basis Seal");
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
         .expect("fixture basis sealed effects");
+    seed_realm_genesis_event(state, realm_id, subject).await;
+    // Accepting a capability Event is what fills the projected grant index the
+    // governance predicates read. Sealing the basis directly skips that, so a
+    // Realm whose sealed basis plainly grants an action would still answer
+    // `missing_capability`.
+    let owner_bootstrap_actions = soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS;
+    let explicit_content_actions = data_plane_actions
+        .iter()
+        .copied()
+        .filter(|action| !owner_bootstrap_actions.contains(action))
+        .collect::<Vec<_>>();
+    for (slot, actions, aggregate_admin) in [
+        ("owner-grant", owner_bootstrap_actions.as_slice(), true),
+        ("content-grant", explicit_content_actions.as_slice(), false),
+    ] {
+        if actions.is_empty() {
+            continue;
+        }
+        let grant_id = fixture_grant_id(realm_id, subject, slot);
+        let body = grant_body(&grant_id, realm_id, subject, actions, aggregate_admin);
+        if let Some(grant) =
+            soland_domain::reducer::engine_grant_from_cell_body(&grant_id, &body, false)
+        {
+            state.upsert_projected_grant_for_test(grant);
+        }
+    }
     basis.seal.id
+}
+
+/// Store the Realm's canonical `ak.realm.create`.
+///
+/// The Control Proposal decision policy is read from this Event, so a Realm
+/// without one answers `quorum_unreachable` on every Control Move. A fixture
+/// that stands a Realm up out of band still owes it its genesis Event.
+pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject: &str) {
+    let genesis_event_id = format!(
+        "ak:event:{}",
+        realm_id
+            .strip_prefix("ak:realm:")
+            .expect("fixture Realm id is typed")
+    );
+    // A Realm has exactly one canonical create and the store enforces that, so
+    // skip when this Realm already has one — whether from a previous call here
+    // or from a fixture that authored its own genesis Event.
+    if state
+        .test_persistence()
+        .events()
+        .realm_events_newest_first(realm_id)
+        .await
+        .expect("fixture Realm genesis lookup")
+        .iter()
+        .any(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+    {
+        return;
+    }
+    let mut event = arkret_wire::Event::new_with_id_at(
+        arkret_wire::EventId::new(genesis_event_id.clone()).expect("fixture genesis Event id"),
+        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
+        },
+        Did::new(subject.to_owned()).expect("fixture genesis actor DID"),
+        0,
+        Hlc::new(FIXTURE_BASIS_HLC).expect("fixture genesis HLC"),
+        serde_json::json!({"object": {"id": realm_id, "created_by": subject}}),
+        chrono::Utc::now(),
+    )
+    .expect("fixture genesis Event");
+    event.event_id =
+        arkret_wire::EventId::new(genesis_event_id.clone()).expect("fixture genesis Event id");
+    let canonical_digest = event.event_digest().expect("fixture genesis Event digest");
+    state
+        .test_persistence()
+        .events()
+        .put(soland_storage::CanonicalEventRecord {
+            event_id: genesis_event_id,
+            actor_id: subject.to_owned(),
+            actor_seq: 0,
+            realm_id: Some(realm_id.to_owned()),
+            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            schema_id: "ak.schema.event.v1".to_owned(),
+            canonical_digest,
+            canonical_bytes: Vec::new(),
+            envelope: serde_json::to_value(&event).expect("fixture genesis envelope"),
+            received_at: chrono::Utc::now(),
+        })
+        .await
+        .expect("fixture Realm genesis Event");
 }
 
 /// Give `event` the CBA envelope shape its kind's registry row declares.
@@ -184,10 +286,17 @@ pub fn apply_registered_cba_plane(
     }
 }
 
-fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str]) -> RealmBasis {
+fn build_realm_basis(
+    realm_id: &str,
+    subject: &str,
+    notary: &str,
+    data_plane_actions: &[&str],
+) -> RealmBasis {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let issuer = Did::new(subject.to_owned()).expect("fixture grant issuer DID");
+    let notary = Did::new(notary.to_owned()).expect("fixture notary DID");
     let authority_root_move = fixture_move_id(realm_id, subject, "authority-root");
+    let notary_move = fixture_move_id(realm_id, subject, "notary");
     let owner_move = fixture_move_id(realm_id, subject, "owner-grant");
     let content_move = fixture_move_id(realm_id, subject, "content-grant");
     let covered_move = fixture_move_id(realm_id, subject, "mls-commit");
@@ -219,6 +328,32 @@ fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str])
                             ),
                         )
                         .expect("fixture authority-root value"),
+                    ),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        ),
+        // `event-kind-registry.json` gives `ak.realm.create` five cell writes,
+        // and `ak.component.notary.v1` is one of them. A genesis unit without it
+        // leaves the Realm with no proposal authority, so every Control Move
+        // against this basis answers `quorum_unreachable`.
+        (
+            CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
+                .expect("fixture notary cell id"),
+            issued_op(
+                &issuer,
+                &notary_move,
+                arkret_wire::LatticeOp {
+                    op_type: arkret_wire::LatticeOpType::Set,
+                    tag: None,
+                    value: Some(
+                        serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
+                            notary.clone(),
+                        ))
+                        .expect("fixture notary value"),
                     ),
                     from: None,
                     to: None,
@@ -276,6 +411,7 @@ fn build_realm_basis(realm_id: &str, subject: &str, data_plane_actions: &[&str])
     // than a formatting choice.
     let mut delta = vec![
         authority_root_move.clone(),
+        notary_move.clone(),
         owner_move.clone(),
         covered_move.clone(),
     ];

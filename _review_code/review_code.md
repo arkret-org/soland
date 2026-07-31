@@ -191,40 +191,52 @@
 - Prevention dimension: online handlers must not expose an unbounded `projected_events()` API;
   new lookup shapes require a storage predicate and an explicit error policy.
 
-## 2026-07-31 — `http_api` carries a standing failure backlog with several distinct causes
+## 2026-07-31 — the fixture Realm basis was not a governable Realm
 
-- Severity: P1 verification gap. Not "the suite is down": 182 of 217 passed when this was
-  measured. But a standing red suite means a change touching an HTTP route cannot tell its own
-  regression from the backlog.
-- Correction: an earlier entry in this file claimed the whole suite failed and blamed one describe
-  drift. That was wrong on both counts — it generalized from a truncated `grep FAILED` — and this
-  entry replaces it. `2bf010fa`'s own message already reported the backlog honestly
-  ("45 workspace failures against the baseline's 50").
-- Resolved here (6 cases): `recovery::did_recovery_backup::*` (5) sent a key-backup PUT with no
-  `Idempotency-Key`; the header became mandatory when spec `bcf57efa` landed and the fixture
-  helper was not carried with it. `health::health_and_describe_work` asserted
-  `supported_reducer_profiles` contains `ak.reducer.v1`, an id that is not in
-  `reducer-profile-registry.json` at all; `2b04a1f0` correctly moved the describe surface to the
-  registered `ak.profile.federation_minimal.v1` and left the literal behind. The assertion now
-  resolves every advertised id through the registry instead of naming one.
-- Remaining, by cause:
-  - `quorum_unreachable` / "current proposal authority profile is unavailable" (~10 cases:
-    `cors_config`, `events::invite_create*`, `lifecycle`, `projection`, `read_receipts`).
-    `build_test_realm_basis` (`crates/server/tests/http_api/common.rs`) seals the authority-root
-    cell, the owner grant and a data-plane grant, but no `ak.component.notary.v1` op. Any Event
-    carrying `seal_basis` then reaches `submit/value.rs` →
-    `NotaryWorker::current_notary_profile_for_events`, finds no sealed op for the notary cell and
-    no projected one from the submitted Event, and `resolve_notary_profile` returns `None` on its
-    `ops.is_empty()` guard. The fixture basis was rewritten for the authority-root model and the
-    notary cell was not carried over — a fixture gap, not a production defect.
-  - `capability_denied` on `ak.self.moderation.report` (2 cases): the same fixture's
-    `FIXTURE_DATA_PLANE_GRANT_ACTIONS` does not cover the moderation action, so the derived
-    moderation cell has no covering grant.
-  - `bad_json` on `ak.peer.events.query.resolve` (1 case): federation request body shape drift.
-  - Signal / WebRTC delivery (`devices_webrtc` 4, `push_keys::push_profile` 2, `read_receipts` 1)
-    and an unlabeled remainder (`agents` 2, `auth`, `directory_index`, `events`, `mimi` 2,
-    `lifecycle::strand_tracks_update_*`) — each needs its own diagnosis.
+- Severity: P1 verification gap, now largely closed. Workspace went from 1573 passing / 45 failing
+  to 1606 passing / 4 failing; `http_api` 182/217 -> 215/217 and `discussion_sync` 0/8 -> 8/8.
+- Root cause behind most of it: `build_test_realm_basis`
+  (`crates/server/tests/http_api/common.rs`) and `cba_basis::build_realm_basis`
+  (`crates/test-support`) sealed an authority root and two capability grants and called that a
+  Realm genesis. `event-kind-registry.json` gives `ak.realm.create` five cell writes, and the
+  fixtures were missing `ak.component.notary.v1`; they also never stored the canonical
+  `ak.realm.create` the Control Proposal decision policy is read from, and never published their
+  grants into the projected grant index that acceptance fills. A Realm like that can prove its
+  authority but cannot decide a proposal, cannot be sealed by the service, and denies every
+  governance capability it plainly grants — which surfaced as `quorum_unreachable`,
+  "not authorized to sign seals", `capability_denied` and `hard_deny` across ~25 unrelated tests.
+- Production defects found and fixed along the way, each against the registry:
+  - `ak.self.moderation.report` is `admission: self_authored_proof`, whose registry definition says
+    "no Realm capability grant is consulted". The DataEvent gate searched for a covering grant
+    anyway, demanding a capability action `capability-action-registry.json` does not define, so the
+    kind could never be authored no matter what a Realm granted.
+  - `scalability-constraints.md` §2.1.8 step 4 is a `Content-Length` precheck that answers
+    `payload_too_large` (413). Salvo's `SecureMaxSize` drops the oversized body instead of
+    answering, so the handler parsed an empty payload and reported `schema_violation` (422) — a
+    byte-limit failure surfacing as a schema failure. `RequestWireSizeLimitMiddleware` now runs the
+    precheck the spec describes. Its no-`Content-Length` fallback is scoped to canonical JSON so it
+    cannot consume a streaming or multipart upload.
+- Test defects found and fixed, each against the registry or schema: the signal subscribe helper
+  skipped every frame carrying `kind`, which per `signal.md` §4.1 is *every* frame including the
+  `{kind:"signal", envelope}` data frame — it was discarding all 7 signal/WebRTC deliveries;
+  `PeerEventsResolveRequestBody` requires `realm_id` and the outcome uses typed `missing_event_ids`;
+  `moderation_report_payload` names the reported object `target_ref`, not `target_event_digest`;
+  `agent_provision_events` members are `EventInitialSubmission`, not bare Events;
+  `ak.reducer.v1` is not in `reducer-profile-registry.json`.
+- Still failing, both genuine and neither a fixture nit:
+  - `agents::agent_provision_recovers_from_each_durable_commit_boundary` — after a fault between
+    Event commit and proposal-receipt persistence, replaying the same commit body fails with
+    "accepted Control Move is missing its proposal receipt". That durable boundary is exactly what
+    the test exists to check, so the recovery path has a real gap.
+  - `events::canonical_control_event_materializes_verifiable_mls_governance_proof` — wants a Realm
+    the service may seal for *and* with no prior Seal coverage. Establishing the notary needs
+    either a sealed genesis unit (which creates coverage the first canonical Seal cannot be a
+    superset of) or the create Event to be a pending control event (which needs the real accept
+    path). Making it green needs the test to submit a real genesis, not a richer fixture.
+  - `consent_cells` 2 cases remain at their pre-existing failure
+    ("accepted Control Events are still awaiting the durable control-seal coordinator").
 - Prevention dimension: the fixture Realm basis is one function every control-plane test depends
-  on, so a rewrite of it moves ~10 tests at once with no signal about which contract actually
-  changed. It needs a self-check that the basis it builds is governable — at minimum, that the
-  notary cell resolves — so the failure names the fixture rather than ten unrelated features.
+  on. It needs a self-check that what it builds is a governable Realm — notary resolves, proposal
+  policy resolves, granted actions answer `allow` — so a gap in it names itself instead of
+  scattering across twenty-five unrelated features.
+

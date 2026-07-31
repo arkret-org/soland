@@ -18,6 +18,65 @@ fn canonical_body_size(raw: &[u8]) -> Option<usize> {
         .map(|bytes| bytes.len())
 }
 
+/// Reject a request whose wire body exceeds the transport limit.
+///
+/// `scalability-constraints.md` §2.1.8 step 4 is a `Content-Length` precheck
+/// that answers `payload_too_large` (HTTP 413). Salvo's `SecureMaxSize` drops
+/// the oversized body instead of answering, which leaves the handler parsing an
+/// empty payload and reporting `schema_violation` — a byte-limit failure
+/// surfacing as a schema failure. This runs the precheck the spec describes so
+/// the size answer is the one that reaches the caller.
+#[derive(Clone)]
+pub struct RequestWireSizeLimitMiddleware {
+    max_bytes: usize,
+}
+
+impl RequestWireSizeLimitMiddleware {
+    #[must_use]
+    pub fn new(max_bytes: usize) -> Self {
+        Self { max_bytes }
+    }
+}
+
+#[async_trait]
+impl Handler for RequestWireSizeLimitMiddleware {
+    async fn handle(
+        &self,
+        req: &mut Request,
+        depot: &mut Depot,
+        res: &mut Response,
+        ctrl: &mut FlowCtrl,
+    ) {
+        let declared = req
+            .headers()
+            .get("content-length")
+            .and_then(|value| value.to_str().ok())
+            .and_then(|value| value.parse::<usize>().ok());
+        // A caller that sends no `Content-Length` (chunked transfer) still owes
+        // the same bound, so fall back to the bytes actually received. Only
+        // canonical JSON bodies are buffered for this: reading a streaming or
+        // multipart upload here would consume the very stream its handler needs.
+        let observed = match declared {
+            Some(length) => Some(length),
+            None if is_canonical_json_request(req) => {
+                req.payload().await.ok().map(|payload| payload.len())
+            }
+            None => None,
+        };
+        if observed.is_some_and(|length| length > self.max_bytes) {
+            let error = AppError::new(
+                ErrorCode::PayloadTooLarge,
+                "request body exceeds the transport wire limit",
+            )
+            .with_wire_code("payload_too_large");
+            error.write(req, depot, res).await;
+            ctrl.skip_rest();
+            return;
+        }
+        ctrl.call_next(req, depot, res).await;
+    }
+}
+
 /// Reject a valid JSON body whose JCS form exceeds the operation-body limit.
 ///
 /// Invalid JSON is deliberately passed through: operation handlers remain the

@@ -632,7 +632,8 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
         realm_id,
         actor_id,
         &DATA_PLANE_GRANT_ACTIONS,
-    );
+    )
+    .await;
     soland_test_support::cba_basis::apply_registered_cba_plane(
         &mut event,
         &verification_method,

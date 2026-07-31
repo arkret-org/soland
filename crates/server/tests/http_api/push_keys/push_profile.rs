@@ -40,7 +40,7 @@ fn alice_signal(
 async fn signal_test_context(state: &AppState) -> (String, SigningKey, arkret_wire::SealId) {
     let (token, signing_key) =
         seed_signal_sender_device(state, ALICE, ALICE_DEVICE, "Alice Desktop").await;
-    let seal_ref = seed_signal_basis_seal(state, DEMO_REALM_ID, ALICE);
+    let seal_ref = seed_signal_basis_seal(state, DEMO_REALM_ID, ALICE).await;
     (token, signing_key, seal_ref)
 }
 
@@ -806,7 +806,7 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
     let (token, signing_key) =
         seed_signal_sender_device(&state, bob, bob_device, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, bob);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, bob).await;
 
     let moderation = |class| {
         signed_signal_envelope(

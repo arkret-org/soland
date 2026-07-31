@@ -390,7 +390,7 @@ async fn events_describe_and_single_event_submit_work() {
     // `signed_event_envelope` authors a DataEvent whose `seal_ref` is the demo
     // Realm's basis Seal, so the genesis unit that Seal covers has to be
     // accepted before the submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
 
     let describe: Value = TestClient::get("http://server/_arkret/self/events/describe")
         .send(&app_from_state(state.clone()))
@@ -616,10 +616,14 @@ async fn events_describe_and_single_event_submit_work() {
             .take_json()
             .await
             .unwrap();
-    assert_eq!(listed["events"].as_array().unwrap().len(), 3);
+    // Alice authored three Events here plus the Realm's own `ak.realm.create`,
+    // which the seeded genesis unit puts in her actor history.
+    let listed_events = listed["events"].as_array().unwrap();
+    assert_eq!(listed_events.len(), 4);
+    assert_eq!(listed_events[0]["kind"], "ak.realm.create");
     assert!(!listed["has_more"].as_bool().unwrap_or(false));
     assert_eq!(
-        listed["events"][2]["event_id"],
+        listed_events.last().unwrap()["event_id"],
         "ak:event:01904100-0000-7000-8000-df827a7269a3"
     );
 
@@ -1201,6 +1205,12 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     // contain what the frontier already covers.
     let basis_seal = test_realm_uncovered_basis_seal(&realm_id);
     state.test_put_seal(&basis_seal).unwrap();
+    // The Realm still needs its canonical create and its notary: the
+    // governance-proof surface reads the Control Proposal decision policy from
+    // the create Event, and the service may only materialize the first
+    // canonical Seal when the Realm's notary profile names it. An uncovered
+    // basis Seal deliberately carries no genesis unit to supply either.
+    seed_realm_genesis_event(&state, &realm_id, "did:web:alice.example").await;
     event.seal_basis = Some(basis_seal.seal_basis());
     // The old fixture hand-wrote the member-state `effects[]` entry. v1 has no
     // producer effect array: the write is whatever the registered contract

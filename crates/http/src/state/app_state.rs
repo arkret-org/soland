@@ -1386,6 +1386,15 @@ impl AppState {
         &self.authorization
     }
 
+    /// Fixture-only: publish a grant into the authz index the way accepting a
+    /// capability Event does. A test that seals a governance basis directly
+    /// never runs the accept path, so without this the authz surface denies
+    /// actions the sealed basis grants.
+    #[doc(hidden)]
+    pub fn upsert_projected_grant_for_test(&self, grant: arkret_policy::authz::delegation::Grant) {
+        self.authorization().upsert_projected_grant(grant);
+    }
+
     pub(crate) fn authorization(&self) -> &AuthorizationService {
         &self.authorization
     }

@@ -286,7 +286,17 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // registry basis, and whether the owner aggregate may author this Event
     // kind at all) is validated by `realm_authority_root` before this gate
     // runs; here it only replaces the per-cell grant search.
-    if !realm_authority_root_authorized {
+    // `event-kind-registry.json` classes `ak.self.moderation.report` and its
+    // peers as `self_authored_proof`, whose definition is explicit that "no
+    // Realm capability grant is consulted" — the author's own proof is the
+    // admission. Searching for a covering grant here would demand a capability
+    // action the registry does not define, so such a kind could never be
+    // authored no matter what the Realm granted.
+    let self_authored = arkret_wire::events::EventKind::from(kind)
+        .descriptor()
+        .and_then(|descriptor| descriptor.admission)
+        == Some("self_authored_proof");
+    if !realm_authority_root_authorized && !self_authored {
         for cell in derived_cells {
             let covering_grant = effective_by_id
                 .values()

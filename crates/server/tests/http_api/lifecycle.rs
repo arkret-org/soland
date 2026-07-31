@@ -11,7 +11,7 @@ async fn space_container_lifecycle_state_machine_returns_412_for_illegal_transit
     // Every fixture DataEvent below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
     let container_space_id = "ak:space:01904100-0000-7000-8000-c10dc0000001";
 
     // 1) ak.space.create — Active.
@@ -166,7 +166,7 @@ async fn strand_morph_lifecycle_state_machine_returns_412_for_illegal_transition
     // Every fixture DataEvent below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-e10dc0000001";
     let morph_id = "ak:morph:01904100-0000-7000-8000-e20dc0000001";
 
@@ -377,7 +377,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
     // Every fixture DataEvent below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
     let now = chrono::Utc::now();
     state
         .test_persistence()
@@ -495,7 +495,7 @@ async fn strand_update_status_fsm_rejects_skipped_terminal_transitions() {
     // Every fixture DataEvent below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
     let task_strand_id = "ak:strand:01904100-0000-7000-8000-f51dc0000001";
     let incident_strand_id = "ak:strand:01904100-0000-7000-8000-f51dc0000002";
 
@@ -683,7 +683,7 @@ async fn redaction_targeting_strand_morph_flips_to_redacted_and_rejects_terminal
     // Every fixture DataEvent below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-f10dc0000001";
     let morph_id = "ak:morph:01904100-0000-7000-8000-f20dc0000001";
 
@@ -843,7 +843,7 @@ async fn strand_tracks_update_rejected_when_parent_strand_archived() {
     // Every fixture DataEvent below names the demo Realm's basis Seal in
     // `seal_ref`; that Seal and the founding unit it covers have to be accepted
     // before the first submit (`event-auth-state-resolution.md` §4.3).
-    seed_demo_realm_basis(&state);
+    seed_demo_realm_basis(&state).await;
     let strand_id = "ak:strand:01904100-0000-7000-8000-aabbccdd0001";
 
     let create_strand = signed_strand_event(

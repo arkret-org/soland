@@ -168,7 +168,7 @@ fn engine_constraints_from_body(body: &Value) -> Vec<crate::capability::Constrai
 /// Build an engine-shaped `Grant` from a projected grant cell body. Returns
 /// `None` only when the body has no actions (a grant with no actions cannot
 /// authorize anything and must not enter the index).
-fn engine_grant_from_cell_body(
+pub fn engine_grant_from_cell_body(
     grant_id: &str,
     body: &Value,
     revoked: bool,

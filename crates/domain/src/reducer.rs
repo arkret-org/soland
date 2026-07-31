@@ -107,7 +107,7 @@ fn projection_context_stripped_payload(payload: &Value) -> Value {
 // modules keep resolving them by bare name through their `use super::*;`.
 // The handful of `pub` items in these modules get an explicit `pub use`
 // (which takes priority over the glob for that name).
-pub use apply_capability::engine_grant_from_capability_cell_state;
+pub use apply_capability::{engine_grant_from_capability_cell_state, engine_grant_from_cell_body};
 pub(crate) use apply_member_application::MemberApplicationState;
 pub use apply_member_application::MemberApplicationView;
 pub use capability_derivation::inheritance_allowed_policies;

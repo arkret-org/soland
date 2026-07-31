@@ -28,6 +28,7 @@ hex.workspace = true
 parking_lot.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+soland-domain = { version = "0.3.0", path = "../domain" }
 soland-services = { version = "0.3.0", path = "../services" }
 soland-http = { version = "0.3.0", path = "../http", features = ["test-support"] }
 soland-storage = { version = "0.3.0", path = "../storage" }

@@ -1318,7 +1318,7 @@ async fn call_signal_relays_to_other_realm_member_and_filters_self_device() {
             .await;
     let (bob_token, _bob_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,
@@ -1370,7 +1370,7 @@ async fn call_signal_reaches_same_actor_other_device() {
             .await;
     let (token_b, _key_b) =
         seed_signal_sender_device(&state, WEBRTC_ALICE, device_b, "Alice Laptop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,
@@ -1416,7 +1416,7 @@ async fn call_signal_not_delivered_after_ttl_expiry() {
             .await;
     let (bob_token, _bob_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,
@@ -1528,7 +1528,7 @@ async fn call_signal_from_a_non_member_is_denied_and_never_relayed() {
     let outsider_device = "ak:device:01904100-0000-7000-8000-b0b000000004";
     let (token, signing_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, outsider_device, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_BOB);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_BOB).await;
 
     let denied = post_signal(
         state.clone(),
@@ -1573,7 +1573,7 @@ async fn call_signal_resubscribe_does_not_redeliver() {
             .await;
     let (bob_token, _bob_key) =
         seed_signal_sender_device(&state, WEBRTC_BOB, WEBRTC_BOB_DEVICE, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, WEBRTC_ALICE).await;
 
     let invite = call_signal(
         WEBRTC_ALICE,

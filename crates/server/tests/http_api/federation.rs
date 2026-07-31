@@ -17,7 +17,7 @@ fn publication_signing_key(verification_method: &str) -> ed25519_dalek::SigningK
     ))
 }
 
-fn seed_peer_delivery_binding(state: &AppState) {
+async fn seed_peer_delivery_binding(state: &AppState) {
     for verification_method in [
         format!("{PEER_SOURCE_DID}#authorization-lease-key"),
         format!("{PEER_SOURCE_DID}#notary-key"),
@@ -32,7 +32,7 @@ fn seed_peer_delivery_binding(state: &AppState) {
     // transported DataEvent's `seal_ref` resolves locally. Without it every
     // inbound Event is deferred as `federation_dependencies_pending` before the
     // check under test is ever reached.
-    seed_test_realm_basis_seal(state, TEST_REALM_ID, "did:web:alice.example");
+    seed_test_realm_basis_seal(state, TEST_REALM_ID, "did:web:alice.example").await;
     let now = Utc::now();
     state.test_projection().lock().members.insert(
         (TEST_REALM_ID.to_owned(), "did:web:alice.example".to_owned()),
@@ -204,7 +204,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
 #[tokio::test]
 async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state);
+    seed_peer_delivery_binding(&state).await;
     let now = Utc::now();
     let predecessor_id = "ak:event:01904100-0000-7000-8000-fede00000040";
     put_event_record(
@@ -264,7 +264,7 @@ async fn peer_events_submit_quarantines_actor_seq_sibling_overflow() {
 #[tokio::test]
 async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state);
+    seed_peer_delivery_binding(&state).await;
     let event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000003",
         0,
@@ -356,7 +356,7 @@ async fn peer_events_frontier_exposes_current_sibling_heads() {
 #[tokio::test]
 async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state);
+    seed_peer_delivery_binding(&state).await;
     let mut event = signed_event_envelope(
         "ak:event:01904100-0000-7000-8000-fede00000099",
         1,
@@ -403,7 +403,7 @@ async fn peer_events_submit_rejects_actor_outside_source_trust_domain() {
 #[tokio::test]
 async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state);
+    seed_peer_delivery_binding(&state).await;
     // encryption-and-audit.md §2: this fixture submits plaintext, so the
     // Realm must explicitly authorize the receiving service to see it. This
     // keeps the assertion focused on foreign-domain member relay acceptance.
@@ -459,7 +459,7 @@ async fn peer_events_submit_accepts_known_member_relayed_by_foreign_domain() {
 #[tokio::test]
 async fn peer_events_submit_rejects_mls_welcome_without_peer_profile_declaration() {
     let state = soland_test_support::app_state(test_config());
-    seed_peer_delivery_binding(&state);
+    seed_peer_delivery_binding(&state).await;
     let welcome_event_id = "ak:event:01904100-0000-7000-8000-fede00000b01";
     let welcome_event = event_envelope(
         welcome_event_id,
@@ -550,7 +550,11 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
     );
 
     let resolve_target = "http://server/_arkret/peer/events/resolve";
+    // `PeerEventsResolveRequestBody` requires `realm_id`: every selector is
+    // scoped to exactly one Realm, so a body without it is not a resolve
+    // request at all.
     let resolve_body = serde_json::json!({
+        "realm_id": TEST_REALM_ID,
         "event_ids": [hidden_event_id],
         "include_payload": true
     });
@@ -575,8 +579,11 @@ async fn peer_events_query_clips_circle_event_outside_source_did_member_scope() 
         Some(0),
         "{resolved:?}"
     );
+    // `PeerEventsResolveOutcome` keeps typed missing buckets: a nonexistent
+    // and an undisclosable selector share `missing_event_ids` so the two stay
+    // externally indistinguishable.
     assert_eq!(
-        resolved["missing"],
+        resolved["missing_event_ids"],
         serde_json::json!([hidden_event_id]),
         "{resolved:?}"
     );

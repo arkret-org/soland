@@ -349,7 +349,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
     let carol_token =
         verified_dev_token_for_device(state.clone(), CAROL, CAROL_DEVICE, "Carol Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
     set_demo_realm_visibility(&state, "invite_only", "shared").await;
 
     let target_event_id =
@@ -465,7 +465,7 @@ async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_
     // Dave is deliberately not a member of the demo Realm.
     let dave_token =
         verified_dev_token_for_device(state.clone(), DAVE, DAVE_DEVICE, "Dave Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
     set_demo_realm_visibility(&state, "public", "world_readable").await;
 
     let target_event_id =
@@ -552,7 +552,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
     add_test_realm_member(&state, DEMO_REALM_ID, BOB);
     let (bob_token, bob_key) =
         seed_signal_sender_device(&state, BOB, BOB_DEVICE, "Bob Desktop").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE);
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
     set_demo_realm_visibility(&state, "invite_only", "shared").await;
 
     let target_event_id =
@@ -581,9 +581,10 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
         "over-ceiling receipt body: {over_ceiling_body}"
     );
 
-    // §2 bounds the lifetime relative to `sent_at`, not to the ingress clock, so
-    // an envelope whose window has already closed is structurally valid and is
-    // admitted. Expiry bites at delivery.
+    // §3(4) makes a valid TTL part of what ingress MUST verify, so an envelope
+    // whose window has already closed is refused rather than admitted into a
+    // rail that could never deliver it. Its declared window is inside the
+    // `session` ceiling, so this is a liveness rejection, not a structural one.
     let expired_at = chrono::Utc::now() - chrono::Duration::seconds(40);
     let expired = bob_receipt_signal(
         realm_scope(),
@@ -593,11 +594,13 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
         &plaintext(expired_at),
         &bob_key,
     );
+    let mut expired_response = post_signal(state.clone(), &bob_token, &expired).await;
+    let expired_status = expired_response.status_code;
+    let expired_body: Value = expired_response.take_json().await.unwrap();
     assert_eq!(
-        post_signal(state.clone(), &bob_token, &expired)
-            .await
-            .status_code,
-        Some(StatusCode::OK)
+        expired_status,
+        Some(StatusCode::BAD_REQUEST),
+        "expired receipt body: {expired_body}"
     );
 
     let live_at = chrono::Utc::now();
@@ -615,8 +618,7 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
             .status_code,
         Some(StatusCode::OK)
     );
-    // Both envelopes were admitted — §2 bounds the lifetime, not the ingress —
-    // but the relay is TTL-bounded storage and retains only the live one.
+    // Only the live envelope was admitted, so the relay holds only that one.
     let retained = state
         .test_persistence()
         .signal_relay()
