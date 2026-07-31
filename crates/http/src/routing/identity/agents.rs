@@ -159,8 +159,6 @@ pub(crate) fn open_router() -> Router {
 
 #[cfg(test)]
 mod tests {
-    use arkret_wire::SchemaId;
-
     use super::*;
 
     fn test_session(actor: &str) -> SessionRecord {
@@ -245,7 +243,7 @@ mod tests {
             AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole,
             AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
             AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, DeviceId, DidUrl,
-            LeaseBasisRef, RiskTier, SealId,
+            LeaseBasisRef, RiskTier, SchemaId, SealId,
         };
 
         let policy = AuthoritySetPolicy {
