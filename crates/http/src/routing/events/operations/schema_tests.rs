@@ -197,6 +197,73 @@ mod event_projection_dto_boundary_tests {
         );
     }
 
+    /// Regression: the Realm bootstrap batch's `ak.realm.policy_bundle` was
+    /// rejected with `realm policy event requires value` because the manual
+    /// operation-semantics table demanded a `{"value": ...}` state-payload
+    /// wrapper, while `realm_policy_bundle_payload` (and its SDK counterpart
+    /// `RealmPolicyBundlePayload`) declares the payload to BE the flat closed
+    /// object. Envelope admission had already accepted the flat shape, so the
+    /// two admission gates in this same server contradicted each other and
+    /// every encrypted Realm creation failed with HTTP 400.
+    #[test]
+    fn realm_policy_bundle_accepts_the_flat_spec_payload_without_a_value_wrapper() {
+        let bundle = |payload: serde_json::Value| {
+            Operation::create(
+                arkret_identifiers::OperationId::new(
+                    "ak:operation:01904100-0000-7000-8000-0000000007a3",
+                )
+                .unwrap(),
+                arkret_identifiers::RealmId::new(
+                    "ak:realm:01904100-0000-7000-8000-0000000007a3".to_owned(),
+                )
+                .unwrap(),
+                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+                payload,
+            )
+        };
+        // Exactly what `arkret_sdk::RealmPolicyBundlePayload::to_value()`
+        // serializes for inkson's genesis bundle.
+        let spec_shaped = json!({
+            "policy_revision": 1,
+            "content_scheme": "mls_exporter_aead_v1",
+            "content_encryption_floor": "e2ee_required",
+            "metadata_encryption_floor": "e2ee_required"
+        });
+
+        let draft = bundle(spec_shaped.clone());
+        assert_eq!(
+            validate_operation_payload_schema(arkret_wire::EventKind::REALM_POLICY_BUNDLE, &draft,),
+            Ok(())
+        );
+
+        let mut projected = bundle(spec_shaped);
+        projected.canonical_event_digest = Some(
+            "sha256:1111111111111111111111111111111111111111111111111111111111111111".to_owned(),
+        );
+        assert_eq!(
+            validate_operation_payload_schema(
+                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+                &projected,
+            ),
+            Ok(())
+        );
+
+        // `policy_revision` stays required — the bundle is a `cas_register`
+        // value whose supersession binds by value, so a revision-less bundle
+        // must still be rejected.
+        let mut revisionless = bundle(json!({"content_encryption_floor": "e2ee_required"}));
+        revisionless.canonical_event_digest = Some(
+            "sha256:2222222222222222222222222222222222222222222222222222222222222222".to_owned(),
+        );
+        assert_eq!(
+            validate_operation_payload_schema(
+                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+                &revisionless,
+            ),
+            Err("ak.realm.policy_bundle requires policy_revision")
+        );
+    }
+
     #[test]
     fn circle_member_convenience_dto_uses_projection_schema() {
         let operation = Operation::create(

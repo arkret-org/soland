@@ -209,9 +209,11 @@ impl ProjectionState {
     }
 
     /// Project `ak.realm.policy_bundle` into the canonical Realm policy
-    /// components cell. The Event Envelope wire shape is a generic state
-    /// payload (`{"value": ...}`), while reducer tests and Move-era callers may
-    /// pass the value directly; both forms are accepted and normalized here.
+    /// components cell. The Event Envelope wire shape is the flat closed
+    /// `realm_policy_bundle_payload` object, NOT a `{"value": ...}` state
+    /// payload wrapper — `additionalProperties:false` on that def makes the
+    /// wrapper unrepresentable on the wire. `state_payload_value` stays only to
+    /// normalize legacy reducer-test fixtures that still pass the wrapper.
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
         let value = state_payload_value(&operation.payload).clone();

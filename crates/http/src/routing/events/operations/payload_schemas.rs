@@ -225,6 +225,22 @@ pub(crate) const REALM_POLICY_VALUE_REQUIREMENTS: &[PayloadRequirement] =
         "value",
         "realm policy event requires value",
     )];
+/// `ak.realm.policy_bundle` is NOT a `state_payload` wrapper: the payload IS
+/// the flat closed `realm_policy_bundle_payload` object (`required:
+/// ["policy_revision"]`, `additionalProperties:false`) — see that def's
+/// `$comment` and its SDK counterpart
+/// [`arkret_models_collaboration::events_payloads::RealmPolicyBundlePayload`].
+/// Envelope admission already validates the wire payload against that
+/// registered schema; this table only restates the one field the projection
+/// DTO must still carry, so the two admission gates cannot disagree about the
+/// shape (they did: this kind used to be pointed at
+/// [`REALM_POLICY_VALUE_REQUIREMENTS`], which rejected every spec-shaped
+/// bundle with `realm policy event requires value`).
+pub(crate) const REALM_POLICY_BUNDLE_REQUIREMENTS: &[PayloadRequirement] =
+    &[PayloadRequirement::Required(
+        "policy_revision",
+        "ak.realm.policy_bundle requires policy_revision",
+    )];
 pub(crate) const REALM_KEY_SHARE_REQUIREMENTS: &[PayloadRequirement] = &[
     PayloadRequirement::Required("share_kind", "ak.realm_key.share requires share_kind"),
     PayloadRequirement::Required(
