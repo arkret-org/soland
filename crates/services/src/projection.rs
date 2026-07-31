@@ -356,8 +356,7 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                 relationship,
             },
             ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
-            | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
-            | ProjectionEffect::CapabilityDelegateProjected { grant_id, .. } => {
+            | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. } => {
                 Self::CapabilityProjected { grant_id }
             }
             ProjectionEffect::CallStateProjected { .. } => Self::CallStateProjected,
@@ -1545,7 +1544,6 @@ impl ProjectionService {
             &[
                 arkret_wire::events::EventKind::CAPABILITY_GRANT,
                 arkret_wire::events::EventKind::CAPABILITY_REVOKE,
-                arkret_wire::events::EventKind::CAPABILITY_DELEGATE,
             ],
         )
     }

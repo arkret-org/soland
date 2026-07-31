@@ -793,16 +793,6 @@ fn apply_capability_revoke_dispatch(
     s.apply_capability_revoke(op, op.created_at)
 }
 
-/// P1 — dispatch for `ak.capability.delegate`. Projects into the delegate
-/// cell + parent grant chain.
-fn apply_capability_delegate_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_capability_delegate(op, op.created_at)
-}
-
 /// P2 — dispatch for `ak.moderation.decision`. Projects the decision snapshot
 /// as an or_set add into the `ak.component.moderation_state.v1` cell keyed by
 /// `payload.target_ref`.
@@ -1313,10 +1303,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_wire::events::EventKind::CAPABILITY_REVOKE,
         apply_capability_revoke_dispatch,
-    );
-    m.insert(
-        arkret_wire::events::EventKind::CAPABILITY_DELEGATE,
-        apply_capability_delegate_dispatch,
     );
     // Agent runtime key authorization + revocation. Authorize records the
     // key; revoke removes it. Neither operation changes Realm grants.

@@ -1050,7 +1050,7 @@ pub(super) async fn submit_event_value_with_context(
             }
             // capabilities.md §10.2 — a ak.capability.delegate that closes a
             // delegation cycle MUST be rejected before it projects.
-            if let Err(reason) = proj.check_delegation_cycle(operation) {
+            if let Err(reason) = proj.check_authority_cycle(operation) {
                 return Err(SubmitOneError::new(
                     StatusCode::PRECONDITION_FAILED,
                     reason,

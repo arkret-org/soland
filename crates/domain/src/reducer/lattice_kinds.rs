@@ -15,20 +15,19 @@ use arkret_identifiers::{CellRef, RealmId};
 // `ViewUpdate`, `ViewReconcile` mentioned in `routing/events/operations.rs`
 // comments) continues to compile.
 pub use arkret_lattice_registry::{
-    AccountStatus, AgentKey, AgentStatus, CallState, CallSummary, CapabilityDelegate,
-    CapabilityDerived, CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant,
-    ContactFactLog, CoveredSeals, CrossSigningPublish, CrossSigningReset, DeviceAuthorized,
-    DeviceListUpdate, DirectConversationBinding, KeyBackupActiveSeries,
-    MemberIdentityLattice as MemberIdentity, MemberState, MimiRoomBinding, MlsEpoch, MorphStage,
-    NotaryCell, PolicyRule, ProfileCreate, RealmArchive, RealmAssetPrivacyPolicy, RealmCreate,
-    RealmDeliveryBindingPolicy, RealmDestroy, RealmDisappearingPolicy, RealmDiscovery, RealmFreeze,
-    RealmHistorySharingPolicy, RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule,
-    RealmLink, RealmMediaService, RealmModerationPolicy, RealmOrganization,
-    RealmPlaintextVisibleServices, RealmPolicy, RealmPolicyBundle, RealmPolicyServer,
-    RealmPreviewPolicy, RealmReadReceiptPolicy, RealmSchema, RealmSearchPolicy, RealmTombstone,
-    RealmUpgrade, SessionGrant, SpaceParent, StrandPosition, StrandStage, ViewCreate,
-    ViewReconcile, ViewUpdate, build_sdk_cell_registry, default_lattice_registry,
-    lattice_bindings_for_sdk_registry,
+    AccountStatus, AgentKey, AgentStatus, CallState, CallSummary, CapabilityDerived,
+    CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog,
+    CoveredSeals, CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate,
+    DirectConversationBinding, KeyBackupActiveSeries, MemberIdentityLattice as MemberIdentity,
+    MemberState, MimiRoomBinding, MlsEpoch, MorphStage, NotaryCell, PolicyRule, ProfileCreate,
+    RealmArchive, RealmAssetPrivacyPolicy, RealmCreate, RealmDeliveryBindingPolicy, RealmDestroy,
+    RealmDisappearingPolicy, RealmDiscovery, RealmFreeze, RealmHistorySharingPolicy,
+    RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule, RealmLink, RealmMediaService,
+    RealmModerationPolicy, RealmOrganization, RealmPlaintextVisibleServices, RealmPolicy,
+    RealmPolicyBundle, RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy, RealmSchema,
+    RealmSearchPolicy, RealmTombstone, RealmUpgrade, SessionGrant, SpaceParent, StrandPosition,
+    StrandStage, ViewCreate, ViewReconcile, ViewUpdate, build_sdk_cell_registry,
+    default_lattice_registry, lattice_bindings_for_sdk_registry,
 };
 use arkret_lattice_registry::{
     ContractRegistryError, ResolvedFsmContract, canonical_fsm_contracts,

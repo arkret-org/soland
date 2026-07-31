@@ -1,12 +1,11 @@
 //! P1 — capability control-plane projection.
 //!
 //! Projects `ak.capability.grant` / `ak.capability.revoke` /
-//! `ak.capability.delegate` into the canonical cells declared by
+//! the canonical cells declared by
 //! `event-kind-registry.json`:
 //!
 //! - grant / revoke → `ak.component.capability.grant.v1` (or_set, one cell per `payload.grant_id`).
-//! - delegate → `ak.component.capability.delegate.v1` (or_set, one cell per `payload.grant_id`)
-//!   plus a `parent_grant_id` chain reference.
+//!   plus its `issuer_authority_refs` chain references.
 //!
 //! Convergence rules (capabilities.md §12.1):
 //! - **grant** = or_set **add**. The add dot is the reducer-deterministic
@@ -214,11 +213,7 @@ pub fn engine_grant_from_cell_body(
         .and_then(Value::as_str)
         .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
         .map(|dt| dt.with_timezone(&chrono::Utc));
-    let delegated_from = body
-        .get("parent_grant_id")
-        .or_else(|| body.get("delegated_from"))
-        .and_then(Value::as_str)
-        .map(ToOwned::to_owned);
+    let issuer_authority_refs = engine_authority_refs_from_body(body);
     Some(crate::capability::Grant {
         grant_id: grant_id.to_owned(),
         realm_id,
@@ -230,7 +225,7 @@ pub fn engine_grant_from_cell_body(
         constraints,
         revoked,
         created_at,
-        delegated_from,
+        issuer_authority_refs,
         expires_at,
     })
 }
@@ -320,6 +315,13 @@ mod cba_capability_cell_tests {
                     "id": grant_id,
                     "realm_id": realm_id,
                     "issuer": "did:web:owner.example",
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": realm_id,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "subject": "did:web:owner.example",
                     "actions": ["ak.realm.admin"],
                     "capability_action_registry_digest": registry_digest,
@@ -543,14 +545,114 @@ fn grant_issuer(payload: &Value) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
-fn grant_parent_ref(payload: &Value) -> Option<&str> {
-    let body = grant_body(payload);
-    body.get("parent_grant_id")
-        .or_else(|| body.get("delegated_from"))
-        .or_else(|| payload.get("parent_grant_id"))
-        .or_else(|| payload.get("delegated_from"))
-        .and_then(Value::as_str)
-        .filter(|value| !value.trim().is_empty())
+/// The grant ids a grant names in `issuer_authority_refs[]`.
+///
+/// `realm_root` entries are rooted terminals and deliberately contribute
+/// nothing here: they end a walk rather than continue it.
+/// `scalability-constraints.md` §3 caps the authority chain at 4; the walk
+/// budget is deliberately larger so a pathological graph is reported as a
+/// cycle rather than silently truncated.
+const MAX_AUTHORITY_WALK: usize = 64;
+
+/// The typed refs a projected grant body carries, in the runtime shape the
+/// policy engine walks.
+fn engine_authority_refs_from_body(body: &Value) -> Vec<crate::capability::IssuerAuthorityRef> {
+    body.get("issuer_authority_refs")
+        .and_then(Value::as_array)
+        .map(|refs| {
+            refs.iter()
+                .filter_map(|entry| match entry.get("kind").and_then(Value::as_str) {
+                    Some("grant") => entry.get("grant_id").and_then(Value::as_str).map(|id| {
+                        crate::capability::IssuerAuthorityRef::Grant {
+                            grant_id: id.to_owned(),
+                        }
+                    }),
+                    Some("realm_root") => Some(crate::capability::IssuerAuthorityRef::RealmRoot {
+                        realm_id: entry
+                            .get("realm_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        cell_ref: entry
+                            .get("cell_ref")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default()
+                            .to_owned(),
+                        controller_epoch_at_issuance: entry
+                            .get("controller_epoch_at_issuance")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default(),
+                        authority_generation: entry
+                            .get("authority_generation")
+                            .and_then(Value::as_u64)
+                            .unwrap_or_default(),
+                    }),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn grant_authority_grant_refs(payload: &Value) -> Vec<String> {
+    grant_authority_grant_refs_in(grant_body(payload))
+}
+
+fn grant_authority_grant_refs_in(body: &Value) -> Vec<String> {
+    body.get("issuer_authority_refs")
+        .and_then(Value::as_array)
+        .map(|refs| {
+            refs.iter()
+                .filter(|entry| entry.get("kind").and_then(Value::as_str) == Some("grant"))
+                .filter_map(|entry| entry.get("grant_id").and_then(Value::as_str))
+                .filter(|value| !value.trim().is_empty())
+                .map(ToOwned::to_owned)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// `authority_depth` / `authority_root_refs[]` for a grant, derived from its
+/// refs. Both are reducer-owned: an author cannot misreport how far its
+/// authority spread or which root it came from. `None` means a `grant` ref is
+/// not projected yet — the caller MUST go pending rather than guess a depth.
+fn derive_authority_audit(
+    body: &Value,
+    resolve: &dyn Fn(&str) -> Option<(u64, Vec<Value>)>,
+) -> Option<(u64, Vec<Value>)> {
+    let mut depth: u64 = 0;
+    let mut roots: Vec<Value> = Vec::new();
+    let refs = body
+        .get("issuer_authority_refs")
+        .and_then(Value::as_array)?;
+    for entry in refs {
+        match entry.get("kind").and_then(Value::as_str) {
+            Some("realm_root") => {
+                roots.push(serde_json::json!({
+                    "kind": "realm_root",
+                    "realm_id": entry.get("realm_id").cloned().unwrap_or(Value::Null),
+                    "cell_ref": entry.get("cell_ref").cloned().unwrap_or(Value::Null),
+                    "authority_generation": entry
+                        .get("authority_generation")
+                        .cloned()
+                        .unwrap_or(Value::Null),
+                }));
+            }
+            Some("grant") => {
+                let grant_id = entry.get("grant_id").and_then(Value::as_str)?;
+                let (parent_depth, parent_roots) = resolve(grant_id)?;
+                depth = depth.max(parent_depth);
+                roots.extend(parent_roots);
+            }
+            _ => return None,
+        }
+    }
+    // Deduplicate on (realm_id, cell_ref, authority_generation) and sort
+    // canonically: controller_epoch_at_issuance is per-grant issuance audit and
+    // deliberately not part of root identity.
+    roots.sort_by_key(|r| serde_json::to_string(r).unwrap_or_default());
+    roots.dedup_by_key(|r| serde_json::to_string(r).unwrap_or_default());
+    (!roots.is_empty()).then_some((depth + 1, roots))
 }
 
 fn grant_realm_id<'a>(body: &'a Value, operation: &'a Operation) -> &'a str {
@@ -602,11 +704,11 @@ fn body_max_delegation_depth(body: &Value) -> Option<u32> {
                 .get("constraint_kind")
                 .and_then(Value::as_str)
                 .or_else(|| constraint.get("type").and_then(Value::as_str));
-            if constraint_kind != Some("delegation_control") {
+            if constraint_kind != Some("authority_control") {
                 return None;
             }
             constraint
-                .get("max_delegation_depth")
+                .get("max_authority_depth")
                 .and_then(Value::as_u64)
                 .and_then(|value| u32::try_from(value).ok())
         })
@@ -645,13 +747,6 @@ impl ProjectionState {
     fn capability_grant_cell_ref(grant_id: &str) -> Option<CellRef> {
         CellRef::new(format!(
             "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-        ))
-        .ok()
-    }
-
-    fn capability_delegate_cell_ref(grant_id: &str) -> Option<CellRef> {
-        CellRef::new(format!(
-            "ak:cell:ak.component.capability.delegate.v1:{grant_id}"
         ))
         .ok()
     }
@@ -1000,8 +1095,16 @@ impl ProjectionState {
     }
 
     fn validate_grant_issuer_upper_bound(&self, operation: &Operation) -> Result<(), &'static str> {
-        if let Some(parent_grant_id) = grant_parent_ref(&operation.payload) {
-            return self.validate_delegated_grant_issuer_upper_bound(operation, parent_grant_id);
+        // capabilities.md §10: the refs' capabilities must jointly cover the
+        // child. Every `grant` ref is checked, not just the first: a grant that
+        // named one narrow ref and one broad one would otherwise be bounded by
+        // whichever happened to come first.
+        let grant_refs = grant_authority_grant_refs(&operation.payload);
+        if !grant_refs.is_empty() {
+            for parent_grant_id in &grant_refs {
+                self.validate_regranted_issuer_upper_bound(operation, parent_grant_id)?;
+            }
+            return Ok(());
         }
         let body = grant_body(&operation.payload);
         let issuer = grant_issuer(&operation.payload).ok_or("capability_grant_issuer_missing")?;
@@ -1041,7 +1144,7 @@ impl ProjectionState {
         Ok(())
     }
 
-    fn validate_delegated_grant_issuer_upper_bound(
+    fn validate_regranted_issuer_upper_bound(
         &self,
         operation: &Operation,
         parent_grant_id: &str,
@@ -1077,22 +1180,22 @@ impl ProjectionState {
                 return Err("grant_exceeds_issuer_authority");
             }
         }
-        if let Some(parent_depth) = crate::capability::max_delegation_depth(&parent) {
+        if let Some(parent_depth) = crate::capability::max_authority_depth(&parent) {
             if parent_depth == 0 {
-                return Err("delegation_depth_exceeded");
+                return Err("authority_depth_exceeded");
             }
             match body_max_delegation_depth(body) {
                 Some(child_depth) if child_depth <= parent_depth.saturating_sub(1) => {}
-                _ => return Err("delegation_depth_exceeded"),
+                _ => return Err("authority_depth_exceeded"),
             }
         }
         let child_expires_at = body_effective_expires_at(body);
         if let Some(parent_expires_at) = crate::capability::grant_effective_expiry(&parent) {
             let Some(child_expires_at) = child_expires_at else {
-                return Err("delegation_expiry_widening");
+                return Err("authority_expiry_widening");
             };
             if child_expires_at > parent_expires_at {
-                return Err("delegation_expiry_widening");
+                return Err("authority_expiry_widening");
             }
         }
         Ok(())
@@ -1184,7 +1287,31 @@ impl ProjectionState {
         // §12.1 terminal: a re-add of an already observed-removed grant_id
         // does NOT revive. Carry the revoked tombstone onto the new add.
         let terminal_revoked = Self::capability_cell_has_revoked_item(&items);
-        let value = grant_item_value(operation, &grant_id, terminal_revoked, now);
+        let mut value = grant_item_value(operation, &grant_id, terminal_revoked, now);
+        // capabilities.md §10 — `authority_depth` and `authority_root_refs[]`
+        // are reducer-derived, so an author cannot misreport how far its
+        // authority spread or which root it came from. A `grant` ref that is
+        // not projected yet leaves them uncomputable, and the contract is
+        // explicit that we go pending rather than guess a depth.
+        let Some((authority_depth, authority_root_refs)) =
+            derive_authority_audit(grant_body(&operation.payload), &|grant_id| {
+                self.projected_authority_audit(grant_id)
+            })
+        else {
+            return ProjectionEffect::Rejected {
+                reason: "capability_authority_refs_unresolved".to_owned(),
+            };
+        };
+        if let Value::Object(map) = &mut value {
+            map.insert(
+                "authority_depth".to_owned(),
+                Value::Number(authority_depth.into()),
+            );
+            map.insert(
+                "authority_root_refs".to_owned(),
+                Value::Array(authority_root_refs),
+            );
+        }
         items.push(serde_json::json!({
             "tag": capability_add_dot(operation),
             "value": value,
@@ -1260,142 +1387,66 @@ impl ProjectionState {
         ProjectionEffect::CapabilityRevokeProjected { grant_id, realm_id }
     }
 
-    /// P1 — project `ak.capability.delegate` into the delegate or_set cell.
-    /// Same convergence as grant (add-dot keyed by operation_id), plus a
-    /// `parent_grant_id` chain reference (capabilities.md §10). A delegate
-    /// MUST name its parent grant; missing parent ⇒ fail closed.
-    pub(crate) fn apply_capability_delegate(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        let Some(grant_id) = operation
-            .payload
-            .get("grant_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-        else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_delegate_grant_id_missing".to_owned(),
-            };
-        };
-        let body = grant_body(&operation.payload);
-        let parent_grant_id = body
-            .get("parent_grant_id")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("parent_grant_id")
-                    .and_then(Value::as_str)
-            })
-            .map(ToOwned::to_owned);
-        let Some(parent) = parent_grant_id.clone() else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_delegate_parent_missing".to_owned(),
-            };
-        };
-        if grant_issuer(&operation.payload).is_none() {
-            return ProjectionEffect::Rejected {
-                reason: "capability_delegate_issuer_missing".to_owned(),
-            };
-        }
-        if let Err(reason) = validate_grant_body_scope(body) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        if let Err(reason) = validate_agent_subject_grant_constraints(body, |subject| {
-            self.agent_lifecycles.contains_key(subject)
-        }) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        if let Err(reason) = self.validate_delegated_grant_issuer_upper_bound(operation, &parent) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        let realm_id = operation.realm_id.to_string();
-        let Some(cell_ref) = Self::capability_delegate_cell_ref(&grant_id) else {
-            return ProjectionEffect::Rejected {
-                reason: "capability_delegate_cell_ref_invalid".to_owned(),
-            };
-        };
-
-        let mut items = self.capability_cell_items(&cell_ref);
-        let terminal_revoked = Self::capability_cell_has_revoked_item(&items);
-        let mut value = grant_item_value(operation, &grant_id, terminal_revoked, now);
-        if let Value::Object(map) = &mut value {
-            map.insert("parent_grant_id".to_owned(), Value::String(parent.clone()));
-        }
-        items.push(serde_json::json!({
-            "tag": capability_add_dot(operation),
-            "value": value,
-            // refs[role="parent_grant"] — delegation chain anchor (§10).
-            "refs": [{ "role": "parent_grant", "id": parent }],
-        }));
-        self.cells
-            .insert(cell_ref, CellState::Value(Value::Array(items)));
-
-        ProjectionEffect::CapabilityDelegateProjected {
-            grant_id,
-            realm_id,
-            parent_grant_id,
-        }
-    }
-
-    /// Resolve a delegated grant's parent grant id from its delegate cell
-    /// (`refs[role="parent_grant"]` / `value.parent_grant_id`). Returns `None`
-    /// for root grants (no delegate cell) — which terminates the chain walk.
-    fn delegate_parent_of(&self, grant_id: &str) -> Option<String> {
-        let cell_ref = Self::capability_delegate_cell_ref(grant_id)?;
+    /// The materialized `(authority_depth, authority_root_refs)` of a grant
+    /// already in the projection, or `None` when it has not landed yet.
+    fn projected_authority_audit(&self, grant_id: &str) -> Option<(u64, Vec<Value>)> {
+        let cell_ref = Self::capability_grant_cell_ref(grant_id)?;
         let items = self.capability_cell_items(&cell_ref);
         let last = items.last()?;
         let body = last.get("value").unwrap_or(last);
-        body.get("parent_grant_id")
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
+        let depth = body.get("authority_depth").and_then(Value::as_u64)?;
+        let roots = body
+            .get("authority_root_refs")
+            .and_then(Value::as_array)
+            .cloned()?;
+        Some((depth, roots))
     }
 
-    /// capabilities.md §10.2 — DFS the parent chain of an incoming
-    /// `ak.capability.delegate(child_grant_id, parent_grant_id)`; reject the
-    /// whole delegation with `delegation_cycle` if the new child closes a cycle
-    /// (appears as one of its own ancestors) or the chain already contains one.
-    /// A `delegation_cycle` MUST NOT project even if each grant looks valid
-    /// individually. Runs at ingest (pre-commit) so the cyclic edge never enters
-    /// the delegate cell / authz index.
-    pub fn check_delegation_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
+    /// The grant ids a projected grant names as `kind="grant"` authority refs.
+    /// A grant that only names `realm_root` refs returns an empty set, which
+    /// terminates a walk: a root is a terminal, never an edge.
+    fn authority_grant_refs_of(&self, grant_id: &str) -> Vec<String> {
+        let Some(cell_ref) = Self::capability_grant_cell_ref(grant_id) else {
+            return Vec::new();
+        };
+        let items = self.capability_cell_items(&cell_ref);
+        let Some(last) = items.last() else {
+            return Vec::new();
+        };
+        let body = last.get("value").unwrap_or(last);
+        grant_authority_grant_refs_in(body)
+    }
+
+    /// capabilities.md §10.2 — DFS the authority graph of an incoming
+    /// `ak.capability.grant` and reject the whole Event with `authority_cycle`
+    /// if it would close a cycle. `realm_root` refs are rooted terminals and
+    /// produce no edge, so the walk always terminates at a root or at the
+    /// depth ceiling. A cycle MUST NOT project even if each grant looks valid
+    /// individually; this runs at ingest so the cyclic edge never reaches the
+    /// grant cell or the authz index.
+    pub fn check_authority_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::CAPABILITY_DELEGATE)
+            != Some(arkret_wire::events::EventKind::CAPABILITY_GRANT)
         {
             return Ok(());
         }
-        let body = grant_body(&operation.payload);
         let Some(grant_id) = operation.payload.get("grant_id").and_then(Value::as_str) else {
-            return Ok(());
-        };
-        let parent = body
-            .get("parent_grant_id")
-            .and_then(Value::as_str)
-            .or_else(|| {
-                operation
-                    .payload
-                    .get("parent_grant_id")
-                    .and_then(Value::as_str)
-            });
-        let Some(parent) = parent else {
             return Ok(());
         };
         let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
         visited.insert(grant_id.to_owned());
-        let mut cursor = Some(parent.to_owned());
-        while let Some(node) = cursor {
-            if node == grant_id || !visited.insert(node.clone()) {
-                return Err("delegation_cycle");
+        let mut pending = grant_authority_grant_refs(&operation.payload);
+        while let Some(node) = pending.pop() {
+            if node == grant_id {
+                return Err("authority_cycle");
             }
-            cursor = self.delegate_parent_of(&node);
+            if !visited.insert(node.clone()) {
+                continue;
+            }
+            if visited.len() > MAX_AUTHORITY_WALK {
+                return Err("authority_cycle");
+            }
+            pending.extend(self.authority_grant_refs_of(&node));
         }
         Ok(())
     }
@@ -1728,6 +1779,13 @@ mod agent_key_tests {
                 "schema": arkret_wire::CAPABILITY_SCHEMA,
                 "realm_id": REALM,
                 "issuer": issuer,
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": REALM,
+                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                    "controller_epoch_at_issuance": 0,
+                    "authority_generation": 0
+                }],
                 "subject": subject,
                 "actions": actions,
                 "resources": resources,
@@ -2037,8 +2095,8 @@ mod agent_key_tests {
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
         payload["grant"]["constraints"] = json!([{
-            "constraint_kind": "delegation_control",
-            "constraint_subkind": "applet_delegation",
+            "constraint_kind": "authority_control",
+            "constraint_subkind": "applet_authority",
             "applet_id": "ak:applet:01970000-0000-7000-8000-0000000000b0",
             "executed_by": "did:web:bridge.example",
             "registration_epoch": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
@@ -2115,7 +2173,7 @@ mod agent_key_tests {
         mutations.push(wrong_applet);
         let mut wrong_subkind = base.clone();
         wrong_subkind["grant"]["constraints"][0]["constraint_subkind"] =
-            json!("max_delegation_depth");
+            json!("max_authority_depth");
         mutations.push(wrong_subkind);
         let mut widened_scope = base;
         widened_scope["grant"]["resources"] = json!(["*"]);
@@ -2130,7 +2188,7 @@ mod agent_key_tests {
     }
 
     #[test]
-    fn delegated_grant_cannot_outlive_parent_expiry() {
+    fn regranted_grant_cannot_outlive_its_ref_expiry() {
         let mut state = ProjectionState::default();
         seed_realm_authority(&mut state);
         let parent_expiry = chrono::Utc::now() + chrono::Duration::hours(1);
@@ -2158,7 +2216,7 @@ mod agent_key_tests {
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        child["grant"]["parent_grant_id"] = json!(GRANT);
+        child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
         child["grant"]["expires_at"] =
             json!(arkret_canonical::format_timestamp_canonical(child_expiry));
         let child_effect =
@@ -2166,12 +2224,12 @@ mod agent_key_tests {
         assert!(matches!(
             child_effect,
             crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == "delegation_expiry_widening"
+                if reason == "authority_expiry_widening"
         ));
     }
 
     #[test]
-    fn delegated_grant_from_revoked_parent_is_rejected() {
+    fn regranted_grant_from_a_revoked_ref_is_rejected() {
         let mut state = ProjectionState::default();
         seed_realm_authority(&mut state);
         let parent = grant_payload(
@@ -2203,7 +2261,7 @@ mod agent_key_tests {
             json!(["ak.message.create"]),
             json!([{ "kind": "realm", "realm_id": REALM }]),
         );
-        child["grant"]["parent_grant_id"] = json!(GRANT);
+        child["grant"]["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": GRANT }]);
         child["grant"]["expires_at"] = json!(arkret_canonical::format_timestamp_canonical(
             chrono::Utc::now() + chrono::Duration::minutes(30)
         ));
@@ -2230,11 +2288,14 @@ mod delegation_cycle_tests {
     const G_B: &str = "ak:grant:01970000-0000-7000-8000-00000000b002";
     const G_C: &str = "ak:grant:01970000-0000-7000-8000-00000000c003";
 
-    fn delegate_op(grant_id: &str, parent_grant_id: &str) -> Operation {
-        delegate_op_with_constraints(grant_id, parent_grant_id, json!([]))
+    /// A re-grant: same `ak.capability.grant` kind as a root issue, with a
+    /// `grant` authority ref instead of a `realm_root` one. That ref type is
+    /// the only thing that distinguishes the two.
+    fn regrant_op(grant_id: &str, parent_grant_id: &str) -> Operation {
+        regrant_op_with_constraints(grant_id, parent_grant_id, json!([]))
     }
 
-    fn delegate_op_with_constraints(
+    fn regrant_op_with_constraints(
         grant_id: &str,
         parent_grant_id: &str,
         constraints: serde_json::Value,
@@ -2242,12 +2303,14 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::CAPABILITY_DELEGATE,
+            arkret_wire::events::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
                     "issuer": "did:web:alice.example",
-                    "parent_grant_id": parent_grant_id,
+                    "issuer_authority_refs": [
+                        { "kind": "grant", "grant_id": parent_grant_id }
+                    ],
                     "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                     "constraints": constraints,
@@ -2274,7 +2337,21 @@ mod delegation_cycle_tests {
                 "grant_id": grant_id,
                 "grant": {
                     "issuer": issuer,
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": REALM,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "subject": subject,
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": REALM,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "actions": ["ak.message.create"],
                     "resources": [{ "kind": "realm", "realm_id": REALM }],
                     "constraints": constraints,
@@ -2308,45 +2385,45 @@ mod delegation_cycle_tests {
     }
 
     fn proj_with_chain() -> ProjectionState {
-        // Project g_b delegated from root g_a, so the chain is g_a <- g_b.
+        // Project g_b issued under root g_a, so the chain is g_a <- g_b.
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
         proj.apply_capability_grant(
             &root_grant_op(G_A, "did:web:alice.example", "did:web:alice.example"),
             chrono::Utc::now(),
         );
-        proj.apply_capability_delegate(&delegate_op(G_B, G_A), chrono::Utc::now());
+        proj.apply_capability_grant(&regrant_op(G_B, G_A), chrono::Utc::now());
         proj
     }
 
     #[test]
-    fn delegate_closing_a_cycle_is_rejected() {
-        // g_a delegated from g_b would close g_a <- g_b <- g_a.
+    fn regrant_closing_a_cycle_is_rejected() {
+        // g_a issued under g_b would close g_a <- g_b <- g_a.
         let proj = proj_with_chain();
         assert_eq!(
-            proj.check_delegation_cycle(&delegate_op(G_A, G_B)),
-            Err("delegation_cycle")
+            proj.check_authority_cycle(&regrant_op(G_A, G_B)),
+            Err("authority_cycle")
         );
     }
 
     #[test]
-    fn self_delegation_is_rejected() {
+    fn self_referential_authority_is_rejected() {
         let proj = ProjectionState::default();
         assert_eq!(
-            proj.check_delegation_cycle(&delegate_op(G_A, G_A)),
-            Err("delegation_cycle")
+            proj.check_authority_cycle(&regrant_op(G_A, G_A)),
+            Err("authority_cycle")
         );
     }
 
     #[test]
-    fn acyclic_delegation_is_allowed() {
-        // g_c delegated from g_b: chain g_b <- g_c over existing g_a <- g_b.
+    fn acyclic_authority_is_allowed() {
+        // g_c issued under g_b: chain g_b <- g_c over existing g_a <- g_b.
         let proj = proj_with_chain();
-        assert!(proj.check_delegation_cycle(&delegate_op(G_C, G_B)).is_ok());
+        assert!(proj.check_authority_cycle(&regrant_op(G_C, G_B)).is_ok());
     }
 
     #[test]
-    fn delegated_grant_must_decrement_parent_depth() {
+    fn regranted_grant_must_decrement_ref_depth() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
         proj.apply_capability_grant(
@@ -2354,33 +2431,33 @@ mod delegation_cycle_tests {
                 G_A,
                 "did:web:alice.example",
                 "did:web:alice.example",
-                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 1 }]),
+                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 1 }]),
             ),
             chrono::Utc::now(),
         );
-        let rejected = proj.apply_capability_delegate(&delegate_op(G_B, G_A), chrono::Utc::now());
+        let rejected = proj.apply_capability_grant(&regrant_op(G_B, G_A), chrono::Utc::now());
         assert!(matches!(
             rejected,
             crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == "delegation_depth_exceeded"
+                if reason == "authority_depth_exceeded"
         ));
 
-        let allowed = proj.apply_capability_delegate(
-            &delegate_op_with_constraints(
+        let allowed = proj.apply_capability_grant(
+            &regrant_op_with_constraints(
                 G_C,
                 G_A,
-                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 0 }]),
+                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
             ),
             chrono::Utc::now(),
         );
         assert!(matches!(
             allowed,
-            crate::reducer::ProjectionEffect::CapabilityDelegateProjected { .. }
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
     }
 
     #[test]
-    fn delegated_grant_rejects_when_parent_depth_exhausted() {
+    fn regranted_grant_rejects_when_ref_depth_exhausted() {
         let mut proj = ProjectionState::default();
         seed_realm_owner(&mut proj);
         proj.apply_capability_grant(
@@ -2388,22 +2465,22 @@ mod delegation_cycle_tests {
                 G_A,
                 "did:web:alice.example",
                 "did:web:alice.example",
-                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 0 }]),
+                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
             ),
             chrono::Utc::now(),
         );
-        let rejected = proj.apply_capability_delegate(
-            &delegate_op_with_constraints(
+        let rejected = proj.apply_capability_grant(
+            &regrant_op_with_constraints(
                 G_B,
                 G_A,
-                json!([{ "constraint_kind": "delegation_control", "max_delegation_depth": 0 }]),
+                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
             ),
             chrono::Utc::now(),
         );
         assert!(matches!(
             rejected,
             crate::reducer::ProjectionEffect::Rejected { reason }
-                if reason == "delegation_depth_exceeded"
+                if reason == "authority_depth_exceeded"
         ));
     }
 }
@@ -2466,6 +2543,13 @@ mod federation_revoke_fanout_tests {
                     "schema": arkret_wire::CAPABILITY_SCHEMA,
                     "realm_id": REALM,
                     "issuer": OWNER,
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": REALM,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "subject": OWNER,
                     "actions": ["ak.realm.admin"],
                     "capability_action_registry_digest": registry_digest,
@@ -2489,6 +2573,13 @@ mod federation_revoke_fanout_tests {
                 "schema": arkret_wire::CAPABILITY_SCHEMA,
                 "realm_id": REALM,
                 "issuer": OWNER,
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": REALM,
+                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                    "controller_epoch_at_issuance": 0,
+                    "authority_generation": 0
+                }],
                 "subject": PEER_SERVICE_ID,
                 // The realm-level admin capability governs the delivery-binding
                 // policy. `ak.realm.delivery_binding_policy` is an event kind,
@@ -2598,6 +2689,13 @@ mod realm_owner_authority_tests {
                     "schema": arkret_wire::CAPABILITY_SCHEMA,
                     "realm_id": REALM,
                     "issuer": issuer,
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": REALM,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "subject": subject,
                     "actions": actions,
                     "capability_action_registry_digest":

@@ -197,6 +197,13 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                     "schema": arkret_wire::CAPABILITY_SCHEMA,
                     "realm_id": DEMO_REALM_ID,
                     "issuer": "did:web:alice.example",
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": DEMO_REALM_ID,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "subject": "did:web:alice.example",
                     "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
                     "resources": [{
@@ -650,9 +657,9 @@ async fn applet_install_package_registers_bot_projection_smoke() {
     assert!(install_events.iter().any(|event| {
         event.kind == arkret_wire::events::EventKind::CAPABILITY_GRANT
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_kind"]
-                == json!("delegation_control")
+                == json!("authority_control")
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_subkind"]
-                == json!("applet_delegation")
+                == json!("applet_authority")
     }));
     let bot_doc = canonical_did_document(&app, &bot_actor_id).await;
     assert_eq!(bot_doc["id"], json!(bot_actor_id));
@@ -1225,8 +1232,8 @@ async fn seed_applet_message_grant_basis(
         actions: &actions,
         resources: json!([{"kind": "realm", "realm_id": realm_id}]),
         constraints: json!([{
-            "constraint_kind": "delegation_control",
-            "constraint_subkind": "applet_delegation",
+            "constraint_kind": "authority_control",
+            "constraint_subkind": "applet_authority",
             "effect": "allow",
             "evaluation_class": "grant_local",
             "applet_id": package.applet_id,
@@ -1680,12 +1687,20 @@ async fn signed_install_events(
                 .unwrap(),
             ],
             capability_action_registry_digest: None,
-            constraints: vec![GrantConstraint::applet_delegation(
+            constraints: vec![GrantConstraint::applet_authority(
                 AppletId::new(package.applet_id.clone()).unwrap(),
                 package.service_id.clone(),
                 package.registration_epoch.clone(),
             )],
-            parent_grant_id: None,
+            // The installing owner issues these under the Realm authority root.
+            issuer_authority_refs: vec![
+                arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
+                    realm_id: realm_id.clone(),
+                    cell_ref: "ak:cell:ak.component.realm.authority_root.v1:null".to_owned(),
+                    controller_epoch_at_issuance: 0,
+                    authority_generation: 0,
+                },
+            ],
             issued_at: now,
             not_before: None,
             expires_at: None,

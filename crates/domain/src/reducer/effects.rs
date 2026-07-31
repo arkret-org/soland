@@ -230,14 +230,6 @@ pub enum ProjectionEffect {
         grant_id: String,
         realm_id: String,
     },
-    /// P1 — `ak.capability.delegate` event was projected into the
-    /// `ak.component.capability.delegate.v1` or_set cell plus the parent
-    /// grant chain reference (capabilities.md §10 / §12.1).
-    CapabilityDelegateProjected {
-        grant_id: String,
-        realm_id: String,
-        parent_grant_id: Option<String>,
-    },
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — agent
     /// lifecycle FSM transition projected. `agent_id` is the DID
     /// from the payload; `new_state` is the post-transition

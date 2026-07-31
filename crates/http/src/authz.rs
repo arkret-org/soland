@@ -327,7 +327,7 @@ pub fn projected_grant_fixture(
         constraints,
         revoked: false,
         created_at: chrono::Utc::now(),
-        delegated_from: None,
+        issuer_authority_refs: Vec::new(),
         expires_at: None,
     }
 }
@@ -370,22 +370,34 @@ pub(crate) fn grant_revoked_upstream(
     let Some(grant) = map.get(grant_id).copied() else {
         return false;
     };
-    let Some(mut current) = grant.delegated_from.as_deref() else {
-        return false;
-    };
-    let mut visited = 0usize;
-    while let Some(parent) = map.get(current).copied() {
-        if visited >= 64 {
+    // Every `grant` ref is walked: multiple refs only add constraints, so one
+    // revoked ancestor on any path is enough. A grant that names only
+    // `realm_root` refs has no upstream to be revoked.
+    let mut pending: Vec<&str> = grant
+        .issuer_authority_refs
+        .iter()
+        .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id)
+        .collect();
+    let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
+    while let Some(current) = pending.pop() {
+        if !visited.insert(current) {
+            continue;
+        }
+        if visited.len() > 64 {
             return false;
         }
-        visited += 1;
+        let Some(parent) = map.get(current).copied() else {
+            return false;
+        };
         if parent.revoked || is_grant_expired(parent, now) {
             return true;
         }
-        let Some(next) = parent.delegated_from.as_deref() else {
-            return false;
-        };
-        current = next;
+        pending.extend(
+            parent
+                .issuer_authority_refs
+                .iter()
+                .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id),
+        );
     }
     false
 }
@@ -816,9 +828,9 @@ fn evaluate_constraint(
                 ))
             }
         }
-        Constraint::DelegationControl { .. } => {
+        Constraint::AuthorityControl { .. } => {
             // Depth is enforced at chain-walk time. The registered
-            // applet_delegation subkind is checked by the Applet Event
+            // applet_authority subkind is checked by the Applet Event
             // reducer, where registration epoch evidence is available.
             None
         }
@@ -1339,7 +1351,11 @@ mod tests {
             vec!["ak.message.create".to_owned()],
             vec![],
         );
-        child.delegated_from = Some(parent.grant_id.clone());
+        child.issuer_authority_refs = vec![
+            arkret_policy::authz::delegation::IssuerAuthorityRef::Grant {
+                grant_id: parent.grant_id.clone(),
+            },
+        ];
         engine.upsert_projected_grant(child.clone());
         engine.mark_projected_grant_revoked(&parent.grant_id);
         let result = engine.check(

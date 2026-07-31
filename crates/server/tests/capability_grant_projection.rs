@@ -59,6 +59,13 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
                 "grant_id": grant_id,
                 "realm_id": REALM,
                 "issuer": ISSUER,
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": REALM,
+                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                    "controller_epoch_at_issuance": 0,
+                    "authority_generation": 0
+                }],
                 "subject": SUBJECT,
                 "actions": actions,
                 "capability_action_registry_digest": registry_digest,
@@ -192,6 +199,13 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
                     "grant_id": GRANT_ID,
                     "realm_id": REALM,
                     "issuer": ISSUER,
+                    "issuer_authority_refs": [{
+                        "kind": "realm_root",
+                        "realm_id": REALM,
+                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                        "controller_epoch_at_issuance": 0,
+                        "authority_generation": 0
+                    }],
                     "subject": SUBJECT,
                     "actions": ["ak.circle.member.manage"],
                     "resources": [{ "kind": "circle", "realm_id": REALM, "circle_id": CIRCLE_A }],

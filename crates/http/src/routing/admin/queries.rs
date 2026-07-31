@@ -454,7 +454,32 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
             .collect(),
         revoked: grant.revoked,
         created_at: Some(grant.created_at),
-        delegated_from: grant.delegated_from.clone(),
+        // The admin summary reports the wire shape, so the runtime refs are
+        // mapped back to their typed form rather than surfaced as strings.
+        issuer_authority_refs: grant
+            .issuer_authority_refs
+            .iter()
+            .filter_map(|entry| match entry {
+                arkret_policy::authz::delegation::IssuerAuthorityRef::Grant { grant_id } => {
+                    arkret_identifiers::GrantId::new(grant_id.clone()).ok().map(|grant_id| {
+                        arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
+                    })
+                }
+                arkret_policy::authz::delegation::IssuerAuthorityRef::RealmRoot {
+                    realm_id,
+                    cell_ref,
+                    controller_epoch_at_issuance,
+                    authority_generation,
+                } => arkret_identifiers::RealmId::new(realm_id.clone()).ok().map(|realm_id| {
+                    arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
+                        realm_id,
+                        cell_ref: cell_ref.clone(),
+                        controller_epoch_at_issuance: *controller_epoch_at_issuance,
+                        authority_generation: *authority_generation,
+                    }
+                }),
+            })
+            .collect(),
         expires_at: grant.expires_at,
     }
 }

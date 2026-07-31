@@ -783,7 +783,7 @@ async fn applet_registration_requires_realm_admin() {
             constraints: Vec::new(),
             revoked: false,
             created_at: now,
-            delegated_from: None,
+            issuer_authority_refs: Vec::new(),
             expires_at: None,
         });
     validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
@@ -1606,7 +1606,7 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         constraints: Vec::new(),
         revoked,
         created_at: chrono::Utc::now(),
-        delegated_from: None,
+        issuer_authority_refs: Vec::new(),
         expires_at: None,
     }
 }
@@ -1624,13 +1624,22 @@ fn historical_data_event_grant_value(
         "schema": arkret_wire::CAPABILITY_SCHEMA,
         "realm_id": DATA_EVENT_REALM,
         "issuer": issuer,
+        "issuer_authority_refs": [{
+            "kind": "realm_root",
+            "realm_id": DATA_EVENT_REALM,
+            "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+            "controller_epoch_at_issuance": 0,
+            "authority_generation": 0
+        }],
         "subject": subject,
         "actions": [action],
         "resources": [DATA_EVENT_STRAND],
         "issued_at": "2026-05-08T00:00:00.000Z"
     });
     if let Some(parent_grant_id) = parent_grant_id {
-        value["delegated_from"] = Value::String(parent_grant_id.to_owned());
+        // A re-grant names the grant it was issued under; the realm_root ref
+        // above belongs to a root issue, so it is replaced rather than kept.
+        value["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": parent_grant_id }]);
     }
     if revoked {
         value["revoked"] = Value::Bool(true);

@@ -411,10 +411,16 @@ fn capability_grant_from_authz_grant(
         resources: vec![resource_selector],
         capability_action_registry_digest: grant.capability_action_registry_digest,
         constraints,
-        parent_grant_id: grant
-            .delegated_from
-            .map(GrantId::new)
-            .transpose()
+        issuer_authority_refs: grant
+            .issuer_authority_refs
+            .iter()
+            .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id)
+            .map(|id| {
+                GrantId::new(id).map(|grant_id| {
+                    arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()
             .map_err(|error| AppError::internal(error.to_string()))?,
         issued_at: grant.created_at,
         not_before: None,
@@ -532,18 +538,18 @@ fn wire_constraint_from_authz_constraint(
             wire.period = Some(period);
             Ok(wire)
         }
-        Constraint::DelegationControl {
-            max_delegation_depth,
+        Constraint::AuthorityControl {
+            max_authority_depth,
             constraint_subkind,
             applet_id,
             executed_by,
             registration_epoch,
         } => {
             let mut wire = WireGrantConstraint::new(
-                WireGrantConstraintKind::DelegationControl,
+                WireGrantConstraintKind::AuthorityControl,
                 WireGrantConstraintEffect::Allow,
             );
-            wire.max_delegation_depth = max_delegation_depth.map(u64::from);
+            wire.max_authority_depth = max_authority_depth.map(u64::from);
             wire.constraint_subkind = constraint_subkind;
             wire.applet_id = applet_id;
             wire.executed_by = executed_by;

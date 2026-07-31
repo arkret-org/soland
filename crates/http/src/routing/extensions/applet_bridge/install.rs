@@ -188,9 +188,9 @@ fn validate_formal_install_events(
             .constraints
             .iter()
             .filter(|constraint| {
-                constraint.constraint_kind == GrantConstraintKind::DelegationControl
+                constraint.constraint_kind == GrantConstraintKind::AuthorityControl
                     && constraint.constraint_subkind
-                        == Some(GrantConstraintSubkind::AppletDelegation)
+                        == Some(GrantConstraintSubkind::AppletAuthority)
                     && constraint.applet_id.as_ref() == Some(&expected_applet_id)
                     && constraint.executed_by.as_ref() == Some(&package.service_id)
                     && constraint.registration_epoch.as_ref() == Some(&package.registration_epoch)
@@ -198,7 +198,7 @@ fn validate_formal_install_events(
             .count();
         if binding_count != 1 || grant.actions.is_empty() {
             return Err(AppError::invalid_param(
-                "capability grant must carry one exact applet_delegation binding and at least one action",
+                "capability grant must carry one exact applet_authority binding and at least one action",
             )
             .with_wire_code("applet_install_plan_mismatch"));
         }

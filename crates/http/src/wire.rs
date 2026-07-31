@@ -1234,7 +1234,7 @@ pub fn describe(
                 "max_refs": MAX_EVENT_REFS,
                 "max_auth_refs": MAX_AUTHORIZED_BY_REFS,
                 "max_relation_expansion_depth": 32,
-                "max_delegation_depth": MAX_DELEGATION_CHAIN_DEPTH,
+                "max_authority_depth": MAX_DELEGATION_CHAIN_DEPTH,
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,

@@ -24,7 +24,9 @@
 use std::collections::BTreeMap;
 
 use arkret_identifiers::Did;
-use arkret_models_collaboration::governance::grant_constraint::GrantConstraint;
+use arkret_models_collaboration::governance::grant_constraint::{
+    GrantConstraint, IssuerAuthorityRef,
+};
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -221,9 +223,13 @@ pub struct CapabilitySummary {
         deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
     )]
     pub created_at: Option<DateTime<Utc>>,
-    /// Parent grant id when issued via re-delegation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub delegated_from: Option<String>,
+    /// The authority this grant was issued under (`capabilities.md` §10).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(
+        feature = "openapi",
+        salvo(schema(value_type = Vec<serde_json::Value>))
+    )]
+    pub issuer_authority_refs: Vec<IssuerAuthorityRef>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -391,6 +397,6 @@ mod tests {
         let summary: CapabilitySummary = serde_json::from_value(wire).expect("parses");
         assert_eq!(summary.actions, vec!["ak.realm.read".to_owned()]);
         assert!(!summary.revoked);
-        assert!(summary.delegated_from.is_none());
+        assert!(summary.issuer_authority_refs.is_empty());
     }
 }
