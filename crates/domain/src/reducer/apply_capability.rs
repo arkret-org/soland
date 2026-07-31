@@ -964,48 +964,36 @@ impl ProjectionState {
         arkret_policy::owner_may_grant(
             action,
             basis.as_ref(),
-            &self.realm_owner_grantable_profile_actions(realm_id),
+            &self.realm_declared_profiles(realm_id),
         )
         .unwrap_or(false)
     }
 
-    /// Actions the Realm's currently active profiles register as
-    /// owner-grantable (`capabilities.md` section 3.2).
+    /// Profile ids the Realm has declared in its `schema_refs`
+    /// (`capabilities.md` section 3.2).
     ///
-    /// Read from the Realm's own `schema_refs` rather than a deployment-wide
-    /// profile list: owner grant authority is a per-Realm question, and a
-    /// profile the Realm never claimed must not widen its owner ceiling.
-    /// A profile action absent here stays non-grantable by the owner aggregate
-    /// even while the profile is active, and being listed does not waive that
-    /// profile's own registration / constraint / evidence gates.
-    fn realm_owner_grantable_profile_actions(&self, realm_id: &str) -> Vec<String> {
-        let Some(metadata) =
-            self.realm_null_subject_cell_value(realm_id, "ak.component.realm.metadata.v1")
-        else {
+    /// Read from the Realm's own metadata rather than a deployment-wide list:
+    /// owner grant authority over a profile action is a per-Realm question,
+    /// and a profile the Realm never claimed must not widen its owner
+    /// ceiling. The declaration is the whole condition — there is no second
+    /// per-action whitelist — and a grantable action still passes its
+    /// profile's own registration / constraint / evidence gates downstream.
+    fn realm_declared_profiles(&self, realm_id: &str) -> Vec<String> {
+        let Some(metadata) = self.realm_metadata_cell_value(realm_id) else {
             return Vec::new();
         };
-        let mut actions = std::collections::BTreeSet::new();
-        for profile_id in metadata
+        metadata
             .get("schema_refs")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .filter_map(Value::as_str)
-        {
-            let Some(requirements) =
+            .filter(|reference| {
                 arkret_schema::generated::profile_requirements::PROFILE_REQUIREMENTS
-                    .get(profile_id)
-            else {
-                continue;
-            };
-            actions.extend(
-                requirements
-                    .owner_grant_authority_actions
-                    .iter()
-                    .map(|action| (*action).to_owned()),
-            );
-        }
-        actions.into_iter().collect()
+                    .contains_key(reference)
+            })
+            .map(ToOwned::to_owned)
+            .collect()
     }
 
     #[allow(clippy::too_many_arguments)]
