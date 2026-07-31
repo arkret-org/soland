@@ -335,7 +335,7 @@ fn resolve_current_ed25519_key(
     let did = Did::new(controller_id.to_owned())
         .map_err(|error| format!("controller DID invalid: {error}"))?;
     let document = resolver
-        .resolve_did(&did)
+        .resolve_did_document(&did)
         .map_err(|error| format!("DID resolution failed: {error}"))?;
     if document.id != did {
         return Err("resolved DID document id does not match requested DID".to_owned());
@@ -437,12 +437,16 @@ mod tests {
             self.docs.contains_key(did.as_str())
         }
 
-        fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
-            self.docs.get(did.as_str()).cloned().ok_or_else(|| {
-                arkret_identity::IdentityError::Protocol(format!(
-                    "stub resolver does not handle {did}"
-                ))
-            })
+        fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
+            self.docs
+                .get(did.as_str())
+                .cloned()
+                .map(arkret_identity::ResolvedDid::proofless)
+                .ok_or_else(|| {
+                    arkret_identity::IdentityError::Protocol(format!(
+                        "stub resolver does not handle {did}"
+                    ))
+                })
         }
     }
 

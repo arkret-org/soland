@@ -638,10 +638,6 @@ fn principal_binding_key(
         purpose: arkret_identity::DidBindingPurpose::Principal,
         policy_digest: state.did_binding_policy_digest().ok()?,
         verification_method: Some(arkret_wire::DidUrl::new(verification_method.to_owned()).ok()?),
-        // soland's resolver boundary does not surface a per-document version id
-        // on this path; the acceptance records that as limited trust instead of
-        // inventing a pin.
-        version_id: None,
     })
 }
 
@@ -680,21 +676,18 @@ fn principal_binding_acceptance(
     // The acceptance inherits the high-risk freshness window that gated it, so
     // a binding can never outlive the evidence it rests on.
     let expires_at = verified_at + chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
-    // soland's resolver boundary does not surface a per-document history head
-    // or version id here, so the acceptance MUST record that it is
-    // limited-trust rather than silently claiming a pin it does not have.
-    let limited_trust = arkret_identity::LimitedTrustReason::for_pins(None, None);
-    // §5 — the evidence digest commits to the canonical evidence *envelope*,
-    // never to the bare document digest. soland's resolver boundary surfaces no
-    // method proof set, history head or version id on this path, so the
-    // envelope carries only its two core members; that is still strictly
-    // stronger than the old `evidence_digest = document_digest`, because a
-    // policy change now moves the evidence digest too. Nothing is invented here
-    // to pad it out.
-    let evidence_digest =
-        arkret_identity::EvidenceEnvelope::new(document_digest.clone(), key.policy_digest.clone())
-            .digest()
-            .ok()?;
+    // §5.2 — the evidence digest is the digest of the canonical evidence
+    // receipt, and the receipt is retained so an auditor can recompute it.
+    // soland's resolver boundary surfaces no method proof set on this path, so
+    // `method_proofs` is empty: that is the normative degenerate form for a
+    // proofless resolution, not a placeholder standing in for evidence. It is
+    // still strictly stronger than the `evidence_digest = document_digest` this
+    // replaced, because the receipt also commits to the resolved method.
+    let receipt = arkret_identity::EvidenceReceipt::new(
+        did.method(),
+        document_digest.clone(),
+        &arkret_identity::MethodEvidence::none(),
+    );
     let input = arkret_identity::VerifiedDidBindingInput {
         did: did.clone(),
         trust_domain: key.trust_domain.clone(),
@@ -704,8 +697,12 @@ fn principal_binding_acceptance(
         document_digest,
         history_head: None,
         version_id: None,
-        limited_trust,
-        evidence_digest,
+        // §5.5 — neither pin is available here, and this path cannot tell a
+        // method that has no history from one whose history the resolver did not
+        // surface, so both states are recorded rather than omitted.
+        limited_trust: arkret_identity::LimitedTrust::for_proofless_method(None, None).record_for(),
+        evidence_digest: receipt.digest().ok()?,
+        evidence_dependencies: receipt.evidence_dependencies().ok()?,
         policy_digest: key.policy_digest.clone(),
         verified_at,
         refresh_after: None,
@@ -713,7 +710,7 @@ fn principal_binding_acceptance(
         status: arkret_identity::DidBindingStatus::Active,
     };
     let binding = arkret_identity::VerifiedDidBinding::new(input).ok()?;
-    arkret_identity::AcceptedDidBinding::new(binding, document.clone()).ok()
+    arkret_identity::AcceptedDidBinding::new(binding, document.clone(), receipt).ok()
 }
 
 /// Whether an acceptance for this verification method may be cached at all.
@@ -947,7 +944,7 @@ pub fn resolve_did_document(state: &AppState, did: &Did) -> Result<DidDocument, 
     let document = state
         .dids()
         .resolver()
-        .resolve_did(did)
+        .resolve_did_document(did)
         .map_err(|error| format!("DID resolution failed: {error}"))?;
     if document.id != *did {
         return Err("resolved DID document id does not match requested DID".to_owned());
@@ -979,9 +976,13 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
         &self.document.id == did
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
         if self.supports(did) {
-            return Ok(self.document.clone());
+            // Already pinned: this adapter only reuses the SDK key lookup, so it
+            // asserts no method evidence of its own.
+            return Ok(arkret_identity::ResolvedDid::proofless(
+                self.document.clone(),
+            ));
         }
         Err(arkret_identity::IdentityError::Protocol(
             "resolved DID document does not match requested DID".to_owned(),

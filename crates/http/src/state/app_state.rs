@@ -948,32 +948,44 @@ impl AppState {
         self.did_bindings = store;
     }
 
-    /// The resolver / Realm policy digest every binding this deployment accepts
-    /// is scoped to (`did-usage-and-verification.md` §5 `policy_digest`).
+    /// The §5.3 `policy_digest` every binding this deployment accepts is scoped
+    /// to.
     ///
-    /// It covers the values that decide whether a resolution is admissible at
-    /// all: the DID method allow list, the default principal method, the trust
-    /// roots, the cache TTL, the resolver fail mode and soland's one
-    /// deployment-local switch, `development_mode`. Changing any of them yields
-    /// a different digest, so bindings accepted under the old policy stop
-    /// matching instead of being silently reused.
+    /// The computation is the SDK's canonical resolver policy snapshot
+    /// (`ak.did.resolver_policy.v1`) and nothing else, so soland, teabay,
+    /// bridges, coauth and inkson derive byte-identical digests from the same
+    /// policy value instead of each encoding one.
     ///
-    /// The canonical encoding is the SDK's
-    /// [`arkret_identity::PolicyDigestInput`], not a soland-private JSON shape,
-    /// so soland, inkson, floria and cotest derive byte-identical digests from
-    /// the same policy value.
+    /// The snapshot's three required members — the accepted DID methods, the
+    /// resolver fail mode and the trust roots — are what decide whether a
+    /// resolution is admissible, and changing any of them changes the digest,
+    /// which changes every [`arkret_identity::VerifiedDidBindingKey`], which
+    /// makes every acceptance taken under the old policy structurally
+    /// unreachable.
     ///
-    /// `trust_domain` is deliberately **not** an input:
+    /// # Why `development_mode` is no longer an input
+    ///
+    /// It used to be a digest extension. §5.3 closed the snapshot: a deployment
+    /// with extra admissibility dimensions MUST register its own
+    /// `policy_profile` with a closed `profile_policy` schema, and v1 registers
+    /// only the base profile. Registering one would be right if the dimension
+    /// could discriminate anything here — it cannot. `development_mode` comes
+    /// from the startup `AppConfig` snapshot, and the acceptance store is the
+    /// process-local `InMemoryVerifiedDidBindingStore` built alongside it in
+    /// `AppState::new`, so no process can ever read an acceptance made under a
+    /// different value of the flag. Keeping it would state a scoping property
+    /// the store already provides structurally.
+    ///
+    /// Giving this store a durable backend would change that, and would then
+    /// require a registered profile rather than a re-added extension.
+    ///
+    /// `trust_domain` is likewise not an input:
     /// [`arkret_identity::VerifiedDidBindingKey`] already carries it as its own
     /// key dimension, so folding it in here scopes nothing extra.
     pub fn did_binding_policy_digest(
         &self,
     ) -> Result<arkret_identifiers::Hash, arkret_identity::DigestError> {
-        let config = self.config();
-        let policy = crate::state::did_resolver_chain::did_resolver_policy(config);
-        arkret_identity::PolicyDigestInput::new(&policy)
-            .with_extension("development_mode", config.development_mode)
-            .digest()
+        crate::state::did_resolver_chain::did_resolver_policy(self.config()).policy_digest()
     }
 
     /// Drop every accepted binding for `did` in this trust domain

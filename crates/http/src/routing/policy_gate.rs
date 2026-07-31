@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, Hash, RealmId};
-use arkret_identity::{DidDocument, DidResolver};
+use arkret_identity::DidResolver;
 use salvo::http::StatusCode;
 use serde_json::{Value, json};
 use soland_services::operation_semantics as kinds;
@@ -65,7 +65,7 @@ impl DidResolver for SharedDidResolver {
         self.inner.supports(did)
     }
 
-    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<DidDocument> {
+    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
         self.inner.resolve_did(did)
     }
 }
