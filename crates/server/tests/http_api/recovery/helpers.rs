@@ -510,10 +510,15 @@ pub(crate) async fn put_key_backup(
     body: &Value,
     expected_status: StatusCode,
 ) -> Value {
+    // `key-management.md` §7 makes `Idempotency-Key` mandatory on a key-backup
+    // PUT. The key is derived from the backup id so a retry of the same
+    // fixture write replays rather than conflicting, which is what these tests
+    // exercise — they are about recovery policy, not about idempotency.
     let mut response = TestClient::put(format!(
         "http://server/_arkret/self/keys/backups/{backup_id}"
     ))
     .add_header("authorization", format!("Bearer {token}"), true)
+    .add_header("idempotency-key", format!("fixture:{backup_id}"), true)
     .json(body)
     .send(&app_from_state(state))
     .await;

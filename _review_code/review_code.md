@@ -191,16 +191,40 @@
 - Prevention dimension: online handlers must not expose an unbounded `projected_events()` API;
   new lookup shapes require a storage predicate and an explicit error policy.
 
-## 2026-07-31 — the whole `http_api` integration suite fails on main
+## 2026-07-31 — `http_api` carries a standing failure backlog with several distinct causes
 
-- Severity: P0 verification blocker: every change touching an HTTP route currently ships without
-  integration evidence.
-- Status: open. Pre-existing at `soland@2bf010fa`; confirmed by running the suite on a stashed
-  working tree.
-- Evidence: `cargo test -p soland --test http_api` fails broadly. The narrowest case,
-  `health::health_and_describe_work`, asserts at `crates/server/tests/http_api/health.rs:80` that
-  `describe.supported_reducer_profiles` contains `ak.reducer.v1`; the served describe no longer
-  lists it, so every test that boots the app through the same describe path fails with it.
-- Prevention dimension: a reducer-profile identifier that the describe surface stops advertising
-  should fail one contract assertion, not the entire integration suite. The suite's shared bootstrap
-  makes a single describe drift indistinguishable from a real regression in 200+ unrelated cases.
+- Severity: P1 verification gap. Not "the suite is down": 182 of 217 passed when this was
+  measured. But a standing red suite means a change touching an HTTP route cannot tell its own
+  regression from the backlog.
+- Correction: an earlier entry in this file claimed the whole suite failed and blamed one describe
+  drift. That was wrong on both counts — it generalized from a truncated `grep FAILED` — and this
+  entry replaces it. `2bf010fa`'s own message already reported the backlog honestly
+  ("45 workspace failures against the baseline's 50").
+- Resolved here (6 cases): `recovery::did_recovery_backup::*` (5) sent a key-backup PUT with no
+  `Idempotency-Key`; the header became mandatory when spec `bcf57efa` landed and the fixture
+  helper was not carried with it. `health::health_and_describe_work` asserted
+  `supported_reducer_profiles` contains `ak.reducer.v1`, an id that is not in
+  `reducer-profile-registry.json` at all; `2b04a1f0` correctly moved the describe surface to the
+  registered `ak.profile.federation_minimal.v1` and left the literal behind. The assertion now
+  resolves every advertised id through the registry instead of naming one.
+- Remaining, by cause:
+  - `quorum_unreachable` / "current proposal authority profile is unavailable" (~10 cases:
+    `cors_config`, `events::invite_create*`, `lifecycle`, `projection`, `read_receipts`).
+    `build_test_realm_basis` (`crates/server/tests/http_api/common.rs`) seals the authority-root
+    cell, the owner grant and a data-plane grant, but no `ak.component.notary.v1` op. Any Event
+    carrying `seal_basis` then reaches `submit/value.rs` →
+    `NotaryWorker::current_notary_profile_for_events`, finds no sealed op for the notary cell and
+    no projected one from the submitted Event, and `resolve_notary_profile` returns `None` on its
+    `ops.is_empty()` guard. The fixture basis was rewritten for the authority-root model and the
+    notary cell was not carried over — a fixture gap, not a production defect.
+  - `capability_denied` on `ak.self.moderation.report` (2 cases): the same fixture's
+    `FIXTURE_DATA_PLANE_GRANT_ACTIONS` does not cover the moderation action, so the derived
+    moderation cell has no covering grant.
+  - `bad_json` on `ak.peer.events.query.resolve` (1 case): federation request body shape drift.
+  - Signal / WebRTC delivery (`devices_webrtc` 4, `push_keys::push_profile` 2, `read_receipts` 1)
+    and an unlabeled remainder (`agents` 2, `auth`, `directory_index`, `events`, `mimi` 2,
+    `lifecycle::strand_tracks_update_*`) — each needs its own diagnosis.
+- Prevention dimension: the fixture Realm basis is one function every control-plane test depends
+  on, so a rewrite of it moves ~10 tests at once with no signal about which contract actually
+  changed. It needs a self-check that the basis it builds is governable — at minimum, that the
+  notary cell resolves — so the failure names the fixture rather than ten unrelated features.
