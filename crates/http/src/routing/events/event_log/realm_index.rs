@@ -58,9 +58,7 @@ pub(super) fn invite_create_actor_is_inviter(
 /// `check_membership_join_admission`
 /// later in the submit pipeline, not here.
 pub(super) fn member_self_knock(object: &serde_json::Map<String, Value>, actor: &str) -> bool {
-    if object.get("kind").and_then(Value::as_str)
-        != Some(arkret_wire::events::EventKind::MEMBER_STATE)
-    {
+    if object.get("kind").and_then(Value::as_str) != Some(arkret_wire::EventKind::MEMBER_STATE) {
         return false;
     }
     let Some(payload) = object.get("payload") else {
@@ -94,9 +92,7 @@ pub(super) async fn member_join_accepts_pending_invite(
     // `ak.member.state{membership:join, invite_ref}` would bypass the
     // invite-lifecycle transition and the registry's atomic two-cell
     // contract, so it must not receive the not-yet-member exemption.
-    if object.get("kind").and_then(Value::as_str)
-        != Some(arkret_wire::events::EventKind::INVITE_ACCEPT)
-    {
+    if object.get("kind").and_then(Value::as_str) != Some(arkret_wire::EventKind::INVITE_ACCEPT) {
         return false;
     }
     let Some(payload) = object.get("payload") else {
@@ -142,9 +138,7 @@ pub(super) async fn invitee_cancels_pending_invite(
     actor: &str,
     realm_id: &str,
 ) -> bool {
-    if object.get("kind").and_then(Value::as_str)
-        != Some(arkret_wire::events::EventKind::INVITE_CANCEL)
-    {
+    if object.get("kind").and_then(Value::as_str) != Some(arkret_wire::EventKind::INVITE_CANCEL) {
         return false;
     }
     let Some(payload) = object.get("payload") else {

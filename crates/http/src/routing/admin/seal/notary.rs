@@ -343,7 +343,7 @@ pub(crate) async fn admin_reconfigure_notary(
     )
     .await?;
     let mut event = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::REALM_NOTARY,
+        arkret_wire::EventKind::REALM_NOTARY,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },

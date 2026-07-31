@@ -1,13 +1,11 @@
 use arkret_event_draft::Operation;
+use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 // Standard protocol event kind constants intentionally live in the SDK.
 // Soland code should refer to `arkret_wire::events::kinds::*` directly instead
 // of re-exporting legacy aliases from this module.
 use serde_json::Value;
 
 use crate::artifacts;
-
-pub const MLS_GOVERNANCE_BINDING_FULL_PROFILE: &str = "ak.profile.mls_governance_binding.full.v1";
-pub const MLS_REDUCER_PROFILE_V1: &str = "ak.reducer.v1";
 
 // AKP-0007 — typed Relation kind couples a "wide synthesis" Strand (often
 // Realm-default scope) to a "narrow discussion" Strand bound to a
@@ -17,7 +15,7 @@ pub const MLS_REDUCER_PROFILE_V1: &str = "ak.reducer.v1";
 pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discussion_of";
 
 // COT-06-004: Realm default-Strand pointer event. The canonical event kind
-// constant is exposed as `arkret_wire::events::EventKind::REALM_SET_DEFAULT_STRAND`.
+// constant is exposed as `arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND`.
 
 // Morph lifecycle (round 13). Same shape as Strand — no dedicated tombstone.
 // `ak.field.position.move` and `ak.field.position.reorder` were removed in
@@ -168,11 +166,11 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
         return Err("mls_governance_binding_encoding_profile_invalid");
     }
     if binding.get("binding_profile").and_then(Value::as_str)
-        != Some(MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+        != Some(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)
     {
         return Err("mls_governance_binding_profile_invalid");
     }
-    if binding.get("reducer_profile").and_then(Value::as_str) != Some(MLS_REDUCER_PROFILE_V1) {
+    if binding.get("reducer_profile").and_then(Value::as_str) != Some(CORE_REDUCER_PROFILE) {
         return Err("mls_governance_binding_reducer_profile_invalid");
     }
     let Some(group_id) = payload
@@ -266,7 +264,7 @@ pub fn canonical_kind_string(operation: &Operation) -> String {
 }
 
 pub fn operation_is_message_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::events::EventKind::MESSAGE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::MESSAGE_CREATE)
 }
 
 pub fn operation_is_redaction(operation: &Operation) -> bool {
@@ -284,16 +282,15 @@ pub fn operation_is_invite(operation: &Operation) -> bool {
 }
 
 pub fn operation_is_invite_create(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::events::EventKind::INVITE_CREATE)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::INVITE_CREATE)
 }
 
 pub fn operation_is_invite_claim(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation) == Some(arkret_wire::events::EventKind::INVITE_CLAIM)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::INVITE_CLAIM)
 }
 
 pub fn operation_is_invite_third_party(operation: &Operation) -> bool {
-    canonical_kind_for_operation(operation)
-        == Some(arkret_wire::events::EventKind::INVITE_THIRD_PARTY)
+    canonical_kind_for_operation(operation) == Some(arkret_wire::EventKind::INVITE_THIRD_PARTY)
 }
 
 pub fn operation_is_realm_lifecycle(operation: &Operation) -> bool {
@@ -322,7 +319,7 @@ pub fn ryw_receipt_durable_event_allowed(active_profiles: &[String]) -> bool {
 
 /// SEC-08 — does this Realm-lifecycle payload (`ak.realm.create` /
 /// `ak.realm.policy_bundle`) declare the minimal-metadata profile
-/// [`arkret_mls::MINIMAL_METADATA_REALM_PROFILE`]
+/// [`ProfileId::MLS_MINIMAL_METADATA_REALM_V1`]
 /// (`crypto-media/encryption-and-audit.md` §2.9)?
 ///
 /// The declaration is the `profiles[]` / `active_profiles[]` array the T09/T12
@@ -336,7 +333,7 @@ pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> b
             .and_then(serde_json::Value::as_array)
             .is_some_and(|profiles| {
                 profiles.iter().any(|profile| {
-                    profile.as_str() == Some(arkret_models_crypto::MINIMAL_METADATA_REALM_PROFILE)
+                    profile.as_str() == Some(ProfileId::MLS_MINIMAL_METADATA_REALM_V1)
                 })
             })
     })
@@ -357,6 +354,7 @@ mod audit_profile_tests {
     #[test]
     fn minimal_metadata_realm_detected_from_profiles_arrays() {
         use serde_json::json;
+
         // SEC-08 — declaration is recognised under `profiles[]` and
         // `active_profiles[]`; absent / other profiles are not minimal.
         assert!(payload_declares_minimal_metadata_realm(&json!({
@@ -397,8 +395,8 @@ mod tests {
                 "next_epoch": 8,
                 "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-                "reducer_profile": MLS_REDUCER_PROFILE_V1
+                "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+                "reducer_profile": CORE_REDUCER_PROFILE
             }
         });
 
@@ -424,8 +422,8 @@ mod tests {
                 "next_epoch": 8,
                 "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-                "reducer_profile": MLS_REDUCER_PROFILE_V1
+                "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+                "reducer_profile": CORE_REDUCER_PROFILE
             }
         });
         assert_eq!(
@@ -450,8 +448,8 @@ mod tests {
                 "next_epoch": 8,
                 "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
                 "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                "binding_profile": MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-                "reducer_profile": MLS_REDUCER_PROFILE_V1
+                "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+                "reducer_profile": CORE_REDUCER_PROFILE
             }
         });
         assert_eq!(

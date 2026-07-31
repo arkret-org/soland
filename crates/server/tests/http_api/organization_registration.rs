@@ -8,7 +8,7 @@ use arkret_models_identity::{
     OrganizationRegistrationScope, OrganizationRegistrationStatus,
 };
 use arkret_signatures::{Ed25519DetachedJwsSigner, EventSigner};
-use arkret_wire::PayloadProof;
+use arkret_wire::{PayloadProof, ProofContextId};
 use chrono::Duration;
 use parking_lot::RwLock;
 use salvo::test::{ResponseExt, TestClient};
@@ -99,7 +99,7 @@ fn signed_control_proof(
         jws: "pending".to_owned(),
     };
     let transcript = serde_json::json!({
-        "context": arkret_models_identity::ORGANIZATION_REGISTRATION_CONTROL_PURPOSE,
+        "context": ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1,
         "challenge_id": challenge.challenge_id,
         "organization_id": challenge.organization_id,
         "local_admin_subject": challenge.local_admin_subject,

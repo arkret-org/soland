@@ -4,16 +4,12 @@ use arkret_models_discovery::ServiceDescribe;
 use arkret_policy::profile_semantics::{
     ProfileSemanticRequirements, collect_profile_semantic_requirements,
 };
+use arkret_wire::{ProfileId, SchemaId};
 use serde_json::Value;
 
 use crate::state::AppState;
 use crate::wire;
 
-const PROFILE_FEDERATION_MINIMAL: &str = "ak.profile.federation_minimal.v1";
-const PROFILE_MLS_GOVERNANCE_FULL: &str = "ak.profile.mls_governance_binding.full.v1";
-const SCHEMA_EVENT: &str = "ak.schema.event.v1";
-const SCHEMA_EVENT_PAYLOAD: &str = "ak.schema.event_payload.v1";
-const SCHEMA_CAPABILITY: &str = "ak.schema.capability.v1";
 const CODE_PROFILE_UNSUPPORTED: &str = "profile_unsupported";
 
 #[derive(Clone, Debug)]
@@ -72,10 +68,10 @@ impl FederationProfileIntersection {
             self.require_feature(feature)?;
         }
         if atoms.requires_capability_semantics {
-            self.require_schema(SCHEMA_CAPABILITY, atoms.kind.as_deref())?;
+            self.require_schema(SchemaId::CAPABILITY_V1, atoms.kind.as_deref())?;
         }
         if atoms.requires_mls_governance {
-            self.require_profile_semantics(PROFILE_MLS_GOVERNANCE_FULL)?;
+            self.require_profile_semantics(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)?;
         }
         Ok(())
     }
@@ -203,11 +199,14 @@ impl SemanticClaims {
         }
         if schema_can_fall_back_to_event_payload(schema)
             && event_kind.is_some_and(|kind| self.covers_event_kind(kind))
-            && contains_str(&self.requirements.required_schemas, SCHEMA_EVENT_PAYLOAD)
+            && contains_str(
+                &self.requirements.required_schemas,
+                SchemaId::EVENT_PAYLOAD_V1,
+            )
         {
             return true;
         }
-        if schema == SCHEMA_EVENT_PAYLOAD
+        if schema == SchemaId::EVENT_PAYLOAD_V1
             && event_kind.is_some_and(|kind| self.covers_event_kind(kind))
         {
             return true;
@@ -253,13 +252,13 @@ impl SemanticAtoms {
                 .map(ToOwned::to_owned),
             ..Self::default()
         };
-        atoms.schemas.insert(SCHEMA_EVENT.to_owned());
+        atoms.schemas.insert(SchemaId::EVENT_V1.to_owned());
         if let Some(requirements) = envelope.get("requirements") {
             collect_requirement_schemas(requirements, &mut atoms.schemas);
             collect_requirement_features(requirements, &mut atoms.features);
         }
         if atoms.schemas.is_empty() {
-            atoms.schemas.insert(SCHEMA_EVENT_PAYLOAD.to_owned());
+            atoms.schemas.insert(SchemaId::EVENT_PAYLOAD_V1.to_owned());
         }
         collect_payload_semantics(envelope.get("payload").unwrap_or(envelope), &mut atoms, 0);
         atoms.finalize_risk_flags();
@@ -306,7 +305,7 @@ fn local_semantic_claims(state: &AppState) -> SemanticClaims {
         state.settings().candidate_join_policy_enabled,
     );
     let mut profiles = profile_ids_from_description(&description);
-    profiles.insert(PROFILE_FEDERATION_MINIMAL.to_owned());
+    profiles.insert(ProfileId::FEDERATION_MINIMAL_V1.to_owned());
     let features = feature_ids_from_description(&description);
     SemanticClaims::from_profiles_and_features(profiles, features)
 }
@@ -316,7 +315,7 @@ async fn peer_semantic_claims(
     source_service_id: &str,
     source_trust_domain: Option<&str>,
 ) -> Result<SemanticClaims, FederationProfileGateRejection> {
-    let mut profiles = BTreeSet::from([PROFILE_FEDERATION_MINIMAL.to_owned()]);
+    let mut profiles = BTreeSet::from([ProfileId::FEDERATION_MINIMAL_V1.to_owned()]);
     let mut features = BTreeSet::new();
     if let Some(description) = fetch_peer_description(state, source_service_id).await {
         if description.service_id.as_str() != source_service_id {
@@ -687,7 +686,7 @@ fn contains_str(values: &[String], needle: &str) -> bool {
 
 fn schema_can_fall_back_to_event_payload(schema: &str) -> bool {
     schema.starts_with("ak.schema.")
-        && schema != SCHEMA_CAPABILITY
+        && schema != SchemaId::CAPABILITY_V1
         && schema != "ak.schema.grant_constraint.v1"
         && schema != "ak.schema.resource_selector.v1"
 }

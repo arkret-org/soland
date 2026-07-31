@@ -51,35 +51,35 @@ const REGISTERED_ACCOUNT_DATA_KEY_PATTERNS: &[AccountDataKeySpec] = &[
     // local Event-fold cache and never an account-data surface
     // (zh/models/sidecar.md §7.2.4).
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_AGENT_SIDECAR_VIEW_STATE,
+        account_data_key: arkret_wire::AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_REMINDER,
+        account_data_key: arkret_wire::AccountDataKey::REMINDERS_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SCHEDULED_SEND,
+        account_data_key: arkret_wire::AccountDataKey::SCHEDULED_SEND_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SNOOZE,
+        account_data_key: arkret_wire::AccountDataKey::SNOOZE_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SAVED,
+        account_data_key: arkret_wire::AccountDataKey::SAVED_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_DRAFT,
+        account_data_key: arkret_wire::AccountDataKey::DRAFT_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_FILE_TRANSFER,
+        account_data_key: arkret_wire::AccountDataKey::FILE_TRANSFER_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
-        account_data_key: arkret_wire::constants::ACCOUNT_DATA_KEY_SEARCH_INDEX_MANIFEST,
+        account_data_key: arkret_wire::AccountDataKey::SEARCH_INDEX_MANIFEST_V1,
         controller_private: true,
     },
     AccountDataKeySpec {
@@ -339,7 +339,7 @@ async fn persist_account_data_event(
         EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:")).map_err(|error| {
             AppError::internal(format!("account_data Event id invalid: {error}"))
         })?,
-        arkret_wire::events::EventKind::ACCOUNT_DATA_SET,
+        arkret_wire::EventKind::ACCOUNT_DATA_SET,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },

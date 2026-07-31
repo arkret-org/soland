@@ -4,9 +4,7 @@ pub(super) fn validate_control_move_seal_basis(
     object: &serde_json::Map<String, Value>,
     allow_realm_bootstrap_followup_without_basis: bool,
 ) -> Result<(), EventValidationError> {
-    if object.get("kind").and_then(Value::as_str)
-        == Some(arkret_wire::events::EventKind::REALM_CREATE)
-    {
+    if object.get("kind").and_then(Value::as_str) == Some(arkret_wire::EventKind::REALM_CREATE) {
         if object.contains_key("seal_ref")
             || object.contains_key("auth_context")
             || object.contains_key("seal_basis")
@@ -41,7 +39,7 @@ pub(super) fn validate_control_move_seal_basis(
     let is_reducer_input = object
         .get("kind")
         .and_then(Value::as_str)
-        .map(arkret_wire::events::EventKind::from)
+        .map(arkret_wire::EventKind::from)
         .and_then(|kind| kind.descriptor())
         .is_some_and(|descriptor| descriptor.reducer_input);
     if !is_reducer_input {

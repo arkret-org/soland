@@ -912,7 +912,7 @@ fn erasure_receipt_operation(receipt: Value) -> Option<arkret_event_draft::Opera
     Some(arkret_event_draft::Operation::create(
         operation_id,
         realm_id,
-        arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT,
+        arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT,
         receipt,
     ))
 }

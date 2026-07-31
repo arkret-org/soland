@@ -450,10 +450,7 @@ async fn upload_keypackage(
             "key_package_bytes_b64": key_package_bytes_b64,
         });
         trust_binding.insert_into(&mut publish_payload);
-        let op = build_op(
-            arkret_wire::events::EventKind::MLS_KEYPACKAGE,
-            publish_payload,
-        );
+        let op = build_op(arkret_wire::EventKind::MLS_KEYPACKAGE, publish_payload);
         let effect = state.projections().apply_mls_keypackage_publish(&op);
         match effect {
             ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackagePublished { .. }) => {}
@@ -1475,7 +1472,7 @@ async fn claim_keypackages_for_request_inner(
         "claim_expires_at_unix_ms": body.expires_at.timestamp_millis()
     });
     claim_binding.insert_into(&mut payload);
-    let op = build_op(arkret_wire::events::EventKind::MLS_KEYPACKAGE, payload);
+    let op = build_op(arkret_wire::EventKind::MLS_KEYPACKAGE, payload);
     let effect = state.projections().apply_mls_keypackage_claim(&op);
     let (claimed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
         ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackageClaimed {
@@ -2001,7 +1998,7 @@ async fn validate_sidecar_keypackage_consume(
         })?;
     let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope)
         .map_err(|error| AppError::internal(format!("stored Sidecar Welcome invalid: {error}")))?;
-    if event.kind.as_str() != arkret_wire::events::EventKind::MLS_WELCOME {
+    if event.kind.as_str() != arkret_wire::EventKind::MLS_WELCOME {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "Sidecar consume reference is not a Welcome Event",
@@ -2607,7 +2604,7 @@ async fn current_agent_keypackage_trust_binding(
         .and_then(Value::as_str)
         .and_then(|value| chrono::DateTime::parse_from_rfc3339(value).ok())
         .is_some_and(|expires_at| expires_at.with_timezone(&Utc) <= now());
-    if event.kind.as_str() != arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
+    if event.kind.as_str() != arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
         || payload.get("agent_id").and_then(Value::as_str) != Some(principal.as_str())
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
         || expired
@@ -3091,7 +3088,7 @@ mod trust_binding_tests {
         )
         .unwrap();
         let authorize_event = arkret_wire::Event::new(
-            arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
+            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
             arkret_wire::ScopeRef::Realm { realm_id },
             principal.clone(),
             1,
@@ -3117,7 +3114,7 @@ mod trust_binding_tests {
                 actor_id: principal.to_string(),
                 actor_seq: 1,
                 realm_id: Some(authorize_event.realm_id.to_string()),
-                kind: arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
+                kind: arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
                 schema_id: "ak.schema.event.v1".to_owned(),
                 canonical_digest: format!("sha256:{}", "a".repeat(64)),
                 canonical_bytes: Vec::new(),

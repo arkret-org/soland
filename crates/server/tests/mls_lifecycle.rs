@@ -23,7 +23,7 @@ use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_models_identity::{
     CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };
-use arkret_wire::NonEmptyString;
+use arkret_wire::{CORE_REDUCER_PROFILE, NonEmptyString};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
@@ -797,8 +797,8 @@ async fn mls_lifecycle_end_to_end() {
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
         "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": CORE_REDUCER_PROFILE
     });
 
     let mut genesis = signed_event(
@@ -941,8 +941,8 @@ async fn mls_lifecycle_end_to_end() {
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
         "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
-        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": CORE_REDUCER_PROFILE
     });
     let mut commit = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e3",

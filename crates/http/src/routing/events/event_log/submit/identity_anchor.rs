@@ -48,10 +48,10 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     let first_kind = event_string_field_from_value(&envelopes[0], "kind");
     let second_kind = event_string_field_from_value(&envelopes[1], "kind");
-    let is_bootstrap = first_kind.as_deref() == Some(arkret_wire::events::EventKind::REALM_CREATE)
-        && second_kind.as_deref() == Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE);
+    let is_bootstrap = first_kind.as_deref() == Some(arkret_wire::EventKind::REALM_CREATE)
+        && second_kind.as_deref() == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE);
     let is_reanchor = first_kind.as_deref() == Some("ak.device.reanchor")
-        && second_kind.as_deref() == Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE);
+        && second_kind.as_deref() == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE);
     if !is_bootstrap && !is_reanchor {
         return Err(unit_error(
             "identity anchor unit must be [ak.realm.create, ak.device.authorize] or [ak.device.reanchor, ak.device.authorize]",
@@ -166,7 +166,7 @@ pub(super) async fn submit_identity_anchor_batch(
     }
     if is_bootstrap
         && existing.iter().any(|record| {
-            record.kind == arkret_wire::events::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::REALM_CREATE
                 && (record.realm_id.as_deref() == Some(first.realm_id.as_str())
                     || (record.actor_id == first.actor_id
                         && record
@@ -486,9 +486,9 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         .map(|submission| typed_event_to_canonical_value(submission.event.clone()))
         .collect::<Result<Vec<_>, _>>()?;
     if event_string_field_from_value(&envelopes[0], "kind").as_deref()
-        != Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE)
+        != Some(arkret_wire::EventKind::DEVICE_AUTHORIZE)
         || event_string_field_from_value(&envelopes[1], "kind").as_deref()
-            != Some(arkret_wire::events::EventKind::DEVICE_LIST_UPDATE)
+            != Some(arkret_wire::EventKind::DEVICE_LIST_UPDATE)
     {
         return Err(unit_error(
             "cross-signing recovery unit must be [ak.device.authorize, ak.device.list_update]",
@@ -1116,7 +1116,7 @@ fn preserved_actor_frontier(
         .copied()
         .filter(|record| {
             record.actor_seq == 0
-                && record.kind == arkret_wire::events::EventKind::REALM_CREATE
+                && record.kind == arkret_wire::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -1133,7 +1133,7 @@ fn preserved_actor_frontier(
         .copied()
         .filter(|record| {
             record.actor_seq == 1
-                && record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
                 && event_prev_refs(&record.envelope) == vec![genesis.event_id.as_str()]
         })
         .collect::<Vec<_>>();
@@ -1919,7 +1919,7 @@ mod tests {
             recovery_session_id: None,
         };
         let mut authorize = arkret_wire::Event::new(
-            arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
+            arkret_wire::EventKind::DEVICE_AUTHORIZE,
             arkret_wire::ScopeRef::Realm { realm_id },
             principal,
             1,

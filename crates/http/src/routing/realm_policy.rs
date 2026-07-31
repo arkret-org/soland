@@ -190,7 +190,7 @@ async fn persist_canonical_policy_server_move(
     )
     .await?;
     let mut event = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::EventKind::REALM_POLICY_SERVER,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },

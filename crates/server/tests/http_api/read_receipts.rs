@@ -204,7 +204,7 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
         "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "payload": {
             "receipt_kind": "read",
-            "schema": arkret_wire::READ_RECEIPT_SCHEMA,
+            "schema": arkret_wire::SchemaId::READ_RECEIPT_V1,
             "realm_id": DEMO_REALM_ID,
             "actor_id": actor,
             "event_id": event_id,
@@ -235,7 +235,7 @@ fn read_receipt_plaintext(
 ) -> String {
     let receipt = ReadReceipt {
         receipt_kind: "read".to_owned(),
-        schema: arkret_wire::READ_RECEIPT_SCHEMA.to_owned(),
+        schema: arkret_wire::SchemaId::READ_RECEIPT_V1.to_owned(),
         realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
         actor_id: Did::new(actor.to_owned()).unwrap(),
         event_id: arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
@@ -421,7 +421,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     let header = server_visible_header(delivered).to_string();
     for forbidden in [
         "ak.receipt.read",
-        arkret_wire::READ_RECEIPT_SCHEMA,
+        arkret_wire::SchemaId::READ_RECEIPT_V1,
         "read_scope",
         "receipt_kind",
         target_event_id.as_str(),
@@ -434,7 +434,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     assert_eq!(delivered.signal_class, arkret_wire::SignalClass::Session);
 
     let decrypted = decrypted_receipt(delivered);
-    assert_eq!(decrypted.schema, arkret_wire::READ_RECEIPT_SCHEMA);
+    assert_eq!(decrypted.schema, arkret_wire::SchemaId::READ_RECEIPT_V1);
     assert_eq!(decrypted.event_id.as_str(), target_event_id);
     assert_eq!(
         decrypted.actor_id.as_str(),

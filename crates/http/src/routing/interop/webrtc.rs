@@ -16,12 +16,13 @@ use std::collections::BTreeSet;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CellRef, DeviceId, Did, Hash, OperationId, RealmId};
+use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
 use arkret_models_collaboration::objects::media::{
     MediaIceConfigOutcome, MediaIceConfigRequestBody, MediaIceConfigSignature,
     MediaIceCredentialType, MediaIceMode, MediaIceServer, MediaIceSignatureAlgorithm,
     MediaIceSignatureInput,
 };
-use arkret_wire::{DidUrl, XExtensionMap};
+use arkret_wire::{CapabilityActionId, DidUrl, REALM_MEDIA_SERVICE_CELL_FAMILY, XExtensionMap};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{DateTime, Duration, Utc};
@@ -365,7 +366,6 @@ fn sign_ice_config_outcome(
 //     (MEDIA-1).
 //   - `service_signature.kid` / `participant_binding.issuer_kid` resolves to the current
 //     `ak.realm.media_service.service_id` epoch → `token_issuer_unauthorised` (MEDIA-1).
-const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ak.component.realm.media_service.v1";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum MediaProviderKind {
@@ -570,7 +570,7 @@ async fn handle_rtc_token(
         state,
         body.realm_id.as_str(),
         body.actor_id.as_str(),
-        CAP_CALL_JOIN,
+        CapabilityActionId::CALL_JOIN,
     )
     .await
     {
@@ -637,7 +637,7 @@ async fn handle_rtc_token(
     // even if the realm focus advertises a larger backend TTL.
     let ttl_secs = focus
         .ttl_seconds
-        .clamp(1, arkret_wire::constants::MEDIA_TOKEN_TTL_MAX_SECS);
+        .clamp(1, arkret_wire::MEDIA_TOKEN_TTL_MAX_SECS);
     let issued_at = now();
     let expires_at = issued_at + Duration::seconds(ttl_secs as i64);
 
@@ -681,7 +681,7 @@ async fn handle_rtc_token(
         state,
         body.realm_id.as_str(),
         body.actor_id.as_str(),
-        CAP_CALL_SCREEN_SHARE,
+        CapabilityActionId::CALL_SCREEN_SHARE,
     )
     .await;
     let issue_request = MediaTokenIssueRequestBody {
@@ -744,7 +744,7 @@ async fn handle_rtc_token(
     };
 
     let participant_binding = CallMediaParticipantBinding {
-        scheme: arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+        scheme: ParticipantBinding::SCHEMA.to_owned(),
         sig,
         issuer_kid,
         realm_id,
@@ -939,7 +939,7 @@ async fn call_state_from_event_log(
         .map_err(|error| AppError::internal(format!("events store unavailable: {error}")))?
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_wire::events::EventKind::CALL_STATE
+            record.kind == arkret_wire::EventKind::CALL_STATE
                 && record_call_id(record) == Some(call_id)
         })
         .collect::<Vec<_>>();
@@ -1030,7 +1030,7 @@ fn call_state_operation_from_record(
     let mut operation = Operation::create(
         operation_id,
         realm_id,
-        arkret_wire::events::EventKind::CALL_STATE,
+        arkret_wire::EventKind::CALL_STATE,
         payload,
     );
     operation.canonical_event_digest = Some(record.canonical_digest.clone());
@@ -1102,7 +1102,7 @@ fn parse_media_service_epoch(realm_id: &str, value: &Value) -> Result<MediaServi
             .get("ttl_seconds")
             .or_else(|| value.get("ttl_seconds"))
             .and_then(Value::as_u64)
-            .unwrap_or(arkret_wire::constants::MEDIA_TOKEN_TTL_SHOULD_SECS);
+            .unwrap_or(arkret_wire::MEDIA_TOKEN_TTL_SHOULD_SECS);
         let connect_url = focus_value
             .get("connect_url")
             .and_then(Value::as_str)
@@ -1310,6 +1310,7 @@ fn issue_livekit_backend_token(
 fn hmac_sha256(key: &[u8], data: &[u8]) -> [u8; 32] {
     use hmac::{Hmac, Mac};
     use sha2::Sha256;
+
     let mut mac = <Hmac<Sha256> as hmac::digest::KeyInit>::new_from_slice(key)
         .expect("HMAC accepts keys of any length");
     mac.update(data);
@@ -1491,8 +1492,6 @@ mod tests {
 // `webrtc-signaling.md` §3 — canonical capability actions. The registry is
 // the truth source; the spec body and this server MUST use the `ak.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
-const CAP_CALL_JOIN: &str = "ak.call.join";
-const CAP_CALL_SCREEN_SHARE: &str = "ak.call.screen_share";
 
 /// Resolve the (owner, members) authorization principals for a realm so the
 /// shared [`SolandAuthzEngine`] default rules (owner ⇒ all actions; explicit

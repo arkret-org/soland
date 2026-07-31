@@ -100,8 +100,7 @@ fn stamp_projection_operation_received_at(
 ) {
     if !matches!(
         operation.object_kind.as_str(),
-        arkret_wire::events::EventKind::MEMBER_STATE
-            | arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE
+        arkret_wire::EventKind::MEMBER_STATE | arkret_wire::EventKind::CIRCLE_MEMBER_STATE
     ) {
         return;
     }
@@ -121,7 +120,7 @@ fn batch_is_managed_agent_pcr_create(envelopes: &[Value]) -> bool {
     let Ok(event) = serde_json::from_value::<arkret_wire::Event>(envelopes[0].clone()) else {
         return false;
     };
-    event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE
+    event.kind.as_str() == arkret_wire::EventKind::REALM_CREATE
         && event.executed_by.as_ref() != Some(&event.actor_id)
         && arkret_bootstrap::materialize_managed_agent_pcr_control(
             std::slice::from_ref(&event),
@@ -271,7 +270,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
             device_id: "mimi-provider-facade".to_owned(),
             binding: InternalEventBinding::MimiProvider {
                 binding_ref: binding_ref.into(),
@@ -291,7 +290,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::events::EventKind::ACCOUNT_DATA_SET.to_owned(),
+            kind: arkret_wire::EventKind::ACCOUNT_DATA_SET.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::AccountData {
                 owner: owner.into(),
@@ -311,7 +310,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::events::EventKind::SELF_MODERATION_REPORT.to_owned(),
+            kind: arkret_wire::EventKind::SELF_MODERATION_REPORT.to_owned(),
             device_id: "moderation-report-service".to_owned(),
             binding: InternalEventBinding::ModerationReport {
                 reporter: reporter.into(),
@@ -331,7 +330,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             actor_id: requested_by.clone(),
             session_actor_id: actor_id.into(),
-            kind: arkret_wire::events::EventKind::REALM_POLICY_SERVER.to_owned(),
+            kind: arkret_wire::EventKind::REALM_POLICY_SERVER.to_owned(),
             device_id: "realm-policy-server-service".to_owned(),
             binding: InternalEventBinding::RealmPolicyServer {
                 requested_by,
@@ -352,7 +351,7 @@ impl InternalEventAdmission {
             realm_id: realm_id.into(),
             session_actor_id: actor_id.clone(),
             actor_id,
-            kind: arkret_wire::events::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
+            kind: arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND.to_owned(),
             device_id: device_id.into(),
             binding: InternalEventBinding::PeerDirectBinding {
                 subject_id: subject_id.into(),
@@ -874,7 +873,7 @@ async fn submit_event_batch_outcome_with_leases(
                     duplicate.push(response.event_id);
                 }
                 if !response.duplicate
-                    && kind.as_deref() == Some(arkret_wire::events::EventKind::REALM_CREATE)
+                    && kind.as_deref() == Some(arkret_wire::EventKind::REALM_CREATE)
                     && let (Some(realm_id), Some(actor_id)) = (realm_id, actor_id)
                 {
                     realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
@@ -929,8 +928,8 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
     submissions: Vec<arkret_wire::EventInitialSubmission>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     let submit_context = if submissions.len() == 2
-        && submissions[0].event.kind == arkret_wire::events::EventKind::DEVICE_REANCHOR
-        && submissions[1].event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+        && submissions[0].event.kind == arkret_wire::EventKind::DEVICE_REANCHOR
+        && submissions[1].event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
     {
         arkret_wire::EventSubmitContext::AnchorUnit
     } else {
@@ -940,8 +939,8 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
         validate_initial_submission_in_context(submission, submit_context)?;
     }
     if submissions.len() == 2
-        && submissions[0].event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
-        && submissions[1].event.kind == arkret_wire::events::EventKind::DEVICE_LIST_UPDATE
+        && submissions[0].event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
+        && submissions[1].event.kind == arkret_wire::EventKind::DEVICE_LIST_UPDATE
     {
         return submit_cross_signing_recovery_batch(state, session, submissions).await;
     }
@@ -965,7 +964,7 @@ async fn direct_bootstrap_source_is_contact_authority(
         return false;
     };
     if event_string_field_from_value(first, "kind").as_deref()
-        != Some(arkret_wire::events::EventKind::REALM_CREATE)
+        != Some(arkret_wire::EventKind::REALM_CREATE)
     {
         return false;
     }
@@ -987,7 +986,7 @@ async fn direct_bootstrap_source_is_contact_authority(
     }
     let peer = events.iter().find_map(|event| {
         if event_string_field_from_value(event, "kind").as_deref()
-            != Some(arkret_wire::events::EventKind::MEMBER_STATE)
+            != Some(arkret_wire::EventKind::MEMBER_STATE)
         {
             return None;
         }
@@ -1280,7 +1279,7 @@ pub(crate) async fn submit_federation_events(
         .collect();
     if events
         .first()
-        .is_some_and(|event| event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE)
+        .is_some_and(|event| event.kind.as_str() == arkret_wire::EventKind::REALM_CREATE)
     {
         let leases = submissions
             .iter()
@@ -1756,7 +1755,7 @@ pub(crate) async fn submit_federation_events(
     if !crate::routing::events::event_log::realm_is_indexed(state, &binding_realm)
         && events.iter().any(|event| {
             event_string_field_from_value(event, "kind").as_deref()
-                != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+                != Some(arkret_wire::EventKind::INVITE_CREATE)
         })
     {
         rejected.extend(events.iter().map(|event| {
@@ -1822,7 +1821,7 @@ pub(crate) async fn submit_federation_events(
         }
         let event_kind = event_string_field_from_value(&envelope, "kind");
         if event_string_field_from_value(&envelope, "kind").as_deref()
-            == Some(arkret_wire::events::EventKind::MLS_WELCOME)
+            == Some(arkret_wire::EventKind::MLS_WELCOME)
         {
             let Some(payload) = envelope.get("payload") else {
                 rejected.push(EventsSubmitRejectedItem {
@@ -2145,9 +2144,9 @@ mod received_at_stamp_tests {
             .unwrap()
             .with_timezone(&Utc);
         let mut device_authorize = operation_for_kind("ak.device.authorize", 1);
-        let mut member_state = operation_for_kind(arkret_wire::events::EventKind::MEMBER_STATE, 2);
+        let mut member_state = operation_for_kind(arkret_wire::EventKind::MEMBER_STATE, 2);
         let mut circle_member_state =
-            operation_for_kind(arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE, 3);
+            operation_for_kind(arkret_wire::EventKind::CIRCLE_MEMBER_STATE, 3);
 
         stamp_projection_operation_received_at(&mut device_authorize, received_at);
         stamp_projection_operation_received_at(&mut member_state, received_at);
@@ -2180,7 +2179,7 @@ mod managed_agent_pcr_batch_tests {
             RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe".to_owned()).unwrap();
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
         let mut event = arkret_wire::Event::new(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::REALM_CREATE,
             arkret_wire::ScopeRef::Realm { realm_id },
             agent_id,
             0,
@@ -2293,7 +2292,7 @@ mod internal_event_admission_tests {
         let mut object = json!({
             "actor_id": requested_by,
             "realm_id": realm_id,
-            "kind": arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+            "kind": arkret_wire::EventKind::REALM_POLICY_SERVER,
             "executed_by": service_id,
             "payload": payload,
         });

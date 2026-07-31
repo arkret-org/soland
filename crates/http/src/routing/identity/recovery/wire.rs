@@ -15,8 +15,6 @@ pub(super) const ALLOWED_PROOF_KINDS: &[&str] = &[
 /// `expired`. Matches the device-lifecycle interactive recovery window.
 pub(super) const RECOVERY_SESSION_TTL_SECS: i64 = 900;
 
-pub(super) const POLICY_SIGNATURE_TYPE: &str = "ak.identity.recovery_policy.signature.v1";
-
 pub(super) const POLICY_ALLOWED_SIGNED_FIELDS: &[&str] = &[
     "schema",
     "policy_id",

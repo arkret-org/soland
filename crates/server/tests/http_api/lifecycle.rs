@@ -421,7 +421,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                 ))
                 .unwrap(),
                 arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap(),
-                arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
+                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
                 serde_json::json!({ "content_encryption_floor": "e2ee_required" }),
             ),
             &hlc,

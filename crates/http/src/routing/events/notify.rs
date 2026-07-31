@@ -807,7 +807,7 @@ mod tests {
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MESSAGE_CREATE,
             payload,
         )
     }
@@ -886,7 +886,7 @@ mod tests {
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
@@ -910,7 +910,7 @@ mod tests {
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
@@ -937,7 +937,7 @@ mod tests {
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::RSVP_SET,
+            arkret_wire::EventKind::RSVP_SET,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
@@ -992,7 +992,7 @@ mod tests {
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MESSAGE_CREATE,
             payload,
         )
     }
@@ -1008,7 +1008,7 @@ mod tests {
             ))
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MESSAGE_CREATE,
             json!({
                 "sender": sender,
                 "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
@@ -1193,7 +1193,7 @@ mod tests {
             )
             .unwrap(),
             arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "sender": alice,
                 "event_id": "ak:event:01904100-0000-7000-8000-000000009933",

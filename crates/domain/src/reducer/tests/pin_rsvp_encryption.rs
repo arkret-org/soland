@@ -49,7 +49,7 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
 fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::REALM_CREATE,
             REALM_ID,
             serde_json::json!({
                 "object": {
@@ -65,7 +65,7 @@ fn seed_pin_target(state: &mut ProjectionState, hlc: &ServerHlc) {
         hlc,
     );
     let mut create = make_operation(
-        arkret_wire::events::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::STRAND_CREATE,
         REALM_ID,
         serde_json::json!({
             "object": {
@@ -136,7 +136,7 @@ fn pin_note_rejects_plaintext_projection_payload() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::PIN_ADD,
+            arkret_wire::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(serde_json::json!("visible note")),
         ),
@@ -156,11 +156,11 @@ fn pin_note_accepts_encrypted_projection_payload() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
-    let note = encrypted_payload(arkret_wire::events::EventKind::PIN_ADD);
+    let note = encrypted_payload(arkret_wire::EventKind::PIN_ADD);
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::PIN_ADD,
+            arkret_wire::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(note.clone()),
         ),
@@ -181,14 +181,14 @@ fn pin_note_accepts_exporter_aead_encrypted_projection_payload() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
     let note = encrypted_payload_with_scheme(
-        arkret_wire::events::EventKind::PIN_ADD,
+        arkret_wire::EventKind::PIN_ADD,
         "mls_exporter_aead_v1",
         "MLS-EXPORTER-AEAD",
     );
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::PIN_ADD,
+            arkret_wire::EventKind::PIN_ADD,
             REALM_ID,
             pin_payload(note.clone()),
         ),
@@ -209,17 +209,13 @@ fn pin_note_rejects_exporter_aead_with_mls_key_algorithm() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
     let note = encrypted_payload_with_scheme(
-        arkret_wire::events::EventKind::PIN_ADD,
+        arkret_wire::EventKind::PIN_ADD,
         "mls_exporter_aead_v1",
         "MLS",
     );
 
     let effect = state.apply(
-        &make_operation(
-            arkret_wire::events::EventKind::PIN_ADD,
-            REALM_ID,
-            pin_payload(note),
-        ),
+        &make_operation(arkret_wire::EventKind::PIN_ADD, REALM_ID, pin_payload(note)),
         &hlc,
     );
 
@@ -241,7 +237,7 @@ fn rsvp_entry_without_causal_basis_is_rejected() {
     // refused without resolving anything, so an e2ee deployment reaches the
     // same verdict as a plaintext one.
     let mut operation = make_operation(
-        arkret_wire::events::EventKind::RSVP_SET,
+        arkret_wire::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload(Value::Null),
     );
@@ -261,7 +257,7 @@ fn rsvp_target_must_be_an_active_calendar_in_the_same_realm() {
     let hlc = ServerHlc::new("test");
     seed_pin_target(&mut state, &hlc);
     let operation = make_operation(
-        arkret_wire::events::EventKind::RSVP_SET,
+        arkret_wire::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload(Value::Null),
     );
@@ -299,7 +295,7 @@ fn rsvp_projects_the_complete_entry_as_one_head() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::RSVP_SET,
+            arkret_wire::EventKind::RSVP_SET,
             REALM_ID,
             rsvp_payload(Value::Null),
         ),
@@ -327,7 +323,7 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
     // from the signed value, so the receiver rejects instead of repairing it.
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::RSVP_SET,
+            arkret_wire::EventKind::RSVP_SET,
             REALM_ID,
             rsvp_payload_for(
                 "accepted",
@@ -344,7 +340,7 @@ fn rsvp_occurrence_must_be_canonical_and_is_never_rewritten() {
 
     let effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::RSVP_SET,
+            arkret_wire::EventKind::RSVP_SET,
             REALM_ID,
             rsvp_payload_for(
                 "accepted",
@@ -373,7 +369,7 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
     seed_pin_target(&mut state, &hlc);
 
     let mut first = make_operation(
-        arkret_wire::events::EventKind::RSVP_SET,
+        arkret_wire::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload_for("accepted", Value::Null, Value::Null),
     );
@@ -384,7 +380,7 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
     // Concurrent: this response did not observe the first, so both heads stay
     // exposed. Nothing here may pick a winner by HLC or arrival order.
     let mut concurrent = make_operation(
-        arkret_wire::events::EventKind::RSVP_SET,
+        arkret_wire::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload_for("declined", Value::Null, Value::Null),
     );
@@ -401,7 +397,7 @@ fn concurrent_rsvps_expose_multiple_heads_and_a_successor_dominates() {
     // Causal successor: it names both heads, so it dominates them and the
     // responder is back to a single answer.
     let mut resolving = make_operation(
-        arkret_wire::events::EventKind::RSVP_SET,
+        arkret_wire::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload_for("tentative", Value::Null, Value::Null),
     );
@@ -429,7 +425,7 @@ fn byte_identical_rsvp_entry_is_a_value_level_noop() {
     seed_pin_target(&mut state, &hlc);
 
     let operation = make_operation(
-        arkret_wire::events::EventKind::RSVP_SET,
+        arkret_wire::EventKind::RSVP_SET,
         REALM_ID,
         rsvp_payload(Value::Null),
     );
@@ -455,7 +451,7 @@ fn schedule_revision_frontier_tracks_only_calendar_changes() {
     // A title-only update is not a schedule revision: previously authored RSVP
     // bases must stay current instead of being invalidated by unrelated edits.
     let mut title_only = make_operation(
-        arkret_wire::events::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::STRAND_UPDATE,
         REALM_ID,
         serde_json::json!({
             "target_ref": STRAND_ID,
@@ -476,7 +472,7 @@ fn schedule_revision_frontier_tracks_only_calendar_changes() {
     // Changing the calendar subtree does advance the frontier, and the new
     // revision replaces the head it patched over.
     let mut schedule_edit = make_operation(
-        arkret_wire::events::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::STRAND_UPDATE,
         REALM_ID,
         serde_json::json!({
             "target_ref": STRAND_ID,
@@ -539,14 +535,14 @@ fn concurrent_schedule_updates_retain_both_frontier_heads() {
         })
     };
     let mut left = make_operation(
-        arkret_wire::events::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::STRAND_UPDATE,
         REALM_ID,
         schedule_patch("2026-06-22T11:00:00", "2026-06-22T12:00:00"),
     );
     left.canonical_event_digest =
         Some("sha256:9999999999999999999999999999999999999999999999999999999999999999".to_owned());
     let mut right = make_operation(
-        arkret_wire::events::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::STRAND_UPDATE,
         REALM_ID,
         schedule_patch("2026-06-22T13:00:00", "2026-06-22T14:00:00"),
     );

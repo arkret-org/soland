@@ -350,7 +350,7 @@ async fn ensure_backing_circle(
     });
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_wire::events::EventKind::CIRCLE_CREATE,
+        arkret_wire::EventKind::CIRCLE_CREATE,
         json!({"object": object}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_circle_operation(
@@ -413,7 +413,7 @@ async fn ensure_sidecar_aggregate(
     };
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_wire::events::EventKind::SIDECAR_CREATE,
+        arkret_wire::EventKind::SIDECAR_CREATE,
         json!({"object": sidecar}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_create_operation(
@@ -462,7 +462,7 @@ async fn ensure_sidecar_member(
     }
     let operation = new_sidecar_operation(
         realm_id,
-        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
         json!({"circle_id": circle_id, "actor_id": actor, "membership": "join"}),
     )?;
     crate::routing::events::projection::accept_trusted_sidecar_member_operation(
@@ -500,7 +500,7 @@ pub(crate) async fn remove_agent_from_controller_sidecars(
             .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
         let operation = new_sidecar_operation(
             &realm_id,
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             json!({"circle_id": circle_id, "actor_id": agent_id, "membership": "leave"}),
         )?;
         crate::routing::events::projection::accept_trusted_sidecar_member_operation(
@@ -575,7 +575,7 @@ async fn create_private_context(
     );
     let strand_operation = new_sidecar_operation(
         &realm_id,
-        arkret_wire::events::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::STRAND_CREATE,
         json!({"object": object}),
     )?;
     accept_local_operations(state, controller, std::slice::from_ref(&strand_operation))
@@ -586,7 +586,7 @@ async fn create_private_context(
         .map_err(|error| AppError::internal(format!("generated Relation id: {error}")))?;
     let relation_operation = new_sidecar_operation(
         &realm_id,
-        arkret_wire::events::EventKind::RELATION_CREATE,
+        arkret_wire::EventKind::RELATION_CREATE,
         json!({"relation": {
             "id": relation_id,
             "kind": "agent_sidecar_of",
@@ -771,9 +771,7 @@ pub(crate) fn validate_sidecar_exchange_control_event(
     actor_id: &str,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if operation.object_kind.as_str()
-        != arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL
-    {
+    if operation.object_kind.as_str() != arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL {
         return Ok(());
     }
     const REASON: &str = "sidecar_exchange_control_forbidden";
@@ -818,10 +816,10 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
 ) -> Result<(), &'static str> {
     if !matches!(
         operation.object_kind.as_str(),
-        arkret_wire::events::EventKind::MLS_GENESIS
-            | arkret_wire::events::EventKind::MLS_PROPOSAL
-            | arkret_wire::events::EventKind::MLS_COMMIT
-            | arkret_wire::events::EventKind::MLS_WELCOME
+        arkret_wire::EventKind::MLS_GENESIS
+            | arkret_wire::EventKind::MLS_PROPOSAL
+            | arkret_wire::EventKind::MLS_COMMIT
+            | arkret_wire::EventKind::MLS_WELCOME
     ) {
         return Ok(());
     }
@@ -905,7 +903,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
         .get(&sidecar_projection.backing_circle_id)
         .and_then(|circle| circle.mls_group_ref.clone());
     match operation.object_kind.as_str() {
-        arkret_wire::events::EventKind::MLS_GENESIS => {
+        arkret_wire::EventKind::MLS_GENESIS => {
             if current_group.is_some()
                 || operation
                     .payload
@@ -922,7 +920,7 @@ pub(crate) async fn validate_sidecar_mls_event_binding(
                 return Err("mls_sidecar_genesis_authority_mismatch");
             }
         }
-        arkret_wire::events::EventKind::MLS_WELCOME => {
+        arkret_wire::EventKind::MLS_WELCOME => {
             if current_group.as_deref() != Some(payload_group_id) {
                 return Err("mls_sidecar_group_mismatch");
             }
@@ -1391,7 +1389,7 @@ mod tests {
 
         let operation = new_sidecar_operation(
             &realm_id,
-            arkret_wire::events::EventKind::SIDECAR_CREATE,
+            arkret_wire::EventKind::SIDECAR_CREATE,
             json!({"object": sidecar}),
         )
         .unwrap();

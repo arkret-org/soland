@@ -6,7 +6,7 @@ use arkret_models_collaboration::governance::accountability::{
 use arkret_models_integration::{
     AppletNamespaceDomain, GhostActorProvisionRequestBody, namespace_pattern_matches,
 };
-use arkret_wire::Event;
+use arkret_wire::{CapabilityActionId, Event};
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 
@@ -206,7 +206,7 @@ pub(super) fn ghost_provision_authorization_ref(record: &AppletRecord) -> Result
     if !record
         .capabilities
         .iter()
-        .any(|action| action == super::install::GHOST_PROVISION_ACTION)
+        .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION)
     {
         return Err(AppError::capability_denied(
             "applet install does not grant ak.applet.ghost.provision",
@@ -229,7 +229,7 @@ pub(super) fn ghost_provision_authorization_ref(record: &AppletRecord) -> Result
             grant
                 .actions
                 .iter()
-                .any(|action| action == super::install::GHOST_PROVISION_ACTION)
+                .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION)
         }) {
             return Ok(payload.grant_id.to_string());
         }
@@ -257,7 +257,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
         event.applet_id.as_ref() == Some(&provision.applet_id)
             && event.authorization_ref.as_deref() == Some(authorization_ref.as_str())
     };
-    if accountability.kind.as_str() != arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
+    if accountability.kind.as_str() != arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
         || accountability.realm_id != provision.realm_id
         || accountability.actor_id != provision.service_id
         || accountability.executed_by.is_some()
@@ -267,7 +267,7 @@ pub(super) async fn validate_signed_ghost_provision_events(
             "accountability_grant_event envelope does not match the Applet provision binding",
         ));
     }
-    if profile.kind.as_str() != arkret_wire::events::EventKind::PROFILE_CREATE
+    if profile.kind.as_str() != arkret_wire::EventKind::PROFILE_CREATE
         || profile.realm_id != provision.realm_id
         || profile.actor_id != provision.ghost_actor_id
         || profile.executed_by.as_ref() != Some(&provision.service_id)

@@ -94,7 +94,6 @@ pub fn assert_enclave_invariants(config: &AppConfig) -> EnclaveAssertionResult {
 /// The conformance profile id soland claims on `/server/describe` when
 /// `sovereign_enclave_enabled=true`. Registered in
 /// `arkret-spec/spec/v1/artifacts/profiles/conformance-profiles.json`.
-pub const SOVEREIGN_ENCLAVE_PROFILE_ID: &str = "ak.profile.sovereign_enclave.v1";
 
 #[derive(Debug, Deserialize, salvo::oapi::ToSchema)]
 struct ConfigureDeploymentRequestBody {

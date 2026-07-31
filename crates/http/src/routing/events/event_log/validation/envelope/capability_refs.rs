@@ -1,3 +1,5 @@
+use arkret_wire::ProfileId;
+
 use super::*;
 use crate::routing::events::event_log::DataEventQueryGrade;
 
@@ -292,7 +294,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // admission. Searching for a covering grant here would demand a capability
     // action the registry does not define, so such a kind could never be
     // authored no matter what the Realm granted.
-    let self_authored = arkret_wire::events::EventKind::from(kind)
+    let self_authored = arkret_wire::EventKind::from(kind)
         .descriptor()
         .and_then(|descriptor| descriptor.admission)
         == Some("self_authored_proof");
@@ -715,12 +717,15 @@ pub(super) fn seal_view_declares_relaxed_e2ee(
 }
 
 pub(super) fn policy_bundle_declare_relaxed_e2ee(policy_bundle: &Value) -> bool {
-    profile_array_contains(policy_bundle.get("profiles"), E2EE_RELAXED_PROFILE)
-        || profile_array_contains(policy_bundle.get("active_profiles"), E2EE_RELAXED_PROFILE)
+    profile_array_contains(policy_bundle.get("profiles"), ProfileId::E2EE_RELAXED_V1)
+        || profile_array_contains(
+            policy_bundle.get("active_profiles"),
+            ProfileId::E2EE_RELAXED_V1,
+        )
         || policy_bundle
             .pointer("/e2ee_relaxed/profile")
             .and_then(Value::as_str)
-            == Some(E2EE_RELAXED_PROFILE)
+            == Some(ProfileId::E2EE_RELAXED_V1)
 }
 
 pub(super) fn profile_array_contains(value: Option<&Value>, profile: &str) -> bool {

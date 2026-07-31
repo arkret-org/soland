@@ -422,13 +422,13 @@ impl SecurityTransactionStore for MemorySecurityTransactionStore {
 #[cfg(test)]
 mod tests {
     use arkret_wire::{
-        AUTHORITY_SET_POLICY_SCHEMA, AcceptedStep, AuthoritySetAuthorizationRule,
-        AuthoritySetIssuer, AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind,
-        AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, AuthorizationLease,
-        AuthorizationLeaseId, BackupId, BackupObjectRef, BackupRotationBinding, BackupRotationKind,
-        BackupRotationPlan, BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, DeviceId,
-        Did, DidUrl, Event, EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash,
-        Hlc, LeaseBasisRef, PayloadProof, PreparedEventUnit, RealmId, RiskTier, ScopeRef, SealId,
+        AcceptedStep, AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole,
+        AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
+        AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, BackupId,
+        BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
+        BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, DeviceId, Did, DidUrl, Event,
+        EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
+        PayloadProof, PreparedEventUnit, RealmId, RiskTier, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
         SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
         TransactionId, proof_kind,
@@ -476,7 +476,7 @@ mod tests {
             realm_id: RealmId::new("ak:realm:019a7360-0000-7000-8000-000000000100").unwrap(),
         };
         let authority_set_policy = AuthoritySetPolicy {
-            schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+            schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
             authority_set_id: "ak.authority_set.backup_erase.v1".to_owned(),
             policy_kind: AuthoritySetPolicyKind::RealmAdmission,
             scope_ref: scope_ref.clone(),

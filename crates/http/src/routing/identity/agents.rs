@@ -240,14 +240,14 @@ mod tests {
 
     fn initial_submission(event: arkret_wire::Event) -> arkret_wire::EventInitialSubmission {
         use arkret_wire::{
-            AUTHORITY_SET_POLICY_SCHEMA, AuthoritySetAuthorizationRule, AuthoritySetIssuer,
-            AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind,
-            AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, AuthorizationLease,
-            AuthorizationLeaseId, DeviceId, DidUrl, LeaseBasisRef, RiskTier, SealId,
+            AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole,
+            AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef,
+            AuthoritySetSourceKind, AuthorizationLease, AuthorizationLeaseId, DeviceId, DidUrl,
+            LeaseBasisRef, RiskTier, SealId,
         };
 
         let policy = AuthoritySetPolicy {
-            schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+            schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
             authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
             policy_kind: AuthoritySetPolicyKind::RealmAdmission,
             scope_ref: event.scope_ref.clone(),

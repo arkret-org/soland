@@ -17,7 +17,7 @@ fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
     // Container hosted inside Realm A (the to-be-destroyed Realm).
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_a,
             serde_json::json!({
                 "object": {
@@ -34,7 +34,7 @@ fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
     // the Realm-A container.
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_b,
             serde_json::json!({
                 "object": {
@@ -57,7 +57,7 @@ fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
     // Destroy Realm A.
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_DESTROY,
+            arkret_wire::EventKind::REALM_DESTROY,
             realm_a,
             serde_json::json!({"action": "destroy"}),
         ),
@@ -100,7 +100,7 @@ fn space_container_lifecycle_round_trip() {
     // create
     let create_effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -129,7 +129,7 @@ fn space_container_lifecycle_round_trip() {
     // archive
     let archive_effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_ARCHIVE,
+            arkret_wire::EventKind::SPACE_ARCHIVE,
             realm_id,
             serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
         ),
@@ -150,7 +150,7 @@ fn space_container_lifecycle_round_trip() {
     // restore
     let restore_effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_RESTORE,
+            arkret_wire::EventKind::SPACE_RESTORE,
             realm_id,
             serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
         ),
@@ -171,7 +171,7 @@ fn space_container_lifecycle_round_trip() {
     // tombstone
     let tombstone_effect = state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_TOMBSTONE,
+            arkret_wire::EventKind::SPACE_TOMBSTONE,
             realm_id,
             serde_json::json!({ "space_id": container_space_id, "sender": "did:web:alice.example" }),
         ),
@@ -203,7 +203,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     // Create the Space container (Active).
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -220,7 +220,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
 
     // restore on Active → space_not_archived
     let restore_op = make_operation(
-        arkret_wire::events::EventKind::SPACE_RESTORE,
+        arkret_wire::EventKind::SPACE_RESTORE,
         realm_id,
         serde_json::json!({ "space_id": container_space_id }),
     );
@@ -232,14 +232,14 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     // Archive then try archive again → space_not_active
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_ARCHIVE,
+            arkret_wire::EventKind::SPACE_ARCHIVE,
             realm_id,
             serde_json::json!({ "space_id": container_space_id }),
         ),
         &hlc,
     );
     let archive_op = make_operation(
-        arkret_wire::events::EventKind::SPACE_ARCHIVE,
+        arkret_wire::EventKind::SPACE_ARCHIVE,
         realm_id,
         serde_json::json!({ "space_id": container_space_id }),
     );
@@ -251,7 +251,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     // Tombstone (legal from Archived).
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_TOMBSTONE,
+            arkret_wire::EventKind::SPACE_TOMBSTONE,
             realm_id,
             serde_json::json!({ "space_id": container_space_id }),
         ),
@@ -259,7 +259,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     );
     // Now restore on Tombstoned → still space_not_archived.
     let restore_again = make_operation(
-        arkret_wire::events::EventKind::SPACE_RESTORE,
+        arkret_wire::EventKind::SPACE_RESTORE,
         realm_id,
         serde_json::json!({ "space_id": container_space_id }),
     );
@@ -269,7 +269,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     );
     // Tombstone on Tombstoned → space_already_terminal.
     let tombstone_again = make_operation(
-        arkret_wire::events::EventKind::SPACE_TOMBSTONE,
+        arkret_wire::EventKind::SPACE_TOMBSTONE,
         realm_id,
         serde_json::json!({ "space_id": container_space_id }),
     );
@@ -279,7 +279,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     );
     // Update on Tombstoned → space_not_active.
     let update_op = make_operation(
-        arkret_wire::events::EventKind::SPACE_UPDATE,
+        arkret_wire::EventKind::SPACE_UPDATE,
         realm_id,
         serde_json::json!({
             "space_id": container_space_id,
@@ -299,7 +299,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
 fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
     let state = ProjectionState::new();
     let archive_unknown = make_operation(
-        arkret_wire::events::EventKind::SPACE_ARCHIVE,
+        arkret_wire::EventKind::SPACE_ARCHIVE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({ "space_id": "ak:space:01904100-0000-7000-8000-cfc039892039" }),
     );
@@ -319,7 +319,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -335,7 +335,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
     );
 
     let update = make_operation(
-        arkret_wire::events::EventKind::SPACE_UPDATE,
+        arkret_wire::EventKind::SPACE_UPDATE,
         realm_id,
         serde_json::json!({
             "space_id": container_space_id,
@@ -355,7 +355,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -371,7 +371,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
     );
 
     let parent = make_operation(
-        arkret_wire::events::EventKind::SPACE_PARENT,
+        arkret_wire::EventKind::SPACE_PARENT,
         realm_id,
         serde_json::json!({
             "space_id": container_space_id,
@@ -392,7 +392,7 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
     );
 
     let detach = make_operation(
-        arkret_wire::events::EventKind::SPACE_PARENT,
+        arkret_wire::EventKind::SPACE_PARENT,
         realm_id,
         serde_json::json!({
             "space_id": container_space_id,
@@ -421,7 +421,7 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
     let space_id = "ak:space:01904100-0000-7000-8000-cfc039892099";
 
     let create = make_operation(
-        arkret_wire::events::EventKind::SPACE_CREATE,
+        arkret_wire::EventKind::SPACE_CREATE,
         realm_id,
         serde_json::json!({
             "object": {
@@ -470,7 +470,7 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
     ] {
         let effect = state.apply(
             &make_operation(
-                arkret_wire::events::EventKind::SPACE_CREATE,
+                arkret_wire::EventKind::SPACE_CREATE,
                 realm_id,
                 serde_json::json!({"object": object}),
             ),
@@ -496,7 +496,7 @@ fn space_container_child_order_tracks_rank_updates() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -517,7 +517,7 @@ fn space_container_child_order_tracks_rank_updates() {
     ] {
         state.apply(
             &make_operation(
-                arkret_wire::events::EventKind::SPACE_CREATE,
+                arkret_wire::EventKind::SPACE_CREATE,
                 realm_id,
                 serde_json::json!({
                     "object": {
@@ -537,7 +537,7 @@ fn space_container_child_order_tracks_rank_updates() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_UPDATE,
+            arkret_wire::EventKind::SPACE_UPDATE,
             realm_id,
             serde_json::json!({
                 "space_id": third_id,
@@ -572,7 +572,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -588,7 +588,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -606,7 +606,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -629,7 +629,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_ARCHIVE,
+            arkret_wire::EventKind::SPACE_ARCHIVE,
             realm_id,
             serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
         ),
@@ -658,7 +658,7 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_RESTORE,
+            arkret_wire::EventKind::SPACE_RESTORE,
             realm_id,
             serde_json::json!({ "space_id": list_id, "sender": "did:web:alice.example" }),
         ),
@@ -688,7 +688,7 @@ fn board_archive_cascades_child_lists_and_cards() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -704,7 +704,7 @@ fn board_archive_cascades_child_lists_and_cards() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -722,7 +722,7 @@ fn board_archive_cascades_child_lists_and_cards() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::STRAND_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -745,7 +745,7 @@ fn board_archive_cascades_child_lists_and_cards() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_ARCHIVE,
+            arkret_wire::EventKind::SPACE_ARCHIVE,
             realm_id,
             serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
         ),
@@ -766,7 +766,7 @@ fn board_archive_cascades_child_lists_and_cards() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_RESTORE,
+            arkret_wire::EventKind::SPACE_RESTORE,
             realm_id,
             serde_json::json!({ "space_id": board_id, "sender": "did:web:alice.example" }),
         ),
@@ -800,7 +800,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::REALM_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -817,7 +817,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::CIRCLE_CREATE,
+            arkret_wire::EventKind::CIRCLE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -835,7 +835,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             realm_id,
             serde_json::json!({
                 "circle_id": circle_id,
@@ -848,7 +848,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -868,7 +868,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     );
 
     let public_create = make_operation(
-        arkret_wire::events::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::STRAND_CREATE,
         realm_id,
         serde_json::json!({
             "object": {
@@ -897,7 +897,7 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     assert!(!state.strands.contains_key(public_strand_id));
 
     let scoped_create = make_operation(
-        arkret_wire::events::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::STRAND_CREATE,
         realm_id,
         serde_json::json!({
             "object": {
@@ -938,7 +938,7 @@ fn child_scope_policy_gates_space_parent_edges() {
 
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::REALM_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -955,7 +955,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::CIRCLE_CREATE,
+            arkret_wire::EventKind::CIRCLE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -973,7 +973,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             realm_id,
             serde_json::json!({
                 "circle_id": circle_id,
@@ -986,7 +986,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     );
     state.apply(
         &make_operation(
-            arkret_wire::events::EventKind::SPACE_CREATE,
+            arkret_wire::EventKind::SPACE_CREATE,
             realm_id,
             serde_json::json!({
                 "object": {
@@ -1020,7 +1020,7 @@ fn child_scope_policy_gates_space_parent_edges() {
         }
         state.apply(
             &make_operation(
-                arkret_wire::events::EventKind::SPACE_CREATE,
+                arkret_wire::EventKind::SPACE_CREATE,
                 realm_id,
                 serde_json::json!({ "object": object }),
             ),
@@ -1029,7 +1029,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     }
 
     let public_parent = make_operation(
-        arkret_wire::events::EventKind::SPACE_PARENT,
+        arkret_wire::EventKind::SPACE_PARENT,
         realm_id,
         serde_json::json!({
             "space_id": child_id,
@@ -1043,7 +1043,7 @@ fn child_scope_policy_gates_space_parent_edges() {
     assert_eq!(state.space_containers[child_id].parent_ref.as_deref(), None);
 
     let scoped_parent = make_operation(
-        arkret_wire::events::EventKind::SPACE_PARENT,
+        arkret_wire::EventKind::SPACE_PARENT,
         realm_id,
         serde_json::json!({
             "space_id": scoped_child_id,

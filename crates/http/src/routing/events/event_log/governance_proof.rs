@@ -14,12 +14,10 @@ use arkret_state::state::{compute_state_root, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cba::LatticeOp;
 use arkret_wire::cba::LatticeOpType;
-use arkret_wire::{CellId, Event, NotarySig, ScopeRef as GovernanceScope};
+use arkret_wire::{CORE_REDUCER_PROFILE, CellId, Event, NotarySig, ScopeRef as GovernanceScope};
 use salvo::oapi::extract::JsonBody;
 
 use super::*;
-
-const SUPPORTED_REDUCER_PROFILE: &str = "ak.reducer.v1";
 
 #[salvo::oapi::endpoint(
     operation_id = "ak.self.events.query.mls_governance_proof",
@@ -38,7 +36,7 @@ pub(super) async fn mls_governance_proof(
     request
         .validate()
         .map_err(|error| AppError::invalid_param(format!("invalid proof request: {error}")))?;
-    if request.reducer_profile != SUPPORTED_REDUCER_PROFILE {
+    if request.reducer_profile != CORE_REDUCER_PROFILE {
         return Err(AppError::new(
             ErrorCode::ProfileUnsupported,
             "requested MLS governance reducer profile is unsupported",
@@ -523,7 +521,7 @@ async fn materialize_realm_control_with_transported_seals(
             )
         })?;
     if realm_records.iter().any(|record| {
-        record.kind == arkret_wire::events::EventKind::REALM_CREATE
+        record.kind == arkret_wire::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -541,7 +539,7 @@ async fn materialize_realm_control_with_transported_seals(
     let principal_control_actor = realm_records
         .iter()
         .find(|record| {
-            record.kind == arkret_wire::events::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -637,7 +635,7 @@ async fn materialize_realm_control_with_transported_seals(
         })
         .collect::<BTreeSet<_>>();
     for bootstrap in realm_records.iter().filter(|record| {
-        record.kind == arkret_wire::events::EventKind::REALM_CREATE
+        record.kind == arkret_wire::EventKind::REALM_CREATE
             && record
                 .envelope
                 .pointer("/payload/object/fields/purpose")
@@ -649,7 +647,7 @@ async fn materialize_realm_control_with_transported_seals(
             realm_records
                 .iter()
                 .filter(|record| {
-                    record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                    record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
                         && record
                             .envelope
                             .get("prev_refs")
@@ -706,7 +704,7 @@ async fn materialize_realm_control_with_transported_seals(
             )
         })?;
         let requires_invite_membership_validation =
-            event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT;
+            event.kind.as_str() == arkret_wire::EventKind::INVITE_ACCEPT;
         // v1 has no producer `effects[]`: whether a stored Event contributes
         // governance writes is decided by its registered contract, not by an
         // array on the envelope.
@@ -1279,7 +1277,7 @@ pub(crate) async fn first_generation_event_seal_requirement(
             .iter()
             .find(|record| {
                 record.event_id == payload.replacement_authorize_event_id.as_str()
-                    && record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                    && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
                     && record.canonical_digest == payload.replacement_authorize_digest.as_str()
                     && record
                         .envelope
@@ -1569,7 +1567,7 @@ fn canonical_event_sealed_ops(
         }
     }
 
-    if event.kind.as_str() == arkret_wire::events::EventKind::INVITE_ACCEPT {
+    if event.kind.as_str() == arkret_wire::EventKind::INVITE_ACCEPT {
         let from = invite_accept_from.ok_or_else(|| {
             AppError::new(
                 ErrorCode::StateMismatch,
@@ -1597,7 +1595,7 @@ fn canonical_event_sealed_ops(
                 "invite acceptance member transition does not match prior membership state",
             ));
         }
-    } else if event.kind.as_str() == arkret_wire::events::EventKind::REALM_CREATE {
+    } else if event.kind.as_str() == arkret_wire::EventKind::REALM_CREATE {
         // Only the genesis targets are asserted; the lattice ops come from the
         // registered `effect_projection`.
         let expected: std::collections::BTreeSet<String> = [
@@ -1668,7 +1666,7 @@ mod tests {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:agent.example").unwrap();
         Event::new(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::REALM_CREATE,
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },
@@ -1756,7 +1754,7 @@ mod tests {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000fade").unwrap();
         let actor_id = arkret_identifiers::Did::new("did:web:invitee.example").unwrap();
         let event = Event::new(
-            arkret_wire::events::EventKind::INVITE_ACCEPT,
+            arkret_wire::EventKind::INVITE_ACCEPT,
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
             },

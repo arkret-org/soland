@@ -3,11 +3,12 @@
 //! Issuance is a read-only pre-admission pass. It neither stores an Event nor
 //! reserves a frontier; the later `events.submit` revalidates everything.
 
+use arkret_wire::SchemaId;
 use arkret_wire::offline_publication::{
-    AUTHORITY_SET_POLICY_SCHEMA, AnchorUnitLeaseBasis, AnchorUnitLeaseBasisRef,
-    AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole, AuthoritySetPolicy,
-    AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind,
-    AuthorizationLease, LeaseBasisRef, RiskTier,
+    AnchorUnitLeaseBasis, AnchorUnitLeaseBasisRef, AuthoritySetAuthorizationRule,
+    AuthoritySetIssuer, AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind,
+    AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind, AuthorizationLease,
+    LeaseBasisRef, RiskTier,
 };
 use arkret_wire::primitives::{Audience, PayloadProof, proof_kind};
 
@@ -294,14 +295,15 @@ struct AnchorIssueContext {
 fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppError> {
     if events
         .first()
-        .is_none_or(|event| event.kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE)
+        .is_none_or(|event| event.kind.as_str() != arkret_wire::EventKind::REALM_CREATE)
     {
         return Ok(None);
     }
     let (realm_id, actor_id, self_principal_pcr_bootstrap) = if events.len() == 2
-        && events.get(1).is_some_and(|event| {
-            event.kind.as_str() == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
-        }) {
+        && events
+            .get(1)
+            .is_some_and(|event| event.kind.as_str() == arkret_wire::EventKind::DEVICE_AUTHORIZE)
+    {
         arkret_bootstrap::validate_self_principal_bootstrap_unit(
             &events[0],
             &events[1],
@@ -490,7 +492,7 @@ pub(crate) fn authority_for_scope(
             },
         )?;
     let policy = AuthoritySetPolicy {
-        schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
         policy_kind: AuthoritySetPolicyKind::RealmAdmission,
         scope_ref: scope_ref.clone(),

@@ -193,13 +193,13 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
         .await
         .expect("fixture Realm genesis lookup")
         .iter()
-        .any(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        .any(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
     {
         return;
     }
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(genesis_event_id.clone()).expect("fixture genesis Event id"),
-        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(realm_id.to_owned()).expect("fixture Realm id"),
         },
@@ -221,7 +221,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             actor_id: subject.to_owned(),
             actor_seq: 0,
             realm_id: Some(realm_id.to_owned()),
-            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest,
             canonical_bytes: Vec::new(),
@@ -254,7 +254,7 @@ pub fn apply_registered_cba_plane(
     };
     if matches!(
         event.kind.as_str(),
-        arkret_wire::events::EventKind::REALM_CREATE | "ak.device.reanchor"
+        arkret_wire::EventKind::REALM_CREATE | "ak.device.reanchor"
     ) {
         return;
     }
@@ -543,7 +543,7 @@ fn grant_body(
 ) -> Value {
     let mut body = serde_json::json!({
         "grant_id": grant_id,
-        "schema": arkret_wire::CAPABILITY_SCHEMA,
+        "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
         "issuer": subject,
         "subject": subject,

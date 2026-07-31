@@ -10,9 +10,9 @@
 
 use arkret_identifiers::{Did, EventId, Hash, RealmId};
 use arkret_models_collaboration::events_payloads::moderation::{
-    FrankingProof, FrankingProofEventTimeAnchor, MODERATION_FRANKING_PROOF_KIND,
+    FrankingProof, FrankingProofEventTimeAnchor,
 };
-use arkret_wire::ScopeRef;
+use arkret_wire::{EventKind, ScopeRef};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -77,7 +77,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
     let mut event = arkret_wire::Event::new_with_id_at(
         EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
             .map_err(|error| AppError::internal(format!("moderation Event id invalid: {error}")))?,
-        arkret_wire::events::EventKind::SELF_MODERATION_REPORT,
+        arkret_wire::EventKind::SELF_MODERATION_REPORT,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
@@ -479,7 +479,7 @@ async fn validate_moderation_franking_proof(
     let object = franking_proof
         .as_object()
         .ok_or_else(|| AppError::invalid_param("franking_proof must be an object"))?;
-    if object.get("kind").and_then(Value::as_str) != Some(MODERATION_FRANKING_PROOF_KIND) {
+    if object.get("kind").and_then(Value::as_str) != Some(EventKind::MODERATION_FRANKING_PROOF) {
         return Err(AppError::invalid_param(
             "franking_proof.kind must be ak.moderation.franking_proof",
         ));

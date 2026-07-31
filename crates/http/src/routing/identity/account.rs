@@ -39,7 +39,7 @@ use arkret_models_identity::account::{
     AccountUpdateProfileOutcome,
 };
 use arkret_models_identity::actor_profile::ActorProfile;
-use arkret_wire::{ACTOR_PROFILE_SCHEMA, ActorKind, ErrorCode, Patch, PatchOpKind};
+use arkret_wire::{ActorKind, ErrorCode, Patch, PatchOpKind};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer as _;
@@ -139,6 +139,7 @@ pub(crate) async fn local_account_primary_handle_claim(
 use crate::{JsonResult, json_ok};
 
 mod social;
+use arkret_wire::SchemaId;
 use social::*;
 pub(crate) use social::{
     accepted_contact_for_pair, direct_binding_matches_projection, project_canonical_direct_binding,
@@ -1326,7 +1327,7 @@ fn actor_profile_from_account(
         })?;
     Ok(ActorProfile {
         id,
-        schema: ACTOR_PROFILE_SCHEMA.to_owned(),
+        schema: SchemaId::ACTOR_PROFILE_V1.to_owned(),
         realm_id: None,
         principal_id: principal_id.clone(),
         actor_kind: ActorKind::User,

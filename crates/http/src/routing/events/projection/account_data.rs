@@ -61,8 +61,7 @@ pub(super) fn actor_private_read_cursor_matches_origin(
     source_device_id: &str,
     operation: &Operation,
 ) -> bool {
-    if kinds::canonical_kind_string(operation)
-        != arkret_wire::events::EventKind::READ_CURSOR_ADVANCE
+    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::READ_CURSOR_ADVANCE
         || source_device_id.is_empty()
     {
         return true;
@@ -93,9 +92,7 @@ pub(super) async fn read_cursor_reducer_context_operation(
     state: &AppState,
     operation: &Operation,
 ) -> Option<Operation> {
-    if kinds::canonical_kind_string(operation)
-        != arkret_wire::events::EventKind::READ_CURSOR_ADVANCE
-    {
+    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::READ_CURSOR_ADVANCE {
         return None;
     }
     let actor_id = operation.payload.get("actor_id")?.as_str()?;

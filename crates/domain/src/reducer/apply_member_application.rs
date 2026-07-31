@@ -12,6 +12,7 @@ use arkret_models_collaboration::governance::join_policy::{
     JoinApplicationDecision, JoinApplicationPrivateBody, JoinApplicationReceipt,
     JoinApplicationReviewReceipt, JoinApplicationStatus,
 };
+use arkret_wire::CapabilityActionId;
 use chrono::{DateTime, Duration, Utc};
 use serde_json::Value;
 
@@ -19,7 +20,6 @@ use super::*;
 
 const DEFAULT_APPLICATION_TTL: &str = "PT168H";
 const DEFAULT_COOLDOWN_AFTER_REJECT: &str = "PT72H";
-const DEFAULT_REVIEW_CAPABILITY: &str = "ak.realm.join.review";
 
 #[derive(Clone, Debug)]
 pub struct MemberApplicationView {
@@ -85,7 +85,7 @@ fn join_policy_review_capability(join_policy: &Value) -> String {
         .get("review_capability")
         .and_then(Value::as_str)
         .filter(|value| !value.trim().is_empty())
-        .unwrap_or(DEFAULT_REVIEW_CAPABILITY)
+        .unwrap_or(CapabilityActionId::REALM_JOIN_REVIEW)
         .to_owned()
 }
 
@@ -320,7 +320,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+            != Some(arkret_wire::EventKind::INVITE_CREATE)
         {
             return Ok(());
         }
@@ -353,7 +353,7 @@ impl ProjectionState {
 
     pub(crate) fn consume_join_authorisation(&mut self, operation: &Operation) {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+            != Some(arkret_wire::EventKind::INVITE_CREATE)
         {
             return;
         }
@@ -576,7 +576,7 @@ mod tests {
             OperationId::new("ak:operation:0196419b-0000-7000-8000-000000000020".to_owned())
                 .unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::INVITE_CREATE,
             json!({}),
         );
         operation.refs = refs

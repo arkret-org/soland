@@ -257,9 +257,9 @@ pub(crate) fn validate_event_schema_and_payload(
     }
     if matches!(
         kind,
-        arkret_wire::events::EventKind::SPACE_ARCHIVE
-            | arkret_wire::events::EventKind::SPACE_RESTORE
-            | arkret_wire::events::EventKind::SPACE_TOMBSTONE
+        arkret_wire::EventKind::SPACE_ARCHIVE
+            | arkret_wire::EventKind::SPACE_RESTORE
+            | arkret_wire::EventKind::SPACE_TOMBSTONE
     ) {
         return validate_space_container_lifecycle_payload(payload);
     }

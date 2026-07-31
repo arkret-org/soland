@@ -14,6 +14,7 @@ use arkret_identifiers::{CellRef, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_state::lattice::CellState;
 use arkret_state::state::{CellRegistry, CellStore, StoreError};
+use arkret_wire::ProfileId;
 use arkret_wire::cba::ProjectedCellWrite;
 use serde_json::Value;
 
@@ -529,7 +530,7 @@ impl ProjectionState {
             }
         };
         let derived_subject = match private_registry.derive_subject(
-            arkret_wire::events::EventKind::DEVICE_PUSH_ROUTE,
+            arkret_wire::EventKind::DEVICE_PUSH_ROUTE,
             principal_id,
             &operation.payload,
         ) {
@@ -1165,28 +1166,27 @@ impl ProjectionState {
         // `ak.strand.archive` requires Active source.
         // `ak.strand.restore` requires Archived source.
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_wire::events::EventKind::STRAND_CREATE => return Ok(()),
-            arkret_wire::events::EventKind::STRAND_UPDATE => {
+            arkret_wire::EventKind::STRAND_CREATE => return Ok(()),
+            arkret_wire::EventKind::STRAND_UPDATE => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_wire::events::EventKind::STRAND_ARCHIVE => {
+            arkret_wire::EventKind::STRAND_ARCHIVE => {
                 (&[ObjectLifecycleState::Active], "strand_not_active")
             }
-            arkret_wire::events::EventKind::STRAND_RESTORE => {
+            arkret_wire::EventKind::STRAND_RESTORE => {
                 (&[ObjectLifecycleState::Archived], "strand_not_archived")
             }
             _ => return Ok(()),
         };
         let strand_id = match kind {
-            arkret_wire::events::EventKind::STRAND_UPDATE => {
-                strand_id_from_payload(&operation.payload)
+            arkret_wire::EventKind::STRAND_UPDATE => strand_id_from_payload(&operation.payload),
+            arkret_wire::EventKind::STRAND_ARCHIVE | arkret_wire::EventKind::STRAND_RESTORE => {
+                operation
+                    .payload
+                    .get("target_ref")
+                    .and_then(Value::as_str)
+                    .filter(|value| value.starts_with("ak:strand:"))
             }
-            arkret_wire::events::EventKind::STRAND_ARCHIVE
-            | arkret_wire::events::EventKind::STRAND_RESTORE => operation
-                .payload
-                .get("target_ref")
-                .and_then(Value::as_str)
-                .filter(|value| value.starts_with("ak:strand:")),
             _ => None,
         };
         let Some(strand_id) = strand_id else {
@@ -1212,7 +1212,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::STRAND_UPDATE)
+            != Some(arkret_wire::EventKind::STRAND_UPDATE)
         {
             return Ok(());
         }
@@ -1234,7 +1234,7 @@ impl ProjectionState {
         actor_id: &str,
     ) -> Option<Value> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::STRAND_UPDATE)
+            != Some(arkret_wire::EventKind::STRAND_UPDATE)
         {
             return None;
         }
@@ -1273,7 +1273,7 @@ impl ProjectionState {
         operation: &Operation,
     ) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::REDACTION)
+            != Some(arkret_wire::EventKind::REDACTION)
         {
             return Ok(());
         }
@@ -1306,14 +1306,14 @@ impl ProjectionState {
             None => return Ok(()),
         };
         let (allowed_source, reason): (&[ObjectLifecycleState], &'static str) = match kind {
-            arkret_wire::events::EventKind::MORPH_CREATE => return Ok(()),
-            arkret_wire::events::EventKind::MORPH_UPDATE => {
+            arkret_wire::EventKind::MORPH_CREATE => return Ok(()),
+            arkret_wire::EventKind::MORPH_UPDATE => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_wire::events::EventKind::MORPH_ARCHIVE => {
+            arkret_wire::EventKind::MORPH_ARCHIVE => {
                 (&[ObjectLifecycleState::Active], "morph_not_active")
             }
-            arkret_wire::events::EventKind::MORPH_RESTORE => {
+            arkret_wire::EventKind::MORPH_RESTORE => {
                 (&[ObjectLifecycleState::Archived], "morph_not_archived")
             }
             _ => return Ok(()),
@@ -1349,7 +1349,7 @@ impl ProjectionState {
     ///   `morph_schema_refs_precondition_mismatch`.
     pub fn check_morph_schema_migrate(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE)
+            != Some(arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE)
         {
             return Ok(());
         }
@@ -1448,9 +1448,10 @@ impl ProjectionState {
     /// permits breaking / transformation schema migrations.
     pub fn realm_declares_morph_migration_profile(&self, realm_id: &str) -> bool {
         self.realm_states.get(realm_id).is_some_and(|realm| {
-            realm.active_profiles.iter().any(|profile| {
-                profile == crate::reducer::MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_PROFILE
-            })
+            realm
+                .active_profiles
+                .iter()
+                .any(|profile| profile == ProfileId::MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_V1)
         })
     }
 
@@ -1465,7 +1466,7 @@ impl ProjectionState {
             realm
                 .active_profiles
                 .iter()
-                .any(|profile| profile == arkret_bootstrap::PRINCIPAL_CONTROL_REALM_PROFILE)
+                .any(|profile| profile == ProfileId::PRINCIPAL_CONTROL_REALM_V1)
         })
     }
 }

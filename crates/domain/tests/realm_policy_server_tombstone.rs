@@ -15,7 +15,7 @@ fn operation(realm_id: &str, payload: Value) -> Operation {
     Operation::create(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),
-        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::EventKind::REALM_POLICY_SERVER,
         payload,
     )
 }

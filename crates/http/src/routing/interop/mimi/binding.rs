@@ -1,3 +1,5 @@
+use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
+
 use super::*;
 
 /// Look up which Arkret `realm_id` (if any) the MIMI `room_id` is
@@ -13,7 +15,7 @@ pub(super) async fn latest_mimi_room_binding(
 ) -> Result<Option<MimiRoomBindingProjection>, AppError> {
     let entries = state
         .event_queries()
-        .projected_events_for_kind(arkret_wire::events::EventKind::MIMI_ROOM_BINDING)
+        .projected_events_for_kind(arkret_wire::EventKind::MIMI_ROOM_BINDING)
         .await
         .map_err(|error| AppError::internal(format!("MIMI binding lookup failed: {error}")))?;
     // Walk in reverse so the most-recently-recorded binding wins.
@@ -302,13 +304,11 @@ pub(super) fn validate_mimi_submit_governance_binding(
         return Err(error("mls_governance_binding_encoding_profile_invalid"));
     }
     if binding.get("binding_profile").and_then(Value::as_str)
-        != Some(soland_services::operation_semantics::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+        != Some(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)
     {
         return Err(error("mls_governance_binding_profile_invalid"));
     }
-    if binding.get("reducer_profile").and_then(Value::as_str)
-        != Some(soland_services::operation_semantics::MLS_REDUCER_PROFILE_V1)
-    {
+    if binding.get("reducer_profile").and_then(Value::as_str) != Some(CORE_REDUCER_PROFILE) {
         return Err(error("mls_governance_binding_reducer_profile_invalid"));
     }
     if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {

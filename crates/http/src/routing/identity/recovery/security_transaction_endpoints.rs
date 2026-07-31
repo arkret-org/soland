@@ -3,7 +3,7 @@ use arkret_wire::{
     AcceptedStep, EnrollmentAuthorityRecoveryPlan, MAX_RECOVERY_AUTHORITY_TICKET_TTL_SECONDS,
     RECOVERY_AUTHORITY_TICKET_SIGNED_FIELDS, RecoveryAuthorityTicket,
     RecoveryAuthorityTicketAuthData, RecoveryAuthorityTicketIssueRequest, RecoveryBinding,
-    RecoveryPreparedPlan, SecurityTransactionBinding, SecurityTransactionPreparedPlan,
+    RecoveryPreparedPlan, SchemaId, SecurityTransactionBinding, SecurityTransactionPreparedPlan,
     SecurityTransactionState, SecurityTransactionStep, ServiceKind, ServiceSignatureAlgorithm,
 };
 use chrono::Duration;
@@ -629,10 +629,7 @@ fn refresh_backup_erase_completion(
     outcome: &mut arkret_models_crypto::BackupSeriesEraseOutcome,
     request: &arkret_models_crypto::BackupSeriesEraseRequestBody,
 ) -> bool {
-    use arkret_models_crypto::{
-        BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA, BackupSeriesEraseConfirmation,
-        BackupSeriesEraseStatus,
-    };
+    use arkret_models_crypto::{BackupSeriesEraseConfirmation, BackupSeriesEraseStatus};
 
     let complete = outcome
         .series_results
@@ -644,7 +641,7 @@ fn refresh_backup_erase_completion(
         BackupSeriesEraseStatus::Partial
     };
     outcome.confirmation = complete.then(|| BackupSeriesEraseConfirmation {
-        schema: BACKUP_SERIES_ERASE_CONFIRMATION_SCHEMA.to_owned(),
+        schema: SchemaId::BACKUP_SERIES_ERASE_CONFIRMATION_V1.to_owned(),
         transaction_id: request.transaction_id.clone(),
         transaction_request_digest: request.transaction_request_digest.clone(),
         prepared_plan_digest: request.prepared_plan_digest.clone(),
@@ -837,9 +834,8 @@ pub(crate) async fn backup_series_erase_command(
             .accepted_event(rotation.active_series_event_id.as_str())
             .await
             .map_err(recovery_service_error)?;
-        if active.is_none_or(|event| {
-            event.kind != arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
-        }) {
+        if active.is_none_or(|event| event.kind != arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+        {
             return Err(
                 AppError::conflict("replacement active-series Event is not accepted")
                     .with_wire_code("security_transaction_failed_precondition"),
@@ -1324,7 +1320,7 @@ async fn continue_issue_terminal_receipt(
         .accepted_event(authorize_event_id.as_str())
         .await
         .map_err(recovery_service_error)?
-        .filter(|event| event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE)
+        .filter(|event| event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE)
         .ok_or_else(|| {
             AppError::conflict("durable device authorization Event is unavailable")
                 .with_wire_code("security_transaction_failed_precondition")
@@ -1405,7 +1401,7 @@ async fn continue_issue_terminal_receipt(
                 .accepted_event(list_event_id.as_str())
                 .await
                 .map_err(recovery_service_error)?
-                .filter(|event| event.kind == arkret_wire::events::EventKind::DEVICE_LIST_UPDATE)
+                .filter(|event| event.kind == arkret_wire::EventKind::DEVICE_LIST_UPDATE)
                 .ok_or_else(|| {
                     AppError::conflict("durable device-list update Event is unavailable")
                         .with_wire_code("security_transaction_failed_precondition")
@@ -1465,7 +1461,7 @@ async fn continue_issue_terminal_receipt(
                 .accepted_event(reanchor_event_id.as_str())
                 .await
                 .map_err(recovery_service_error)?
-                .filter(|event| event.kind == arkret_wire::events::EventKind::DEVICE_REANCHOR)
+                .filter(|event| event.kind == arkret_wire::EventKind::DEVICE_REANCHOR)
                 .ok_or_else(|| {
                     AppError::conflict("durable device re-anchor Event is unavailable")
                         .with_wire_code("security_transaction_failed_precondition")

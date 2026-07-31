@@ -130,7 +130,7 @@ pub(crate) async fn enforce_operation_policy_server(
     // clear the bad declaration is itself denied by the declaration. The spec
     // requires a break-glass path for exactly this, and keeping the binding's
     // own control surface on pure capability authorization is that path.
-    if operation_kind == arkret_wire::events::EventKind::REALM_POLICY_SERVER {
+    if operation_kind == arkret_wire::EventKind::REALM_POLICY_SERVER {
         return Ok(());
     }
     let realm_config = state

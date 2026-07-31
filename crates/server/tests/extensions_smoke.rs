@@ -138,7 +138,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     ingest_extension_admin_document(state).await;
     let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
     let create = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },
@@ -194,7 +194,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
                 tag: Some(admin_grant_move_id.to_string()),
                 value: Some(json!({
                     "grant_id": ADMIN_GRANT_ID,
-                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": DEMO_REALM_ID,
                     "issuer": "did:web:alice.example",
                     "issuer_authority_refs": [{
@@ -278,7 +278,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
             actor_id: create.actor_id.to_string(),
             actor_seq: create.actor_seq,
             realm_id: Some(DEMO_REALM_ID.to_owned()),
-            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest: create.event_digest().unwrap(),
             canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
@@ -656,11 +656,11 @@ async fn applet_install_package_registers_bot_projection_smoke() {
         .collect::<Vec<_>>();
     assert_eq!(install_events.len(), accepted_event_refs.len());
     assert!(install_events.iter().any(|event| {
-        event.kind == arkret_wire::events::EventKind::APPLET_REGISTRATION
+        event.kind == arkret_wire::EventKind::APPLET_REGISTRATION
             && event.envelope["payload"]["applet_id"] == json!(applet_id)
     }));
     assert!(install_events.iter().any(|event| {
-        event.kind == arkret_wire::events::EventKind::CAPABILITY_GRANT
+        event.kind == arkret_wire::EventKind::CAPABILITY_GRANT
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_kind"]
                 == json!("authority_control")
             && event.envelope["payload"]["grant"]["constraints"][0]["constraint_subkind"]
@@ -1669,7 +1669,7 @@ async fn signed_install_events(
         chrono::DateTime::from_timestamp_millis(chrono::Utc::now().timestamp_millis()).unwrap();
     let millis = now.timestamp_millis().max(0) as u64;
     let mut registration_event = Event::new(
-        arkret_wire::events::EventKind::APPLET_REGISTRATION,
+        arkret_wire::EventKind::APPLET_REGISTRATION,
         scope_ref.clone(),
         actor_id.clone(),
         frontier.actor_seq + 1,
@@ -1693,7 +1693,7 @@ async fn signed_install_events(
         let grant_id = GrantId::new(arkret_identifiers::new_prefixed_uuid7("ak:grant:")).unwrap();
         let mut grant = CapabilityGrant {
             id: grant_id.clone(),
-            schema: arkret_wire::CAPABILITY_SCHEMA.to_owned(),
+            schema: arkret_wire::SchemaId::CAPABILITY_V1.to_owned(),
             realm_id: Some(realm_id.clone()),
             issuer: actor_id.clone(),
             subject: CapabilitySubject::Did(package.service_id.clone()),
@@ -1755,7 +1755,7 @@ async fn signed_install_events(
         };
         let counter = offset + 2;
         let mut event = Event::new(
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             scope_ref.clone(),
             actor_id.clone(),
             frontier.actor_seq + counter as u64,

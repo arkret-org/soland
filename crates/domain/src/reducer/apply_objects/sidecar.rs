@@ -110,7 +110,7 @@ mod tests {
             .unwrap(),
             arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
                 .unwrap(),
-            arkret_wire::events::EventKind::SIDECAR_CREATE,
+            arkret_wire::EventKind::SIDECAR_CREATE,
             serde_json::json!({"object": {
                 "id": sidecar_id,
                 "schema": "ak.schema.agent_sidecar.v1",
@@ -155,7 +155,7 @@ mod tests {
             .unwrap(),
             arkret_identifiers::RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030")
                 .unwrap(),
-            arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+            arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
             serde_json::json!({
                 "strand_id": strand_id,
                 "encrypted_payload": payload,

@@ -11,7 +11,7 @@ pub(crate) async fn append_encrypted_message_franking(
     append_audit_log(
         state,
         Some(&parsed.actor_id),
-        arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF,
+        arkret_wire::EventKind::MODERATION_FRANKING_PROOF,
         proof,
         "accepted",
     )
@@ -23,12 +23,12 @@ fn encrypted_message_franking_proof(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Value> {
-    if parsed.kind != arkret_wire::events::EventKind::MESSAGE_CREATE {
+    if parsed.kind != arkret_wire::EventKind::MESSAGE_CREATE {
         return None;
     }
     let ciphertext_digest = encrypted_message_ciphertext_digest(envelope)?;
     let mut proof = json!({
-        "kind": arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF,
+        "kind": arkret_wire::EventKind::MODERATION_FRANKING_PROOF,
         "realm_id": parsed.realm_id,
         "target_event_id": parsed.event_id,
         "sender_did": parsed.actor_id,
@@ -58,7 +58,7 @@ fn franking_proof_digest(proof: &Value) -> String {
         "kind": proof
             .get("kind")
             .and_then(Value::as_str)
-            .unwrap_or(arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF),
+            .unwrap_or(arkret_wire::EventKind::MODERATION_FRANKING_PROOF),
         "target_event_id": proof.get("target_event_id").and_then(Value::as_str).unwrap_or_default(),
         "sender_did": proof.get("sender_did").and_then(Value::as_str).unwrap_or_default(),
         "receiving_service_id": proof.get("receiving_service_id").and_then(Value::as_str).unwrap_or_default(),
@@ -73,7 +73,7 @@ pub(super) fn validate_audit_accessed_payload(
     kind: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::events::EventKind::AUDIT_ACCESSED {
+    if kind != arkret_wire::EventKind::AUDIT_ACCESSED {
         return Ok(());
     }
     let payload = object
@@ -246,7 +246,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
     actor_id: &str,
     canonical_digest: &str,
 ) -> Result<(), EventValidationError> {
-    if kind != arkret_wire::events::EventKind::STRAND_WATCH_SET {
+    if kind != arkret_wire::EventKind::STRAND_WATCH_SET {
         return Ok(());
     }
     let payload = object
@@ -301,7 +301,7 @@ pub(super) async fn validate_strand_watch_audit_pair(
         .await
         .map_err(|_| manage_others_audit_error("audit_pair event lookup failed"))?
         .ok_or_else(|| manage_others_audit_error("audit_pair event is not accepted"))?;
-    if audit_record.kind != arkret_wire::events::EventKind::AUDIT_ACCESSED {
+    if audit_record.kind != arkret_wire::EventKind::AUDIT_ACCESSED {
         return Err(manage_others_audit_error(
             "audit_pair ref must point to ak.audit.accessed",
         ));
@@ -400,7 +400,7 @@ mod tests {
     fn encrypted_message_franking_is_not_gated_by_audit_applet_policy() {
         let proof = encrypted_message_franking_proof(
             "did:web:soland.example",
-            &parsed(arkret_wire::events::EventKind::MESSAGE_CREATE),
+            &parsed(arkret_wire::EventKind::MESSAGE_CREATE),
             &json!({
                 "payload": {
                     "encrypted_content": {
@@ -414,7 +414,7 @@ mod tests {
 
         assert_eq!(
             proof.get("kind").and_then(Value::as_str),
-            Some(arkret_wire::events::EventKind::MODERATION_FRANKING_PROOF)
+            Some(arkret_wire::EventKind::MODERATION_FRANKING_PROOF)
         );
         assert_eq!(
             proof.get("receiving_service_id").and_then(Value::as_str),
@@ -429,7 +429,7 @@ mod tests {
         assert!(
             encrypted_message_franking_proof(
                 "did:web:soland.example",
-                &parsed(arkret_wire::events::EventKind::MESSAGE_CREATE),
+                &parsed(arkret_wire::EventKind::MESSAGE_CREATE),
                 &json!({"payload": {"content": {"body": "hello"}}}),
             )
             .is_none()

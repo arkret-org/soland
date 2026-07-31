@@ -159,7 +159,7 @@ pub async fn hydrate_cross_signing_from_persistence(
     for event in persistence.projection_events().snapshot_all().await? {
         let payload = projection_context_stripped_payload(&event.payload);
         match event.event_kind.as_str() {
-            arkret_wire::events::EventKind::CROSS_SIGNING_PUBLISH => {
+            arkret_wire::EventKind::CROSS_SIGNING_PUBLISH => {
                 let publish =
                     serde_json::from_value::<CrossSigningPublish>(payload).map_err(|error| {
                         soland_storage::PersistenceError::Internal(format!(
@@ -176,7 +176,7 @@ pub async fn hydrate_cross_signing_from_persistence(
                         ))
                     })?;
             }
-            arkret_wire::events::EventKind::CROSS_SIGNING_RESET => {
+            arkret_wire::EventKind::CROSS_SIGNING_RESET => {
                 let reset = serde_json::from_value::<CrossSigningResetPayload>(payload).map_err(
                     |error| {
                         soland_storage::PersistenceError::Internal(format!(
@@ -239,7 +239,7 @@ fn replay_projection_event(
     projection_name: &str,
 ) -> soland_storage::PersistenceResult<()> {
     let mut operation = operation_from_projection_event(&event, projection_name)?;
-    if event.event_kind == arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE {
+    if event.event_kind == arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
         let payload = operation.payload.as_object_mut().ok_or_else(|| {
             soland_storage::PersistenceError::Internal(format!(
                 "{projection_name} projection event {} has a non-object payload",
@@ -315,7 +315,7 @@ pub async fn hydrate_sidecar_projections(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
     for event in events {
-        if event.event_kind == arkret_wire::events::EventKind::SIDECAR_CREATE
+        if event.event_kind == arkret_wire::EventKind::SIDECAR_CREATE
             && let Some(sidecar_id) = event.payload.pointer("/object/id").and_then(Value::as_str)
             && proj.sidecars.contains_key(sidecar_id)
         {
@@ -330,10 +330,10 @@ pub async fn hydrate_sidecar_projections(
             continue;
         }
         let circle_id = match event.event_kind.as_str() {
-            arkret_wire::events::EventKind::CIRCLE_CREATE => {
+            arkret_wire::EventKind::CIRCLE_CREATE => {
                 event.payload.pointer("/object/id").and_then(Value::as_str)
             }
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE => {
+            arkret_wire::EventKind::CIRCLE_MEMBER_STATE => {
                 event.payload.get("circle_id").and_then(Value::as_str)
             }
             _ => None,
@@ -342,7 +342,7 @@ pub async fn hydrate_sidecar_projections(
             continue;
         }
         let mut operation = operation_from_projection_event(&event, "sidecar-backing-circle")?;
-        if event.event_kind == arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE {
+        if event.event_kind == arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
             let controller = proj
                 .sidecars
                 .values()
@@ -392,7 +392,7 @@ pub async fn hydrate_sidecar_context_projections(
     });
     for event in events {
         match event.event_kind.as_str() {
-            arkret_wire::events::EventKind::STRAND_CREATE => {
+            arkret_wire::EventKind::STRAND_CREATE => {
                 let object = event.payload.get("object").and_then(Value::as_object);
                 let is_sidecar = object
                     .and_then(|object| object.get("scope_circle_id"))
@@ -405,7 +405,7 @@ pub async fn hydrate_sidecar_context_projections(
                     replay_projection_event(proj, event, hydration_hlc, "sidecar-context-strand")?;
                 }
             }
-            arkret_wire::events::EventKind::RELATION_CREATE => {
+            arkret_wire::EventKind::RELATION_CREATE => {
                 let relation = event.payload.get("relation").unwrap_or(&event.payload);
                 let is_sidecar = relation
                     .get("scope_circle_id")
@@ -419,8 +419,8 @@ pub async fn hydrate_sidecar_context_projections(
                 }
                 replay_projection_event(proj, event, hydration_hlc, "sidecar-context-relation")?;
             }
-            arkret_wire::events::EventKind::RELATION_UPDATE
-            | arkret_wire::events::EventKind::RELATION_TOMBSTONE => {
+            arkret_wire::EventKind::RELATION_UPDATE
+            | arkret_wire::EventKind::RELATION_TOMBSTONE => {
                 let relation_id = event
                     .payload
                     .get("relation_id")
@@ -484,7 +484,7 @@ async fn hydrate_canonical_realm_bootstraps(
     for (create_index, create) in records
         .iter()
         .enumerate()
-        .filter(|(_, record)| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        .filter(|(_, record)| record.kind == arkret_wire::EventKind::REALM_CREATE)
     {
         let mut unit = vec![create];
         let mut previous_event_id = create.event_id.as_str();
@@ -597,7 +597,7 @@ pub async fn hydrate_canonical_realm_memberships(
         .snapshot_all()
         .await?
         .into_iter()
-        .filter(|record| record.kind == arkret_wire::events::EventKind::MEMBER_STATE)
+        .filter(|record| record.kind == arkret_wire::EventKind::MEMBER_STATE)
         .collect::<Vec<_>>();
     records.sort_by(|left, right| {
         left.received_at
@@ -671,10 +671,10 @@ pub async fn hydrate_projections_from_persistence(
     let events = persistence.projection_events().snapshot_all().await?;
     for event in events.iter().cloned() {
         let projection_name = match event.event_kind.as_str() {
-            arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
-            | arkret_wire::events::EventKind::AGENT_KEY_REVOKE => "agent-key",
-            arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES => "active-series",
-            arkret_wire::events::EventKind::REALM_POLICY_SERVER => "realm-policy-server",
+            arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
+            | arkret_wire::EventKind::AGENT_KEY_REVOKE => "agent-key",
+            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES => "active-series",
+            arkret_wire::EventKind::REALM_POLICY_SERVER => "realm-policy-server",
             _ => continue,
         };
         replay_projection_event(proj, event, &hydration_hlc, projection_name)?;
@@ -1010,7 +1010,7 @@ pub async fn hydrate_projections_from_persistence(
     }
     for event in persistence
         .projection_events()
-        .snapshot_kind(arkret_wire::events::EventKind::MLS_COMMIT)
+        .snapshot_kind(arkret_wire::EventKind::MLS_COMMIT)
         .await?
     {
         proj.accepted_mls_commit_refs.insert(event.event_id);
@@ -1023,11 +1023,11 @@ pub async fn hydrate_projections_from_persistence(
     for event in events.into_iter().filter(|event| {
         matches!(
             event.event_kind.as_str(),
-            arkret_wire::events::EventKind::STRAND_CREATE
-                | arkret_wire::events::EventKind::STRAND_UPDATE
-                | arkret_wire::events::EventKind::STRAND_ARCHIVE
-                | arkret_wire::events::EventKind::STRAND_RESTORE
-                | arkret_wire::events::EventKind::RSVP_SET
+            arkret_wire::EventKind::STRAND_CREATE
+                | arkret_wire::EventKind::STRAND_UPDATE
+                | arkret_wire::EventKind::STRAND_ARCHIVE
+                | arkret_wire::EventKind::STRAND_RESTORE
+                | arkret_wire::EventKind::RSVP_SET
         )
     }) {
         replay_projection_event(proj, event, &hydration_hlc, "strand-calendar-rsvp")?;

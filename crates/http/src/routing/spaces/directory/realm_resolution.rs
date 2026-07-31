@@ -745,7 +745,7 @@ pub(super) async fn join_candidates_for_resolved_realm(
         .unwrap_or_default();
     if let Some(create) = records
         .iter()
-        .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
     {
         let source_ref = EventId::new(create.event_id.clone()).ok();
         if let Some(endpoints) = create

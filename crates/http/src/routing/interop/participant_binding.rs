@@ -36,6 +36,8 @@ use std::collections::BTreeSet;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::CellRef;
+use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
+use arkret_wire::REALM_MEDIA_SERVICE_CELL_FAMILY;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
@@ -46,8 +48,7 @@ use crate::state::AppState;
 /// Fixed ASCII domain-separation label prefixed (NUL-delimited) before the
 /// canonical binding bytes. Equals the `scheme` value verbatim; MUST match the
 /// issuer and verifier byte-for-byte (`media-service-binding.md` §3).
-pub(crate) const BINDING_SIGNING_LABEL: &[u8] =
-    arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.as_bytes();
+pub(crate) const BINDING_SIGNING_LABEL: &[u8] = ParticipantBinding::SCHEMA.as_bytes();
 
 /// Build the canonical-JSON value the issuer signs over: exactly the seven
 /// authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
@@ -98,6 +99,7 @@ pub(crate) fn binding_signing_input(canonical_bytes: &[u8]) -> Vec<u8> {
 /// construction.
 pub(crate) fn sign_binding(binding: &Value, signing_key: &ed25519_dalek::SigningKey) -> String {
     use ed25519_dalek::Signer as _;
+
     let canonical_bytes = binding_canonical_bytes(binding);
     let signing_input = binding_signing_input(&canonical_bytes);
     let signature = signing_key.sign(&signing_input);
@@ -133,7 +135,6 @@ pub(crate) fn verify_binding_signature(
 
 /// `media_service_binding.md` §2 — the family of the per-realm media_service
 /// epoch cell projected by `apply_realm_media_service`.
-const REALM_MEDIA_SERVICE_CELL_FAMILY: &str = "ak.component.realm.media_service.v1";
 
 /// The current-epoch issuer anchor set for one realm's media service.
 struct MediaServiceAnchors {
@@ -425,7 +426,7 @@ mod cross_impl_tests {
         let expires_at: DateTime<Utc> = expires_at.parse().unwrap();
         let binding = CallMediaParticipantBinding {
             // Unsigned metadata — MUST NOT enter the signing input.
-            scheme: arkret_wire::constants::PARTICIPANT_BINDING_SCHEMA.to_owned(),
+            scheme: ParticipantBinding::SCHEMA.to_owned(),
             sig: String::new(),
             issuer_kid: arkret_wire::DidUrl::new("did:web:media.example#media-token").unwrap(),
             issued_at: "2026-05-27T12:30:00.000Z".parse().unwrap(),

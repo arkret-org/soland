@@ -1,51 +1,39 @@
 use arkret_crypto::account_data_crypto::AccountDataEncryptedValue;
 use arkret_identifiers::{Did, RealmId};
+use arkret_wire::AccountDataKey;
 use serde_json::{Map, Value};
 
-const ACCOUNT_DATA_KEY_AGENT_DRAFT: &str = "ak.agent.draft.v1";
-const ACCOUNT_DATA_KEY_AGENT_PARTICIPATION: &str = "ak.agent.participation.v1";
-const ACCOUNT_DATA_KEY_BLOCKLIST: &str = "ak.account.blocklist";
-const ACCOUNT_DATA_KEY_CLIENT_UI_STATE: &str = "ak.client.ui_state";
-const ACCOUNT_DATA_KEY_COLLECTIONS_STICKERS: &str = "ak.collections.stickers";
-const ACCOUNT_DATA_KEY_DND_SCHEDULE: &str = "ak.dnd_schedule";
-const ACCOUNT_DATA_KEY_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
-const ACCOUNT_DATA_KEY_PRESENCE_PREFERENCE: &str = "ak.presence.preference";
-const ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY: &str = "ak.presence.visibility";
-const ACCOUNT_DATA_KEY_PUSH_RULES: &str = "ak.push_rules";
-const ACCOUNT_DATA_KEY_READ_RECEIPT_PREFERENCES: &str = "ak.read_receipt.preferences";
-const ACCOUNT_DATA_KEY_TAGS_REALM: &str = "ak.tags.realm";
-
 const EXACT_ENCRYPTED_ACCOUNT_DATA_KEYS: &[&str] = &[
-    ACCOUNT_DATA_KEY_BLOCKLIST,
-    ACCOUNT_DATA_KEY_CLIENT_UI_STATE,
-    ACCOUNT_DATA_KEY_COLLECTIONS_STICKERS,
-    ACCOUNT_DATA_KEY_DND_SCHEDULE,
-    ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
-    ACCOUNT_DATA_KEY_PRESENCE_PREFERENCE,
-    ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY,
-    ACCOUNT_DATA_KEY_PUSH_RULES,
-    ACCOUNT_DATA_KEY_READ_RECEIPT_PREFERENCES,
+    AccountDataKey::ACCOUNT_BLOCKLIST,
+    AccountDataKey::CLIENT_UI_STATE,
+    AccountDataKey::COLLECTIONS_STICKERS,
+    AccountDataKey::DND_SCHEDULE,
+    AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
+    AccountDataKey::PRESENCE_PREFERENCE,
+    AccountDataKey::PRESENCE_VISIBILITY,
+    AccountDataKey::PUSH_RULES,
+    AccountDataKey::READ_RECEIPT_PREFERENCES,
 ];
 
 const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    arkret_wire::constants::ACCOUNT_DATA_KEY_CONTACTS_ACTOR,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_CONTACTS_REALM,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_REMINDER,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_SCHEDULED_SEND,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_SNOOZE,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_SAVED,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_DRAFT,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_FILE_TRANSFER,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_SEARCH_INDEX_MANIFEST,
+    AccountDataKey::CONTACTS_ACTOR,
+    AccountDataKey::CONTACTS_REALM,
+    AccountDataKey::REMINDERS_V1,
+    AccountDataKey::SCHEDULED_SEND_V1,
+    AccountDataKey::SNOOZE_V1,
+    AccountDataKey::SAVED_V1,
+    AccountDataKey::DRAFT_V1,
+    AccountDataKey::FILE_TRANSFER_V1,
+    AccountDataKey::SEARCH_INDEX_MANIFEST_V1,
 ];
 
 // `ak.agent.sidecar_projection.v1` is intentionally absent: the exchange
 // projection is a controller-device-local fold cache and never registers an
 // account-data key surface (zh/models/sidecar.md §7.2.4).
 const AGENT_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
-    ACCOUNT_DATA_KEY_AGENT_DRAFT,
-    arkret_wire::constants::ACCOUNT_DATA_KEY_AGENT_SIDECAR_VIEW_STATE,
-    ACCOUNT_DATA_KEY_AGENT_PARTICIPATION,
+    AccountDataKey::AGENT_DRAFT_V1,
+    AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1,
+    AccountDataKey::AGENT_PARTICIPATION_V1,
 ];
 
 /// Account-data key prefixes that were removed from the registry and MUST stay
@@ -130,10 +118,10 @@ pub(crate) fn encrypted_account_data_prefix(account_data_key: &str) -> Option<&'
         return Some(key);
     }
     if account_data_key
-        .strip_prefix(ACCOUNT_DATA_KEY_TAGS_REALM)
+        .strip_prefix(AccountDataKey::TAGS_REALM)
         .is_some_and(|rest| rest.starts_with('.'))
     {
-        return Some(ACCOUNT_DATA_KEY_TAGS_REALM);
+        return Some(AccountDataKey::TAGS_REALM);
     }
     if let Some(prefix) = SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES
         .iter()
@@ -169,7 +157,7 @@ pub(crate) fn validate_encrypted_account_data_key(
         return Ok(());
     }
     if account_data_key
-        .strip_prefix(ACCOUNT_DATA_KEY_BLOCKLIST)
+        .strip_prefix(AccountDataKey::ACCOUNT_BLOCKLIST)
         .is_some_and(|rest| rest.starts_with('.'))
     {
         return Err(AccountDataEncryptionError::InvalidKeyPattern);
@@ -191,12 +179,9 @@ pub(crate) fn validate_encrypted_account_data_key(
             .map_err(|_| AccountDataEncryptionError::InvalidKeyPattern);
     }
     if let Some(rest) = account_data_key
-        .strip_prefix(ACCOUNT_DATA_KEY_AGENT_DRAFT)
-        .or_else(|| {
-            account_data_key
-                .strip_prefix(arkret_wire::constants::ACCOUNT_DATA_KEY_AGENT_SIDECAR_VIEW_STATE)
-        })
-        .or_else(|| account_data_key.strip_prefix(ACCOUNT_DATA_KEY_AGENT_PARTICIPATION))
+        .strip_prefix(AccountDataKey::AGENT_DRAFT_V1)
+        .or_else(|| account_data_key.strip_prefix(AccountDataKey::AGENT_SIDECAR_VIEW_STATE_V1))
+        .or_else(|| account_data_key.strip_prefix(AccountDataKey::AGENT_PARTICIPATION_V1))
     {
         return validate_agent_private_key_tail(rest);
     }
@@ -435,14 +420,14 @@ mod tests {
     #[test]
     fn standard_encrypted_account_data_requires_encrypted_carrier() {
         for key in [
-            ACCOUNT_DATA_KEY_BLOCKLIST,
-            ACCOUNT_DATA_KEY_CLIENT_UI_STATE,
-            ACCOUNT_DATA_KEY_COLLECTIONS_STICKERS,
-            ACCOUNT_DATA_KEY_DND_SCHEDULE,
-            ACCOUNT_DATA_KEY_PRESENCE_VISIBILITY,
-            ACCOUNT_DATA_KEY_PRESENCE_PREFERENCE,
-            ACCOUNT_DATA_KEY_PUSH_RULES,
-            ACCOUNT_DATA_KEY_READ_RECEIPT_PREFERENCES,
+            AccountDataKey::ACCOUNT_BLOCKLIST,
+            AccountDataKey::CLIENT_UI_STATE,
+            AccountDataKey::COLLECTIONS_STICKERS,
+            AccountDataKey::DND_SCHEDULE,
+            AccountDataKey::PRESENCE_VISIBILITY,
+            AccountDataKey::PRESENCE_PREFERENCE,
+            AccountDataKey::PUSH_RULES,
+            AccountDataKey::READ_RECEIPT_PREFERENCES,
         ] {
             let err =
                 validate_encrypted_account_data_value(key, &json!({"enabled": true})).unwrap_err();
@@ -457,7 +442,7 @@ mod tests {
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
 
         let err = validate_encrypted_account_data_value(
-            ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
+            AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
             &json!({"invite_event_id": "ak:event:0196419b-0000-7000-8000-000000000000"}),
         )
         .unwrap_err();

@@ -15,6 +15,7 @@
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
+use arkret_wire::CapabilityActionId;
 use serde_json::{Value, json};
 use soland_domain::hlc::ServerHlc;
 use soland_domain::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};
@@ -24,7 +25,6 @@ const REALM: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
 const GRANT_ID: &str = "ak:grant:01904100-0000-7000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
-const ACTION: &str = "ak.realm.admin";
 const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
 const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
 const CIRCLE_B: &str = "ak:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
@@ -41,7 +41,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn grant_op(grant_id: &str) -> Operation {
     grant_op_with(
         grant_id,
-        vec![json!(ACTION)],
+        vec![json!(CapabilityActionId::REALM_ADMIN)],
         vec![json!({ "kind": "realm", "realm_id": REALM })],
     )
 }
@@ -50,7 +50,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
     let registry_digest = arkret_policy::current_capability_action_registry_digest()
         .expect("embedded capability action registry");
     op(
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::EventKind::CAPABILITY_GRANT,
         REALM,
         json!({
             "grant_id": grant_id,
@@ -77,7 +77,7 @@ fn grant_op_with(grant_id: &str, actions: Vec<Value>, resources: Vec<Value>) -> 
 
 fn revoke_op(grant_id: &str) -> Operation {
     op(
-        arkret_wire::events::EventKind::CAPABILITY_REVOKE,
+        arkret_wire::EventKind::CAPABILITY_REVOKE,
         REALM,
         json!({ "grant_id": grant_id }),
     )
@@ -132,7 +132,7 @@ fn seed_realm_owner(state: &mut ProjectionState) {
 /// Mirror the projection driver: derive the engine grant from the cell and
 /// fold it into a fresh engine, then run a check for the subject/action.
 fn check_allows(state: &ProjectionState, grant_id: &str) -> bool {
-    check_allows_for(state, grant_id, ACTION, REALM)
+    check_allows_for(state, grant_id, CapabilityActionId::REALM_ADMIN, REALM)
 }
 
 fn check_allows_for(state: &ProjectionState, grant_id: &str, action: &str, resource: &str) -> bool {
@@ -190,7 +190,7 @@ fn canonical_circle_selector_and_constraint_project_to_narrow_runtime_grant() {
     let hlc = ServerHlc::new("test");
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             REALM,
             json!({
                 "grant_id": GRANT_ID,

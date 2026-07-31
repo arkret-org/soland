@@ -1,3 +1,5 @@
+use arkret_wire::SchemaId;
+
 use super::*;
 
 /// Build one snapshot of the account-aggregate sync response for the next
@@ -346,7 +348,6 @@ async fn agent_signer_evidence_bundle_for_sync(
         arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry,
     >,
 ) -> Option<arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle> {
-    use arkret_models_collaboration::agent_signer_evidence::AGENT_SIGNER_EVIDENCE_BUNDLE_SCHEMA;
     use arkret_wire::NonEmptyString;
 
     let mut selectors = BTreeMap::new();
@@ -369,7 +370,8 @@ async fn agent_signer_evidence_bundle_for_sync(
     }
     Some(
         arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle {
-            schema: NonEmptyString::new(AGENT_SIGNER_EVIDENCE_BUNDLE_SCHEMA.to_owned()).ok()?,
+            schema: NonEmptyString::new(SchemaId::AGENT_SIGNER_EVIDENCE_BUNDLE_V1.to_owned())
+                .ok()?,
             evidence,
         },
     )
@@ -969,8 +971,7 @@ async fn timeline_events_for_realm(
     {
         if !matches!(
             record.kind.as_str(),
-            arkret_wire::events::EventKind::REACTION_ADD
-                | arkret_wire::events::EventKind::REACTION_REMOVE
+            arkret_wire::EventKind::REACTION_ADD | arkret_wire::EventKind::REACTION_REMOVE
         ) || !seen.insert(record.event_id.clone())
         {
             continue;
@@ -1030,7 +1031,7 @@ pub(crate) fn collapse_message_ordered_log_equivocations(
 
     let mut slots = BTreeMap::<(String, String, u64), Vec<usize>>::new();
     for (index, (_, event)) in entries.iter().enumerate() {
-        if event.kind.as_str() != arkret_wire::events::EventKind::MESSAGE_CREATE {
+        if event.kind.as_str() != arkret_wire::EventKind::MESSAGE_CREATE {
             continue;
         }
         let Some(strand_id) = event.payload.get("strand_id").and_then(Value::as_str) else {
@@ -1188,7 +1189,7 @@ async fn state_events_for_realm(
     let mut newest_position = after_position;
     let mut state_entries = Vec::new();
     for event in events {
-        if event.event_kind == arkret_wire::events::EventKind::MESSAGE_CREATE {
+        if event.event_kind == arkret_wire::EventKind::MESSAGE_CREATE {
             continue;
         }
         let position = projection_event_position(&event);
@@ -1349,7 +1350,7 @@ async fn account_data_events(
         .await
         .unwrap_or_default()
     {
-        if record.kind != arkret_wire::events::EventKind::ACCOUNT_DATA_SET {
+        if record.kind != arkret_wire::EventKind::ACCOUNT_DATA_SET {
             continue;
         }
         let Ok(event) = super::super::event_log::sdk_event_for_state(state, &record) else {
@@ -1536,7 +1537,7 @@ fn projection_event_scope_circle_id(
     projection: &ProjectionState,
     event: &ProjectionEventRecord,
 ) -> Option<String> {
-    if event.event_kind == arkret_wire::events::EventKind::MESSAGE_CREATE {
+    if event.event_kind == arkret_wire::EventKind::MESSAGE_CREATE {
         return event
             .payload
             .get("strand_id")
@@ -1575,7 +1576,7 @@ fn projection_event_scope_circle_id(
     if explicit_scope.is_some() {
         return explicit_scope;
     }
-    if event.event_kind == arkret_wire::events::EventKind::RELATION_CREATE {
+    if event.event_kind == arkret_wire::EventKind::RELATION_CREATE {
         let relation = event.payload.get("relation").and_then(Value::as_object);
         return relation
             .and_then(|value| value.get("from_ref"))

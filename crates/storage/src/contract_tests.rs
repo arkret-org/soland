@@ -1,9 +1,9 @@
 use arkret_models_identity::{
-    ORGANIZATION_REGISTRATION_CONTROL_PURPOSE, OrganizationControlProofKind,
-    OrganizationRegistrationChallenge, OrganizationRegistrationOutcome,
-    OrganizationRegistrationReceipt, OrganizationRegistrationScope, OrganizationRegistrationStatus,
+    OrganizationControlProofKind, OrganizationRegistrationChallenge,
+    OrganizationRegistrationOutcome, OrganizationRegistrationReceipt,
+    OrganizationRegistrationScope, OrganizationRegistrationStatus,
 };
-use arkret_wire::{Did, Hash, PayloadProof};
+use arkret_wire::{Did, Hash, PayloadProof, ProofContextId};
 use chrono::{Duration, Utc};
 
 use super::{
@@ -534,7 +534,7 @@ fn registration_challenge(
     OrganizationRegistrationChallenge {
         challenge_id: format!("ak:organization-registration-challenge:{challenge_hash}"),
         organization_id: organization_id.clone(),
-        purpose: ORGANIZATION_REGISTRATION_CONTROL_PURPOSE.to_owned(),
+        purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
         nonce: challenge_hash[..32].to_owned(),
         audience: Did::new("did:webvh:zService:service.example").expect("valid service DID"),
         origin: "https://service.example/".to_owned(),

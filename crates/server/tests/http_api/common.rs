@@ -923,7 +923,7 @@ fn apply_registered_cba_plane(event: &mut arkret_wire::Event, verification_metho
     };
     if matches!(
         event.kind.as_str(),
-        arkret_wire::events::EventKind::REALM_CREATE | "ak.device.reanchor"
+        arkret_wire::EventKind::REALM_CREATE | "ak.device.reanchor"
     ) {
         return;
     }
@@ -1645,7 +1645,7 @@ pub(crate) async fn seed_realm_genesis_event(
     // a fixture that seeds the same Realm twice must not write a second one.
     let envelope = signed_canonical_event(
         &genesis_event_id,
-        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::REALM_CREATE,
         subject,
         "01904100-0000-7000-8000-a11ce0000001",
         realm_id,
@@ -1677,7 +1677,7 @@ pub(crate) async fn seed_realm_genesis_event(
             actor_id: subject.to_owned(),
             actor_seq: 0,
             realm_id: Some(realm_id.to_owned()),
-            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest: genesis_digest.to_string(),
             canonical_bytes: Vec::new(),
@@ -2013,7 +2013,7 @@ fn fixture_grant_body(
 ) -> Value {
     let mut body = serde_json::json!({
         "grant_id": grant_id,
-        "schema": arkret_wire::CAPABILITY_SCHEMA,
+        "schema": arkret_wire::SchemaId::CAPABILITY_V1,
         "realm_id": realm_id,
         "issuer": subject,
         "subject": subject,
@@ -2495,16 +2495,17 @@ pub(crate) fn normalize_space_container_payload(kind: &str, payload: &mut Value)
 
 fn typed_space_container_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_wire::events::EventKind::SPACE_ARCHIVE
-        | arkret_wire::events::EventKind::SPACE_RESTORE => serde_json::to_value(
-            arkret_models_collaboration::object_lifecycle::SpaceStateTransitionPayload {
-                space_id: required_space_id(&payload, "space_id"),
-                reason: optional_string(&payload, "reason"),
-                effective_at: None,
-            },
-        )
-        .expect("space lifecycle payload serialization"),
-        arkret_wire::events::EventKind::SPACE_TOMBSTONE => serde_json::to_value(
+        arkret_wire::EventKind::SPACE_ARCHIVE | arkret_wire::EventKind::SPACE_RESTORE => {
+            serde_json::to_value(
+                arkret_models_collaboration::object_lifecycle::SpaceStateTransitionPayload {
+                    space_id: required_space_id(&payload, "space_id"),
+                    reason: optional_string(&payload, "reason"),
+                    effective_at: None,
+                },
+            )
+            .expect("space lifecycle payload serialization")
+        }
+        arkret_wire::EventKind::SPACE_TOMBSTONE => serde_json::to_value(
             arkret_models_collaboration::object_lifecycle::SpaceObjectTombstonePayload {
                 space_id: required_space_id(&payload, "space_id"),
                 reason: optional_string(&payload, "reason"),
@@ -2684,7 +2685,7 @@ pub(crate) fn normalize_morph_payload(kind: &str, payload: &mut Value) {
 
 fn typed_morph_payload(kind: &str, payload: Value) -> Value {
     match kind {
-        arkret_wire::events::EventKind::MORPH_ARCHIVE => {
+        arkret_wire::EventKind::MORPH_ARCHIVE => {
             arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
                 required_string(&payload, "target_ref", "morph lifecycle target_ref"),
             )
@@ -2692,7 +2693,7 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
             .to_value()
             .expect("morph archive payload serialization")
         }
-        arkret_wire::events::EventKind::MORPH_RESTORE => {
+        arkret_wire::EventKind::MORPH_RESTORE => {
             arkret_models_collaboration::governance::realm_lifecycle::ObjectLifecyclePayload::new(
                 required_string(&payload, "target_ref", "morph lifecycle target_ref"),
             )
@@ -2700,7 +2701,7 @@ fn typed_morph_payload(kind: &str, payload: Value) -> Value {
             .to_value()
             .expect("morph restore payload serialization")
         }
-        arkret_wire::events::EventKind::MORPH_UPDATE => {
+        arkret_wire::EventKind::MORPH_UPDATE => {
             let morph_id = arkret_identifiers::MorphId::new(required_string(
                 &payload,
                 "target_ref",

@@ -774,7 +774,7 @@ impl PeerReadAuthz {
             return;
         };
         match record.kind.as_str() {
-            arkret_wire::events::EventKind::INVITE_CREATE => {
+            arkret_wire::EventKind::INVITE_CREATE => {
                 let Some(invite_id) = payload.get("invite_id").and_then(Value::as_str) else {
                     return;
                 };
@@ -797,7 +797,7 @@ impl PeerReadAuthz {
                     );
                 }
             }
-            arkret_wire::events::EventKind::INVITE_ACCEPT => {
+            arkret_wire::EventKind::INVITE_ACCEPT => {
                 let Some(invite_id) = payload
                     .get("invite_id")
                     .or_else(|| payload.get("invite_ref"))
@@ -964,7 +964,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_wire::events::EventKind::MEMBER_STATE {
+        if record.kind != arkret_wire::EventKind::MEMBER_STATE {
             return;
         }
         let Some(realm_id) = super::event_log::canonical_realm_id_for_record(record) else {
@@ -1049,7 +1049,7 @@ impl PeerReadAuthz {
     }
 
     fn apply_circle_member_record(&mut self, record: &CanonicalEventRecord) {
-        if record.kind != arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE {
+        if record.kind != arkret_wire::EventKind::CIRCLE_MEMBER_STATE {
             return;
         }
         let Some(payload) = record_payload(record) else {

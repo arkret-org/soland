@@ -40,7 +40,7 @@ fn accepted_operation_cell_writes(
     let Some(kind) = kinds::canonical_kind_for_operation(operation) else {
         return Vec::new();
     };
-    if !arkret_wire::events::EventKind::from(kind)
+    if !arkret_wire::EventKind::from(kind)
         .descriptor()
         .is_some_and(|descriptor| descriptor.reducer_input)
     {
@@ -350,8 +350,7 @@ pub async fn mirror_join_authorisation_consumption(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::INVITE_CREATE)
     {
         return;
     }
@@ -454,13 +453,9 @@ async fn project_accepted_operations_inner(
             project_invite_claim_operation(state, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ak.invite.accept" {
             project_invite_accept_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation)
-            == arkret_wire::events::EventKind::INVITE_CANCEL
-        {
+        } else if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::INVITE_CANCEL {
             project_invite_cancel_operation(state, origin, operation).await;
-        } else if kinds::canonical_kind_string(operation)
-            == arkret_wire::events::EventKind::INVITE_REVOKE
-        {
+        } else if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::INVITE_REVOKE {
             project_invite_revoke_operation(state, origin, operation).await;
         } else if kinds::canonical_kind_string(operation) == "ak.realm.plaintext_visible_services" {
             project_plaintext_visible_services_operation(state, operation).await;
@@ -475,8 +470,7 @@ async fn project_accepted_operations_inner(
         // digest binding) runs inside `project_member_identity_update`;
         // plaintext Ed25519 proof verification has already run at event
         // ingest, and unsupported proof forms fail closed there.
-        if kinds::canonical_kind_string(operation)
-            == arkret_wire::events::EventKind::MEMBER_IDENTITY_UPDATE
+        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE
         {
             project_member_identity_update(state, operation);
         }
@@ -511,9 +505,7 @@ async fn project_accepted_operations_inner(
         // `keys/query` signing-key directory resolves devices that were
         // authorized but never opened a session (previously the key only
         // landed via the session-grant exchange path).
-        if kinds::canonical_kind_string(operation)
-            == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
-        {
+        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::DEVICE_AUTHORIZE {
             project_device_authorize(state, operation).await;
         }
         // Also apply to the deterministic reducer.
@@ -528,13 +520,13 @@ async fn project_accepted_operations_inner(
             Some(contextual)
         } else {
             match kinds::canonical_kind_for_operation(operation) {
-                Some(arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE) => {
+                Some(arkret_wire::EventKind::CIRCLE_MEMBER_STATE) => {
                     Some(accepted_circle_member_reducer_operation(
                         operation,
                         trusted_sidecar_member_controller,
                     ))
                 }
-                Some(arkret_wire::events::EventKind::MEMBER_STATE)
+                Some(arkret_wire::EventKind::MEMBER_STATE)
                     if operation.payload.get("sender").is_none() =>
                 {
                     let mut contextual = operation.clone();
@@ -558,7 +550,7 @@ async fn project_accepted_operations_inner(
             };
         if let Some(effect) = reducer_effect {
             if kinds::canonical_kind_string(operation)
-                == arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES
+                == arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES
                 && let ProjectionEffectView::Rejected { reason } = &effect
             {
                 tracing::error!(
@@ -577,9 +569,7 @@ async fn project_accepted_operations_inner(
             // view: replay/hydration may legitimately collapse that view after
             // the cell write, while the idempotent device-message projection
             // must still be rebuilt.
-            if kinds::canonical_kind_string(operation)
-                == arkret_wire::events::EventKind::REALM_KEY_SHARE
-            {
+            if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::REALM_KEY_SHARE {
                 project_realm_key_share_to_device(state, origin, source_device_id, operation).await;
             }
             fanout_projection_effect_private_update(state, origin, source_device_id, &effect).await;
@@ -606,14 +596,11 @@ async fn project_accepted_operations_inner(
         crate::routing::identity::account::retire_direct_bindings_for_operation(state, operation)
             .await;
         crate::routing::identity::account::project_canonical_direct_binding(state, operation).await;
-        if kinds::canonical_kind_string(operation)
-            == arkret_wire::events::EventKind::RELATION_CREATE
-        {
+        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::RELATION_CREATE {
             crate::routing::events::notify::dispatch_assignment_notifications(state, operation)
                 .await;
         }
-        if kinds::canonical_kind_string(operation) == arkret_wire::events::EventKind::STRAND_UPDATE
-        {
+        if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::STRAND_UPDATE {
             crate::routing::events::notify::dispatch_schedule_notifications(state, operation).await;
         }
         // AKP-0016 — mirror agent_participation ceiling changes into the
@@ -895,7 +882,7 @@ fn realm_key_share_device_message_content(
     payload: &Value,
 ) -> Value {
     json!({
-        "kind": arkret_wire::events::EventKind::REALM_KEY_SHARE,
+        "kind": arkret_wire::EventKind::REALM_KEY_SHARE,
         "sender_device_id": sender_device_id,
         "content": {
             "realm_id": realm_id,
@@ -1142,7 +1129,7 @@ mod tests {
         let operation = Operation::create(
             operation_id.clone(),
             realm_id,
-            arkret_wire::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::EventKind::REALM_KEY_SHARE,
             payload,
         );
 
@@ -1162,7 +1149,7 @@ mod tests {
         assert_eq!(queued.len(), 1);
         assert_eq!(
             queued[0].content["kind"],
-            arkret_wire::events::EventKind::REALM_KEY_SHARE
+            arkret_wire::EventKind::REALM_KEY_SHARE
         );
         assert_eq!(
             queued[0].content["content"]["payload"]["ciphertext"],
@@ -1231,10 +1218,7 @@ mod tests {
 
         let delivered = device_message_envelopes_after(&[record]);
         assert_eq!(delivered.len(), 1);
-        assert_eq!(
-            delivered[0].kind,
-            arkret_wire::events::EventKind::REALM_KEY_SHARE
-        );
+        assert_eq!(delivered[0].kind, arkret_wire::EventKind::REALM_KEY_SHARE);
         assert_eq!(delivered[0].content["realm_id"], realm_id);
         assert_eq!(delivered[0].content["operation_id"], operation_id);
         assert_eq!(delivered[0].content["payload"], payload);
@@ -1251,7 +1235,7 @@ mod tests {
                 "ak:realm:0196419b-1000-7000-8000-000000000201".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             json!({
                 "circle_id": "ak:circle:0196419b-1000-7000-8000-000000000203",
                 "actor_id": "did:web:agent.example",

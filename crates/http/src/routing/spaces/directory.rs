@@ -58,8 +58,8 @@ use arkret_server::{
 };
 use arkret_signatures::Ed25519PayloadSigner;
 use arkret_wire::{
-    AGENT_SELECTOR_CLAIM_SCHEMA, AddressLinkKind, Audience, JoinRule, PayloadProof, PayloadSigner,
-    RealmRef, TargetDescriptor, parse_address, proof_kind, target_digest,
+    AddressLinkKind, Audience, JoinRule, PayloadProof, PayloadSigner, RealmRef, TargetDescriptor,
+    parse_address, proof_kind, target_digest,
 };
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -179,7 +179,7 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         service_id,
         trust_domain,
         service_kind: arkret_wire::ServiceKind::DirectoryService,
-        protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
         supported_profiles: supported_profiles.clone(),
         profile_bindings: Default::default(),
         supported_operations: DIRECTORY_SUPPORTED_OPERATIONS

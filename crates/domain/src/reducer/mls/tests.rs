@@ -1,5 +1,6 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::{OperationId, RealmId};
+use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::{TimeZone, Utc};
@@ -58,8 +59,8 @@ fn governance_binding_for_scope(
             frontier
         ],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": CORE_REDUCER_PROFILE
     });
     if let Some(circle_id) = binding["effective_scope"]
         .get("circle_id")
@@ -132,8 +133,8 @@ fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
             "ak:event:0196419b-0000-7000-8000-000000000000"
         ],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": CORE_REDUCER_PROFILE
     });
     if let Some(circle_id) = binding["effective_scope"]
         .get("circle_id")
@@ -581,7 +582,7 @@ fn welcome_enqueue_accepts_current_agent_key_authorization() {
     let authorize_event_id = "ak:event:0196419b-0000-7000-8000-0000000000a2";
     let authorize = op_at(
         200,
-        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
         json!({
             "agent_id": "did:web:bob.example",
             "key_id": "ak:agent_key:0196419b-0000-7000-8000-0000000000a2",
@@ -1038,8 +1039,8 @@ fn commit_epoch_requires_covered_seals() {
                     "previous_epoch": 0,
                     "next_epoch": 1,
                     "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                    "binding_profile": crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-                    "reducer_profile": crate::kinds::MLS_REDUCER_PROFILE_V1
+                    "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+                    "reducer_profile": CORE_REDUCER_PROFILE
                 },
             }),
         ),

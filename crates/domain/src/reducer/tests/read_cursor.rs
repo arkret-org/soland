@@ -28,7 +28,7 @@ fn cursor_operation(
             serde_json::Value::String(relation.to_owned());
     }
     make_operation(
-        arkret_wire::events::EventKind::READ_CURSOR_ADVANCE,
+        arkret_wire::EventKind::READ_CURSOR_ADVANCE,
         REALM_ID,
         payload,
     )

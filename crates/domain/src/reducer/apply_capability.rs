@@ -28,6 +28,8 @@
 //! structure/causality against projected cells rather than re-running the
 //! Seal acceptance judgment.
 
+use arkret_wire::CapabilityActionId;
+
 use super::*;
 
 const RESOURCE_SELECTOR_MAX_ITEMS: usize = 256;
@@ -909,7 +911,7 @@ impl ProjectionState {
         self.issuer_holds_literal_capability(
             actor,
             realm_id,
-            arkret_policy::REALM_OWNER_ACTION,
+            CapabilityActionId::REALM_OWNER,
             realm_id,
             evaluation_basis,
         )
@@ -1036,7 +1038,7 @@ impl ProjectionState {
                 return false;
             };
             if rule.required_registration_event_kind
-                != arkret_wire::events::EventKind::APPLET_REGISTRATION
+                != arkret_wire::EventKind::APPLET_REGISTRATION
                 || rule.required_claimed_profile != profile_id
                 || rule.subject_binding != "registration.service_id"
                 || rule.scope_binding != "grant.resource_exact_registration_scope"
@@ -1414,7 +1416,7 @@ impl ProjectionState {
     /// grant cell or the authz index.
     pub fn check_authority_cycle(&self, operation: &Operation) -> Result<(), &'static str> {
         if crate::kinds::canonical_kind_for_operation(operation)
-            != Some(arkret_wire::events::EventKind::CAPABILITY_GRANT)
+            != Some(arkret_wire::EventKind::CAPABILITY_GRANT)
         {
             return Ok(());
         }
@@ -1764,7 +1766,7 @@ mod agent_key_tests {
             "grant_id": grant_id,
             "grant": {
                 "id": grant_id,
-                "schema": arkret_wire::CAPABILITY_SCHEMA,
+                "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
                 "issuer": issuer,
                 "issuer_authority_refs": [{
@@ -2291,7 +2293,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fe").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -2320,7 +2322,7 @@ mod delegation_cycle_tests {
         Operation::create(
             OperationId::new("ak:operation:01970000-0000-7000-8000-0000000000fd").unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
@@ -2523,12 +2525,12 @@ mod federation_revoke_fanout_tests {
             .expect("embedded capability action registry");
         let owner_grant = capability_op(
             "ak:operation:01970000-0000-7000-8000-0000000000a0",
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": OWNER_GRANT,
                 "grant": {
                     "id": OWNER_GRANT,
-                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
                     "issuer": OWNER,
                     "issuer_authority_refs": [{
@@ -2558,7 +2560,7 @@ mod federation_revoke_fanout_tests {
             "grant_id": GRANT,
             "grant": {
                 "id": GRANT,
-                "schema": arkret_wire::CAPABILITY_SCHEMA,
+                "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                 "realm_id": REALM,
                 "issuer": OWNER,
                 "issuer_authority_refs": [{
@@ -2594,7 +2596,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_grant(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a1",
-                arkret_wire::events::EventKind::CAPABILITY_GRANT,
+                arkret_wire::EventKind::CAPABILITY_GRANT,
                 delivery_binding_grant_payload(),
             ),
             now,
@@ -2612,7 +2614,7 @@ mod federation_revoke_fanout_tests {
         let effect = state.apply_capability_revoke(
             &capability_op(
                 "ak:operation:01970000-0000-7000-8000-0000000000a2",
-                arkret_wire::events::EventKind::CAPABILITY_REVOKE,
+                arkret_wire::EventKind::CAPABILITY_REVOKE,
                 json!({ "grant_id": GRANT, "realm_id": REALM }),
             ),
             now,
@@ -2669,12 +2671,12 @@ mod realm_owner_authority_tests {
             ))
             .unwrap(),
             RealmId::new(REALM.to_owned()).unwrap(),
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             json!({
                 "grant_id": grant_id,
                 "grant": {
                     "id": grant_id,
-                    "schema": arkret_wire::CAPABILITY_SCHEMA,
+                    "schema": arkret_wire::SchemaId::CAPABILITY_V1,
                     "realm_id": REALM,
                     "issuer": issuer,
                     "issuer_authority_refs": [{
@@ -2830,11 +2832,8 @@ mod realm_owner_authority_tests {
                 "{action} is root_control_only and is not owner-grantable"
             );
             assert!(
-                !arkret_policy::action_covers_event_kinds(
-                    arkret_policy::REALM_OWNER_ACTION,
-                    action
-                )
-                .unwrap(),
+                !arkret_policy::action_covers_event_kinds(CapabilityActionId::REALM_OWNER, action)
+                    .unwrap(),
                 "{action} is outside the owner aggregate's operational coverage"
             );
         }
@@ -2902,7 +2901,7 @@ mod realm_owner_authority_tests {
         // empty-set guard every aggregate would vacuously "cover" it.
         assert!(
             !arkret_policy::action_covers_event_kinds(
-                arkret_policy::REALM_OWNER_ACTION,
+                CapabilityActionId::REALM_OWNER,
                 "ak.audit.export"
             )
             .unwrap()
@@ -2946,7 +2945,7 @@ mod realm_owner_authority_tests {
         // grant-authority set.
         assert!(
             arkret_policy::action_covers_event_kinds(
-                arkret_policy::REALM_OWNER_ACTION,
+                CapabilityActionId::REALM_OWNER,
                 "ak.agent.sidecar.write"
             )
             .unwrap()

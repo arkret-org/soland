@@ -69,7 +69,7 @@ pub(super) fn agent_participation_ceiling_change(
             .map(ToOwned::to_owned)
     };
     match kinds::canonical_kind_for_operation(operation) {
-        Some(arkret_wire::events::EventKind::REALM_POLICY_BUNDLE) => {
+        Some(arkret_wire::EventKind::REALM_POLICY_BUNDLE) => {
             let value = find()?;
             Some((
                 "realm",
@@ -78,8 +78,8 @@ pub(super) fn agent_participation_ceiling_change(
                 Vec::new(),
             ))
         }
-        Some(arkret_wire::events::EventKind::CIRCLE_CREATE)
-        | Some(arkret_wire::events::EventKind::CIRCLE_UPDATE) => {
+        Some(arkret_wire::EventKind::CIRCLE_CREATE)
+        | Some(arkret_wire::EventKind::CIRCLE_UPDATE) => {
             let value = find()?;
             let circle_uuid = ap_uuid_part(&id_of("circle_id")?).to_owned();
             Some((
@@ -89,8 +89,8 @@ pub(super) fn agent_participation_ceiling_change(
                 vec![format!("realm:{realm_uuid}")],
             ))
         }
-        Some(arkret_wire::events::EventKind::STRAND_CREATE)
-        | Some(arkret_wire::events::EventKind::STRAND_UPDATE) => {
+        Some(arkret_wire::EventKind::STRAND_CREATE)
+        | Some(arkret_wire::EventKind::STRAND_UPDATE) => {
             let value = find()?;
             let strand_uuid = ap_uuid_part(&id_of("strand_id")?).to_owned();
             Some((
@@ -529,8 +529,7 @@ pub(super) fn validate_agent_context_authorization_ref(
     // instead of requiring a second capability grant that the materialization
     // protocol does not emit for the peer.
     if authorization_ref == operation.realm_id.as_str()
-        && agent_participation_action(operation)
-            == Some(arkret_wire::events::EventKind::MESSAGE_CREATE)
+        && agent_participation_action(operation) == Some(arkret_wire::EventKind::MESSAGE_CREATE)
     {
         let binding = super::governance::active_direct_conversation_binding_for_realm(
             state,

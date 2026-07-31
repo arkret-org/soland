@@ -95,7 +95,7 @@ async fn realm_sync_endpoint_binding_is_current(
     };
     let Some(create) = records
         .iter()
-        .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
     else {
         return false;
     };

@@ -182,7 +182,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         recovery_session_id: None,
     };
     let mut authorize = arkret_wire::Event::new_at(
-        arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
+        arkret_wire::EventKind::DEVICE_AUTHORIZE,
         arkret_wire::ScopeRef::Realm { realm_id: realm },
         actor.clone(),
         1,
@@ -815,7 +815,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
         arkret_identifiers::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis()))
             .unwrap();
     let accountability = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
+        arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
         arkret_wire::ScopeRef::Realm {
             realm_id: controller_realm_id.clone(),
         },
@@ -826,7 +826,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     )
     .unwrap();
     let selector = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::AGENT_SELECTOR_CLAIM,
+        arkret_wire::EventKind::AGENT_SELECTOR_CLAIM,
         arkret_wire::ScopeRef::Realm {
             realm_id: controller_realm_id,
         },
@@ -857,7 +857,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
             "authority_set_digest": format!("sha256:{}", "0".repeat(64))
         },
         "authority_set_policy": {
-            "schema": arkret_wire::AUTHORITY_SET_POLICY_SCHEMA,
+            "schema": arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1,
             "authority_set_id": "ak.authority_set.realm_admission.v1",
             "policy_kind": "realm_admission",
             "scope_ref": accountability.scope_ref,

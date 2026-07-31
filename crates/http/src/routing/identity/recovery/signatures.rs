@@ -1,3 +1,5 @@
+use arkret_wire::RECOVERY_POLICY_SIGNATURE_TYPE;
+
 use super::*;
 
 pub(super) async fn verify_recovery_policy_auth_signature(
@@ -11,7 +13,7 @@ pub(super) async fn verify_recovery_policy_auth_signature(
         state,
         payload,
         &record.principal_id,
-        POLICY_SIGNATURE_TYPE,
+        RECOVERY_POLICY_SIGNATURE_TYPE,
         POLICY_ALLOWED_SIGNED_FIELDS,
         POLICY_REQUIRED_SIGNED_FIELDS,
     )
@@ -81,7 +83,8 @@ pub(super) async fn verify_recovery_policy_session_device_signature(
         POLICY_REQUIRED_SIGNED_FIELDS,
         payload,
     )?;
-    let transcript = recovery_signature_transcript(POLICY_SIGNATURE_TYPE, payload, &signed_fields);
+    let transcript =
+        recovery_signature_transcript(RECOVERY_POLICY_SIGNATURE_TYPE, payload, &signed_fields);
     let transcript_bytes = arkret_canonical::canonical_json_bytes(&transcript)
         .map_err(|error| AppError::internal(format!("recovery transcript failed: {error}")))?;
 

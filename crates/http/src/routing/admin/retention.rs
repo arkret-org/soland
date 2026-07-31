@@ -152,7 +152,7 @@ async fn sweep_retention_policy(
         .await
         .map_err(|error| AppError::internal(format!("retention scan failed: {error}")))?
         .into_iter()
-        .filter(|event| event.event_kind == arkret_wire::events::EventKind::MESSAGE_CREATE)
+        .filter(|event| event.event_kind == arkret_wire::EventKind::MESSAGE_CREATE)
         .collect::<Vec<_>>();
     let examined = events.len();
     let mut created = Vec::new();

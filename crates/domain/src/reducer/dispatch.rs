@@ -214,66 +214,42 @@ fn apply_realm_create_dispatch(
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(
-        op,
-        op.created_at,
-        arkret_wire::events::EventKind::REALM_CREATE,
-    )
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_CREATE)
 }
 fn apply_realm_update_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(
-        op,
-        op.created_at,
-        arkret_wire::events::EventKind::REALM_UPDATE,
-    )
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_UPDATE)
 }
 fn apply_realm_archive_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(
-        op,
-        op.created_at,
-        arkret_wire::events::EventKind::REALM_ARCHIVE,
-    )
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_ARCHIVE)
 }
 fn apply_realm_freeze_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(
-        op,
-        op.created_at,
-        arkret_wire::events::EventKind::REALM_FREEZE,
-    )
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_FREEZE)
 }
 fn apply_realm_tombstone_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(
-        op,
-        op.created_at,
-        arkret_wire::events::EventKind::REALM_TOMBSTONE,
-    )
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_TOMBSTONE)
 }
 fn apply_realm_destroy_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
-    s.apply_realm_lifecycle(
-        op,
-        op.created_at,
-        arkret_wire::events::EventKind::REALM_DESTROY,
-    )
+    s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_DESTROY)
 }
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
@@ -580,7 +556,7 @@ fn apply_agent_draft_propose_dispatch(
     _hlc: &ServerHlc,
 ) -> ProjectionEffect {
     ProjectionEffect::AgentPrivateEventAccepted {
-        kind: arkret_wire::events::EventKind::AGENT_DRAFT_PROPOSE,
+        kind: arkret_wire::EventKind::AGENT_DRAFT_PROPOSE,
         event_id: op.operation_id.to_string(),
     }
 }
@@ -932,84 +908,72 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     let mut m: std::collections::HashMap<&'static str, ApplyFn> =
         std::collections::HashMap::with_capacity(40);
     m.insert(
-        arkret_wire::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MESSAGE_CREATE,
         apply_message_dispatch as ApplyFn,
     );
     m.insert(
-        arkret_wire::events::EventKind::MESSAGE_REVISE,
+        arkret_wire::EventKind::MESSAGE_REVISE,
         apply_message_revise_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MESSAGE_REDACT,
+        arkret_wire::EventKind::MESSAGE_REDACT,
         apply_redaction_dispatch,
     );
+    m.insert(arkret_wire::EventKind::REDACTION, apply_redaction_dispatch);
     m.insert(
-        arkret_wire::events::EventKind::REDACTION,
-        apply_redaction_dispatch,
-    );
-    m.insert(
-        arkret_wire::events::EventKind::REACTION_ADD,
+        arkret_wire::EventKind::REACTION_ADD,
         apply_reaction_add_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REACTION_REMOVE,
+        arkret_wire::EventKind::REACTION_REMOVE,
         apply_reaction_remove_dispatch,
     );
+    m.insert(arkret_wire::EventKind::RSVP_SET, apply_rsvp_set_dispatch);
+    m.insert(arkret_wire::EventKind::PIN_ADD, apply_pin_dispatch);
+    m.insert(arkret_wire::EventKind::PIN_REMOVE, apply_pin_dispatch);
+    m.insert(arkret_wire::EventKind::PIN_REORDER, apply_pin_dispatch);
     m.insert(
-        arkret_wire::events::EventKind::RSVP_SET,
-        apply_rsvp_set_dispatch,
-    );
-    m.insert(arkret_wire::events::EventKind::PIN_ADD, apply_pin_dispatch);
-    m.insert(
-        arkret_wire::events::EventKind::PIN_REMOVE,
-        apply_pin_dispatch,
-    );
-    m.insert(
-        arkret_wire::events::EventKind::PIN_REORDER,
-        apply_pin_dispatch,
-    );
-    m.insert(
-        arkret_wire::events::EventKind::READ_CURSOR_ADVANCE,
+        arkret_wire::EventKind::READ_CURSOR_ADVANCE,
         apply_read_cursor_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::RELATION_CREATE,
+        arkret_wire::EventKind::RELATION_CREATE,
         apply_relation_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::RELATION_UPDATE,
+        arkret_wire::EventKind::RELATION_UPDATE,
         apply_relation_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::RELATION_TOMBSTONE,
+        arkret_wire::EventKind::RELATION_TOMBSTONE,
         apply_relation_delete_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CONTAINER_MOVE_ITEM,
+        arkret_wire::EventKind::CONTAINER_MOVE_ITEM,
         apply_container_move_item_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CONTAINER_REBALANCE,
+        arkret_wire::EventKind::CONTAINER_REBALANCE,
         apply_container_rebalance_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         apply_membership_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::INVITE_THIRD_PARTY,
+        arkret_wire::EventKind::INVITE_THIRD_PARTY,
         apply_invite_third_party_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::INVITE_CLAIM,
+        arkret_wire::EventKind::INVITE_CLAIM,
         apply_invite_claim_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::INVITE_CREATE,
+        arkret_wire::EventKind::INVITE_CREATE,
         apply_invite_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+        arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
         apply_key_backup_active_series_dispatch,
     );
     // MID-1..6 (R3.1/R3.2 spec-sync, arkret-spec @ b56cab1) —
@@ -1022,101 +986,101 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // because it spans cells; the in-process reducer just records that
     // the event was accepted so subscribers observe the lifecycle effect.
     m.insert(
-        arkret_wire::events::EventKind::MEMBER_IDENTITY_UPDATE,
+        arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
         apply_member_identity_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::REALM_CREATE,
         apply_realm_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_UPDATE,
+        arkret_wire::EventKind::REALM_UPDATE,
         apply_realm_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_ARCHIVE,
+        arkret_wire::EventKind::REALM_ARCHIVE,
         apply_realm_archive_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_FREEZE,
+        arkret_wire::EventKind::REALM_FREEZE,
         apply_realm_freeze_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_TOMBSTONE,
+        arkret_wire::EventKind::REALM_TOMBSTONE,
         apply_realm_tombstone_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_DESTROY,
+        arkret_wire::EventKind::REALM_DESTROY,
         apply_realm_destroy_dispatch,
     );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(
-        arkret_wire::events::EventKind::REALM_SET_DEFAULT_STRAND,
+        arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND,
         apply_realm_set_default_strand_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_NOTARY,
+        arkret_wire::EventKind::REALM_NOTARY,
         apply_realm_notary_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_DIGEST_SUITE_TRANSITION,
+        arkret_wire::EventKind::REALM_DIGEST_SUITE_TRANSITION,
         apply_realm_digest_suite_transition_dispatch,
     );
     m.insert(CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(
-        arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT,
+        arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT,
         apply_erasure_receipt_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SPACE_CREATE,
+        arkret_wire::EventKind::SPACE_CREATE,
         apply_space_container_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SPACE_UPDATE,
+        arkret_wire::EventKind::SPACE_UPDATE,
         apply_space_container_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SPACE_PARENT,
+        arkret_wire::EventKind::SPACE_PARENT,
         apply_space_container_parent_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SPACE_ARCHIVE,
+        arkret_wire::EventKind::SPACE_ARCHIVE,
         apply_space_container_archive_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SPACE_RESTORE,
+        arkret_wire::EventKind::SPACE_RESTORE,
         apply_space_container_restore_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SPACE_TOMBSTONE,
+        arkret_wire::EventKind::SPACE_TOMBSTONE,
         apply_space_container_tombstone_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::STRAND_CREATE,
         apply_strand_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_UPDATE,
+        arkret_wire::EventKind::STRAND_UPDATE,
         apply_strand_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_ARCHIVE,
+        arkret_wire::EventKind::STRAND_ARCHIVE,
         apply_strand_archive_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_RESTORE,
+        arkret_wire::EventKind::STRAND_RESTORE,
         apply_strand_restore_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_MOVE,
+        arkret_wire::EventKind::STRAND_MOVE,
         apply_strand_position_touch_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_REORDER,
+        arkret_wire::EventKind::STRAND_REORDER,
         apply_strand_position_touch_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::STRAND_WATCH_SET,
+        arkret_wire::EventKind::STRAND_WATCH_SET,
         apply_strand_watch_set_dispatch,
     );
     // Unified tracks patch. Payload-shape validation (presence of `tracks`
@@ -1124,27 +1088,27 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // against soland-side Strand.tracks projection once the server-side
     // projection carries the tracks map.
     m.insert(
-        arkret_wire::events::EventKind::STRAND_TRACKS_UPDATE,
+        arkret_wire::EventKind::STRAND_TRACKS_UPDATE,
         apply_strand_track_touch_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MORPH_CREATE,
+        arkret_wire::EventKind::MORPH_CREATE,
         apply_morph_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MORPH_UPDATE,
+        arkret_wire::EventKind::MORPH_UPDATE,
         apply_morph_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MORPH_ARCHIVE,
+        arkret_wire::EventKind::MORPH_ARCHIVE,
         apply_morph_archive_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MORPH_RESTORE,
+        arkret_wire::EventKind::MORPH_RESTORE,
         apply_morph_restore_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
+        arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
         apply_morph_schema_migrate_dispatch,
     );
     // AKP-0007 — Circle lifecycle / membership dispatch. The seventh
@@ -1153,143 +1117,143 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // `NON_REDUCER_EVENT_KINDS` set, so no dispatch entry is added for
     // it here.
     m.insert(
-        arkret_wire::events::EventKind::CIRCLE_CREATE,
+        arkret_wire::EventKind::CIRCLE_CREATE,
         apply_circle_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CIRCLE_UPDATE,
+        arkret_wire::EventKind::CIRCLE_UPDATE,
         apply_circle_update_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CIRCLE_ARCHIVE,
+        arkret_wire::EventKind::CIRCLE_ARCHIVE,
         apply_circle_archive_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CIRCLE_RESTORE,
+        arkret_wire::EventKind::CIRCLE_RESTORE,
         apply_circle_restore_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CIRCLE_TOMBSTONE,
+        arkret_wire::EventKind::CIRCLE_TOMBSTONE,
         apply_circle_tombstone_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
         apply_circle_member_state_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SIDECAR_CREATE,
+        arkret_wire::EventKind::SIDECAR_CREATE,
         apply_sidecar_create_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
+        arkret_wire::EventKind::AGENT_SIDECAR_EXCHANGE_CONTROL,
         apply_sidecar_exchange_control_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::APPLET_REGISTRATION,
+        arkret_wire::EventKind::APPLET_REGISTRATION,
         apply_applet_registration_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::APPLET_DISCOVERY,
+        arkret_wire::EventKind::APPLET_DISCOVERY,
         apply_applet_discovery_dispatch,
     );
     // REDU-1 (R3 spec-sync) — agent lifecycle FSM dispatch. bottom=reject,
     // deactivate is terminal.
     m.insert(
-        arkret_wire::events::EventKind::SELF_AGENT_PAUSE,
+        arkret_wire::EventKind::SELF_AGENT_PAUSE,
         apply_agent_pause_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SELF_AGENT_RESUME,
+        arkret_wire::EventKind::SELF_AGENT_RESUME,
         apply_agent_resume_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::SELF_AGENT_DEACTIVATE,
+        arkret_wire::EventKind::SELF_AGENT_DEACTIVATE,
         apply_agent_deactivate_dispatch,
     );
     // REDU-2 — actor_private_event kinds (reducer_input=false). These
     // accept but do NOT advance the seal frontier / actor_seq;
     // downstream consumers read them from the audit log.
     m.insert(
-        arkret_wire::events::EventKind::AGENT_DRAFT_PROPOSE,
+        arkret_wire::EventKind::AGENT_DRAFT_PROPOSE,
         apply_agent_draft_propose_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::AGENT_ACTION_REQUEST,
+        arkret_wire::EventKind::AGENT_ACTION_REQUEST,
         apply_agent_action_request_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::AGENT_ACTION_APPROVE,
+        arkret_wire::EventKind::AGENT_ACTION_APPROVE,
         apply_agent_action_approve_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::AGENT_ACTION_REJECT,
+        arkret_wire::EventKind::AGENT_ACTION_REJECT,
         apply_agent_action_reject_dispatch,
     );
     // delivery_binding_policy is Realm-scoped with cell_family
     // `ak.component.realm.delivery_binding_policy.v1`.
     m.insert(
-        arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY,
+        arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
         apply_delivery_binding_policy_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
+        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
         apply_realm_policy_bundle_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_DISAPPEARING_POLICY,
+        arkret_wire::EventKind::REALM_DISAPPEARING_POLICY,
         apply_realm_disappearing_policy_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_SEARCH_POLICY,
+        arkret_wire::EventKind::REALM_SEARCH_POLICY,
         apply_realm_search_policy_dispatch,
     );
     // media_service is Realm-scoped with cell_family
     // `ak.component.realm.media_service.v1`; consumed by the AKP-0010
     // media token exchange in `routing::interop::webrtc`.
     m.insert(
-        arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
+        arkret_wire::EventKind::REALM_MEDIA_SERVICE,
         apply_realm_media_service_dispatch,
     );
     // `ak.call.state` — durable call lifecycle + recording/transcribe/
     // moderation projection. Cell family `ak.component.call.state.v1`,
     // `cell_subject = payload.call_id` (`call-state.md` §4.2 / §5).
     m.insert(
-        arkret_wire::events::EventKind::CALL_STATE,
+        arkret_wire::EventKind::CALL_STATE,
         apply_call_state_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CALL_RECORDING_START,
+        arkret_wire::EventKind::CALL_RECORDING_START,
         apply_call_recording_start_dispatch,
     );
     // `ak.call.summary` — durable terminal summary projection. Cell family
     // `ak.component.call.summary.v1`, write-once cas_register (`call-state.md`
     // §7).
     m.insert(
-        arkret_wire::events::EventKind::CALL_SUMMARY,
+        arkret_wire::EventKind::CALL_SUMMARY,
         apply_call_summary_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::DEVICE_PUSH_ROUTE,
+        arkret_wire::EventKind::DEVICE_PUSH_ROUTE,
         apply_device_push_route_dispatch,
     );
     // R3.1 / R3.2 / R3.3 — Realm-governance event kinds. Each writes a
     // cell + a structured side-band cache; see the per-kind apply
     // helpers for cell-family naming.
     m.insert(
-        arkret_wire::events::EventKind::REALM_LINK,
+        arkret_wire::EventKind::REALM_LINK,
         apply_realm_link_dispatch,
     );
     // SOL-ORG-02 — organization-authorized Realm relationship statement.
     m.insert(
-        arkret_wire::events::EventKind::REALM_ORGANIZATION,
+        arkret_wire::EventKind::REALM_ORGANIZATION,
         apply_realm_organization_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
+        arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
         apply_realm_inheritance_policy_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CAPABILITY_DERIVED,
+        arkret_wire::EventKind::CAPABILITY_DERIVED,
         apply_capability_derived_dispatch,
     );
     // P1 — capability control-plane projection (grant / revoke / delegate).
@@ -1297,21 +1261,21 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // cell; delegate writes `ak.component.capability.delegate.v1` + parent
     // chain. Acceptance fail-closed lives in `apply_capability.rs`.
     m.insert(
-        arkret_wire::events::EventKind::CAPABILITY_GRANT,
+        arkret_wire::EventKind::CAPABILITY_GRANT,
         apply_capability_grant_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::CAPABILITY_REVOKE,
+        arkret_wire::EventKind::CAPABILITY_REVOKE,
         apply_capability_revoke_dispatch,
     );
     // Agent runtime key authorization + revocation. Authorize records the
     // key; revoke removes it. Neither operation changes Realm grants.
     m.insert(
-        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE,
+        arkret_wire::EventKind::AGENT_KEY_AUTHORIZE,
         apply_agent_key_authorize_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::AGENT_KEY_REVOKE,
+        arkret_wire::EventKind::AGENT_KEY_REVOKE,
         apply_agent_key_revoke_dispatch,
     );
     // P2 — moderation control-plane projection (decision / lift / appeal.*).
@@ -1320,27 +1284,27 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // fsm cell. §5.5.2 reducer constraints + acceptance fail-closed live in
     // `apply_moderation.rs`.
     m.insert(
-        arkret_wire::events::EventKind::MODERATION_DECISION,
+        arkret_wire::EventKind::MODERATION_DECISION,
         apply_moderation_decision_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MODERATION_DECISION_LIFT,
+        arkret_wire::EventKind::MODERATION_DECISION_LIFT,
         apply_moderation_decision_lift_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT,
+        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MODERATION_APPEAL_REVIEW,
+        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MODERATION_APPEAL_DECISION,
+        arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
         apply_moderation_appeal_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MODERATION_APPEAL_CLOSE,
+        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
         apply_moderation_appeal_dispatch,
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
@@ -1353,32 +1317,32 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     // Deferred (TODO(G3.S1-followup)): decryption_pending. See
     // `reducer/mls.rs`.
     m.insert(
-        arkret_wire::events::EventKind::MLS_KEYPACKAGE,
+        arkret_wire::EventKind::MLS_KEYPACKAGE,
         apply_mls_keypackage_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MLS_WELCOME,
+        arkret_wire::EventKind::MLS_WELCOME,
         apply_mls_welcome_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MLS_GENESIS,
+        arkret_wire::EventKind::MLS_GENESIS,
         apply_mls_genesis_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MLS_PROPOSAL,
+        arkret_wire::EventKind::MLS_PROPOSAL,
         apply_mls_proposal_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::MLS_COMMIT,
+        arkret_wire::EventKind::MLS_COMMIT,
         apply_mls_commit_dispatch,
     );
     m.insert(
-        arkret_wire::events::EventKind::REALM_KEY_SHARE,
+        arkret_wire::EventKind::REALM_KEY_SHARE,
         apply_realm_key_share_dispatch,
     );
     // G3.S2: policy server cell
     m.insert(
-        arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+        arkret_wire::EventKind::REALM_POLICY_SERVER,
         apply_realm_policy_server_dispatch,
     );
     m

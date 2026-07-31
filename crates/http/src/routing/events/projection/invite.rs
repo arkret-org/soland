@@ -157,7 +157,7 @@ pub(super) async fn project_invite_cancel_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != arkret_wire::events::EventKind::INVITE_CANCEL {
+    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::INVITE_CANCEL {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Cancel).await;
@@ -174,7 +174,7 @@ pub(in crate::routing::events) async fn freeze_invite_cancel_pre_state(
     event: &arkret_wire::Event,
 ) -> Result<arkret_schema::FrozenPreState, &'static str> {
     let mut frozen = arkret_schema::FrozenPreState::new();
-    if event.kind.as_str() != arkret_wire::events::EventKind::INVITE_CANCEL {
+    if event.kind.as_str() != arkret_wire::EventKind::INVITE_CANCEL {
         return Ok(frozen);
     }
     let invite_id = event
@@ -248,7 +248,7 @@ pub(in crate::routing::events) fn validate_invite_cancel_pre_admission(
     operation: &Operation,
     frozen_pre_state: &arkret_schema::FrozenPreState,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_string(operation) != arkret_wire::events::EventKind::INVITE_CANCEL {
+    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::INVITE_CANCEL {
         return Ok(());
     }
     let invite_id =
@@ -303,7 +303,7 @@ pub(super) async fn project_invite_revoke_operation(
     origin: &str,
     operation: &Operation,
 ) {
-    if kinds::canonical_kind_string(operation) != arkret_wire::events::EventKind::INVITE_REVOKE {
+    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::INVITE_REVOKE {
         return;
     }
     project_invite_terminal_operation(state, origin, operation, InviteTerminalEvent::Revoke).await;
@@ -1131,7 +1131,7 @@ mod tests {
             payload["invitee"] = json!(invitee);
         }
         arkret_wire::Event::new(
-            arkret_wire::events::EventKind::INVITE_CANCEL,
+            arkret_wire::EventKind::INVITE_CANCEL,
             arkret_wire::ScopeRef::Realm {
                 realm_id: RealmId::new(CANCEL_REALM).unwrap(),
             },
@@ -1151,7 +1151,7 @@ mod tests {
             )
             .unwrap(),
             RealmId::new(CANCEL_REALM).unwrap(),
-            arkret_wire::events::EventKind::INVITE_CANCEL,
+            arkret_wire::EventKind::INVITE_CANCEL,
             serde_json::to_value(event.payload).unwrap(),
         );
         operation.created_at = event.created_at;
@@ -1199,7 +1199,7 @@ mod tests {
                 )
                 .unwrap(),
                 RealmId::new(CANCEL_REALM).unwrap(),
-                arkret_wire::events::EventKind::INVITE_CREATE,
+                arkret_wire::EventKind::INVITE_CREATE,
                 json!({"invite_id": CANCEL_INVITE, "invitee": CANCEL_INVITEE}),
             );
             create.created_at = created_at;
@@ -1392,7 +1392,7 @@ mod tests {
             )
             .unwrap(),
             realm_id.clone(),
-            arkret_wire::events::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::INVITE_CREATE,
             json!({
                 "invite_id": invite_id,
                 "invitee": invitee,
@@ -1457,7 +1457,7 @@ mod tests {
             )
             .unwrap(),
             realm_id.clone(),
-            arkret_wire::events::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::INVITE_CREATE,
             json!({
                 "invite_id": invite_id,
                 "invitee": invitee,

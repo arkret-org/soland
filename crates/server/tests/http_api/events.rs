@@ -858,21 +858,21 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         "ak:event:01904100-0000-7000-8000-c7ea7e000003",
         1,
         event["event_id"].as_str().unwrap(),
-        arkret_wire::events::EventKind::REALM_JOIN_RULE,
+        arkret_wire::EventKind::REALM_JOIN_RULE,
         serde_json::json!("invite"),
     );
     let history_visibility = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000004",
         2,
         join_rule["event_id"].as_str().unwrap(),
-        arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY,
+        arkret_wire::EventKind::REALM_HISTORY_VISIBILITY,
         serde_json::json!("shared"),
     );
     let discovery = facet(
         "ak:event:01904100-0000-7000-8000-c7ea7e000005",
         3,
         history_visibility["event_id"].as_str().unwrap(),
-        arkret_wire::events::EventKind::REALM_DISCOVERY,
+        arkret_wire::EventKind::REALM_DISCOVERY,
         serde_json::json!("listed"),
     );
 
@@ -1184,7 +1184,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     // separate reducer-managed `effective_scope` member the fixture used to
     // stamp on top of it no longer exists on the v1 Event Envelope.
     let mut event = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: typed_realm.clone(),
         },
@@ -1417,7 +1417,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     .unwrap()
     .with_timezone(&chrono::Utc);
     let mut create = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
         },
@@ -1606,7 +1606,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     // writes keyed on `payload.mls_group_id`, so the successor Seal can only be
     // built over a payload the registered contract can actually evaluate.
     let mut pending = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::MLS_GENESIS,
+        arkret_wire::EventKind::MLS_GENESIS,
         arkret_wire::ScopeRef::Realm {
             realm_id: RealmId::new(realm_id.clone()).unwrap(),
         },

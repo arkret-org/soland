@@ -1174,7 +1174,7 @@ impl ProjectionService {
         for (index, projected) in operations.iter().enumerate() {
             let operation = &projected.operation;
             let effect = if operation.object_kind.as_str().starts_with("ak.realm.")
-                && operation.object_kind.as_str() != arkret_wire::events::EventKind::REALM_CREATE
+                && operation.object_kind.as_str() != arkret_wire::EventKind::REALM_CREATE
             {
                 staged.apply_validated_realm_bootstrap_facet(operation, &projected.cell_writes)
             } else {
@@ -1241,31 +1241,31 @@ impl ProjectionService {
         let kind = crate::operation_semantics::canonical_kind_for_operation(operation)?;
         let is_space_container_kind = matches!(
             kind,
-            arkret_wire::events::EventKind::SPACE_CREATE
-                | arkret_wire::events::EventKind::SPACE_UPDATE
-                | arkret_wire::events::EventKind::SPACE_PARENT
-                | arkret_wire::events::EventKind::SPACE_ARCHIVE
-                | arkret_wire::events::EventKind::SPACE_RESTORE
-                | arkret_wire::events::EventKind::SPACE_TOMBSTONE
+            arkret_wire::EventKind::SPACE_CREATE
+                | arkret_wire::EventKind::SPACE_UPDATE
+                | arkret_wire::EventKind::SPACE_PARENT
+                | arkret_wire::EventKind::SPACE_ARCHIVE
+                | arkret_wire::EventKind::SPACE_RESTORE
+                | arkret_wire::EventKind::SPACE_TOMBSTONE
         );
         let is_strand_kind = matches!(
             kind,
-            arkret_wire::events::EventKind::STRAND_CREATE
-                | arkret_wire::events::EventKind::STRAND_UPDATE
-                | arkret_wire::events::EventKind::STRAND_ARCHIVE
-                | arkret_wire::events::EventKind::STRAND_RESTORE
-                | arkret_wire::events::EventKind::STRAND_MOVE
-                | arkret_wire::events::EventKind::STRAND_REORDER
-                | arkret_wire::events::EventKind::STRAND_TRACKS_UPDATE
+            arkret_wire::EventKind::STRAND_CREATE
+                | arkret_wire::EventKind::STRAND_UPDATE
+                | arkret_wire::EventKind::STRAND_ARCHIVE
+                | arkret_wire::EventKind::STRAND_RESTORE
+                | arkret_wire::EventKind::STRAND_MOVE
+                | arkret_wire::EventKind::STRAND_REORDER
+                | arkret_wire::EventKind::STRAND_TRACKS_UPDATE
         );
         let is_morph_kind = matches!(
             kind,
-            arkret_wire::events::EventKind::MORPH_CREATE
-                | arkret_wire::events::EventKind::MORPH_UPDATE
-                | arkret_wire::events::EventKind::MORPH_ARCHIVE
-                | arkret_wire::events::EventKind::MORPH_RESTORE
+            arkret_wire::EventKind::MORPH_CREATE
+                | arkret_wire::EventKind::MORPH_UPDATE
+                | arkret_wire::EventKind::MORPH_ARCHIVE
+                | arkret_wire::EventKind::MORPH_RESTORE
         );
-        let is_redaction = kind == arkret_wire::events::EventKind::REDACTION;
+        let is_redaction = kind == arkret_wire::EventKind::REDACTION;
         if !(is_space_container_kind || is_strand_kind || is_morph_kind || is_redaction) {
             return None;
         }
@@ -1338,13 +1338,13 @@ impl ProjectionService {
             });
         }
         if is_strand_kind {
-            let id = if kind == arkret_wire::events::EventKind::STRAND_CREATE {
+            let id = if kind == arkret_wire::EventKind::STRAND_CREATE {
                 object_id()
             } else if matches!(
                 kind,
-                arkret_wire::events::EventKind::STRAND_UPDATE
-                    | arkret_wire::events::EventKind::STRAND_ARCHIVE
-                    | arkret_wire::events::EventKind::STRAND_RESTORE
+                arkret_wire::EventKind::STRAND_UPDATE
+                    | arkret_wire::EventKind::STRAND_ARCHIVE
+                    | arkret_wire::EventKind::STRAND_RESTORE
             ) {
                 string_field("target_ref")
             } else {
@@ -1369,7 +1369,7 @@ impl ProjectionService {
             });
         }
         if is_morph_kind {
-            let id = if kind == arkret_wire::events::EventKind::MORPH_CREATE {
+            let id = if kind == arkret_wire::EventKind::MORPH_CREATE {
                 object_id()
             } else {
                 string_field("target_ref")
@@ -1542,8 +1542,8 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::events::EventKind::CAPABILITY_GRANT,
-                arkret_wire::events::EventKind::CAPABILITY_REVOKE,
+                arkret_wire::EventKind::CAPABILITY_GRANT,
+                arkret_wire::EventKind::CAPABILITY_REVOKE,
             ],
         )
     }
@@ -1557,9 +1557,9 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::events::EventKind::STRAND_CREATE,
-                arkret_wire::events::EventKind::STRAND_UPDATE,
-                arkret_wire::events::EventKind::RSVP_SET,
+                arkret_wire::EventKind::STRAND_CREATE,
+                arkret_wire::EventKind::STRAND_UPDATE,
+                arkret_wire::EventKind::RSVP_SET,
             ],
         )
     }
@@ -1573,12 +1573,12 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::events::EventKind::MODERATION_DECISION,
-                arkret_wire::events::EventKind::MODERATION_DECISION_LIFT,
-                arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT,
-                arkret_wire::events::EventKind::MODERATION_APPEAL_REVIEW,
-                arkret_wire::events::EventKind::MODERATION_APPEAL_DECISION,
-                arkret_wire::events::EventKind::MODERATION_APPEAL_CLOSE,
+                arkret_wire::EventKind::MODERATION_DECISION,
+                arkret_wire::EventKind::MODERATION_DECISION_LIFT,
+                arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
+                arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
+                arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
+                arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
             ],
         )
     }
@@ -1592,8 +1592,8 @@ impl ProjectionService {
             operation,
             cell_writes,
             &[
-                arkret_wire::events::EventKind::INVITE_THIRD_PARTY,
-                arkret_wire::events::EventKind::INVITE_CLAIM,
+                arkret_wire::EventKind::INVITE_THIRD_PARTY,
+                arkret_wire::EventKind::INVITE_CLAIM,
             ],
         )
     }
@@ -1606,7 +1606,7 @@ impl ProjectionService {
         self.preflight_apply_rejection(
             operation,
             cell_writes,
-            &[arkret_wire::events::EventKind::REALM_POLICY_BUNDLE],
+            &[arkret_wire::EventKind::REALM_POLICY_BUNDLE],
         )
     }
 
@@ -1614,7 +1614,7 @@ impl ProjectionService {
         let kind = soland_domain::kinds::canonical_kind_string(operation);
         let mut state = self.state.lock().clone();
         let effect = match kind.as_str() {
-            arkret_wire::events::EventKind::MLS_KEYPACKAGE => {
+            arkret_wire::EventKind::MLS_KEYPACKAGE => {
                 match operation.payload.get("action").and_then(Value::as_str) {
                     Some("publish") => {
                         soland_domain::reducer::mls::apply_keypackage_publish(&mut state, operation)
@@ -1630,16 +1630,16 @@ impl ProjectionService {
                     },
                 }
             }
-            arkret_wire::events::EventKind::MLS_WELCOME => {
+            arkret_wire::EventKind::MLS_WELCOME => {
                 soland_domain::reducer::mls::apply_welcome_enqueue(&mut state, operation)
             }
-            arkret_wire::events::EventKind::MLS_GENESIS => {
+            arkret_wire::EventKind::MLS_GENESIS => {
                 soland_domain::reducer::mls::apply_group_genesis(&mut state, operation)
             }
-            arkret_wire::events::EventKind::MLS_PROPOSAL => {
+            arkret_wire::EventKind::MLS_PROPOSAL => {
                 soland_domain::reducer::mls::apply_remove_proposal(&mut state, operation)
             }
-            arkret_wire::events::EventKind::MLS_COMMIT => {
+            arkret_wire::EventKind::MLS_COMMIT => {
                 soland_domain::reducer::mls::apply_commit_epoch(&mut state, operation)
             }
             _ => ProjectionEffect::Ignored,

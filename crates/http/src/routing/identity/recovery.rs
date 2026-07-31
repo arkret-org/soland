@@ -25,11 +25,11 @@ use arkret_models_crypto::{
     SessionState, TypedSecurityTransactionContinueRequest,
 };
 use arkret_wire::{
-    AUTHORITY_SET_POLICY_SCHEMA, AuthoritySetAuthorizationRule, AuthoritySetIssuer,
-    AuthoritySetIssuerRole, AuthoritySetPolicy, AuthoritySetPolicyKind, AuthoritySetPolicySource,
-    AuthoritySetRef, AuthoritySetSourceKind, DidUrl, LeaseBasisRef, NonEmptyString,
-    RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID, RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID,
-    SecurityTransaction, SecurityTransactionCreateRequest, TransactionId,
+    AuthoritySetAuthorizationRule, AuthoritySetIssuer, AuthoritySetIssuerRole, AuthoritySetPolicy,
+    AuthoritySetPolicyKind, AuthoritySetPolicySource, AuthoritySetRef, AuthoritySetSourceKind,
+    DidUrl, LeaseBasisRef, NonEmptyString, RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID,
+    RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID, SecurityTransaction,
+    SecurityTransactionCreateRequest, TransactionId,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};

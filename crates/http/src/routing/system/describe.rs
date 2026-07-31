@@ -19,6 +19,7 @@
 use arkret_identity::service_identity::ServiceIdentityState;
 use arkret_models_discovery::ServiceDescribe;
 use arkret_models_discovery::http_bodies::ServerDescribeOutcome;
+use arkret_wire::ProfileId;
 use salvo::http::StatusCode;
 use salvo::oapi::extract::QueryParam;
 use salvo::prelude::*;
@@ -484,7 +485,6 @@ pub(crate) fn apply_claim_level_partition(
     loaded_verified: &[crate::verified_profiles::VerifiedProfileDescriptor],
     candidate_join_policy_enabled: bool,
 ) {
-    const JOIN_PROFILE: &str = "ak.profile.candidate.join_policy.v1";
     const JOIN_OPERATIONS: &[&str] = &[
         "ak.self.realm.join_application.command.submit",
         "ak.self.realm.join_application.command.review",
@@ -500,7 +500,7 @@ pub(crate) fn apply_claim_level_partition(
     ];
     if candidate_join_policy_enabled {
         description.profile_bindings.insert(
-            JOIN_PROFILE.to_owned(),
+            ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned(),
             arkret_models_discovery::service_description::ProfileBinding {
                 carrier: "profile_private_http_receipt_v1".to_owned(),
             },
@@ -508,9 +508,11 @@ pub(crate) fn apply_claim_level_partition(
         if !description
             .supported_profiles
             .iter()
-            .any(|profile| profile == JOIN_PROFILE)
+            .any(|profile| profile == ProfileId::CANDIDATE_JOIN_POLICY_V1)
         {
-            description.supported_profiles.push(JOIN_PROFILE.to_owned());
+            description
+                .supported_profiles
+                .push(ProfileId::CANDIDATE_JOIN_POLICY_V1.to_owned());
         }
         for operation in JOIN_OPERATIONS {
             if !description
@@ -533,10 +535,12 @@ pub(crate) fn apply_claim_level_partition(
             }
         }
     } else {
-        description.profile_bindings.remove(JOIN_PROFILE);
+        description
+            .profile_bindings
+            .remove(ProfileId::CANDIDATE_JOIN_POLICY_V1);
         description
             .supported_profiles
-            .retain(|profile| profile != JOIN_PROFILE);
+            .retain(|profile| profile != ProfileId::CANDIDATE_JOIN_POLICY_V1);
         description
             .supported_operations
             .retain(|operation| !JOIN_OPERATIONS.contains(&operation.as_str()));
@@ -623,7 +627,7 @@ pub(crate) fn apply_claim_level_partition(
                         .to_owned(),
                 ),
                 ..arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
-                    crate::routing::extensions::sovereign::SOVEREIGN_ENCLAVE_PROFILE_ID,
+                    ProfileId::SOVEREIGN_ENCLAVE_V1,
                 )
             },
         );
@@ -886,7 +890,6 @@ mod tests {
 
     #[test]
     fn candidate_join_policy_claim_is_complete_and_flag_gated() {
-        const PROFILE: &str = "ak.profile.candidate.join_policy.v1";
         let mut description = ServiceDescribe::development(
             Did::new("did:web:soland.example".to_owned()).unwrap(),
             TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
@@ -897,10 +900,10 @@ mod tests {
             description
                 .supported_profiles
                 .iter()
-                .any(|profile| profile == PROFILE)
+                .any(|profile| profile == ProfileId::CANDIDATE_JOIN_POLICY_V1)
         );
         assert_eq!(
-            description.profile_bindings[PROFILE].carrier,
+            description.profile_bindings[ProfileId::CANDIDATE_JOIN_POLICY_V1].carrier,
             "profile_private_http_receipt_v1"
         );
         assert!(description.validate().is_ok());
@@ -910,9 +913,13 @@ mod tests {
             !description
                 .supported_profiles
                 .iter()
-                .any(|profile| profile == PROFILE)
+                .any(|profile| profile == ProfileId::CANDIDATE_JOIN_POLICY_V1)
         );
-        assert!(!description.profile_bindings.contains_key(PROFILE));
+        assert!(
+            !description
+                .profile_bindings
+                .contains_key(ProfileId::CANDIDATE_JOIN_POLICY_V1)
+        );
         assert!(
             !description
                 .supported_operations

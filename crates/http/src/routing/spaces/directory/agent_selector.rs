@@ -1,4 +1,5 @@
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
+use arkret_wire::SchemaId;
 
 use super::*;
 
@@ -76,7 +77,7 @@ pub(super) fn signed_agent_selector_claim(
         claim_scope.insert("realm_id".to_owned(), json!(realm_id.as_str()));
     }
     let unsigned = json!({
-        "schema": AGENT_SELECTOR_CLAIM_SCHEMA,
+        "schema": SchemaId::AGENT_SELECTOR_CLAIM_V1,
         "controller_subject": controller_subject.as_str(),
         "agent_slug": agent_slug,
         "subject": subject.as_str(),
@@ -120,7 +121,7 @@ pub(super) fn signed_agent_selector_claim(
         jws: signature.jws,
     };
     Ok(AgentSelectorClaim {
-        schema: AGENT_SELECTOR_CLAIM_SCHEMA.to_owned(),
+        schema: SchemaId::AGENT_SELECTOR_CLAIM_V1.to_owned(),
         controller_subject,
         agent_slug: agent_slug.to_owned(),
         subject,

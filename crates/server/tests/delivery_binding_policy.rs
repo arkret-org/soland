@@ -27,7 +27,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY,
+            arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
             REALM_A,
             payload,
         ),
@@ -41,7 +41,7 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, payload: Value) {
 
 fn join_op(member: &str, binding: Value) -> Operation {
     op(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": member,
@@ -68,7 +68,7 @@ fn create_direct_conversation(state: &mut ProjectionState, hlc: &ServerHlc) {
     );
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_CREATE,
+            arkret_wire::EventKind::REALM_CREATE,
             REALM_A,
             serde_json::to_value(payload).unwrap(),
         ),
@@ -358,7 +358,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
     create_direct_conversation(&mut state, &hlc);
 
     let founding_peer = op(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": "did:web:bob.example",
@@ -382,7 +382,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
     );
 
     let third_member = op(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": "did:web:carol.example",

@@ -399,7 +399,7 @@ impl ProjectionState {
     ) -> Result<(), &'static str> {
         let kind = crate::kinds::canonical_kind_for_operation(operation);
         let (member, hard_gates_only) = match kind {
-            Some(arkret_wire::events::EventKind::MEMBER_STATE)
+            Some(arkret_wire::EventKind::MEMBER_STATE)
                 if operation.payload.get("membership").and_then(Value::as_str) == Some("join") =>
             {
                 let member = operation
@@ -412,7 +412,7 @@ impl ProjectionState {
                     .filter(|value| !value.is_empty());
                 (member, false)
             }
-            Some(arkret_wire::events::EventKind::INVITE_CREATE) => {
+            Some(arkret_wire::EventKind::INVITE_CREATE) => {
                 let member = operation
                     .payload
                     .pointer("/invite/invitee")
@@ -421,7 +421,7 @@ impl ProjectionState {
                     .filter(|value| !value.is_empty());
                 (member, true)
             }
-            Some(arkret_wire::events::EventKind::INVITE_ACCEPT) => {
+            Some(arkret_wire::EventKind::INVITE_ACCEPT) => {
                 let member = operation
                     .payload
                     .get("sender")
@@ -435,7 +435,7 @@ impl ProjectionState {
         let Some(member) = member else {
             return Err("gate_check_failed");
         };
-        if kind == Some(arkret_wire::events::EventKind::MEMBER_STATE)
+        if kind == Some(arkret_wire::EventKind::MEMBER_STATE)
             && self
                 .member(operation.realm_id.as_str(), member)
                 .is_some_and(|membership| membership.state == "join")

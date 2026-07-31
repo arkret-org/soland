@@ -462,7 +462,7 @@ pub(crate) async fn active_series_pointer_is_current(
                 return Ok(false);
             };
             if authorize.actor_id != controller_id
-                || authorize.kind != arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                || authorize.kind != arkret_wire::EventKind::DEVICE_AUTHORIZE
             {
                 return Ok(false);
             }
@@ -489,7 +489,7 @@ pub(crate) async fn validate_active_series_operation_authority(
     operation: &arkret_event_draft::Operation,
 ) -> Result<(), &'static str> {
     if soland_services::operation_semantics::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+        != Some(arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
     {
         return Ok(());
     }
@@ -850,7 +850,7 @@ pub(crate) async fn validate_delegated_agent_envelope(
             "managed_agent_delegation_scope",
         ));
     }
-    if kind == arkret_wire::events::EventKind::REALM_CREATE {
+    if kind == arkret_wire::EventKind::REALM_CREATE {
         let object = envelope
             .get("payload")
             .and_then(|payload| payload.get("object"))
@@ -1265,7 +1265,7 @@ async fn validate_current_recovery_recipient(
         .encryption
         .hpke_suite
         .as_deref()
-        .unwrap_or(arkret_models_crypto::key_backup::DEFAULT_HPKE_SUITE);
+        .unwrap_or(arkret_wire::HPKE_SUITE_X25519_CHACHA20POLY1305_V1);
     let suite: RecoveryHpkeSuite = serde_json::from_value(Value::String(suite_id.to_owned()))
         .map_err(|_| {
             AppError::new(

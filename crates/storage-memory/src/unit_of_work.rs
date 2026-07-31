@@ -30,10 +30,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         if staged_events.contains_key(&request.event.event_id) {
             return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
         }
-        if request.event.kind == arkret_wire::events::EventKind::REALM_CREATE
+        if request.event.kind == arkret_wire::EventKind::REALM_CREATE
             && request.event.realm_id.is_some()
             && staged_events.values().any(|existing| {
-                existing.kind == arkret_wire::events::EventKind::REALM_CREATE
+                existing.kind == arkret_wire::EventKind::REALM_CREATE
                     && existing.realm_id == request.event.realm_id
             })
         {
@@ -126,10 +126,10 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             if staged_events.contains_key(&event_request.event.event_id) {
                 return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
             }
-            if event_request.event.kind == arkret_wire::events::EventKind::REALM_CREATE
+            if event_request.event.kind == arkret_wire::EventKind::REALM_CREATE
                 && event_request.event.realm_id.is_some()
                 && staged_events.values().any(|existing| {
-                    existing.kind == arkret_wire::events::EventKind::REALM_CREATE
+                    existing.kind == arkret_wire::EventKind::REALM_CREATE
                         && existing.realm_id == event_request.event.realm_id
                 })
             {
@@ -253,7 +253,7 @@ mod tests {
                 actor_id: actor_id.to_owned(),
                 actor_seq: 0,
                 realm_id: Some(realm_id),
-                kind: arkret_wire::events::EventKind::PROFILE_CREATE.to_owned(),
+                kind: arkret_wire::EventKind::PROFILE_CREATE.to_owned(),
                 schema_id: "arkret://events/profile/create/v1".to_owned(),
                 canonical_digest: format!("sha256:{event_id}"),
                 canonical_bytes: event_id.as_bytes().to_vec(),

@@ -1,10 +1,6 @@
-use arkret_wire::{DidUrl, NonEmptyString};
+use arkret_wire::{CapabilityActionId, DidUrl, NonEmptyString};
 
 use super::*;
-
-const ACTION_EVENT_READ: &str = "ak.event.read";
-const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
-const ACTION_REACTION_ADD: &str = "ak.reaction.add";
 
 /// Narrow internal execution context used only after the caller has authenticated
 /// the deployment S2S credential and the handler has re-validated the claimed
@@ -278,7 +274,7 @@ pub(super) fn agent_requested_participation_ceiling(
     record: &AgentPrincipalRecord,
 ) -> AgentParticipation {
     let actions = requested_scope_actions(record);
-    let message_create = actions.contains(ACTION_MESSAGE_CREATE);
+    let message_create = actions.contains(CapabilityActionId::MESSAGE_CREATE);
     let approval_required = record
         .requested_scope
         .as_ref()
@@ -320,13 +316,13 @@ pub(super) fn agent_requested_participation_ceiling(
                 .is_none_or(|values| {
                     values
                         .iter()
-                        .any(|value| value.as_str() == Some(ACTION_MESSAGE_CREATE))
+                        .any(|value| value.as_str() == Some(CapabilityActionId::MESSAGE_CREATE))
                 });
             controller_requirement && applies_to_message_create
         });
     AgentParticipation {
-        reply: message_create && actions.contains(ACTION_REACTION_ADD),
-        accept_third_party_mention: actions.contains(ACTION_EVENT_READ),
+        reply: message_create && actions.contains(CapabilityActionId::REACTION_ADD),
+        accept_third_party_mention: actions.contains(CapabilityActionId::EVENT_READ),
         act_on_behalf: message_create && approval_required,
     }
 }
@@ -408,23 +404,23 @@ mod requested_scope_tests {
     #[test]
     fn realm_grant_actions_cannot_exceed_provision_ceiling() {
         let record = record_with_scope(json!({
-            "actions": [ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD]
+            "actions": [CapabilityActionId::MESSAGE_CREATE, CapabilityActionId::REACTION_ADD]
         }));
 
         assert!(agent_actions_within_requested_scope(
             &record,
-            &[ACTION_MESSAGE_CREATE.to_owned()]
+            &[CapabilityActionId::MESSAGE_CREATE.to_owned()]
         ));
         assert!(!agent_actions_within_requested_scope(
             &record,
-            &[ACTION_EVENT_READ.to_owned()]
+            &[CapabilityActionId::EVENT_READ.to_owned()]
         ));
     }
 
     #[test]
     fn explicit_content_resources_narrow_later_realm_grants() {
         let record = record_with_scope(json!({
-            "actions": [ACTION_EVENT_READ],
+            "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "realm",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001"
@@ -432,7 +428,7 @@ mod requested_scope_tests {
         }));
         assert!(agent_grant_within_requested_scope(
             &record,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
@@ -442,7 +438,7 @@ mod requested_scope_tests {
         ));
         assert!(!agent_grant_within_requested_scope(
             &record,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "realm",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099"
@@ -451,7 +447,7 @@ mod requested_scope_tests {
         ));
 
         let realm_wide_strand_ceiling = record_with_scope(json!({
-            "actions": [ACTION_EVENT_READ],
+            "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001"
@@ -459,7 +455,7 @@ mod requested_scope_tests {
         }));
         assert!(agent_grant_within_requested_scope(
             &realm_wide_strand_ceiling,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
@@ -469,12 +465,12 @@ mod requested_scope_tests {
         ));
 
         let global_strand_ceiling = record_with_scope(json!({
-            "actions": [ACTION_EVENT_READ],
+            "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{ "kind": "strand" }]
         }));
         assert!(agent_grant_within_requested_scope(
             &global_strand_ceiling,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099",
@@ -484,7 +480,7 @@ mod requested_scope_tests {
         ));
 
         let circle_ceiling = record_with_scope(json!({
-            "actions": [ACTION_EVENT_READ],
+            "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
@@ -493,7 +489,7 @@ mod requested_scope_tests {
         }));
         assert!(agent_grant_within_requested_scope(
             &circle_ceiling,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
@@ -503,7 +499,7 @@ mod requested_scope_tests {
         ));
         assert!(!agent_grant_within_requested_scope(
             &circle_ceiling,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
@@ -523,7 +519,7 @@ mod requested_scope_tests {
         mandatory.controller_approval_required = Some(true);
         let mandatory_value = serde_json::to_value(&mandatory).unwrap();
         let record = record_with_scope(json!({
-            "actions": [ACTION_EVENT_READ],
+            "actions": [CapabilityActionId::EVENT_READ],
             "resources": [{
                 "kind": "operation",
                 "operation": "ak.self.events.stream.subscribe"
@@ -538,13 +534,13 @@ mod requested_scope_tests {
 
         assert!(agent_grant_within_requested_scope(
             &record,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &resources,
             &[mandatory]
         ));
         assert!(!agent_grant_within_requested_scope(
             &record,
-            &[ACTION_EVENT_READ.to_owned()],
+            &[CapabilityActionId::EVENT_READ.to_owned()],
             &resources,
             &[]
         ));
@@ -553,12 +549,12 @@ mod requested_scope_tests {
     #[test]
     fn participation_is_intersected_with_provision_ceiling() {
         let record = record_with_scope(json!({
-            "actions": [ACTION_EVENT_READ, ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
+            "actions": [CapabilityActionId::EVENT_READ, CapabilityActionId::MESSAGE_CREATE, CapabilityActionId::REACTION_ADD],
             "constraints": [{
                 "constraint_kind": "claim_based",
                 "constraint_subkind": "accountability",
                 "effect": "allow",
-                "applies_to_actions": [ACTION_MESSAGE_CREATE],
+                "applies_to_actions": [CapabilityActionId::MESSAGE_CREATE],
                 "accountability_required": true,
                 "approval_relation": "controller"
             }]
@@ -574,7 +570,7 @@ mod requested_scope_tests {
         );
 
         let record = record_with_scope(json!({
-            "actions": [ACTION_MESSAGE_CREATE]
+            "actions": [CapabilityActionId::MESSAGE_CREATE]
         }));
         assert_eq!(
             agent_requested_participation_ceiling(&record),
@@ -586,14 +582,14 @@ mod requested_scope_tests {
         );
 
         let wrong_action = record_with_scope(json!({
-            "actions": [ACTION_MESSAGE_CREATE, ACTION_REACTION_ADD],
+            "actions": [CapabilityActionId::MESSAGE_CREATE, CapabilityActionId::REACTION_ADD],
             "constraints": [{
                 "constraint_kind": "claim_based",
                 "constraint_subkind": "approval",
                 "effect": "require_review",
                 "approval_required": true,
                 "approval_relation": "controller",
-                "applies_to_actions": [ACTION_REACTION_ADD]
+                "applies_to_actions": [CapabilityActionId::REACTION_ADD]
             }]
         }));
         assert!(!agent_requested_participation_ceiling(&wrong_action).act_on_behalf);

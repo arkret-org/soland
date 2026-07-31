@@ -1380,7 +1380,7 @@ mod tests {
             realm_id: realm_id.clone(),
         };
         let authority_set_policy = arkret_wire::AuthoritySetPolicy {
-            schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+            schema: arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
             authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
             policy_kind: arkret_wire::AuthoritySetPolicyKind::RealmAdmission,
             scope_ref: scope_ref.clone(),
@@ -1418,7 +1418,7 @@ mod tests {
                     "ak:event:019f0000-0000-7000-8000-{suffix}"
                 ))
                 .unwrap(),
-                arkret_wire::events::EventKind::MESSAGE_CREATE,
+                arkret_wire::EventKind::MESSAGE_CREATE,
                 arkret_wire::ScopeRef::Realm {
                     realm_id: realm_id.clone(),
                 },

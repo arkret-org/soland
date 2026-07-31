@@ -185,10 +185,7 @@ pub fn patch_string_field<'a>(operation: &'a Operation, field: &str) -> Option<&
 fn operation_updates_realm_metadata(operation: &Operation) -> bool {
     matches!(
         soland_domain::kinds::canonical_kind_for_operation(operation),
-        Some(
-            arkret_wire::events::EventKind::REALM_CREATE
-                | arkret_wire::events::EventKind::REALM_UPDATE
-        )
+        Some(arkret_wire::EventKind::REALM_CREATE | arkret_wire::EventKind::REALM_UPDATE)
     )
 }
 
@@ -238,11 +235,11 @@ mod tests {
     fn child_object_metadata_is_not_realm_metadata() {
         for operation in [
             operation(
-                arkret_wire::events::EventKind::SPACE_CREATE,
+                arkret_wire::EventKind::SPACE_CREATE,
                 json!({"object": {"title": "List", "summary": "List summary"}}),
             ),
             operation(
-                arkret_wire::events::EventKind::STRAND_UPDATE,
+                arkret_wire::EventKind::STRAND_UPDATE,
                 json!({
                     "patch": {
                         "title": {"$op": "set", "value": "Thread"},
@@ -259,7 +256,7 @@ mod tests {
     #[test]
     fn realm_update_metadata_is_still_projected() {
         let operation = operation(
-            arkret_wire::events::EventKind::REALM_UPDATE,
+            arkret_wire::EventKind::REALM_UPDATE,
             json!({
                 "patch": {
                     "title": {"$op": "set", "value": "Realm"},

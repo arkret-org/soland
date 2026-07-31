@@ -176,7 +176,7 @@ async fn device_generation_event_seal_context(
     let bootstrap = records
         .iter()
         .filter(|record| {
-            record.kind == arkret_wire::events::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::REALM_CREATE
                 && record
                     .envelope
                     .pointer("/payload/object/fields/purpose")
@@ -224,7 +224,7 @@ async fn device_generation_event_seal_context(
         .iter()
         .filter(|record| {
             record.actor_id == principal_id
-                && record.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                && record.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
                 && record
                     .envelope
                     .get("prev_refs")
@@ -1730,7 +1730,7 @@ mod seal_delta_tests {
         let issued_at = chrono::Utc::now();
         let mut event = Event::new_with_id_at(
             arkret_wire::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
-            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MESSAGE_CREATE,
             arkret_wire::ScopeRef::Realm { realm_id },
             actor_id.clone(),
             1,

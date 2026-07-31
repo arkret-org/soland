@@ -307,7 +307,7 @@ fn verify_with_current_recovery_ssk(
     jws: &str,
 ) -> Result<bool, EventValidationError> {
     let kind = object.get("kind").and_then(Value::as_str);
-    let is_recovery_authorize = kind == Some(arkret_wire::events::EventKind::DEVICE_AUTHORIZE)
+    let is_recovery_authorize = kind == Some(arkret_wire::EventKind::DEVICE_AUTHORIZE)
         && object.get("payload").is_some_and(|payload| {
             payload
                 .get("recovery_session_id")
@@ -316,7 +316,7 @@ fn verify_with_current_recovery_ssk(
                 && payload.get("cross_signing_binding").is_some()
                 && payload.get("enrollment_authority_binding").is_none()
         });
-    if !is_recovery_authorize && kind != Some(arkret_wire::events::EventKind::DEVICE_LIST_UPDATE) {
+    if !is_recovery_authorize && kind != Some(arkret_wire::EventKind::DEVICE_LIST_UPDATE) {
         return Ok(false);
     }
     let principal = arkret_identifiers::Did::new(actor_id.to_owned()).map_err(|_| {
@@ -477,7 +477,7 @@ async fn verify_with_active_agent_session(
                 "Agent key authorization payload is unavailable",
             )
         })?;
-    if authorization.kind != arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
+    if authorization.kind != arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
         || payload.get("agent_id").and_then(Value::as_str) != Some(signer_id)
         || payload.get("verification_method").and_then(Value::as_str) != Some(verification_method)
     {

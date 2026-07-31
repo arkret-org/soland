@@ -29,7 +29,7 @@ fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
 fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value) {
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
                 "value": {
@@ -54,7 +54,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
     let payload = json!({"value": join_rule});
     let event = arkret_wire::Event::new_with_id_at(
         arkret_identifiers::EventId::new(format!("ak:event:{}", uuid::Uuid::now_v7())).unwrap(),
-        arkret_wire::events::EventKind::REALM_JOIN_RULE,
+        arkret_wire::EventKind::REALM_JOIN_RULE,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(REALM_A).unwrap(),
         },
@@ -70,11 +70,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
         arkret_canonical::DigestSuite::Sha256,
     )
     .expect("registered join-rule contract must be evaluable");
-    let operation = op(
-        arkret_wire::events::EventKind::REALM_JOIN_RULE,
-        REALM_A,
-        payload,
-    );
+    let operation = op(arkret_wire::EventKind::REALM_JOIN_RULE, REALM_A, payload);
     let effect = state.apply_validated_realm_bootstrap_facet(&operation, &cell_writes);
     assert!(
         matches!(
@@ -87,7 +83,7 @@ fn apply_join_rule(state: &mut ProjectionState, join_rule: &str) {
 
 fn join_op(member: &str) -> Operation {
     op(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         REALM_A,
         json!({
             "actor_id": member,
@@ -100,7 +96,7 @@ fn join_op(member: &str) -> Operation {
 
 fn member_state_op(realm_id: &str, member: &str, membership: &str) -> Operation {
     op(
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         realm_id,
         json!({
             "actor_id": member,
@@ -243,7 +239,7 @@ fn principal_admission_requires_selector_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
                 "value": {
@@ -277,7 +273,7 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
 
     let effect = state.apply(
         &op(
-            arkret_wire::events::EventKind::REALM_POLICY_BUNDLE,
+            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
                 "value": {

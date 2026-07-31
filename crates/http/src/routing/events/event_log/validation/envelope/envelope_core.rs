@@ -265,7 +265,7 @@ async fn validate_event_envelope_with_ingress(
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
     let realm_exists = realm_exists_in_index(state, &realm_id);
-    if kind == arkret_wire::events::EventKind::REALM_CREATE && realm_exists {
+    if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -299,7 +299,7 @@ async fn validate_event_envelope_with_ingress(
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id);
-    let is_identity_anchor_authorize = kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+    let is_identity_anchor_authorize = kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -313,7 +313,7 @@ async fn validate_event_envelope_with_ingress(
                             .is_some_and(|refs| refs.len() == 1 && refs[0].as_str() == Some(anchor))
                     })
         });
-    let is_identity_anchor_reanchor = kind == arkret_wire::events::EventKind::DEVICE_REANCHOR
+    let is_identity_anchor_reanchor = kind == arkret_wire::EventKind::DEVICE_REANCHOR
         && realm_bootstrap_contexts.iter().any(|context| {
             context.realm_id == realm_id
                 && context.actor_id == actor_id
@@ -347,8 +347,7 @@ async fn validate_event_envelope_with_ingress(
         ));
     }
     require_object_field(object, "payload")?;
-    let is_self_principal_pcr_bootstrap_create = kind
-        == arkret_wire::events::EventKind::REALM_CREATE
+    let is_self_principal_pcr_bootstrap_create = kind == arkret_wire::EventKind::REALM_CREATE
         && realm_bootstrap_contexts.iter().any(|context| {
             context.self_principal_pcr_bootstrap
                 && context.realm_id == realm_id
@@ -424,14 +423,14 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,
     )?;
-    if kind == arkret_wire::events::EventKind::MEMBER_IDENTITY_UPDATE {
+    if kind == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
     }
     if kind == "ak.device.authorize" {
         validate_device_enrollment_authority_binding(state, object, &actor_id).await?;
     }
-    if kind == arkret_wire::events::EventKind::ACCOUNT_STATUS {
+    if kind == arkret_wire::EventKind::ACCOUNT_STATUS {
         validate_account_status_service_binding(state, object).await?;
     }
     validate_audit_accessed_payload(&kind, object)?;
@@ -742,7 +741,7 @@ fn is_realm_bootstrap_unit_member(
     if is_realm_bootstrap_followup || is_identity_anchor_authorize || is_identity_anchor_reanchor {
         return true;
     }
-    kind == arkret_wire::events::EventKind::REALM_CREATE
+    kind == arkret_wire::EventKind::REALM_CREATE
         && realm_bootstrap_contexts
             .iter()
             .any(|context| context.realm_id == realm_id && context.actor_id == actor_id)
@@ -792,7 +791,7 @@ fn enforce_registered_cell_contract(
     kind: &str,
     context: arkret_schema::EventCellContractContext,
 ) -> Result<(), EventValidationError> {
-    let event_kind = arkret_wire::events::EventKind::from(kind);
+    let event_kind = arkret_wire::EventKind::from(kind);
     let Some(descriptor) = event_kind.descriptor() else {
         return Ok(());
     };
@@ -822,7 +821,7 @@ fn enforce_registered_cell_contract(
             )
         },
     )?;
-    if kind == arkret_wire::events::EventKind::REALM_CREATE {
+    if kind == arkret_wire::EventKind::REALM_CREATE {
         // The canonical Realm-create genesis write set is likewise recomputed,
         // never compared against a submitted array. Only the *targets* are
         // asserted: the lattice ops come from the registered
@@ -882,7 +881,7 @@ fn enforce_ordered_log_cell_contract(
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<(), EventValidationError> {
-    let event_kind = arkret_wire::events::EventKind::from(kind);
+    let event_kind = arkret_wire::EventKind::from(kind);
     let Some(descriptor) = event_kind.descriptor() else {
         return Ok(());
     };

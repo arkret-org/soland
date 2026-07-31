@@ -16,7 +16,7 @@ use arkret_models_integration::{
     ScopeGrant, WidgetEffect,
 };
 use arkret_policy::authz::{ProtocolResourceSelectorScope, ResourceSelector};
-use arkret_wire::{Event, ScopeRef};
+use arkret_wire::{CapabilityActionId, Event, ScopeRef};
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use serde_json::{Value, json};
@@ -36,8 +36,6 @@ use super::types::{
 use crate::ids;
 use crate::routing::events::strand::strand_id_from_realm_id;
 use crate::state::AppState;
-
-pub(super) const GHOST_PROVISION_ACTION: &str = "ak.applet.ghost.provision";
 
 struct ValidatedInstallEvents {
     approved_actions: Vec<String>,
@@ -79,7 +77,7 @@ fn validate_formal_install_events(
     let package = &commit.applet_package;
     let realm_id = commit.effective_scope.realm_id();
     let registration = &commit.registration_event;
-    if registration.kind.as_str() != arkret_wire::events::EventKind::APPLET_REGISTRATION
+    if registration.kind.as_str() != arkret_wire::EventKind::APPLET_REGISTRATION
         || registration.actor_id.as_str() != install_actor
         || &registration.realm_id != realm_id
         || registration.scope_ref != commit.effective_scope
@@ -140,7 +138,7 @@ fn validate_formal_install_events(
     let mut event_ids = BTreeSet::new();
 
     for event in &commit.capability_grant_events {
-        if event.kind.as_str() != arkret_wire::events::EventKind::CAPABILITY_GRANT
+        if event.kind.as_str() != arkret_wire::EventKind::CAPABILITY_GRANT
             || event.actor_id.as_str() != install_actor
             || &event.realm_id != realm_id
             || event.scope_ref != commit.effective_scope
@@ -550,7 +548,7 @@ fn install_execution_steps(
     if let Some(event) = record.registration_event.as_ref() {
         steps.push(install_execution_step(
             0,
-            arkret_wire::events::EventKind::APPLET_REGISTRATION,
+            arkret_wire::EventKind::APPLET_REGISTRATION,
             event.event_id.as_str(),
             canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!("registration Event serialization failed: {error}"))
@@ -570,7 +568,7 @@ fn install_execution_steps(
         let grant_id = payload.grant_id;
         steps.push(install_execution_step(
             offset + 1,
-            arkret_wire::events::EventKind::CAPABILITY_GRANT,
+            arkret_wire::EventKind::CAPABILITY_GRANT,
             event.event_id.as_str(),
             canonical_digest(&serde_json::to_value(event).map_err(|error| {
                 AppError::internal(format!(
@@ -746,7 +744,7 @@ pub(super) async fn append_portal_message(
     let projection_record = ProjectionEventRecord {
         event_id: event_id.clone(),
         realm_id: realm_id.to_owned(),
-        event_kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
+        event_kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
         operation_kind: "applet_portal_ingress".to_owned(),
         operation_id: Some(operation_id.clone()),
         sender: Some(ghost.ghost_actor_id.clone()),
@@ -1092,7 +1090,10 @@ pub(super) fn approval_actions_for_install(approval: &AppletApprovalRequest) -> 
     approval
         .approve_actions
         .iter()
-        .filter(|action| approval.ghost_actors_allowed || action.as_str() != GHOST_PROVISION_ACTION)
+        .filter(|action| {
+            approval.ghost_actors_allowed
+                || action.as_str() != CapabilityActionId::APPLET_GHOST_PROVISION
+        })
         .cloned()
         .collect()
 }
@@ -1126,7 +1127,7 @@ pub(super) async fn build_install_plan(
         "approved_scopes": approved_scopes,
         "denied_scopes": denied_scopes,
         "events_to_submit": [{
-            "event_kind": arkret_wire::events::EventKind::APPLET_REGISTRATION,
+            "event_kind": arkret_wire::EventKind::APPLET_REGISTRATION,
             "payload": registration_payload,
         }],
         "capability_constraints": capability_constraints_for_scope(scope),
@@ -1152,7 +1153,7 @@ pub(super) async fn build_install_plan(
         approved_scopes,
         denied_scopes,
         events_to_submit: vec![EventSubmission {
-            event_kind: arkret_wire::events::EventKind::APPLET_REGISTRATION.to_owned(),
+            event_kind: arkret_wire::EventKind::APPLET_REGISTRATION.to_owned(),
             payload: event_payload,
             refs: None,
         }],
@@ -1422,7 +1423,7 @@ pub(super) fn ghost_actors_allowed_for_install(
     let package_allows = package.ghost_policy.enabled;
     let scope_approved = approved_actions
         .iter()
-        .any(|action| action == GHOST_PROVISION_ACTION);
+        .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION);
     let actor_policy_allows = actor_policy.is_some_and(|policy| {
         matches!(
             policy.ghost_actor_mode,
@@ -1690,7 +1691,7 @@ mod tests {
         };
         assert!(ghost_actors_allowed_for_install(
             &package,
-            &[GHOST_PROVISION_ACTION.to_owned()],
+            &[CapabilityActionId::APPLET_GHOST_PROVISION.to_owned()],
             Some(&actor_policy)
         ));
 
@@ -1701,7 +1702,7 @@ mod tests {
         };
         assert!(!ghost_actors_allowed_for_install(
             &package,
-            &[GHOST_PROVISION_ACTION.to_owned()],
+            &[CapabilityActionId::APPLET_GHOST_PROVISION.to_owned()],
             Some(&actor_policy)
         ));
     }
@@ -1718,7 +1719,7 @@ mod tests {
             .with_timezone(&chrono::Utc);
         let registration_event = Event::new_with_id_at(
             response.registration_event_ref.clone().unwrap(),
-            arkret_wire::events::EventKind::APPLET_REGISTRATION,
+            arkret_wire::EventKind::APPLET_REGISTRATION,
             scope_ref.clone(),
             actor_id.clone(),
             1,
@@ -1738,7 +1739,7 @@ mod tests {
                         0x20 + offset
                     ))
                     .unwrap(),
-                    arkret_wire::events::EventKind::CAPABILITY_GRANT,
+                    arkret_wire::EventKind::CAPABILITY_GRANT,
                     scope_ref.clone(),
                     actor_id.clone(),
                     offset as u64 + 2,
@@ -1766,7 +1767,7 @@ mod tests {
             effective_scope: Some(scope_ref),
             capabilities: vec![
                 "ak.message.create".to_owned(),
-                GHOST_PROVISION_ACTION.to_owned(),
+                CapabilityActionId::APPLET_GHOST_PROVISION.to_owned(),
             ],
             manifest: manifest_from_package(package),
             package: Some(package.clone()),
@@ -1895,7 +1896,7 @@ mod tests {
         assert_eq!(pending_steps.len(), 3);
         assert_eq!(
             pending_steps[0]["target_event_kind"],
-            json!(arkret_wire::events::EventKind::APPLET_REGISTRATION)
+            json!(arkret_wire::EventKind::APPLET_REGISTRATION)
         );
         assert_eq!(pending_steps[0]["status"], json!("pending"));
         assert_eq!(pending_steps[0]["event_ref"], Value::Null);

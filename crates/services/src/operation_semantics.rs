@@ -2,9 +2,6 @@ use arkret_event_draft::Operation;
 use serde_json::Value;
 
 pub const AUDIT_COMPLIANCE_PROFILES: &[&str] = soland_domain::kinds::AUDIT_COMPLIANCE_PROFILES;
-pub const MLS_GOVERNANCE_BINDING_FULL_PROFILE: &str =
-    soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE;
-pub const MLS_REDUCER_PROFILE_V1: &str = soland_domain::kinds::MLS_REDUCER_PROFILE_V1;
 pub const REASON_KEYPACKAGE_NOT_FOUND: &str =
     soland_domain::reducer::mls::REASON_KEYPACKAGE_NOT_FOUND;
 pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str =

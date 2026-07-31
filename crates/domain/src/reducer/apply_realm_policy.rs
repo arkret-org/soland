@@ -26,17 +26,17 @@ impl ProjectionState {
         cell_writes: &[ProjectedCellWrite],
     ) -> ProjectionEffect {
         let kind = operation.object_kind.as_str();
-        if kind == arkret_wire::events::EventKind::REALM_POLICY_BUNDLE {
+        if kind == arkret_wire::EventKind::REALM_POLICY_BUNDLE {
             return self.apply_realm_policy_bundle(operation);
         }
         if !matches!(
             kind,
-            arkret_wire::events::EventKind::REALM_JOIN_RULE
-                | arkret_wire::events::EventKind::REALM_HISTORY_VISIBILITY
-                | arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY
-                | arkret_wire::events::EventKind::REALM_DISCOVERY
-                | arkret_wire::events::EventKind::REALM_DELIVERY_BINDING_POLICY
-                | arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
+            arkret_wire::EventKind::REALM_JOIN_RULE
+                | arkret_wire::EventKind::REALM_HISTORY_VISIBILITY
+                | arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
+                | arkret_wire::EventKind::REALM_DISCOVERY
+                | arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY
+                | arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES
         ) {
             return ProjectionEffect::Rejected {
                 reason: "out_of_order_bootstrap".to_owned(),
@@ -77,7 +77,7 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::CAS_CONFLICT.to_owned(),
             };
         }
-        if kind == arkret_wire::events::EventKind::REALM_JOIN_RULE {
+        if kind == arkret_wire::EventKind::REALM_JOIN_RULE {
             // `realm_join_rule_payload` is `{"value": <enum>}` and the
             // registered projection sets the cell to that whole object, so the
             // scalar rule lives one level down.

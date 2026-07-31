@@ -18,6 +18,7 @@ use arkret_models_collaboration::objects::blob::{
     BlobPresignPayload, BlobPresignRequestBody, BlobUploadOutcome, BlobVisibility, SignatureValue,
     UploadReceipt,
 };
+use arkret_wire::{BLOB_SCHEME_STREAM_AEAD_V1, BLOB_SCHEME_WHOLE_FILE_AEAD_V1};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signer;
@@ -779,6 +780,7 @@ fn issue_presign_envelope(
     let mut nonce_bytes = [0u8; 16];
     {
         use rand::RngExt;
+
         rand::rng().fill(&mut nonce_bytes[..]);
     }
     let payload = BlobPresignPayload {
@@ -1186,8 +1188,6 @@ pub(super) fn plaintext_blob_data_class(
 /// discriminator. The server stores the envelope as opaque JSON and never
 /// decrypts; these constants only drive the light-touch shape validation
 /// below (which fields are required), not any cryptographic interpretation.
-const SCHEME_WHOLE_FILE: &str = "ak.blob.whole_file_aead.v1";
-const SCHEME_STREAM: &str = "ak.blob.stream_aead.v1";
 
 fn validate_encrypted_attachment_metadata(
     metadata: &serde_json::Value,
@@ -1229,7 +1229,7 @@ fn validate_encrypted_attachment_metadata(
     // whole-file `nonce` requirement, so an unknown value is never
     // mis-validated as whole-file.
     match envelope.get("scheme").and_then(|value| value.as_str()) {
-        Some(SCHEME_STREAM) => {
+        Some(BLOB_SCHEME_STREAM_AEAD_V1) => {
             // Streaming chunked AEAD: per-object random `nonce_prefix`, no
             // single `nonce`. Require the stream descriptor fields exist and
             // have the right JSON types; do NOT validate segment structure,
@@ -1255,7 +1255,7 @@ fn validate_encrypted_attachment_metadata(
                 return Err("stream attachment envelope requires integer segment_count");
             }
         }
-        None | Some(SCHEME_WHOLE_FILE) => {
+        None | Some(BLOB_SCHEME_WHOLE_FILE_AEAD_V1) => {
             // Whole-file AEAD (explicit or, per spec, the default when scheme
             // is absent): a single `nonce` is required.
             if envelope

@@ -21,7 +21,8 @@ use arkret_models_identity::HandleClaim;
 use arkret_models_identity::handle::{Handle, HandleBindingState};
 use arkret_models_identity::proof::DetachedPayloadProof;
 use arkret_wire::{
-    InviteReceiveAction, ReceivePolicyConstraints, ReceivePolicySurface, UnknownInviteAction,
+    AccountDataKey, InviteReceiveAction, ReceivePolicyConstraints, ReceivePolicySurface,
+    UnknownInviteAction,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
@@ -52,7 +53,6 @@ use crate::wire::now;
 
 const HEADER_SOURCE_SERVICE_ID: &str = "source-service-id";
 const HEADER_DESTINATION_SERVICE_ID: &str = "destination-service-id";
-const ACCOUNT_DATA_KEY_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const ACTIVE_LOCATOR_LIMIT: usize = 16;
 const INVITE_LOCATOR_CACHE_CONTROL: &str = "private, no-store";
 const INVITE_QUARANTINE_TTL_DAYS: i64 = 30;
@@ -546,7 +546,7 @@ async fn resolve_invite_locator(
         ))
     })?;
     let mut locator = PrincipalLocator {
-        schema: arkret_wire::constants::PRINCIPAL_LOCATOR_SCHEMA.to_owned(),
+        schema: arkret_wire::SchemaId::PRINCIPAL_LOCATOR_V1.to_owned(),
         subject_id,
         recipient_service_id,
         recipient_service_kind: None,
@@ -705,7 +705,7 @@ async fn persist_invite_quarantine_entry(
 
     let account_data = state.account_data();
     let existing = account_data
-        .entry(subject, ACCOUNT_DATA_KEY_INVITE_QUARANTINE)
+        .entry(subject, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?;
     let mut entries = existing
@@ -735,7 +735,7 @@ async fn persist_invite_quarantine_entry(
     });
     let record = AccountDataState {
         actor_id: subject.to_owned(),
-        account_data_key: ACCOUNT_DATA_KEY_INVITE_QUARANTINE.to_owned(),
+        account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
         revision: existing.as_ref().map_or(1, |record| record.revision + 1),
         payload,
         tombstone: false,
@@ -759,7 +759,7 @@ async fn persist_invite_quarantine_entry(
         ACCOUNT_DATA_UPDATE_TYPE,
         json!({
             "operation": "put",
-            "account_data_key": ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
+            "account_data_key": AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
             "revision": record.revision,
             "content": record.payload.clone(),
             "updated_at": record.updated_at,
@@ -1578,7 +1578,7 @@ fn validate_invite_delivery_consistency(
         ));
     }
     if body.pointer("/invite_event/kind").and_then(Value::as_str)
-        != Some(arkret_wire::events::EventKind::INVITE_CREATE)
+        != Some(arkret_wire::EventKind::INVITE_CREATE)
     {
         return Err(super::events::peer::schema_violation(
             "invite_event.kind must be ak.invite.create",
@@ -1729,7 +1729,7 @@ mod invite_locator_security_tests {
             device_id: "ak:device:01904100-0000-7000-8000-000000000404".to_owned(),
             actor_seq: 7,
             realm_id: realm_id.to_owned(),
-            kind: arkret_wire::events::EventKind::INVITE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::INVITE_CREATE.to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             prev_refs: Vec::new(),
             authorized_refs: Vec::new(),

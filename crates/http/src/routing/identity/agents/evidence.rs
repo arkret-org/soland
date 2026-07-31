@@ -2,16 +2,15 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{CellRef, Did, EventId, Hash, RealmId};
 use arkret_models_collaboration::agent_signer_evidence::{
-    AGENT_KEY_COMPONENT, AGENT_SIGNER_EVIDENCE_BUNDLE_SCHEMA, AGENT_SIGNER_EVIDENCE_SCHEMA,
-    AgentAuthorizationAdmission, AgentAuthorizationEvidence, AgentAuthorizationStateWitness,
-    AgentAuthorizationStatus, AgentAuthorizationTransitionWitness, AgentSignerEvidence,
-    AgentSignerEvidenceBundle, AgentSignerEvidenceQueryFailure,
+    AGENT_KEY_COMPONENT, AgentAuthorizationAdmission, AgentAuthorizationEvidence,
+    AgentAuthorizationStateWitness, AgentAuthorizationStatus, AgentAuthorizationTransitionWitness,
+    AgentSignerEvidence, AgentSignerEvidenceBundle, AgentSignerEvidenceQueryFailure,
     AgentSignerEvidenceQueryFailureReason, AgentSignerEvidenceQueryOutcome,
     AgentSignerEvidenceQueryRequestBodyBody, AgentSignerEvidenceQuerySelector,
     AgentSigningKeyBinding,
 };
 use arkret_state::lattice::CellState;
-use arkret_wire::{DidUrl, Event, NonEmptyString, NotarySig, Seal};
+use arkret_wire::{DidUrl, Event, NonEmptyString, NotarySig, SchemaId, Seal};
 use chrono::{DateTime, Duration, Utc};
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
@@ -268,7 +267,7 @@ pub(crate) async fn build_evidence(
         };
 
     Ok(Some(AgentSignerEvidence {
-        schema: NonEmptyString::new(AGENT_SIGNER_EVIDENCE_SCHEMA.to_owned())
+        schema: NonEmptyString::new(SchemaId::AGENT_SIGNER_EVIDENCE_V1.to_owned())
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceStale)?,
         signing_key_binding: binding.clone(),
         authorization: AgentAuthorizationEvidence {
@@ -347,7 +346,7 @@ pub(crate) async fn signer_evidence_bundle_for_events(
         return None;
     }
     Some(AgentSignerEvidenceBundle {
-        schema: NonEmptyString::new(AGENT_SIGNER_EVIDENCE_BUNDLE_SCHEMA.to_owned()).ok()?,
+        schema: NonEmptyString::new(SchemaId::AGENT_SIGNER_EVIDENCE_BUNDLE_V1.to_owned()).ok()?,
         evidence,
     })
 }
@@ -560,8 +559,7 @@ fn select_authorization_event<'a>(
         .map(EventId::as_str)
         .or(record.authorized_event_ref.as_deref())?;
     events.iter().find(|event| {
-        event.event_id == event_id
-            && event.kind == arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
+        event.event_id == event_id && event.kind == arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
     })
 }
 
@@ -730,7 +728,7 @@ fn find_transition(
             continue;
         };
         let (status, transition_key_id) = if event.kind
-            == arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
+            == arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
             && payload
                 .get("supersedes")
                 .and_then(Value::as_array)
@@ -746,7 +744,7 @@ fn find_transition(
                 AgentAuthorizationStatus::Superseded,
                 payload.get("key_id").and_then(Value::as_str),
             )
-        } else if event.kind == arkret_wire::events::EventKind::AGENT_KEY_REVOKE
+        } else if event.kind == arkret_wire::EventKind::AGENT_KEY_REVOKE
             && payload.get("key_id").and_then(Value::as_str) == Some(binding.agent_key_id.as_str())
         {
             (
@@ -903,7 +901,7 @@ mod tests {
             actor_id: actor_id.to_owned(),
             actor_seq: 1,
             realm_id: Some("ak:realm:01964137-0000-7000-8000-000000000004".to_owned()),
-            kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
             schema_id: "ak.schema.event.v1".to_owned(),
             canonical_digest:
                 "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_owned(),

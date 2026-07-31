@@ -23,6 +23,7 @@
 //!   - decryption_pending (deferred-decryption queue + retry)
 
 use arkret_event_draft::Operation;
+use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use serde_json::{Map, Value};
 
 use super::{
@@ -1070,13 +1071,11 @@ fn validate_binding_frontier_and_policy(binding: &Value) -> Result<(), &'static 
 
 fn validate_binding_profiles(binding: &Value) -> Result<(), &'static str> {
     if binding.get("binding_profile").and_then(Value::as_str)
-        != Some(crate::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE)
+        != Some(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)
     {
         return Err("mls_governance_binding_profile_invalid");
     }
-    if binding.get("reducer_profile").and_then(Value::as_str)
-        != Some(crate::kinds::MLS_REDUCER_PROFILE_V1)
-    {
+    if binding.get("reducer_profile").and_then(Value::as_str) != Some(CORE_REDUCER_PROFILE) {
         return Err("mls_governance_binding_reducer_profile_invalid");
     }
     Ok(())
@@ -1550,6 +1549,7 @@ fn merge_frontier(existing: &mut Vec<String>, delta: &[String]) {
 /// have to be strict about padding.
 fn decode_base64_loose(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
     use base64::Engine;
+
     let engine_nopad = base64::engine::general_purpose::URL_SAFE_NO_PAD;
     let engine_pad = base64::engine::general_purpose::URL_SAFE;
     engine_nopad
@@ -1559,6 +1559,5 @@ fn decode_base64_loose(s: &str) -> Result<Vec<u8>, base64::DecodeError> {
 
 // ──────────────────────────── tests ───────────────────────────────────
 
-#[cfg(test)]
 #[cfg(test)]
 mod tests;

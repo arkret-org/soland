@@ -2,6 +2,7 @@
 
 use std::collections::BTreeSet;
 
+use arkret_wire::CORE_REDUCER_PROFILE;
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use soland_domain::reducer::{CircleLifecycleState, CircleProjection};
 use soland_storage::{CanonicalEventRecord, RealmMetaRecord};
@@ -655,7 +656,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
     )
     .unwrap();
     let authority_set_policy = arkret_wire::AuthoritySetPolicy {
-        schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        schema: arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
         authority_set_id: "ak.authority_set.realm_admission.v1".to_owned(),
         policy_kind: arkret_wire::AuthoritySetPolicyKind::RealmAdmission,
         scope_ref: event.scope_ref.clone(),
@@ -1075,8 +1076,8 @@ fn mls_governance_binding(group_id: &str) -> Value {
             "ak:event:01904100-0000-7000-8000-fede00000a01"
         ],
         "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "binding_profile": soland_domain::kinds::MLS_GOVERNANCE_BINDING_FULL_PROFILE,
-        "reducer_profile": soland_domain::kinds::MLS_REDUCER_PROFILE_V1
+        "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
+        "reducer_profile": CORE_REDUCER_PROFILE
     })
 }
 

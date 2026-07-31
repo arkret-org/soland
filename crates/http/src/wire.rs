@@ -30,7 +30,7 @@ use arkret_models_identity::session_credential::SessionGrantProofKind;
 pub use arkret_models_integration::{OkOutcome, PushNotifyOutcome, PushNotifyRequestBody};
 use arkret_wire::{
     MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH, MAX_EVENT_ENVELOPE_BYTES,
-    MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH,
+    MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH, ProfileId,
 };
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -902,7 +902,7 @@ pub fn describe(
             .parse()
             .expect("trust_domain must be ak:trust_domain:<scope>"),
         service_kind: arkret_wire::ServiceKind::PrincipalServer,
-        protocol_version: arkret_wire::constants::PROTOCOL_VERSION.to_owned(),
+        protocol_version: arkret_wire::PROTOCOL_VERSION.to_owned(),
         supported_profiles: {
             let mut profiles = vec![
                 "ak.profile.core_event_store.v1".to_owned(),
@@ -911,7 +911,7 @@ pub fn describe(
                 "ak.profile.mimi_interop.v1".to_owned(),
                 "ak.profile.file_transfer.v1".to_owned(),
                 "ak.profile.webrtc_media.v1".to_owned(),
-                arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_PROFILE.to_owned(),
+                ProfileId::DIRECT_CONVERSATION_REALM_V1.to_owned(),
             ];
             // PROF-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) —
             // advertise `ak.profile.media_service_binding.v1` whenever the
@@ -1055,7 +1055,7 @@ pub fn describe(
                 ),
         ],
         supported_reducer_profiles: vec![
-            crate::routing::federation::FEDERATION_REDUCER_PROFILE_ID.to_owned(),
+            ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
         ],
         supported_schema_profiles: vec!["ak.schema.core.v1".to_owned()],
         auth_metadata,

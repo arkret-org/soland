@@ -275,13 +275,13 @@ pub(in crate::routing) async fn submit_ghost_provision_batch(
     let accountability_admission = InternalEventAdmission::applet_formal(
         realm_id,
         service_id,
-        arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
+        arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
         event_string_field_from_value(&accountability_value, "event_id").unwrap_or_default(),
     );
     let profile_admission = InternalEventAdmission::applet_formal(
         realm_id,
         ghost_actor_id,
-        arkret_wire::events::EventKind::PROFILE_CREATE,
+        arkret_wire::EventKind::PROFILE_CREATE,
         event_string_field_from_value(&profile_value, "event_id").unwrap_or_default(),
     );
     let accountability_prepared = prepare_ghost_event(

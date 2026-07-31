@@ -1,3 +1,5 @@
+use arkret_wire::SchemaId;
+
 use super::*;
 
 #[derive(Debug)]
@@ -654,7 +656,7 @@ pub(super) async fn signed_handle_claim(
         policy_event_ref: None,
     };
     let mut claim = SdkHandleClaim {
-        schema: arkret_models_identity::handle::HANDLE_CLAIM_SCHEMA.to_owned(),
+        schema: SchemaId::HANDLE_CLAIM_V1.to_owned(),
         handle: Some(handle),
         handle_aliases: vec![handle_alias],
         subject: Some(subject),

@@ -20,15 +20,6 @@ use super::SessionRecord;
 use crate::routing::events::event_log::submit_initial_event_submission;
 use crate::state::AppState;
 
-#[cfg(test)]
-const SCOPE_EVENTS_QUERY_SCAN: &str = "ak.self.events.query.scan";
-#[cfg(test)]
-const SCOPE_EVENTS_STREAM_SUBSCRIBE: &str = "ak.self.events.stream.subscribe";
-#[cfg(test)]
-const SCOPE_EVENTS_COMMAND_SUBMIT: &str = "ak.self.events.command.submit";
-#[cfg(test)]
-const ACTION_MESSAGE_CREATE: &str = "ak.message.create";
-
 /// Build a server-authored envelope for `session.actor` and submit it via the
 /// shared internal event API. `actor_seq` is taken as
 /// `max_actor_seq(actor) + 1` so concurrent fan-out events stay strictly
@@ -600,7 +591,7 @@ mod tests {
         assert!(!projection.issuer_has_projected_capability(
             controller,
             realm_id,
-            ACTION_MESSAGE_CREATE,
+            CapabilityActionId::MESSAGE_CREATE,
             realm_id,
             chrono::Utc::now(),
         ));
@@ -628,9 +619,9 @@ mod tests {
     fn runtime_agent_key_scope_service_actions_are_registered() {
         let registry = soland_services::protocol_artifacts::operation_ids();
         for action in [
-            SCOPE_EVENTS_STREAM_SUBSCRIBE,
-            SCOPE_EVENTS_QUERY_SCAN,
-            SCOPE_EVENTS_COMMAND_SUBMIT,
+            ServiceOperationId::SELF_EVENTS_STREAM_SUBSCRIBE,
+            ServiceOperationId::SELF_EVENTS_QUERY_SCAN,
+            ServiceOperationId::SELF_EVENTS_COMMAND_SUBMIT,
         ] {
             assert!(
                 registry.contains(action),

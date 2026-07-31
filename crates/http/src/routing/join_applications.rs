@@ -14,7 +14,7 @@ use arkret_models_collaboration::governance::join_policy::{
     JoinApplicationPrivateBody, JoinApplicationReviewRequestBodyBody, JoinApplicationStatus,
     JoinApplicationSubmitRequestBodyBody, join_application_revision_digest,
 };
-use arkret_wire::Hash;
+use arkret_wire::{CapabilityActionId, Hash};
 use chrono::{Duration, Utc};
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -32,8 +32,6 @@ use soland_services::join_applications::{
 use super::AuthArgs;
 use crate::state::AppState;
 
-const REVIEW_ACTION_FALLBACK: &str = "ak.realm.join.review";
-const AUDIT_READ_ACTION: &str = "ak.audit.query";
 const MAX_IDEMPOTENCY_KEY_LEN: usize = 255;
 
 pub(crate) fn router() -> Router {
@@ -261,7 +259,7 @@ async fn submit_join_application(
     {
         let action = snapshot
             .realm_join_policy_review_capability(realm_id.as_str())
-            .unwrap_or_else(|| REVIEW_ACTION_FALLBACK.to_owned());
+            .unwrap_or_else(|| CapabilityActionId::REALM_JOIN_REVIEW.to_owned());
         let mut recipients = BTreeSet::new();
         for recipient in &encryption_envelope.recipients {
             if recipient.recipient_hpke_kid.is_empty()
@@ -479,7 +477,7 @@ fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, b
     let evaluated_at = chrono::Utc::now();
     let review_action = snapshot
         .realm_join_policy_review_capability(realm_id.as_str())
-        .unwrap_or_else(|| REVIEW_ACTION_FALLBACK.to_owned());
+        .unwrap_or_else(|| CapabilityActionId::REALM_JOIN_REVIEW.to_owned());
     // Review eligibility is a Realm-governance decision, so it goes through the
     // shared predicate: the owner aggregate satisfies it without a verbatim
     // reviewer grant. Audit read is not a governance decision and stays an
@@ -494,7 +492,7 @@ fn viewer_context(state: &AppState, realm_id: &RealmId, actor: &str) -> (bool, b
     let audit_reader = snapshot.issuer_has_projected_capability(
         actor,
         realm_id.as_str(),
-        AUDIT_READ_ACTION,
+        CapabilityActionId::AUDIT_QUERY,
         realm_id.as_str(),
         evaluated_at,
     );

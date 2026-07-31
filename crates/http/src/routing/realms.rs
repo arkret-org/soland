@@ -176,7 +176,7 @@ async fn list_realm_links_impl(
 }
 
 /// G3.S5 — POST a new `ak.realm.link` Move. Builds an `Operation` for
-/// `arkret_wire::events::EventKind::REALM_LINK` and routes through the standard
+/// `arkret_wire::EventKind::REALM_LINK` and routes through the standard
 /// `accept_local_operations` pipeline so reducer-level validators
 /// (FSM, kind validation, self-reference rejection) all run.
 #[endpoint(
@@ -228,7 +228,7 @@ async fn post_realm_link(
     let operation = Operation::create(
         op_id,
         realm_scope.clone(),
-        arkret_wire::events::EventKind::REALM_LINK,
+        arkret_wire::EventKind::REALM_LINK,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
@@ -316,7 +316,7 @@ async fn delete_realm_link(
     let operation = Operation::create(
         op_id,
         realm_id.clone(),
-        arkret_wire::events::EventKind::REALM_LINK,
+        arkret_wire::EventKind::REALM_LINK,
         payload,
     );
     accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))

@@ -970,7 +970,7 @@ mod tests {
                         created_at: chrono::Utc::now(),
                         updated_at: None,
                     },
-                    event_kind: arkret_wire::events::EventKind::MessageCreate,
+                    event_kind: arkret_wire::EventKind::MessageCreate,
                     source_actor_id: None,
                 },
             })

@@ -11,15 +11,14 @@ pub(crate) mod well_known;
 // SPEC-CR-001 — reused by `identity::session_pop` so self-PoP and the
 // federation rail reconstruct the signed `@target-uri` / `@authority`
 // identically.
+use arkret_wire::ProfileId;
 pub(in crate::routing) use federation::{signature_authority, signature_target_uri};
 pub use well_known::well_known_arkret_router;
 
 use super::{AuthArgs, now, sync_token};
 
-pub(crate) const FEDERATION_REDUCER_PROFILE_ID: &str = "ak.profile.federation_minimal.v1";
-
 pub(crate) fn federation_reducer_profile_digest() -> &'static str {
-    arkret_policy::generated::profiles::reducer_profile_digest(FEDERATION_REDUCER_PROFILE_ID)
+    arkret_policy::generated::profiles::reducer_profile_digest(ProfileId::FEDERATION_MINIMAL_V1)
         .expect("the embedded spec registry contains the federation reducer profile")
 }
 

@@ -400,7 +400,7 @@ impl<'a> CanonicalCausalGraph<'a> {
             .collect();
         let event_id_by_message_id = records
             .iter()
-            .filter(|record| record.kind == arkret_wire::events::EventKind::MESSAGE_CREATE)
+            .filter(|record| record.kind == arkret_wire::EventKind::MESSAGE_CREATE)
             .map(|record| {
                 let message_id = record
                     .envelope
@@ -1946,7 +1946,7 @@ mod tests {
             actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),
             actor_seq: u64::from(suffix),
             realm_id: Some("ak:realm:01964137-0000-7000-8000-000000000001".to_owned()),
-            kind: arkret_wire::events::EventKind::MESSAGE_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::MESSAGE_CREATE.to_owned(),
             schema_id: "ak.schema.message.v1".to_owned(),
             canonical_digest: format!("sha256:{digest_suffix:064x}"),
             canonical_bytes: Vec::new(),

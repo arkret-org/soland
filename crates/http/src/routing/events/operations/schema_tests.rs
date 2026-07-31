@@ -14,7 +14,7 @@ mod invite_create_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-000000000701".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::INVITE_CREATE,
+            arkret_wire::EventKind::INVITE_CREATE,
             payload,
         )
     }
@@ -34,8 +34,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_directed_v1_payload() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let operation = op(invite_payload());
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
@@ -43,8 +42,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_projection_internal_fields() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
         payload["sender"] = json!("did:web:alice.example");
@@ -59,8 +57,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_accepts_spec_reason_field() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["reason"] = json!("review_accept");
         let operation = op(payload);
@@ -70,8 +67,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_removed_inviter_payload_field() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["inviter"] = json!("did:web:alice.example");
         let operation = op(payload);
@@ -84,8 +80,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_requires_invite_id() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload.as_object_mut().unwrap().remove("invite_id");
         let operation = op(payload);
@@ -98,8 +93,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_requires_expires_at() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload.as_object_mut().unwrap().remove("expires_at");
         let operation = op(payload);
@@ -112,8 +106,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_invalid_invite_id() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["invite_id"] = json!("ak:invite:01");
         let operation = op(payload);
@@ -126,8 +119,7 @@ mod invite_create_schema_tests {
 
     #[test]
     fn invite_create_rejects_non_canonical_expires_at() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::INVITE_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::INVITE_CREATE).unwrap();
         let mut payload = invite_payload();
         payload["expires_at"] = json!("2026-06-14T10:00:00+00:00");
         let operation = op(payload);
@@ -155,7 +147,7 @@ mod event_projection_dto_boundary_tests {
                 "ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_JOIN_RULE,
+            arkret_wire::EventKind::REALM_JOIN_RULE,
             payload,
         )
     }
@@ -176,11 +168,8 @@ mod event_projection_dto_boundary_tests {
         );
 
         assert!(
-            validate_operation_payload_schema(
-                arkret_wire::events::EventKind::REALM_JOIN_RULE,
-                &projected,
-            )
-            .is_ok()
+            validate_operation_payload_schema(arkret_wire::EventKind::REALM_JOIN_RULE, &projected,)
+                .is_ok()
         );
     }
 
@@ -188,26 +177,20 @@ mod event_projection_dto_boundary_tests {
     fn draft_operation_still_uses_closed_sdk_event_payload_schema() {
         let valid = join_rule(json!({"value": "invite"}));
         assert!(
-            validate_operation_payload_schema(
-                arkret_wire::events::EventKind::REALM_JOIN_RULE,
-                &valid,
-            )
-            .is_ok()
+            validate_operation_payload_schema(arkret_wire::EventKind::REALM_JOIN_RULE, &valid,)
+                .is_ok()
         );
 
         let extra = join_rule(json!({"value": "invite", "event_id": "ak:event:extra"}));
         assert_eq!(
-            validate_operation_payload_schema(
-                arkret_wire::events::EventKind::REALM_JOIN_RULE,
-                &extra,
-            ),
+            validate_operation_payload_schema(arkret_wire::EventKind::REALM_JOIN_RULE, &extra,),
             Err("operation payload violates SDK artifact schema")
         );
 
         let invalid_enum = join_rule(json!({"value": "anything_goes"}));
         assert_eq!(
             validate_operation_payload_schema(
-                arkret_wire::events::EventKind::REALM_JOIN_RULE,
+                arkret_wire::EventKind::REALM_JOIN_RULE,
                 &invalid_enum,
             ),
             Err("operation payload violates SDK artifact schema")
@@ -225,7 +208,7 @@ mod event_projection_dto_boundary_tests {
                 "ak:realm:01904100-0000-7000-8000-0000000007a2".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
+            arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             json!({
                 "circle_id": "ak:circle:01904100-0000-7000-8000-0000000007a2",
                 "actor_id": "did:web:bob.example",
@@ -240,11 +223,8 @@ mod event_projection_dto_boundary_tests {
             }),
         );
 
-        validate_operation_payload_schema(
-            arkret_wire::events::EventKind::CIRCLE_MEMBER_STATE,
-            &operation,
-        )
-        .unwrap();
+        validate_operation_payload_schema(arkret_wire::EventKind::CIRCLE_MEMBER_STATE, &operation)
+            .unwrap();
     }
 }
 
@@ -265,7 +245,7 @@ mod key_backup_active_series_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-0000000007a1".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES,
+            arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES,
             json!({
                 "schema": "ak.schema.key_backup_active_series.v1",
                 "actor_id": "did:web:alice.example",
@@ -301,9 +281,8 @@ mod key_backup_active_series_schema_tests {
             }),
         );
 
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::KEY_BACKUP_ACTIVE_SERIES)
-                .expect("active-series projection schema");
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES)
+            .expect("active-series projection schema");
         assert!(validate_operation_schema(&operation, schema).is_ok());
 
         let state = crate::state::AppState::new(
@@ -350,7 +329,7 @@ mod realm_key_share_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-0000000007aa".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_KEY_SHARE,
+            arkret_wire::EventKind::REALM_KEY_SHARE,
             payload,
         )
     }
@@ -383,7 +362,7 @@ mod realm_key_share_schema_tests {
 
     #[test]
     fn realm_key_share_uses_share_payload_schema_not_realm_policy_value_schema() {
-        let schema = operation_schema_for_kind(arkret_wire::events::EventKind::REALM_KEY_SHARE)
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::REALM_KEY_SHARE)
             .expect("realm key share must build an Operation");
         let operation = op(member_device_share_payload());
 
@@ -403,7 +382,7 @@ mod realm_key_share_schema_tests {
 
     #[test]
     fn realm_key_share_requires_sealed_key_material() {
-        let schema = operation_schema_for_kind(arkret_wire::events::EventKind::REALM_KEY_SHARE)
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::REALM_KEY_SHARE)
             .expect("realm key share must build an Operation");
         let mut payload = member_device_share_payload();
         payload.as_object_mut().unwrap().remove("ciphertext");
@@ -432,7 +411,7 @@ mod read_receipt_policy_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-000000000702".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
+            arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY,
             payload,
         )
     }
@@ -440,8 +419,7 @@ mod read_receipt_policy_schema_tests {
     #[test]
     fn accepts_projection_internal_fields() {
         let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY)
-                .unwrap();
+            operation_schema_for_kind(arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY).unwrap();
         let mut operation = op(json!({
             "disclosure": "required",
             "event_id": "ak:event:01904100-0000-7000-8000-000000000702",
@@ -456,7 +434,7 @@ mod read_receipt_policy_schema_tests {
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
         validate_operation_payload_schema(
-            arkret_wire::events::EventKind::REALM_READ_RECEIPT_POLICY,
+            arkret_wire::EventKind::REALM_READ_RECEIPT_POLICY,
             &operation,
         )
         .unwrap();
@@ -480,7 +458,7 @@ mod realm_media_service_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-000000000901".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_MEDIA_SERVICE,
+            arkret_wire::EventKind::REALM_MEDIA_SERVICE,
             json!({
                 "service_id": "did:web:media.example",
                 "foci": [{
@@ -491,7 +469,7 @@ mod realm_media_service_schema_tests {
                 }]
             }),
         );
-        let schema = operation_schema_for_kind(arkret_wire::events::EventKind::REALM_MEDIA_SERVICE)
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::REALM_MEDIA_SERVICE)
             .expect("media_service event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
@@ -515,7 +493,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-000000000902".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
+            arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
             json!({
                 "services": [{
                     "service_id": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
@@ -526,10 +504,9 @@ mod realm_plaintext_visible_services_schema_tests {
                 }]
             }),
         );
-        let schema = operation_schema_for_kind(
-            arkret_wire::events::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES,
-        )
-        .expect("plaintext_visible_services event kind must build a projection Operation");
+        let schema =
+            operation_schema_for_kind(arkret_wire::EventKind::REALM_PLAINTEXT_VISIBLE_SERVICES)
+                .expect("plaintext_visible_services event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
     }
@@ -545,7 +522,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-000000000904".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
             json!({
                 "source_realm_id": "ak:realm:01904100-0000-7000-8000-000000000905",
                 "inherits": {
@@ -559,13 +536,12 @@ mod realm_plaintext_visible_services_schema_tests {
                 "hlc": "2026-07-06T00:00:00.000Z/node/1"
             }),
         );
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY)
-                .expect("inheritance_policy event kind must build a projection Operation");
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::REALM_INHERITANCE_POLICY)
+            .expect("inheritance_policy event kind must build a projection Operation");
 
         validate_operation_schema(&operation, schema).unwrap();
         validate_operation_payload_schema(
-            arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
             &operation,
         )
         .unwrap();
@@ -582,7 +558,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 "ak:realm:01904100-0000-7000-8000-000000000906".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
+            arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
             json!({
                 "source_realm_id": "ak:realm:01904100-0000-7000-8000-000000000905",
                 "allowed_policies": ["moderation.banned_keywords"],
@@ -592,7 +568,7 @@ mod realm_plaintext_visible_services_schema_tests {
 
         assert_eq!(
             validate_operation_payload_schema(
-                arkret_wire::events::EventKind::REALM_INHERITANCE_POLICY,
+                arkret_wire::EventKind::REALM_INHERITANCE_POLICY,
                 &operation,
             ),
             Err("ak.realm.inheritance_policy requires inherits")
@@ -607,7 +583,7 @@ mod realm_plaintext_visible_services_schema_tests {
         .unwrap();
         let cases = [
             (
-                arkret_wire::events::EventKind::MODERATION_DECISION,
+                arkret_wire::EventKind::MODERATION_DECISION,
                 json!({
                     "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
                     "decision": "quarantine",
@@ -616,14 +592,14 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                arkret_wire::events::EventKind::MODERATION_DECISION_LIFT,
+                arkret_wire::EventKind::MODERATION_DECISION_LIFT,
                 json!({
                     "target_ref": "ak:message:01904100-0000-7000-8000-000000000903",
                     "decision_ref": "ak:event:01904100-0000-7000-8000-000000000903"
                 }),
             ),
             (
-                arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT,
+                arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT,
                 json!({
                     "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -635,7 +611,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                arkret_wire::events::EventKind::MODERATION_APPEAL_REVIEW,
+                arkret_wire::EventKind::MODERATION_APPEAL_REVIEW,
                 json!({
                     "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -644,7 +620,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                arkret_wire::events::EventKind::MODERATION_APPEAL_DECISION,
+                arkret_wire::EventKind::MODERATION_APPEAL_DECISION,
                 json!({
                     "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -655,7 +631,7 @@ mod realm_plaintext_visible_services_schema_tests {
                 }),
             ),
             (
-                arkret_wire::events::EventKind::MODERATION_APPEAL_CLOSE,
+                arkret_wire::EventKind::MODERATION_APPEAL_CLOSE,
                 json!({
                     "appeal_id": "ak:appeal:01904100-0000-7000-8000-000000000903",
                     "realm_id": realm_id.as_str(),
@@ -704,14 +680,13 @@ mod message_projection_schema_tests {
     #[test]
     fn message_revise_accepts_spec_canonical_target_ref() {
         let operation = op(
-            arkret_wire::events::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MESSAGE_REVISE,
             json!({
                 "target_ref": "ak:event:01904100-0000-7000-8000-000000000001",
                 "content": {"kind": "ak.content.text", "body": "edited"}
             }),
         );
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::MESSAGE_REVISE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::MESSAGE_REVISE).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
     }
@@ -719,15 +694,14 @@ mod message_projection_schema_tests {
     #[test]
     fn reaction_accepts_spec_target_ref_without_event_alias() {
         let operation = op(
-            arkret_wire::events::EventKind::REACTION_ADD,
+            arkret_wire::EventKind::REACTION_ADD,
             json!({
                 "target_ref": "ak:event:01904100-0000-7000-8000-000000000001",
                 "sender": "did:web:alice.example",
                 "key": "+1"
             }),
         );
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::REACTION_ADD).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::REACTION_ADD).unwrap();
 
         assert!(validate_operation_schema(&operation, schema).is_ok());
         assert!(operation.payload.get("event_id").is_none());
@@ -757,10 +731,9 @@ mod agent_action_schema_tests {
     #[test]
     fn action_approve_accepts_complete_draft_bound_payload() {
         let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::AGENT_ACTION_APPROVE)
-                .unwrap();
+            operation_schema_for_kind(arkret_wire::EventKind::AGENT_ACTION_APPROVE).unwrap();
         let operation = op(
-            arkret_wire::events::EventKind::AGENT_ACTION_APPROVE,
+            arkret_wire::EventKind::AGENT_ACTION_APPROVE,
             json!({
                 "approval_id": "ak:agent_approval:01904100-0000-7000-8000-000000000001",
                 "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
@@ -785,10 +758,9 @@ mod agent_action_schema_tests {
     #[test]
     fn action_approve_rejects_legacy_minimal_payload() {
         let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::AGENT_ACTION_APPROVE)
-                .unwrap();
+            operation_schema_for_kind(arkret_wire::EventKind::AGENT_ACTION_APPROVE).unwrap();
         let operation = op(
-            arkret_wire::events::EventKind::AGENT_ACTION_APPROVE,
+            arkret_wire::EventKind::AGENT_ACTION_APPROVE,
             json!({ "request_id": "ak:agent-action-request:01904100-0000-7000-8000-000000000001" }),
         );
 
@@ -801,9 +773,9 @@ mod agent_action_schema_tests {
     #[test]
     fn action_reject_accepts_complete_draft_bound_payload() {
         let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::AGENT_ACTION_REJECT).unwrap();
+            operation_schema_for_kind(arkret_wire::EventKind::AGENT_ACTION_REJECT).unwrap();
         let operation = op(
-            arkret_wire::events::EventKind::AGENT_ACTION_REJECT,
+            arkret_wire::EventKind::AGENT_ACTION_REJECT,
             json!({
                 "rejection_id": "ak:agent_rejection:01904100-0000-7000-8000-000000000001",
                 "draft_id": "ak:agent_draft:01904100-0000-7000-8000-000000000001",
@@ -839,10 +811,9 @@ mod spec_sync_validator_tests {
 
     #[test]
     fn morph_create_accepts_metadata_and_rejects_content_conflict() {
-        let schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::MORPH_CREATE).unwrap();
+        let schema = operation_schema_for_kind(arkret_wire::EventKind::MORPH_CREATE).unwrap();
         let valid = op(
-            arkret_wire::events::EventKind::MORPH_CREATE,
+            arkret_wire::EventKind::MORPH_CREATE,
             json!({
                 "object": {
                     "id": "ak:morph:01904100-0000-7000-8000-000000000001",
@@ -856,7 +827,7 @@ mod spec_sync_validator_tests {
         assert!(validate_operation_schema(&valid, schema).is_ok());
 
         let content_conflict = op(
-            arkret_wire::events::EventKind::MORPH_CREATE,
+            arkret_wire::EventKind::MORPH_CREATE,
             json!({
                 "object": {
                     "id": "ak:morph:01904100-0000-7000-8000-000000000001",
@@ -876,9 +847,9 @@ mod spec_sync_validator_tests {
     #[test]
     fn morph_schema_refs_use_migrate_gate() {
         let update_schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::MORPH_UPDATE).unwrap();
+            operation_schema_for_kind(arkret_wire::EventKind::MORPH_UPDATE).unwrap();
         let update = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "patch": {"schema_refs": ["ak.schema.new"]}
@@ -890,7 +861,7 @@ mod spec_sync_validator_tests {
         );
 
         let migrate = op(
-            arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
+            arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ak.schema.old"],
@@ -901,13 +872,12 @@ mod spec_sync_validator_tests {
             }),
         );
         let migrate_schema =
-            operation_schema_for_kind(arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE)
-                .unwrap();
+            operation_schema_for_kind(arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE).unwrap();
         assert!(validate_operation_schema(&migrate, migrate_schema).is_ok());
         assert!(validate_morph_schema_migrate_capability(&migrate).is_ok());
 
         let non_additive = op(
-            arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
+            arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ak.schema.old"],
@@ -923,7 +893,7 @@ mod spec_sync_validator_tests {
         );
 
         let missing_gate = op(
-            arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
+            arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ak.schema.old"],
@@ -942,7 +912,7 @@ mod spec_sync_validator_tests {
         // state-aware preflight (`ProjectionState::check_morph_schema_migrate`),
         // not here.
         let breaking = op(
-            arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
+            arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ak.schema.old"],
@@ -957,7 +927,7 @@ mod spec_sync_validator_tests {
         // A transformation migration MUST carry non-empty transformation_rules[]
         // even at the stateless layer.
         let transformation_without_rules = op(
-            arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE,
+            arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE,
             json!({
                 "morph_id": "ak:morph:01904100-0000-7000-8000-000000000001",
                 "from_schema_refs": ["ak.schema.old"],
@@ -1214,7 +1184,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn device_authorize_accepts_service_attested_did_key_authority() {
         let operation = op(
-            arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
+            arkret_wire::EventKind::DEVICE_AUTHORIZE,
             json!({
                 "principal_id": "did:webvh:zQmZcDaFwUR8yQCZRkXoYEBi9hdzMSCCLASUVdwT1J4Qyc6:local.host:webvh:01kvqwpxssfq3bqm15rcd0g99x",
                 "device_id": "ak:device:019eefcb-5882-7861-bc30-3033fa32dcf6",
@@ -1242,7 +1212,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn device_authorize_rejects_multiple_authorization_bindings() {
         let operation = op(
-            arkret_wire::events::EventKind::DEVICE_AUTHORIZE,
+            arkret_wire::EventKind::DEVICE_AUTHORIZE,
             json!({
                 "principal_id": "did:web:alice.example",
                 "device_id": "ak:device:01904100-0000-7000-8000-000000000001",
@@ -1276,7 +1246,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_watches_is_rejected() {
         let operation = op(
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": "ak:relation:01904100-0000-7000-8000-000000000001",
                 "relation_kind": "watches",
@@ -1295,7 +1265,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_container_contains_is_rejected() {
         let operation = op(
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": "ak:relation:01904100-0000-7000-8000-000000000003",
                 "relation_kind": "contains",
@@ -1314,7 +1284,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_strand_subtask_contains_is_allowed() {
         let operation = op(
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": "ak:relation:01904100-0000-7000-8000-000000000006",
                 "relation_kind": "contains",
@@ -1328,7 +1298,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_weak_reference_is_allowed() {
         let operation = op(
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": "ak:relation:01904100-0000-7000-8000-000000000009",
                 "relation_kind": "references",
@@ -1344,7 +1314,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_actor_supplied_effective_scope_is_rejected() {
         let operation = op(
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation_id": "ak:relation:01904100-0000-7000-8000-00000000000f",
                 "relation_kind": "references",
@@ -1362,7 +1332,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn relation_create_nested_effective_scope_is_rejected() {
         let operation = op(
-            arkret_wire::events::EventKind::RELATION_CREATE,
+            arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "relation": {
                     "id": "ak:relation:01904100-0000-7000-8000-00000000001f",
@@ -1383,7 +1353,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn morph_update_morph_kind_is_immutable() {
         let bare = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_kind": "task"}
@@ -1394,7 +1364,7 @@ mod derived_relation_and_morph_immutability_tests {
             Err("morph_kind_immutable")
         );
         let enveloped = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000c",
                 "patch": {"morph_kind": {"$op": "set", "value": "task"}}
@@ -1412,7 +1382,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn morph_update_stage_axis_is_forbidden_wire() {
         let top_stage = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"stage": "done"}
@@ -1423,7 +1393,7 @@ mod derived_relation_and_morph_immutability_tests {
             Err("morph_stage_patch_forbidden")
         );
         let dotted = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields.lifecycle": "archived"}
@@ -1434,7 +1404,7 @@ mod derived_relation_and_morph_immutability_tests {
             Err("morph_forbidden_field_patch")
         );
         let object_replace = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000d",
                 "patch": {"fields": {"$op": "set", "value": {"stage_reason": "x"}}}
@@ -1449,7 +1419,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn morph_update_ordinary_field_patch_is_allowed() {
         let operation = op(
-            arkret_wire::events::EventKind::MORPH_UPDATE,
+            arkret_wire::EventKind::MORPH_UPDATE,
             json!({
                 "target_ref": "ak:morph:01904100-0000-7000-8000-00000000000e",
                 "patch": {"fields.severity": "high", "fields": {"$op": "set", "value": {"status": "open"}}}
@@ -1461,7 +1431,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn object_patch_reducer_managed_path_is_rejected() {
         let operation = op(
-            arkret_wire::events::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "target_ref": "ak:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"state": {"$op": "set", "value": "archived"}}
@@ -1476,7 +1446,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn object_patch_redactable_unset_is_rejected() {
         let operation = op(
-            arkret_wire::events::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "target_ref": "ak:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.summary": {"$op": "unset"}}
@@ -1491,7 +1461,7 @@ mod derived_relation_and_morph_immutability_tests {
     #[test]
     fn object_patch_non_redactable_metadata_unset_is_allowed() {
         let operation = op(
-            arkret_wire::events::EventKind::STRAND_UPDATE,
+            arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "target_ref": "ak:strand:01904100-0000-7000-8000-00000000000e",
                 "patch": {"metadata.title": {"$op": "unset"}}

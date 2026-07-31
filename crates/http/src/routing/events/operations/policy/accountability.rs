@@ -94,7 +94,7 @@ async fn accountability_grants_at_frozen_basis(
     records.sort_by(|left, right| left.event_id.as_bytes().cmp(right.event_id.as_bytes()));
     let mut grants = std::collections::BTreeMap::new();
     for record in records {
-        if record.kind != arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
+        if record.kind != arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
             || record.realm_id.as_deref() != Some(operation.realm_id.as_str())
         {
             continue;
@@ -156,7 +156,7 @@ fn merge_atomic_accountability_grants(
 ) {
     for operation in operations {
         if kinds::canonical_kind_string(operation)
-            != arkret_wire::events::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
+            != arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT
             || operation.realm_id.as_str() != realm_id
         {
             continue;
@@ -320,9 +320,9 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
     let is_message_or_reaction = matches!(
         kind,
         Some(
-            arkret_wire::events::EventKind::MESSAGE_CREATE
-                | arkret_wire::events::EventKind::REACTION_ADD
-                | arkret_wire::events::EventKind::REACTION_REMOVE
+            arkret_wire::EventKind::MESSAGE_CREATE
+                | arkret_wire::EventKind::REACTION_ADD
+                | arkret_wire::EventKind::REACTION_REMOVE
         )
     );
     if !is_message_or_reaction {

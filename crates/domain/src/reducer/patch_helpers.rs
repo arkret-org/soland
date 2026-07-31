@@ -15,8 +15,6 @@ use super::{DocumentVersionProjection, PushRouteCellValue, StrandProjection};
 /// `morph.md` §4.1 S3 — the opt-in Realm profile id that permits breaking /
 /// transformation schema migrations. Mirrors
 /// `artifacts/profiles/conformance-profiles.json#/profile_requirements`.
-pub(crate) const MORPH_SCHEMA_MIGRATION_TRANSFORMATIONS_PROFILE: &str =
-    "ak.profile.morph.schema_migration_transformations.v1";
 
 /// `morph.md` §4.1 — the canonical transformation rule ids understood by the
 /// `ak.profile.morph.schema_migration_transformations.v1`

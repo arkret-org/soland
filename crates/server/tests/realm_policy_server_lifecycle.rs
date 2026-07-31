@@ -572,7 +572,7 @@ async fn policy_server_same_basis_sibling_fails_closed() {
             arkret_identifiers::OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7()))
                 .unwrap(),
             arkret_identifiers::RealmId::new(CHILD_REALM).unwrap(),
-            arkret_wire::events::EventKind::REALM_POLICY_SERVER,
+            arkret_wire::EventKind::REALM_POLICY_SERVER,
             payload,
         )
     };

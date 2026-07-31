@@ -1364,10 +1364,7 @@ async fn full_event_from_projection_json(
 fn projection_row_is_redacted_message_tombstone(row: &Value) -> bool {
     matches!(
         row.get("event_kind").and_then(Value::as_str),
-        Some(
-            arkret_wire::events::EventKind::MESSAGE_CREATE
-                | arkret_wire::events::EventKind::MESSAGE_REVISE
-        )
+        Some(arkret_wire::EventKind::MESSAGE_CREATE | arkret_wire::EventKind::MESSAGE_REVISE)
     ) && row.get("payload").is_some_and(|payload| {
         payload.get("redacted").and_then(Value::as_bool) == Some(true)
             || payload.get("state").and_then(Value::as_str) == Some("redacted")
@@ -1452,7 +1449,7 @@ mod tests {
                 "ak:event:01904100-0000-7000-8000-00000000aa43".to_owned(),
             )
             .unwrap(),
-            arkret_wire::events::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::STRAND_CREATE,
             arkret_wire::ScopeRef::Circle {
                 realm_id: RealmId::new(TEST_REALM.to_owned()).unwrap(),
                 circle_id: arkret_identifiers::CircleId::new(circle_id.to_owned()).unwrap(),
@@ -1479,7 +1476,7 @@ mod tests {
         put_durable_event(
             &state,
             event.event_id.as_str(),
-            arkret_wire::events::EventKind::STRAND_CREATE,
+            arkret_wire::EventKind::STRAND_CREATE,
             event_envelope,
             created_at,
         )
@@ -1497,7 +1494,7 @@ mod tests {
         let row = soland_services::events::ProjectedEvent {
             event_id: event.event_id.to_string(),
             realm_id: TEST_REALM.to_owned(),
-            event_kind: arkret_wire::events::EventKind::STRAND_CREATE.to_owned(),
+            event_kind: arkret_wire::EventKind::STRAND_CREATE.to_owned(),
             operation_kind: "event".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-00000000aa43".to_owned()),
             sender: Some(TEST_ACTOR.to_owned()),
@@ -1603,19 +1600,19 @@ mod tests {
         });
         let message = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa41",
-            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MESSAGE_CREATE,
             plaintext_payload.clone(),
             created_at,
         );
         let revise = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa43",
-            arkret_wire::events::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MESSAGE_REVISE,
             revised_payload.clone(),
             revised_at,
         );
         let redaction = operation_at(
             "ak:operation:01904100-0000-7000-8000-00000000aa42",
-            arkret_wire::events::EventKind::MESSAGE_REDACT,
+            arkret_wire::EventKind::MESSAGE_REDACT,
             json!({
                 "event_id": TEST_REDACTION_EVENT,
                 "message_id": TEST_MESSAGE_ID,
@@ -1633,10 +1630,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_MESSAGE_EVENT,
-            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::EventKind::MESSAGE_CREATE,
             json!({
                 "event_id": TEST_MESSAGE_EVENT,
-                "kind": arkret_wire::events::EventKind::MESSAGE_CREATE,
+                "kind": arkret_wire::EventKind::MESSAGE_CREATE,
                 "realm_id": TEST_REALM,
                 "scope_ref": {"kind": "realm", "realm_id": TEST_REALM},
                 "actor_id": TEST_ACTOR,
@@ -1653,10 +1650,10 @@ mod tests {
         put_durable_event(
             &state,
             TEST_REVISE_EVENT,
-            arkret_wire::events::EventKind::MESSAGE_REVISE,
+            arkret_wire::EventKind::MESSAGE_REVISE,
             json!({
                 "event_id": TEST_REVISE_EVENT,
-                "kind": arkret_wire::events::EventKind::MESSAGE_REVISE,
+                "kind": arkret_wire::EventKind::MESSAGE_REVISE,
                 "realm_id": TEST_REALM,
                 "scope_ref": {"kind": "realm", "realm_id": TEST_REALM},
                 "actor_id": TEST_ACTOR,

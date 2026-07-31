@@ -80,12 +80,12 @@ async fn seed_realm_create_proposal_policy(
         .await
         .unwrap()
         .into_iter()
-        .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
     {
         return arkret_wire::EventId::new(record.event_id).unwrap();
     }
     let event = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::REALM_CREATE,
+        arkret_wire::EventKind::REALM_CREATE,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
         },
@@ -114,7 +114,7 @@ async fn seed_realm_create_proposal_policy(
             actor_id: principal_id.to_owned(),
             actor_seq: 0,
             realm_id: Some(realm_id.to_string()),
-            kind: arkret_wire::events::EventKind::REALM_CREATE.to_owned(),
+            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
             schema_id: "ak.schema.event_envelope.v1".to_owned(),
             canonical_digest,
             canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
@@ -392,7 +392,7 @@ pub(crate) fn fixture_recovery_publication_authority_context(
     .unwrap();
     let scope_ref = arkret_wire::ScopeRef::Realm { realm_id };
     let authority_set_policy = arkret_wire::AuthoritySetPolicy {
-        schema: arkret_wire::AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        schema: arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
         authority_set_id: arkret_wire::RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
         policy_kind: arkret_wire::AuthoritySetPolicyKind::PrincipalControl,
         scope_ref: scope_ref.clone(),
@@ -911,7 +911,7 @@ pub(crate) async fn post_recovery_policy(
         .collect();
     let logical = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed) & 0xffff;
     let mut event = arkret_wire::Event::new(
-        arkret_wire::events::EventKind::POLICY_SET,
+        arkret_wire::EventKind::POLICY_SET,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm.clone(),
         },

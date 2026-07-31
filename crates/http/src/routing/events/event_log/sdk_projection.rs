@@ -168,7 +168,7 @@ pub(in crate::routing) fn projection_operation_from_event(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
 ) -> Option<Operation> {
-    if arkret_wire::events::EventKind::try_new(&parsed.kind).is_none() {
+    if arkret_wire::EventKind::try_new(&parsed.kind).is_none() {
         tracing::debug!(kind = %parsed.kind, "projection: kind is not registered");
         return None;
     }
@@ -207,7 +207,7 @@ pub(in crate::routing) fn projection_operation_from_event(
     // lives on the envelope, not the payload, so surface it on the projection
     // operation for this kind (scoped to avoid changing other reducers' payload
     // shape).
-    if parsed.kind == arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE
+    if parsed.kind == arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE
         && let Some(requirements) = envelope.get("requirements")
     {
         payload_object
@@ -220,12 +220,12 @@ pub(in crate::routing) fn projection_operation_from_event(
     // Scoped to this kind so other reducers keep their payload shape.
     if matches!(
         parsed.kind.as_str(),
-        arkret_wire::events::EventKind::RSVP_SET | arkret_wire::events::EventKind::STRAND_UPDATE
+        arkret_wire::EventKind::RSVP_SET | arkret_wire::EventKind::STRAND_UPDATE
     ) && let Some(causal_refs) = envelope.get("causal_refs")
     {
         payload_object.insert("envelope_causal_refs".to_owned(), causal_refs.clone());
     }
-    if parsed.kind == arkret_wire::events::EventKind::RSVP_SET
+    if parsed.kind == arkret_wire::EventKind::RSVP_SET
         && let Some(digest) = envelope
             .get("proofs")
             .and_then(Value::as_array)
@@ -236,12 +236,12 @@ pub(in crate::routing) fn projection_operation_from_event(
             .entry("canonical_event_digest".to_owned())
             .or_insert_with(|| digest.clone());
     }
-    if parsed.kind == arkret_wire::events::EventKind::APPLET_REGISTRATION
+    if parsed.kind == arkret_wire::EventKind::APPLET_REGISTRATION
         && let Some(scope_ref) = envelope.get("scope_ref")
     {
         payload_object.insert("accepted_scope_ref".to_owned(), scope_ref.clone());
     }
-    if parsed.kind == arkret_wire::events::EventKind::RELATION_CREATE {
+    if parsed.kind == arkret_wire::EventKind::RELATION_CREATE {
         normalize_relation_create_payload(payload_object, parsed);
     }
     if let Some(target_ref) = payload_object
@@ -284,7 +284,7 @@ pub(in crate::routing) fn projection_operation_from_event(
             .entry("actor_seq".to_owned())
             .or_insert_with(|| Value::from(parsed.actor_seq));
     }
-    if parsed.kind == arkret_wire::events::EventKind::MORPH_SCHEMA_MIGRATE {
+    if parsed.kind == arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE {
         if let Some(authorization_ref) = parsed.authorized_refs.first() {
             payload_object
                 .entry("authorization_ref".to_owned())
@@ -316,9 +316,9 @@ pub(in crate::routing) fn projection_operation_from_event(
     }
     if matches!(
         parsed.kind.as_str(),
-        arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE
-            | arkret_wire::events::EventKind::AGENT_KEY_REVOKE
-            | arkret_wire::events::EventKind::CALL_RECORDING_START
+        arkret_wire::EventKind::AGENT_KEY_AUTHORIZE
+            | arkret_wire::EventKind::AGENT_KEY_REVOKE
+            | arkret_wire::EventKind::CALL_RECORDING_START
     ) {
         payload_object.insert(
             "accepted_event_id".to_owned(),
@@ -495,7 +495,7 @@ mod projection_operation_tests {
     #[test]
     fn accepted_event_id_is_only_projected_for_agent_key_authorize() {
         let agent_key = projection_operation_from_event(
-            &parsed(arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE),
+            &parsed(arkret_wire::EventKind::AGENT_KEY_AUTHORIZE),
             &json!({ "payload": { "agent_id": "did:web:agent.example", "key_id": "ak:agent_key:test" } }),
         )
         .unwrap();
@@ -508,14 +508,14 @@ mod projection_operation_tests {
         );
 
         let device_authorize = projection_operation_from_event(
-            &parsed(arkret_wire::events::EventKind::DEVICE_AUTHORIZE),
+            &parsed(arkret_wire::EventKind::DEVICE_AUTHORIZE),
             &json!({ "payload": {} }),
         )
         .unwrap();
         assert!(device_authorize.payload.get("accepted_event_id").is_none());
 
         let agent_key_revoke = projection_operation_from_event(
-            &parsed(arkret_wire::events::EventKind::AGENT_KEY_REVOKE),
+            &parsed(arkret_wire::EventKind::AGENT_KEY_REVOKE),
             &json!({ "payload": {} }),
         )
         .unwrap();
@@ -530,7 +530,7 @@ mod projection_operation_tests {
 
     #[test]
     fn agent_key_authorize_projection_passes_reducer_schema_validation() {
-        let kind = arkret_wire::events::EventKind::AGENT_KEY_AUTHORIZE;
+        let kind = arkret_wire::EventKind::AGENT_KEY_AUTHORIZE;
         let operation = projection_operation_from_event(
             &parsed(kind),
             &json!({
@@ -579,8 +579,8 @@ mod projection_operation_tests {
     #[test]
     fn realm_bootstrap_join_and_discovery_facets_are_projectable() {
         for (kind, value) in [
-            (arkret_wire::events::EventKind::REALM_JOIN_RULE, "invite"),
-            (arkret_wire::events::EventKind::REALM_DISCOVERY, "listed"),
+            (arkret_wire::EventKind::REALM_JOIN_RULE, "invite"),
+            (arkret_wire::EventKind::REALM_DISCOVERY, "listed"),
         ] {
             let operation = projection_operation_from_event(
                 &parsed(kind),
@@ -622,9 +622,7 @@ pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
     // server-stamped `effective_scope` above, derived from its Strand at ingest.
     // There is deliberately no client-supplied fallback, so a message cannot
     // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str)
-        == Some(arkret_wire::events::EventKind::MESSAGE_CREATE)
-    {
+    if object.get("kind").and_then(Value::as_str) == Some(arkret_wire::EventKind::MESSAGE_CREATE) {
         return None;
     }
     // Non-message events (e.g. ak.strand.create / ak.strand.update) legitimately
@@ -670,7 +668,7 @@ pub(crate) fn sdk_event_for_state(
     record: &CanonicalEventRecord,
 ) -> Result<Event, AppError> {
     let realm_id = canonical_realm_id_for_record(record);
-    let actor_erased = record.kind != arkret_wire::events::EventKind::AUDIT_ERASURE_RECEIPT
+    let actor_erased = record.kind != arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT
         && realm_id.as_deref().is_some_and(|realm_id| {
             actor_erased_in_realm(&state.projections().snapshot(), &record.actor_id, realm_id)
         });

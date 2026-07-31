@@ -393,7 +393,7 @@ pub async fn realm_basis(
                 AppError::internal(format!("read accepted Realm bootstrap events: {error}"))
             })?;
         if accepted.iter().any(|record| {
-            record.kind == arkret_wire::events::EventKind::REALM_CREATE
+            record.kind == arkret_wire::EventKind::REALM_CREATE
                 && record.realm_id.as_deref() == Some(body.realm_id.as_str())
         }) {
             return Err(AppError::conflict(

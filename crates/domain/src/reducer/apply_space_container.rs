@@ -27,19 +27,18 @@ impl ProjectionState {
         // `ak.space.restore` requires Archived.
         // `ak.space.tombstone` requires {Active, Archived}.
         let (allowed_source, reason): (&[SpaceContainerLifecycleState], &'static str) = match kind {
-            arkret_wire::events::EventKind::SPACE_CREATE => return Ok(()),
-            arkret_wire::events::EventKind::SPACE_UPDATE
-            | arkret_wire::events::EventKind::SPACE_PARENT => {
+            arkret_wire::EventKind::SPACE_CREATE => return Ok(()),
+            arkret_wire::EventKind::SPACE_UPDATE | arkret_wire::EventKind::SPACE_PARENT => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_wire::events::EventKind::SPACE_ARCHIVE => {
+            arkret_wire::EventKind::SPACE_ARCHIVE => {
                 (&[SpaceContainerLifecycleState::Active], "space_not_active")
             }
-            arkret_wire::events::EventKind::SPACE_RESTORE => (
+            arkret_wire::EventKind::SPACE_RESTORE => (
                 &[SpaceContainerLifecycleState::Archived],
                 "space_not_archived",
             ),
-            arkret_wire::events::EventKind::SPACE_TOMBSTONE => (
+            arkret_wire::EventKind::SPACE_TOMBSTONE => (
                 &[
                     SpaceContainerLifecycleState::Active,
                     SpaceContainerLifecycleState::Archived,
@@ -541,7 +540,7 @@ impl ProjectionState {
             None => return Ok(()),
         };
         match kind {
-            arkret_wire::events::EventKind::STRAND_CREATE => {
+            arkret_wire::EventKind::STRAND_CREATE => {
                 let Some(object) = operation.payload.get("object").and_then(Value::as_object)
                 else {
                     return Ok(());
@@ -568,8 +567,7 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            arkret_wire::events::EventKind::STRAND_MOVE
-            | arkret_wire::events::EventKind::STRAND_REORDER => {
+            arkret_wire::EventKind::STRAND_MOVE | arkret_wire::EventKind::STRAND_REORDER => {
                 let Some((_, list_space_id, _)) =
                     strand_position_from_lifecycle_payload(&operation.payload)
                 else {
@@ -593,7 +591,7 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_wire::events::EventKind::SPACE_PARENT => {
+            arkret_wire::EventKind::SPACE_PARENT => {
                 let Some(container_space_id) = space_container_id_from_payload(&operation.payload)
                 else {
                     return Ok(());
@@ -616,8 +614,8 @@ impl ProjectionState {
                     false,
                 )
             }
-            arkret_wire::events::EventKind::CONTAINER_MOVE_ITEM
-            | arkret_wire::events::EventKind::CONTAINER_REBALANCE => {
+            arkret_wire::EventKind::CONTAINER_MOVE_ITEM
+            | arkret_wire::EventKind::CONTAINER_REBALANCE => {
                 let Some(container_space_id) = operation
                     .payload
                     .get("to_container_id")

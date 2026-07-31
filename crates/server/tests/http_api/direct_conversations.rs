@@ -79,10 +79,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
         (frontier.next_actor_seq, frontier.frontier_event_ids)
     } else {
         assert_eq!(frontier_response.status_code, Some(StatusCode::NOT_FOUND));
-        assert_eq!(
-            drafts[0]["kind"],
-            arkret_wire::events::EventKind::REALM_CREATE
-        );
+        assert_eq!(drafts[0]["kind"], arkret_wire::EventKind::REALM_CREATE);
         (0, Vec::new())
     };
     let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{ALICE_SIGNING_DEVICE}"))
@@ -95,7 +92,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
     let mut events = Vec::with_capacity(drafts.len());
     for draft in drafts {
         let mut draft = (*draft).clone();
-        if draft["kind"] == arkret_wire::events::EventKind::CAPABILITY_GRANT {
+        if draft["kind"] == arkret_wire::EventKind::CAPABILITY_GRANT {
             let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant =
                 serde_json::from_value(draft["payload"]["grant"].clone()).unwrap();
             grant.proofs = vec![

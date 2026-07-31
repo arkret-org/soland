@@ -1,3 +1,4 @@
+use arkret_wire::SchemaId;
 use sha2::{Digest as _, Sha256};
 use soland_services::identity::RecoverySessionState as RecoverySessionServiceState;
 
@@ -244,7 +245,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::events::EventKind::DEVICE_AUTHORIZE
+                    && event.kind == arkret_wire::EventKind::DEVICE_AUTHORIZE
                     && event.envelope["payload"]["device_id"].as_str() == Some(member)
             })
             .map(|event| event.actor_seq)
@@ -253,7 +254,7 @@ async fn verify_device_quorum_rule_at_policy_basis(
             .iter()
             .filter(|event| {
                 covered.contains(&event.canonical_digest)
-                    && event.kind == arkret_wire::events::EventKind::DEVICE_REVOKE
+                    && event.kind == arkret_wire::EventKind::DEVICE_REVOKE
                     && event.envelope["payload"]["device_id"].as_str() == Some(member)
             })
             .map(|event| event.actor_seq)
@@ -288,7 +289,7 @@ async fn enrollment_recovery_publication_authority_context(
     verify_device_quorum_rule_at_policy_basis(state, active, &policy).await?;
 
     let authority_set_policy = AuthoritySetPolicy {
-        schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
         authority_set_id: RECOVERY_IDENTITY_REANCHOR_AUTHORITY_SET_ID.to_owned(),
         policy_kind: AuthoritySetPolicyKind::PrincipalControl,
         scope_ref: arkret_wire::ScopeRef::Realm {
@@ -354,7 +355,7 @@ async fn cross_signing_recovery_publication_authority_context(
     let source = events
         .iter()
         .filter(|event| {
-            event.kind == arkret_wire::events::EventKind::CROSS_SIGNING_PUBLISH
+            event.kind == arkret_wire::EventKind::CROSS_SIGNING_PUBLISH
                 && event.envelope["payload"]["generation"].as_u64() == Some(generation)
         })
         .max_by_key(|event| event.actor_seq)
@@ -377,7 +378,7 @@ async fn cross_signing_recovery_publication_authority_context(
         realm_id: realm_id.clone(),
     };
     let authority_set_policy = AuthoritySetPolicy {
-        schema: AUTHORITY_SET_POLICY_SCHEMA.to_owned(),
+        schema: SchemaId::AUTHORITY_SET_POLICY_V1.to_owned(),
         authority_set_id: RECOVERY_CROSS_SIGNING_AUTHORITY_SET_ID.to_owned(),
         policy_kind: AuthoritySetPolicyKind::PrincipalControl,
         scope_ref: scope_ref.clone(),
@@ -391,8 +392,8 @@ async fn cross_signing_recovery_publication_authority_context(
             rule_id: "cross_signing".to_owned(),
             issuer_role: AuthoritySetIssuerRole::CrossSigningSelfSigning,
             allowed_actions: vec![
-                arkret_wire::events::EventKind::DEVICE_AUTHORIZE.to_owned(),
-                arkret_wire::events::EventKind::DEVICE_LIST_UPDATE.to_owned(),
+                arkret_wire::EventKind::DEVICE_AUTHORIZE.to_owned(),
+                arkret_wire::EventKind::DEVICE_LIST_UPDATE.to_owned(),
             ],
             issuers: vec![AuthoritySetIssuer {
                 verification_method: DidUrl::new(issuer.to_owned()).map_err(|error| {

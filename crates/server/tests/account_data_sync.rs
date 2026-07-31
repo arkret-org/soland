@@ -404,10 +404,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
     let phone_sync = account_subscribe_frame(state.clone(), &phone, "catchup=true").await;
     let event = account_data_entry(&phone_sync, account_data_key)
         .unwrap_or_else(|| panic!("latest account_data Event missing: {phone_sync}"));
-    assert_eq!(
-        event["kind"],
-        arkret_wire::events::EventKind::ACCOUNT_DATA_SET
-    );
+    assert_eq!(event["kind"], arkret_wire::EventKind::ACCOUNT_DATA_SET);
     assert_eq!(
         event["actor_id"].as_str(),
         Some(state.service_id().as_str())
@@ -453,7 +450,7 @@ async fn rest_account_data_overwrite_syncs_latest_canonical_event_and_tombstones
         .unwrap()
         .into_iter()
         .filter(|record| {
-            record.kind == arkret_wire::events::EventKind::ACCOUNT_DATA_SET
+            record.kind == arkret_wire::EventKind::ACCOUNT_DATA_SET
                 && record
                     .envelope
                     .get("payload")

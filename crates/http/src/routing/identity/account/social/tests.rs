@@ -101,7 +101,7 @@ fn direct_realm_create_payload_is_sdk_schema_valid() {
 
     arkret_schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_wire::events::EventKind::REALM_CREATE, &payload)
+        .validate_payload(arkret_wire::EventKind::REALM_CREATE, &payload)
         .unwrap();
     assert!(payload.get("plaintext_visible_services").is_none());
 
@@ -131,7 +131,7 @@ fn direct_member_join_payload_is_sdk_schema_valid() {
 
     arkret_schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_wire::events::EventKind::MEMBER_STATE, &payload)
+        .validate_payload(arkret_wire::EventKind::MEMBER_STATE, &payload)
         .unwrap();
     assert_eq!(
         payload.get("membership").and_then(Value::as_str),
@@ -168,7 +168,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
 
     arkret_schema::event_payload_validator_catalog()
         .unwrap()
-        .validate_payload(arkret_wire::events::EventKind::STRAND_CREATE, &payload)
+        .validate_payload(arkret_wire::EventKind::STRAND_CREATE, &payload)
         .unwrap();
 
     let object = payload
@@ -200,7 +200,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
         "did:web:alice.example",
         "ak:event:01964137-0000-7000-8000-000000000103",
         realm_id.as_str(),
-        arkret_wire::events::EventKind::STRAND_CREATE,
+        arkret_wire::EventKind::STRAND_CREATE,
         payload,
     )
     .unwrap();
@@ -297,7 +297,7 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
     let mut message_op = arkret_event_draft::Operation::create(
         direct_operation_id().unwrap(),
         arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
-        arkret_wire::events::EventKind::MESSAGE_CREATE,
+        arkret_wire::EventKind::MESSAGE_CREATE,
         message_payload,
     );
     let event_id = message_op.operation_id.to_string();
@@ -373,7 +373,7 @@ async fn participant_leave_retires_direct_binding() {
     let leave = arkret_event_draft::Operation::create(
         direct_operation_id().unwrap(),
         arkret_identifiers::RealmId::new(realm_id).unwrap(),
-        arkret_wire::events::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::MEMBER_STATE,
         leave_payload,
     );
     crate::routing::accept_local_operations(&state, bob, std::slice::from_ref(&leave))

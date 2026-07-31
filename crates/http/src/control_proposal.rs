@@ -33,7 +33,7 @@ fn policy_from_realm_create(
     realm_id: &RealmId,
     event: &Event,
 ) -> Result<Option<ControlProposalDecisionPolicy>, String> {
-    if event.kind != arkret_wire::events::EventKind::REALM_CREATE {
+    if event.kind != arkret_wire::EventKind::REALM_CREATE {
         return Ok(None);
     }
     // A proposal receipt acknowledges ingress before semantic admission. Read
@@ -92,7 +92,7 @@ pub(crate) async fn control_proposal_policy(
     let mut resolved = None;
     for record in records
         .into_iter()
-        .filter(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
+        .filter(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
     {
         if resolved.is_some() {
             return Err("Realm has more than one canonical create policy".to_owned());
@@ -175,7 +175,7 @@ pub(crate) async fn mint_control_proposal_receipts(
             .map_err(|error| error.to_string())?;
     let is_closed_genesis = events
         .first()
-        .is_some_and(|event| event.kind == arkret_wire::events::EventKind::REALM_CREATE);
+        .is_some_and(|event| event.kind == arkret_wire::EventKind::REALM_CREATE);
     let authority_set_ref = select_proposal_receipt_authority(
         notary_authority_set_ref,
         bootstrap_ingress_authority_set_ref,

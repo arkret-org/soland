@@ -13,6 +13,7 @@ use arkret_models_collaboration::account_lifecycle::{
     ConsentCellList, ConsentCellView, ConsentRequestRequestBody, ConsentState,
     ConsentUpdateRequestBody,
 };
+use arkret_wire::AccountDataKey;
 use chrono::{DateTime, Utc};
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
@@ -32,7 +33,6 @@ use crate::routing::identity::device_messages::{
 use crate::state::AppState;
 use crate::{JsonResult, ids, json_ok};
 
-const ACCOUNT_DATA_KEY_INVITE_QUARANTINE: &str = "ak.account.invite_quarantine";
 const INVITE_QUARANTINE_ORIGIN_DEVICE: &str = "server:consent_revoke";
 
 pub(super) fn router() -> Router {
@@ -1423,7 +1423,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     }
     let Some(existing) = state
         .account_data()
-        .entry(holder, ACCOUNT_DATA_KEY_INVITE_QUARANTINE)
+        .entry(holder, AccountDataKey::ACCOUNT_INVITE_QUARANTINE)
         .await
         .map_err(|error| AppError::internal(error.to_string()))?
     else {
@@ -1467,7 +1467,7 @@ async fn invalidate_quarantined_invites_for_revoke(
     );
     let record = AccountDataState {
         actor_id: holder.to_owned(),
-        account_data_key: ACCOUNT_DATA_KEY_INVITE_QUARANTINE.to_owned(),
+        account_data_key: AccountDataKey::ACCOUNT_INVITE_QUARANTINE.to_owned(),
         revision: existing.revision + 1,
         payload: Value::Object(object),
         tombstone: false,
@@ -1492,7 +1492,7 @@ async fn invalidate_quarantined_invites_for_revoke(
         ACCOUNT_DATA_UPDATE_TYPE,
         json!({
             "operation": "put",
-            "account_data_key": ACCOUNT_DATA_KEY_INVITE_QUARANTINE,
+            "account_data_key": AccountDataKey::ACCOUNT_INVITE_QUARANTINE,
             "revision": record.revision,
             "content": record.payload.clone(),
             "updated_at": record.updated_at,

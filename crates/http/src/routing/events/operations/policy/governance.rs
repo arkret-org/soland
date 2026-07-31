@@ -32,12 +32,12 @@ pub(super) fn operation_is_space_container(operation: &Operation) -> bool {
     matches!(
         kinds::canonical_kind_for_operation(operation),
         Some(
-            arkret_wire::events::EventKind::SPACE_CREATE
-                | arkret_wire::events::EventKind::SPACE_UPDATE
-                | arkret_wire::events::EventKind::SPACE_PARENT
-                | arkret_wire::events::EventKind::SPACE_ARCHIVE
-                | arkret_wire::events::EventKind::SPACE_RESTORE
-                | arkret_wire::events::EventKind::SPACE_TOMBSTONE
+            arkret_wire::EventKind::SPACE_CREATE
+                | arkret_wire::EventKind::SPACE_UPDATE
+                | arkret_wire::EventKind::SPACE_PARENT
+                | arkret_wire::EventKind::SPACE_ARCHIVE
+                | arkret_wire::EventKind::SPACE_RESTORE
+                | arkret_wire::EventKind::SPACE_TOMBSTONE
         )
     )
 }
@@ -46,8 +46,7 @@ pub(super) async fn validate_member_state_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::events::EventKind::MEMBER_STATE)
+    if kinds::canonical_kind_for_operation(operation) != Some(arkret_wire::EventKind::MEMBER_STATE)
     {
         return Ok(());
     }
@@ -255,7 +254,7 @@ pub(super) async fn validate_set_default_strand_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::events::EventKind::REALM_SET_DEFAULT_STRAND)
+        != Some(arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND)
     {
         return Ok(());
     }
@@ -355,7 +354,7 @@ pub(super) async fn validate_realm_organization_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::events::EventKind::REALM_ORGANIZATION)
+        != Some(arkret_wire::EventKind::REALM_ORGANIZATION)
     {
         return Ok(());
     }
@@ -432,24 +431,20 @@ pub(super) async fn validate_moderation_event_policy(
         return Ok(());
     };
     let actions = match kind {
-        arkret_wire::events::EventKind::MODERATION_DECISION => &[
+        arkret_wire::EventKind::MODERATION_DECISION => &[
             "ak.realm.moderation_policy",
             "ak.policy.manage",
             "ak.moderation.decision",
         ][..],
-        arkret_wire::events::EventKind::MODERATION_DECISION_LIFT => &[
+        arkret_wire::EventKind::MODERATION_DECISION_LIFT => &[
             "ak.realm.moderation_policy",
             "ak.policy.manage",
             "ak.moderation.decision.lift",
         ][..],
-        arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT => {
-            &["ak.moderation.appeal.submit"][..]
-        }
-        arkret_wire::events::EventKind::MODERATION_APPEAL_REVIEW
-        | arkret_wire::events::EventKind::MODERATION_APPEAL_DECISION
-        | arkret_wire::events::EventKind::MODERATION_APPEAL_CLOSE => {
-            &["ak.moderation.appeal.review"][..]
-        }
+        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT => &["ak.moderation.appeal.submit"][..],
+        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW
+        | arkret_wire::EventKind::MODERATION_APPEAL_DECISION
+        | arkret_wire::EventKind::MODERATION_APPEAL_CLOSE => &["ak.moderation.appeal.review"][..],
         _ => return Ok(()),
     };
 
@@ -462,7 +457,7 @@ pub(super) async fn validate_moderation_event_policy(
 
     // §5.5.2 appellant-withdrawal: an appellant MAY close their own appeal
     // without the review capability (closer == cell appellant).
-    if kind == arkret_wire::events::EventKind::MODERATION_APPEAL_CLOSE
+    if kind == arkret_wire::EventKind::MODERATION_APPEAL_CLOSE
         && moderation_close_is_appellant_withdrawal(state, operation, actor)
     {
         return Ok(());
@@ -470,7 +465,7 @@ pub(super) async fn validate_moderation_event_policy(
 
     let realm_id = operation.realm_id.as_str();
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
-    if kind == arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT
+    if kind == arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT
         && members.iter().any(|member| member == actor)
     {
         return Ok(());
@@ -499,7 +494,7 @@ pub(super) async fn validate_realm_policy_server_policy(
     operation: &Operation,
 ) -> Result<(), &'static str> {
     if kinds::canonical_kind_for_operation(operation)
-        != Some(arkret_wire::events::EventKind::REALM_POLICY_SERVER)
+        != Some(arkret_wire::EventKind::REALM_POLICY_SERVER)
     {
         return Ok(());
     }
@@ -531,9 +526,7 @@ pub(super) async fn validate_call_recording_start_policy(
     state: &AppState,
     operation: &Operation,
 ) -> Result<(), &'static str> {
-    if kinds::canonical_kind_string(operation)
-        != arkret_wire::events::EventKind::CALL_RECORDING_START
-    {
+    if kinds::canonical_kind_string(operation) != arkret_wire::EventKind::CALL_RECORDING_START {
         return Ok(());
     }
     let payload = call_recording_start_payload(operation)?;
@@ -616,14 +609,14 @@ pub(super) fn moderation_actor<'a>(
     kind: &str,
 ) -> Result<Option<&'a str>, &'static str> {
     let actor = match kind {
-        arkret_wire::events::EventKind::MODERATION_DECISION => operation
+        arkret_wire::EventKind::MODERATION_DECISION => operation
             .payload
             .get("issuer")
             .or_else(|| operation.payload.get("decided_by"))
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_decision_issuer_missing")?,
-        arkret_wire::events::EventKind::MODERATION_DECISION_LIFT => {
+        arkret_wire::EventKind::MODERATION_DECISION_LIFT => {
             return Ok(operation
                 .payload
                 .get("sender")
@@ -631,20 +624,20 @@ pub(super) fn moderation_actor<'a>(
                 .and_then(Value::as_str)
                 .filter(|value| !value.trim().is_empty()));
         }
-        arkret_wire::events::EventKind::MODERATION_APPEAL_SUBMIT => operation
+        arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT => operation
             .payload
             .get("appellant")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        arkret_wire::events::EventKind::MODERATION_APPEAL_REVIEW
-        | arkret_wire::events::EventKind::MODERATION_APPEAL_DECISION => operation
+        arkret_wire::EventKind::MODERATION_APPEAL_REVIEW
+        | arkret_wire::EventKind::MODERATION_APPEAL_DECISION => operation
             .payload
             .get("reviewer")
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or("moderation_appeal_actor_missing")?,
-        arkret_wire::events::EventKind::MODERATION_APPEAL_CLOSE => operation
+        arkret_wire::EventKind::MODERATION_APPEAL_CLOSE => operation
             .payload
             .get("closer")
             .and_then(Value::as_str)

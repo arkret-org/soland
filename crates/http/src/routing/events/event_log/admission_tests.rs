@@ -19,7 +19,7 @@ fn legacy_ephemeral_kinds_are_not_registered_event_kinds() {
         "ak.key.verification.mac",
     ] {
         assert!(
-            arkret_wire::events::EventKind::try_new(kind).is_none(),
+            arkret_wire::EventKind::try_new(kind).is_none(),
             "{kind} must not be a registered durable Event kind"
         );
         // The entry gate stays keyed off the live SDK predicate rather than a
@@ -56,8 +56,8 @@ fn terminal_realm_blocks_non_audit_kind() {
 #[test]
 fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
     assert!(frozen_realm_check(true, "ak.message.create").is_some());
-    assert!(frozen_realm_check(true, arkret_wire::events::EventKind::REALM_FREEZE).is_none());
-    assert!(frozen_realm_check(true, arkret_wire::events::EventKind::REALM_DESTROY).is_none());
+    assert!(frozen_realm_check(true, arkret_wire::EventKind::REALM_FREEZE).is_none());
+    assert!(frozen_realm_check(true, arkret_wire::EventKind::REALM_DESTROY).is_none());
     assert!(frozen_realm_check(true, "ak.audit.accessed").is_none());
     assert!(frozen_realm_check(false, "ak.message.create").is_none());
 }

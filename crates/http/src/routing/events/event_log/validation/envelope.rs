@@ -12,7 +12,6 @@ use super::payload_shape::{
     validate_space_container_lifecycle_payload,
 };
 
-const E2EE_RELAXED_PROFILE: &str = "ak.profile.e2ee_relaxed.v1";
 const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [
     "ak.event_envelope.v1",
     "ak.profile.core_event_store.v1",
@@ -30,7 +29,7 @@ fn event_digest_suite(
     realm_id: &str,
     object: &serde_json::Map<String, Value>,
 ) -> Result<String, EventValidationError> {
-    let suite = if kind == arkret_wire::events::EventKind::REALM_CREATE {
+    let suite = if kind == arkret_wire::EventKind::REALM_CREATE {
         realm_create_digest_algorithm(object)
     } else {
         state
@@ -136,10 +135,9 @@ mod control_move_seal_basis_tests {
         // MUST accept it as a genesis followup alongside the other realm.*
         // policy moves, else the whole create batch is `status=partial`.
         assert!(is_realm_bootstrap_followup_kind(
-            arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY
+            arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY
         ));
-        let obj =
-            control_move_with_effects(arkret_wire::events::EventKind::REALM_HISTORY_SHARING_POLICY);
+        let obj = control_move_with_effects(arkret_wire::EventKind::REALM_HISTORY_SHARING_POLICY);
         // As a recognized bootstrap followup it passes without seal_basis…
         validate_control_move_seal_basis(&obj, true).unwrap();
         // …but a non-bootstrap effects-bearing Control Move still requires it.

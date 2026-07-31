@@ -10,7 +10,7 @@ use arkret_models_identity::{
     OrganizationRegistrationStatus, next_organization_registration_generation,
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_wire::{Did, DidUrl, Hash, PayloadProof};
+use arkret_wire::{Did, DidUrl, Hash, PayloadProof, ProofContextId};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use soland_storage::{
@@ -180,7 +180,7 @@ impl OrganizationRegistrationService {
                     .unwrap_or(&challenge_digest)
             ),
             organization_id: request.organization_id,
-            purpose: arkret_models_identity::ORGANIZATION_REGISTRATION_CONTROL_PURPOSE.to_owned(),
+            purpose: ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1.to_owned(),
             nonce,
             audience: issuer_service_id.clone(),
             origin: origin.to_owned(),
@@ -1206,7 +1206,7 @@ fn control_transcript_bytes(
     proof: &PayloadProof,
 ) -> Result<Vec<u8>, OrganizationRegistrationError> {
     arkret_canonical::canonical_json_bytes(&json!({
-        "context": arkret_models_identity::ORGANIZATION_REGISTRATION_CONTROL_PURPOSE,
+        "context": ProofContextId::ORGANIZATION_REGISTRATION_CONTROL_PROOF_V1,
         "challenge_id": challenge_id,
         "organization_id": organization_id,
         "local_admin_subject": local_admin_subject,
