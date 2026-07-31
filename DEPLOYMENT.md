@@ -332,8 +332,14 @@ Scrape `http://127.0.0.1:9090/metrics` for:
 - `soland_request_total{op,status}`
 - `soland_request_duration_seconds` histogram buckets
 - `soland_db_pool_in_use`
-- `soland_federation_outbox_depth`
-- `soland_federation_outbox_dead_letter_total` (P5 — counter; alert on
+- `soland_federation_outbox_depth` (rows still owed to a peer: `pending` +
+  `leased`)
+- `soland_federation_outbox_state_depth{state,peer}` — per-peer breakdown
+  across the full lifecycle, including `policy_suppressed`
+- `soland_federation_outbox_oldest_pending_age_seconds`
+- `soland_federation_retry_delay_seconds` histogram
+- `soland_federation_outbox_lease_takeover_total`
+- `soland_federation_outbox_dead_letter_total{reason}` (P5 — counter; alert on
   any non-zero rate over 5m via `examples/prometheus-alerts.yml`)
 - `soland_audit_append_failures_total` (alert on any non-zero rate over
   5m — see `examples/prometheus-alerts.yml`)

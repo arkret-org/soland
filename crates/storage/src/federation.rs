@@ -1,13 +1,95 @@
 use super::{
     FederationFrontierExchangeRecord, FederationOutboxDeadLetterRecord, FederationOutboxRecord,
-    Operation, PersistenceResult, async_trait,
+    FederationOutboxState, Operation, PersistenceResult, async_trait,
 };
+
+/// One atomic "read due rows and take ownership of them" operation.
+///
+/// Claiming and reading are deliberately one storage call: a bare `SELECT`
+/// lets two replicas send the same row concurrently, which the receiver's
+/// idempotency absorbs but which inflates traffic, attempt counters and
+/// diagnostic noise (`sync/federation.md` §8.5).
+#[derive(Clone, Debug)]
+pub struct FederationOutboxClaim {
+    pub now_unix_secs: i64,
+    pub limit: usize,
+    /// Stable worker identity, e.g. `<service_id>#<process uuid>`.
+    pub lease_owner: String,
+    /// Random per-claim token. A row re-claimed later carries a different
+    /// token, which is what invalidates the previous holder's writes.
+    pub lease_token: String,
+    pub lease_duration_secs: i64,
+}
+
+/// The terminal or retry decision one delivery attempt produced.
+#[derive(Clone, Debug)]
+pub enum FederationOutboxOutcome {
+    /// Keep the same transport identity (same canonical body, same
+    /// `Idempotency-Key`) and try again at `next_attempt_at`.
+    Retry { next_attempt_at: i64 },
+    /// Peer accepted or confirmed the batch as a duplicate.
+    Delivered,
+    /// Local egress policy denied the target before any socket was opened.
+    /// Not a network failure and not a delivery — it stays recoverable
+    /// through revalidation when the policy version changes.
+    PolicySuppressed { policy_version: String },
+    /// Terminal failure. The dead-letter row is written in the same
+    /// transaction as the state change, so "stopped delivering" and "has a
+    /// failure ledger entry" can never disagree.
+    DeadLettered(FederationOutboxDeadLetterRecord),
+    /// A response was received that requires re-evaluation. The old transport
+    /// identity is finished and a fresh pending row (new body, new
+    /// `Idempotency-Key`, `supersedes_outbox_id` back-reference) replaces it in
+    /// the same transaction (`sync/federation.md` §8.5).
+    Superseded(Box<FederationOutboxRecord>),
+}
+
+/// The full result of one delivery attempt, applied atomically.
+#[derive(Clone, Debug)]
+pub struct FederationOutboxTransition {
+    pub id: String,
+    /// Lease token the caller holds. The write only lands when it matches the
+    /// row's current `lease_token`.
+    pub lease_token: String,
+    pub attempts: i32,
+    pub semantic_attempts: i32,
+    pub last_http_status: Option<i32>,
+    pub last_error_code: Option<String>,
+    pub last_response_excerpt: Option<String>,
+    pub observed_at: i64,
+    pub outcome: FederationOutboxOutcome,
+}
+
+/// Verdict of one `policy_suppressed` revalidation.
+#[derive(Clone, Debug)]
+pub enum FederationOutboxPolicyResolution {
+    /// Revalidation passed under the new policy — return the row to `pending`.
+    Release { next_attempt_at: i64 },
+    /// Still denied. Pin the current policy version so the sweep stops
+    /// re-checking this row until the policy changes again.
+    Repin { policy_version: String },
+}
+
+/// Operator replay of one dead letter (`sync/federation.md` §8.5: a response
+/// was received, so re-evaluation MUST use a new key).
+#[derive(Clone, Debug)]
+pub struct FederationOutboxRequeue {
+    pub dead_letter_id: String,
+    /// Fresh pending row with a new id, a new `Idempotency-Key` and
+    /// `supersedes_outbox_id` pointing at the dead-lettered row.
+    pub record: FederationOutboxRecord,
+    pub operator: String,
+    pub reason: String,
+    pub request_digest: String,
+    pub requeued_at: i64,
+}
+
 /// G3.S0 — durable outbound federation HTTP delivery queue.
 ///
-/// Rows are inserted synchronously by the standard peer-event post-commit
-/// path; the `FederationDispatcher` background worker
-/// (`routing::federation::outbox::FederationDispatcher`) polls pending rows
-/// and posts them to peers.
+/// Rows are inserted inside the same transaction that accepts the Event; the
+/// `FederationDispatcher` background worker
+/// (`routing::federation::outbox::FederationDispatcher`) claims due rows under
+/// a lease and posts them to peers.
 ///
 /// Idempotency: `(peer_did, idempotency_key)` is UNIQUE. Callers that
 /// re-enqueue the same logical request MUST see `enqueue` return `Ok(false)`
@@ -20,37 +102,76 @@ pub trait FederationOutboxStore: Send + Sync {
     /// exists (callers MUST treat that as "already enqueued" rather
     /// than an error — see trait-doc idempotency note).
     async fn enqueue(&self, record: &FederationOutboxRecord) -> PersistenceResult<bool>;
-    /// Returns rows where `delivered_at IS NULL` and `next_attempt_at
-    /// <= now_unix_secs`, ordered by `next_attempt_at` ascending. The
-    /// `limit` caps the per-poll batch so a backlog never starves
-    /// other workers on the same tokio runtime.
-    async fn pending_due(
+    /// Atomically claim up to `limit` rows in `pending` state whose
+    /// `next_attempt_at <= now`, plus rows whose `leased` state has an expired
+    /// lease, ordered by `next_attempt_at` ascending. Implementations MUST
+    /// stamp `lease_owner` / `lease_token` / `lease_expires_at` and move the
+    /// rows to `leased` in the same statement that selects them, so two
+    /// replicas never claim the same row.
+    async fn claim_due(
         &self,
-        now_unix_secs: i64,
+        claim: &FederationOutboxClaim,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
+    /// Apply one delivery attempt's result. Returns `Ok(false)` when the lease
+    /// token no longer matches, i.e. the caller is a stale holder whose write
+    /// MUST be dropped. Terminal transitions and their dead-letter or successor
+    /// rows commit together or not at all.
+    async fn complete(&self, transition: &FederationOutboxTransition) -> PersistenceResult<bool>;
+    /// Rows currently parked in `policy_suppressed` whose recorded
+    /// `policy_version` differs from `current_policy_version`. Those are the
+    /// only candidates for revalidation; a bare restart never re-opens a row
+    /// the still-current policy denied.
+    async fn policy_suppressed_stale(
+        &self,
+        current_policy_version: &str,
         limit: usize,
     ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
-    /// Replace the row by `id`. Used by the worker after every delivery
-    /// attempt to record the new `attempts` / `last_status` /
-    /// `next_attempt_at` / `delivered_at` columns.
-    async fn update(&self, record: &FederationOutboxRecord) -> PersistenceResult<()>;
-    /// Fetch a single row by primary key. Used by the integration test
-    /// (and the optional admin observability endpoint, not wired in
-    /// G3.S0).
+    /// Apply the revalidation verdict to one `policy_suppressed` row. Returns
+    /// `Ok(false)` when the row left `policy_suppressed` meanwhile.
+    async fn resolve_policy_suppressed(
+        &self,
+        id: &str,
+        resolution: &FederationOutboxPolicyResolution,
+    ) -> PersistenceResult<bool>;
+    /// Fetch a single row by primary key.
     async fn get(&self, id: &str) -> PersistenceResult<Option<FederationOutboxRecord>>;
     /// Snapshot the full table — diagnostics + the integration test
     /// rely on it. Production deployments SHOULD NOT call this on a
-    /// large outbox; use `pending_due` instead.
+    /// large outbox; use `claim_due` instead.
     async fn snapshot_all(&self) -> PersistenceResult<Vec<FederationOutboxRecord>>;
-    /// Append a terminal failure to the dead-letter queue. The outbox row
-    /// remains in place for idempotency and diagnostics; this queue is the
-    /// operator-facing replay/quarantine surface.
-    async fn insert_dead_letter(
+    /// Rows in one lifecycle state, newest first, for the operator surfaces.
+    async fn list_by_state(
         &self,
-        record: &FederationOutboxDeadLetterRecord,
-    ) -> PersistenceResult<()>;
+        state: FederationOutboxState,
+        limit: usize,
+    ) -> PersistenceResult<Vec<FederationOutboxRecord>>;
+    /// Aggregate depth per `(state, peer_did)` for the gauge exporter.
+    async fn state_depth(&self) -> PersistenceResult<Vec<FederationOutboxStateDepth>>;
+    async fn dead_letter(
+        &self,
+        id: &str,
+    ) -> PersistenceResult<Option<FederationOutboxDeadLetterRecord>>;
     async fn dead_letters_snapshot(
         &self,
     ) -> PersistenceResult<Vec<FederationOutboxDeadLetterRecord>>;
+    /// Insert the replay row and stamp the operator audit onto the dead letter
+    /// in one transaction. Returns `Ok(false)` when the dead letter is missing
+    /// or was already requeued.
+    async fn requeue_dead_letter(
+        &self,
+        command: &FederationOutboxRequeue,
+    ) -> PersistenceResult<bool>;
+}
+
+/// One `(state, peer_did)` bucket of the outbox depth gauge.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FederationOutboxStateDepth {
+    pub state: FederationOutboxState,
+    pub peer_did: String,
+    pub depth: i64,
+    /// Unix seconds of the oldest row in this bucket, for the pending-age
+    /// alert. `None` when the bucket is empty.
+    pub oldest_created_at: Option<i64>,
 }
 pub const FEDERATION_FRONTIER_STALE_FAILURES: i32 = 3;
 pub const FEDERATION_FRONTIER_STATUS_HEALTHY: &str = "healthy";

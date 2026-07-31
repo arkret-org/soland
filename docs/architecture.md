@@ -58,14 +58,31 @@ registry.
 
 ## Federation outbox
 
-Outbound federation is at-least-once. The event transaction records a stable
-idempotency key and outbox intent together. A runtime dispatcher selects due
-entries, signs the peer request, applies retry backoff, and moves terminal
-failures to the dead-letter ledger. Receiver idempotency makes duplicate
-delivery safe.
+Outbound federation is at-least-once. Every accepted-Event path — ordinary
+Events, Realm genesis units, identity anchors, applet ghosts — records the
+stable idempotency key and the outbox intent inside the *same* transaction as
+the Event; there is no post-commit best-effort enqueue anywhere. A construction
+failure rejects the admission rather than accepting an Event this service could
+never route.
 
-Operators should alert on sustained `soland_federation_outbox_depth` growth and
-on any non-zero rate of `soland_federation_outbox_dead_letter_total`.
+The dispatcher claims due entries under a database lease
+(`FOR UPDATE SKIP LOCKED`), signs the peer request, and applies one of two
+retry classes:
+
+- **transport retry** — no response arrived; same body, same `Idempotency-Key`,
+  exponential backoff with jitter, never earlier than the peer's `Retry-After`;
+- **semantic resubmission** — a response arrived that needs re-evaluation; the
+  attempt is terminated as `superseded` and a fresh intent with a **new** key
+  carries the still-unconfirmed Events (`sync/federation.md` §8.5).
+
+Each row ends in exactly one terminal state: `delivered`, `policy_suppressed`,
+`dead_lettered` or `superseded`. Terminal state and its dead-letter ledger row
+commit together. Receiver idempotency makes duplicate delivery safe.
+
+Operators should alert on sustained `soland_federation_outbox_depth` growth,
+on `soland_federation_outbox_oldest_pending_age_seconds`, and on any non-zero
+rate of `soland_federation_outbox_dead_letter_total`. See `docs/runbook.md` for
+the `soland-federation-outbox` list/inspect/requeue commands.
 
 ## MLS and Move/Seal/Cell state
 

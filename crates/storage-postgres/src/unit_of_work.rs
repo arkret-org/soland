@@ -239,9 +239,13 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
             for record in request.outbox {
                 outbox_inserted += sql_query(
                     "INSERT INTO federation_outbox \
-                     (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, attempts, \
-                      next_attempt_at, last_status, last_response_excerpt, created_at, delivered_at) \
-                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
+                     (id, peer_id, peer_url, endpoint, idempotency_key, payload_json, state, \
+                      attempts, semantic_attempts, next_attempt_at, last_http_status, \
+                      last_error_code, last_response_excerpt, lease_owner, lease_token, \
+                      lease_expires_at, policy_version, supersedes_outbox_id, created_at, \
+                      completed_at) \
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, \
+                      $16, $17, $18, $19, $20) \
                      ON CONFLICT (peer_id, idempotency_key) DO NOTHING",
                 )
                 .bind::<Text, _>(&record.id)
@@ -250,12 +254,20 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                 .bind::<Text, _>(&record.endpoint)
                 .bind::<Text, _>(&record.idempotency_key)
                 .bind::<Text, _>(&record.payload_json)
+                .bind::<Text, _>(record.state.as_str())
                 .bind::<Integer, _>(record.attempts)
+                .bind::<Integer, _>(record.semantic_attempts)
                 .bind::<BigInt, _>(record.next_attempt_at)
-                .bind::<Nullable<Integer>, _>(record.last_status)
+                .bind::<Nullable<Integer>, _>(record.last_http_status)
+                .bind::<Nullable<Text>, _>(record.last_error_code.as_deref())
                 .bind::<Nullable<Text>, _>(record.last_response_excerpt.as_deref())
+                .bind::<Nullable<Text>, _>(record.lease_owner.as_deref())
+                .bind::<Nullable<Text>, _>(record.lease_token.as_deref())
+                .bind::<Nullable<BigInt>, _>(record.lease_expires_at)
+                .bind::<Nullable<Text>, _>(record.policy_version.as_deref())
+                .bind::<Nullable<Text>, _>(record.supersedes_outbox_id.as_deref())
                 .bind::<BigInt, _>(record.created_at)
-                .bind::<Nullable<BigInt>, _>(record.delivered_at)
+                .bind::<Nullable<BigInt>, _>(record.completed_at)
                 .execute(conn)
                 .await
                 .map_err(PersistenceError::database)?;

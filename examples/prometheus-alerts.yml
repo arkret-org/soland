@@ -54,11 +54,12 @@ groups:
           summary: "soland federation outbox is moving rows to the dead-letter ledger"
           description: |
             soland_federation_outbox_dead_letter_total has advanced over the
-            last 5 minutes. Inspect the dead-letter rows via
-            GET /admin/federation/dead-letters and confirm the peer
-            is reachable. See docs/federation-s2s.md and
-            docs/runbook.md "Fault-injection examples".
-          runbook: "docs/federation-s2s.md"
+            last 5 minutes. Group by the `reason` label, then inspect the rows
+            with `soland-federation-outbox list --dead-letters` and confirm the
+            peer is reachable. Replay only after the cause is fixed, via
+            `soland-federation-outbox requeue`. See docs/federation-s2s.md and
+            docs/runbook.md "Federation outbox operator commands".
+          runbook: "docs/runbook.md#federation-outbox-operator-commands"
 
       # Federation outbox depth — gauge of undelivered rows. Sustained
       # growth (>500 for >15m) indicates the dispatcher cannot keep up
@@ -72,9 +73,49 @@ groups:
         annotations:
           summary: "soland federation outbox depth is sustained > 500 rows"
           description: |
-            The outbox dispatcher cannot drain rows fast enough. Check
-            peer reachability + your rate-limit budget against the peer's
-            inbound quota. See docs/federation-s2s.md "Peer onboarding".
+            The outbox dispatcher cannot drain rows fast enough. Split it by
+            peer with sum by (peer) (soland_federation_outbox_state_depth) to
+            tell "one peer is down" from "the dispatcher is stuck". Check peer
+            reachability + your rate-limit budget against the peer's inbound
+            quota. See docs/federation-s2s.md "Peer onboarding".
+
+      # A delivery intent nobody has managed to hand off. Unlike depth, this
+      # fires even when the backlog is a single row: an Event this service
+      # already told a client was accepted is still owed to a peer.
+      - alert: SolandFederationOutboxStalled
+        expr: soland_federation_outbox_oldest_pending_age_seconds{job="soland"} > 3600
+        for: 15m
+        labels:
+          severity: warning
+          component: federation
+        annotations:
+          summary: "soland has owed a peer a delivery for over an hour"
+          description: |
+            The oldest still-owed federation outbox row is more than an hour
+            old. A long soland_federation_retry_delay_seconds means the peer
+            asked for the delay (Retry-After); a flat attempts count means the
+            dispatcher is not making progress. See docs/runbook.md
+            "Federation outbox operator commands".
+          runbook: "docs/runbook.md#federation-outbox-operator-commands"
+
+      # A dispatcher replica keeps losing rows it was mid-delivery on.
+      # Correctness holds (the stale write is dropped), but sustained
+      # takeovers mean the lease is shorter than this peer's real latency,
+      # or a replica is crash-looping.
+      - alert: SolandFederationLeaseTakeover
+        expr: increase(soland_federation_outbox_lease_takeover_total{job="soland"}[15m]) > 0
+        for: 15m
+        labels:
+          severity: info
+          component: federation
+        annotations:
+          summary: "soland federation outbox leases are being taken over mid-delivery"
+          description: |
+            A dispatcher replica's delivery result was discarded because the
+            row's lease had already moved to another worker. Check replica
+            restarts first, then whether LEASE_DURATION_SECS covers this peer's
+            response latency.
+          runbook: "docs/runbook.md#federation-outbox-operator-commands"
 
       # Readiness flapping. /readyz returning 503 for > 5 minutes on a
       # replica that should be serving traffic typically means the

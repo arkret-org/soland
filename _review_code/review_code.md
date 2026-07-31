@@ -240,3 +240,34 @@
   policy resolves, granted actions answer `allow` — so a gap in it names itself instead of
   scattering across twenty-five unrelated features.
 
+## 2026-07-31 — accepted Events could outlive their federation delivery intent
+
+- Surface: `federation_outbox` state model, the dispatcher, and every accepted-Event path that
+  fans out to a peer (ordinary Event, Realm genesis unit, identity anchor, cross-signing
+  recovery, applet ghost).
+- Regression: the three atomic batches enqueued their outbox rows *after* `store_*_batch`
+  returned, and an enqueue failure only logged a warning. A crash between the two — or any
+  construction failure — left an Event accepted locally with no record that a peer was still
+  owed it. Terminal state was inferred from `delivered_at` plus negative `last_status`
+  sentinels, so "delivered", "policy denied" and "gave up" were indistinguishable, and an egress
+  denial was written as `delivered_at = now` with no dead letter at all. `dependency_missing`
+  replayed the spent `Idempotency-Key`, which can only re-hit the receiver's cached failure.
+- Correction: the outbox rows are built before the commit and travel inside the same
+  transaction; a construction failure now rejects the admission. Rows carry an explicit `state`
+  (`pending / leased / delivered / policy_suppressed / dead_lettered / superseded`), are claimed
+  under a database lease (`FOR UPDATE SKIP LOCKED`), and every terminal transition commits with
+  its dead-letter or successor row. Transport retry keeps body and key; a received response that
+  needs re-evaluation terminates the attempt and mints a new key.
+- Prevention dimension: a durable queue must never encode business state in a timestamp or a
+  sentinel code, and "accepted locally" must never be reachable without the durable intent that
+  makes the acceptance routable. Any new accepted-Event path has to hand its outbox rows to the
+  storage unit-of-work, not enqueue them afterwards. Building an intent before its own
+  transaction also means evidence that transaction writes is not yet readable — pass it in
+  explicitly rather than reading it back from the store.
+
+## Known failing on main (predates the federation-outbox work)
+
+Reproduced on a clean tree at `f3dca339` with all local work stashed, so it is not a regression
+from the federation-outbox change: `cargo test -p soland --test consent_cells` — 2 of 9 fail with
+`frontier_unavailable: accepted Control Events are still awaiting the durable control-seal
+coordinator`. Same two cases the fixture-Realm entry above also leaves open.

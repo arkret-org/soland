@@ -525,12 +525,21 @@ CREATE TABLE public.federation_outbox (
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
     payload_json text NOT NULL,
+    state text DEFAULT 'pending' NOT NULL,
     attempts integer DEFAULT 0 NOT NULL,
+    semantic_attempts integer DEFAULT 0 NOT NULL,
     next_attempt_at bigint NOT NULL,
-    last_status integer,
+    last_http_status integer,
+    last_error_code text,
     last_response_excerpt text,
+    lease_owner text,
+    lease_token text,
+    lease_expires_at bigint,
+    policy_version text,
+    supersedes_outbox_id text,
     created_at bigint NOT NULL,
-    delivered_at bigint
+    completed_at bigint,
+    CONSTRAINT federation_outbox_state_check CHECK (state IN ('pending', 'leased', 'delivered', 'policy_suppressed', 'dead_lettered', 'superseded'))
 );
 
 CREATE TABLE public.federation_outbox_dead_letter (
@@ -539,11 +548,16 @@ CREATE TABLE public.federation_outbox_dead_letter (
     peer_id text NOT NULL,
     endpoint text NOT NULL,
     idempotency_key text NOT NULL,
-    terminal_status integer NOT NULL,
+    last_http_status integer,
     attempts integer NOT NULL,
     response_excerpt text,
+    reason text NOT NULL,
     failed_at bigint NOT NULL,
-    reason text NOT NULL
+    requeued_outbox_id text,
+    requeued_by text,
+    requeue_reason text,
+    requeue_request_digest text,
+    requeued_at bigint
 );
 
 CREATE TABLE public.federation_frontier_exchange (
@@ -1889,7 +1903,15 @@ CREATE INDEX federation_outbox_dead_letter_failed_at ON public.federation_outbox
 
 CREATE UNIQUE INDEX federation_outbox_peer_idem ON public.federation_outbox USING btree (peer_id, idempotency_key);
 
-CREATE INDEX federation_outbox_pending ON public.federation_outbox USING btree (delivered_at, next_attempt_at);
+-- Claim scan: `state IN ('pending','leased') AND next_attempt_at <= now`,
+-- ordered by next_attempt_at. `lease_expires_at` is in the index so an expired
+-- lease can be taken over without touching the heap.
+CREATE INDEX federation_outbox_claim ON public.federation_outbox USING btree (state, next_attempt_at, lease_expires_at);
+
+-- Policy-suppressed revalidation sweep (`federation.md` §4.4).
+CREATE INDEX federation_outbox_policy_suppressed ON public.federation_outbox USING btree (policy_version) WHERE (state = 'policy_suppressed'::text);
+
+CREATE INDEX federation_outbox_state_peer ON public.federation_outbox USING btree (state, peer_id, created_at);
 
 CREATE INDEX federation_frontier_exchange_status_idx ON public.federation_frontier_exchange USING btree (status, updated_at);
 

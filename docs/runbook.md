@@ -16,7 +16,9 @@ operator-relevant ones:
 | `delivery_binding_stale` | Federation handover | Recipient has rebound; the response body carries `new_recipient_service_id` + `handover_frontier`. Update the routing table. |
 | `cursor_expired` | account / events subscribe | Client cursor older than the configured window. Client must re-subscribe with `from=null`. |
 | `handle_in_grace_period` | identity handle claim | Handle was released too recently. Wait out `HANDLE_GRACE_PERIOD_SECONDS` or pick a different handle. |
-| `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` retries. Inspect the row in the dead-letter ledger via `GET /_soland/admin/federation/dead-letters`. |
+| `retry_budget_exhausted` (DLQ row reason) | Federation outbox | Peer was unreachable for `MAX_ATTEMPTS` transport retries. Inspect with `soland-federation-outbox list --dead-letters`, then `inspect <id>`. |
+| `semantic_retry_budget_exhausted` (DLQ row reason) | Federation outbox | The peer kept answering `dependency_missing` past `MAX_SEMANTIC_ATTEMPTS` resubmissions. The missing dependency is on the peer side — do not keep replaying; resolve the dependency first (`sync/federation.md` §4.1). |
+| `egress_policy_denied` (`policy_suppressed` state) | Federation outbox | The local egress policy blocked the peer. The row is **not** dead-lettered: fix the policy and the dispatcher revalidates it automatically on the next pass, because the policy version changed. |
 
 ## Log search recipes
 
@@ -71,6 +73,15 @@ sum by (state) (
   increase(soland_federation_retry_total{state=~"retry_budget_exhausted|terminal_http_status"}[15m])
 ) > 0
 
+# A delivery intent nobody has managed to hand off for an hour.
+soland_federation_outbox_oldest_pending_age_seconds > 3600
+
+# One peer's backlog is growing while the rest are healthy.
+sum by (peer) (soland_federation_outbox_state_depth{state=~"pending|leased"}) > 500
+
+# A dispatcher replica keeps losing its lease mid-delivery (overrun or crash loop).
+increase(soland_federation_outbox_lease_takeover_total[15m]) > 0
+
 # Durable audit append failure.
 increase(soland_audit_append_failures_total[5m]) > 0
 ```
@@ -82,8 +93,36 @@ Operator actions:
 | `soland_egress_denied_total` | `sum by (reason,target_class) (increase(soland_egress_denied_total[30m]))` | Confirm the target is expected. If it is a real dependency, add the explicit allow-list or public endpoint; otherwise treat as SSRF or peer misconfiguration. |
 | `soland_digest_mismatch_total` | `sum by (scope) (increase(soland_digest_mismatch_total[30m]))` | Pull the rejected request logs for the same `scope`; compare client canonical bytes, `Content-Digest`, and SDK version. |
 | `soland_federation_retry_total` | `sum by (state) (increase(soland_federation_retry_total[30m]))` | For `retry_scheduled`, inspect peer health. For terminal states, inspect the dead-letter row and replay only after the peer/config issue is fixed. |
+| `soland_federation_outbox_oldest_pending_age_seconds` | `soland_federation_outbox_oldest_pending_age_seconds` | Something is owed to a peer and not moving. Check `soland_federation_retry_delay_seconds` — a long scheduled delay is the peer's `Retry-After`, a zero-progress `attempts` count is a stuck dispatcher. |
+| `soland_federation_outbox_state_depth` | `sum by (state,peer) (soland_federation_outbox_state_depth)` | Distinguishes "one peer is down" from "the dispatcher is stuck". A rising `policy_suppressed` bucket means the local egress policy, not the peer. |
+| `soland_federation_outbox_lease_takeover_total` | `increase(soland_federation_outbox_lease_takeover_total[30m])` | A replica's delivery outran its lease or the replica died. Correctness is preserved (the stale write is dropped), but sustained takeovers mean `LEASE_DURATION_SECS` is too short for this peer's latency. |
 | `soland_audit_append_failures_total` | `increase(soland_audit_append_failures_total[10m])` | Check Postgres availability and audit-table permissions first; stop admin rollout if audit durability is unavailable. |
-| `soland_federation_outbox_dead_letter_total` | `increase(soland_federation_outbox_dead_letter_total[30m])` | Read dead-letter reasons, group by peer DID, and coordinate with the peer before replay. |
+| `soland_federation_outbox_dead_letter_total` | `sum by (reason) (increase(soland_federation_outbox_dead_letter_total[30m]))` | Read the reasons, group by peer DID, coordinate with the peer, then replay explicitly (below). |
+
+## Federation outbox operator commands
+
+Terminal rows are never replayed by a restart — that is deliberate, since a
+dead letter means the peer rejected the request or the retry budget ran out.
+Replay is an explicit, audited act:
+
+```bash
+# What is still owed, and what gave up.
+cargo run --bin soland-federation-outbox -- list --state pending
+cargo run --bin soland-federation-outbox -- list --dead-letters
+
+# Why one row stopped (request reported by digest, not verbatim).
+cargo run --bin soland-federation-outbox -- inspect <outbox-id|dead-letter-id>
+
+# Replay after the peer/config issue is fixed. Re-validates the peer, the
+# egress policy and the stored request, then mints a NEW intent with a NEW
+# Idempotency-Key and stamps the audit onto the dead letter. Single-shot.
+cargo run --bin soland-federation-outbox -- requeue <dead-letter-id> \
+  --operator did:web:you.example --reason "peer endpoint restored"
+```
+
+There is no HTTP admin surface for this. Adding one would require a canonical
+operation and an `/_arkret/...` binding in `arkret-spec` first; a private
+`/_soland/...` route is not permitted.
 
 ## Restart strategy
 
@@ -129,8 +168,10 @@ sudo iptables -D OUTPUT -p tcp --dport 5432 -j DROP
 # soland_federation_outbox_dead_letter_total counter advance after
 # MAX_ATTEMPTS retries per row.
 just db-shell
-# inside psql:
-UPDATE federation_outbox SET next_attempt_at = 0 WHERE delivered_at IS NULL;
+# inside psql: pull every still-owed row forward. `state` is the source of
+# truth for "still owed"; do not infer it from a timestamp.
+UPDATE federation_outbox SET next_attempt_at = 0
+ WHERE state IN ('pending', 'leased');
 ```
 
 ### 3. Trigger the audit-append failure alert

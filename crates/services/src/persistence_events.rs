@@ -82,6 +82,20 @@ fn persistence_projected_event(
     }
 }
 
+fn persistence_outbox_row(
+    delivery: crate::events::FederationDelivery,
+) -> soland_storage::FederationOutboxRecord {
+    soland_storage::FederationOutboxRecord::pending(
+        delivery.id,
+        delivery.peer_did,
+        delivery.peer_url,
+        delivery.endpoint,
+        delivery.idempotency_key,
+        delivery.payload_json,
+        delivery.created_at,
+    )
+}
+
 fn persistence_event_commit_request(
     command: crate::events::CommitAcceptedEventCommand,
 ) -> soland_storage::EventCommitRequest {
@@ -108,20 +122,7 @@ fn persistence_event_commit_request(
         outbox: command
             .deliveries
             .into_iter()
-            .map(|delivery| soland_storage::FederationOutboxRecord {
-                id: delivery.id,
-                peer_did: delivery.peer_did,
-                peer_url: delivery.peer_url,
-                endpoint: delivery.endpoint,
-                idempotency_key: delivery.idempotency_key,
-                payload_json: delivery.payload_json,
-                attempts: 0,
-                next_attempt_at: delivery.created_at,
-                last_status: None,
-                last_response_excerpt: None,
-                created_at: delivery.created_at,
-                delivered_at: None,
-            })
+            .map(persistence_outbox_row)
             .collect(),
     }
 }
@@ -142,6 +143,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         &self,
         records: Vec<crate::events::CanonicalEventRecord>,
         proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        deliveries: Vec<crate::events::FederationDelivery>,
     ) -> crate::ServiceResult<()> {
         self.0
             .events()
@@ -151,6 +153,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     .map(persistence_canonical_event)
                     .collect(),
                 proposal_receipts,
+                deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
             .await?;
         Ok(())
@@ -164,6 +167,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
         frontier_cas: Option<crate::events::IdentityAnchorFrontierState>,
         reanchor_slot: Option<crate::events::IdentityAnchorReanchorState>,
         publication_evidence: Vec<soland_storage::PublicationEvidenceRecord>,
+        deliveries: Vec<crate::events::FederationDelivery>,
     ) -> crate::ServiceResult<crate::events::IdentityAnchorCommitResult> {
         let outcome = self
             .0
@@ -197,6 +201,7 @@ impl crate::events::EventReadPort for PersistenceEventReader {
                     authorize_digest: state.authorize_digest,
                 }),
                 publication_evidence,
+                deliveries.into_iter().map(persistence_outbox_row).collect(),
             )
             .await?;
         Ok(crate::events::IdentityAnchorCommitResult {

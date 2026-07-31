@@ -1,10 +1,11 @@
 use super::{
     Arc, BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
-    EventStore, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot,
-    MessageRecord, MessageStore, Mutex, PeerEventsPageQuery, PersistenceError, PersistenceResult,
-    PublicationEvidenceRecord, RealmEventStats, async_trait, event_position_cmp,
-    identity_anchor_slot_conflicts, peer_page_record_after_cursor, peer_page_record_matches,
-    receipt_covers_event, record_is_peer_authz_state_record, stage_identity_anchor_events,
+    EventStore, FederationOutboxRecord, IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas,
+    IdentityAnchorReanchorSlot, MessageRecord, MessageStore, Mutex, PeerEventsPageQuery,
+    PersistenceError, PersistenceResult, PublicationEvidenceRecord, RealmEventStats, async_trait,
+    event_position_cmp, identity_anchor_slot_conflicts, peer_page_record_after_cursor,
+    peer_page_record_matches, receipt_covers_event, record_is_peer_authz_state_record,
+    stage_identity_anchor_events,
 };
 // In-memory message store
 pub(crate) struct MemoryMessageStore {
@@ -74,19 +75,49 @@ pub(crate) struct MemoryEventStore {
     devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     receipts: Mutex<BTreeMap<String, EventBatchReceipt>>,
     publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
+    /// Shared with `MemoryFederationOutboxStore` so the atomic Event batches
+    /// commit their delivery intents in the same staged mutation as the Events,
+    /// mirroring the single PostgreSQL transaction.
+    federation_outbox: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
 }
 impl MemoryEventStore {
     pub(crate) fn with_devices(
         devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
         publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
+        federation_outbox: Arc<Mutex<BTreeMap<String, FederationOutboxRecord>>>,
     ) -> Self {
         Self {
             data: Mutex::new(BTreeMap::new()),
             devices,
             receipts: Mutex::new(BTreeMap::new()),
             publication_evidence,
+            federation_outbox,
         }
     }
+}
+
+/// Stage outbox rows with exactly the uniqueness PostgreSQL enforces:
+/// `(peer_id, idempotency_key)` is `ON CONFLICT DO NOTHING` — a retried
+/// admission collapses onto the existing intent — while a colliding primary key
+/// is a hard conflict that aborts the whole batch.
+fn stage_federation_outbox(
+    staged: &mut BTreeMap<String, FederationOutboxRecord>,
+    outbox: Vec<FederationOutboxRecord>,
+) -> PersistenceResult<()> {
+    for record in outbox {
+        let already_enqueued = staged.values().any(|existing| {
+            existing.peer_did == record.peer_did
+                && existing.idempotency_key == record.idempotency_key
+        });
+        if already_enqueued {
+            continue;
+        }
+        if staged.contains_key(&record.id) {
+            return Err(PersistenceError::Conflict("duplicate_conflict".to_owned()));
+        }
+        staged.insert(record.id.clone(), record);
+    }
+    Ok(())
 }
 #[async_trait]
 impl EventStore for MemoryEventStore {
@@ -111,11 +142,16 @@ impl EventStore for MemoryEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         _proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut data = self.data.lock();
+        let mut federation_outbox = self.federation_outbox.lock();
         let mut staged = data.clone();
+        let mut staged_outbox = federation_outbox.clone();
         stage_identity_anchor_events(&mut staged, records)?;
+        stage_federation_outbox(&mut staged_outbox, outbox)?;
         *data = staged;
+        *federation_outbox = staged_outbox;
         Ok(())
     }
 
@@ -128,15 +164,18 @@ impl EventStore for MemoryEventStore {
         _frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
+        outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut data = self.data.lock();
         let mut devices = self.devices.lock();
         let mut receipts = self.receipts.lock();
         let mut evidence = self.publication_evidence.lock();
+        let mut federation_outbox = self.federation_outbox.lock();
         let mut staged_events = data.clone();
         let mut staged_devices = devices.clone();
         let mut staged_receipts = receipts.clone();
         let mut staged_evidence = evidence.clone();
+        let mut staged_outbox = federation_outbox.clone();
         let reanchor_conflict = reanchor_slot
             .as_ref()
             .is_some_and(|slot| identity_anchor_slot_conflicts(staged_events.values(), slot));
@@ -153,11 +192,15 @@ impl EventStore for MemoryEventStore {
                     .entry(record.event_digest.clone())
                     .or_insert(record);
             }
+            // A quarantined re-anchor conflict is not accepted locally, so it
+            // owes no peer anything.
+            stage_federation_outbox(&mut staged_outbox, outbox)?;
         }
         *data = staged_events;
         *devices = staged_devices;
         *receipts = staged_receipts;
         *evidence = staged_evidence;
+        *federation_outbox = staged_outbox;
         Ok(IdentityAnchorCommitOutcome { reanchor_conflict })
     }
 
@@ -339,9 +382,11 @@ mod tests {
 
     #[tokio::test]
     async fn realm_bootstrap_batch_rolls_back_every_prior_insert_on_late_conflict() {
+        let outbox = Arc::new(Mutex::new(BTreeMap::new()));
         let store = MemoryEventStore::with_devices(
             Arc::new(Mutex::new(BTreeMap::new())),
             Arc::new(Mutex::new(BTreeMap::new())),
+            outbox.clone(),
         );
         let conflict_id = "ak:event:019f9000-0000-7000-8000-000000000002";
         store.put(record(conflict_id, b"existing")).await.unwrap();
@@ -354,6 +399,15 @@ mod tests {
                     record(conflict_id, b"different"),
                 ],
                 Vec::new(),
+                vec![FederationOutboxRecord::pending(
+                    "outbox:rollback".to_owned(),
+                    "did:web:peer.example".to_owned(),
+                    "https://peer.example".to_owned(),
+                    "/_arkret/peer/events".to_owned(),
+                    "ak:outbox:event:rollback".to_owned(),
+                    "{}".to_owned(),
+                    1,
+                )],
             )
             .await
             .unwrap_err();
@@ -362,6 +416,10 @@ mod tests {
             PersistenceError::Conflict(reason) if reason == "duplicate_conflict"
         ));
         assert!(!store.contains(first_id).await.unwrap());
+        assert!(
+            outbox.lock().is_empty(),
+            "a rolled-back genesis unit leaves no delivery intent behind"
+        );
         assert_eq!(
             store
                 .get(conflict_id)

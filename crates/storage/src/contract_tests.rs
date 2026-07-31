@@ -8,13 +8,15 @@ use chrono::{Duration, Utc};
 
 use super::{
     CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork, EventStore,
-    FederationOutboxRecord, FederationOutboxStore, IdempotencyRecord, IdempotencyStore,
-    MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow, MlsKeyPackageStore,
-    OrganizationRegistrationEnsureCommit, OrganizationRegistrationLifecycleCommit,
-    OrganizationRegistrationRefreshCommit, OrganizationRegistrationStore,
-    OrganizationRegistrationTerminalReason, PeerKeyPackageClaimLedgerRecord,
-    PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord, ProjectionEventStore,
-    ProposalMemberReceiptRecord, ProposalMemberReceiptStore,
+    FederationOutboxClaim, FederationOutboxDeadLetterRecord, FederationOutboxOutcome,
+    FederationOutboxPolicyResolution, FederationOutboxRecord, FederationOutboxRequeue,
+    FederationOutboxState, FederationOutboxStore, FederationOutboxTransition, IdempotencyRecord,
+    IdempotencyStore, MlsKeyPackageClaim, MlsKeyPackageClaimTarget, MlsKeyPackageRow,
+    MlsKeyPackageStore, OrganizationRegistrationEnsureCommit,
+    OrganizationRegistrationLifecycleCommit, OrganizationRegistrationRefreshCommit,
+    OrganizationRegistrationStore, OrganizationRegistrationTerminalReason,
+    PeerKeyPackageClaimLedgerRecord, PeerKeyPackageClaimLedgerWriteResult, ProjectionEventRecord,
+    ProjectionEventStore, ProposalMemberReceiptRecord, ProposalMemberReceiptStore,
 };
 
 fn database_timestamp_now() -> chrono::DateTime<Utc> {
@@ -778,12 +780,20 @@ pub async fn assert_event_commit_unit_of_work_contract(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{event_uuid}"),
             payload_json: "{}".to_owned(),
+            state: FederationOutboxState::Pending,
             attempts: 0,
+            semantic_attempts: 0,
             next_attempt_at: now.timestamp(),
-            last_status: None,
+            last_http_status: None,
+            last_error_code: None,
             last_response_excerpt: None,
+            lease_owner: None,
+            lease_token: None,
+            lease_expires_at: None,
+            policy_version: None,
+            supersedes_outbox_id: None,
             created_at: now.timestamp(),
-            delivered_at: None,
+            completed_at: None,
         }],
     };
 
@@ -857,12 +867,20 @@ pub async fn assert_event_commit_unit_of_work_contract(
             endpoint: "/_arkret/peer/events".to_owned(),
             idempotency_key: format!("peer:{rollback_uuid}"),
             payload_json: "{}".to_owned(),
+            state: FederationOutboxState::Pending,
             attempts: 0,
+            semantic_attempts: 0,
             next_attempt_at: now.timestamp(),
-            last_status: None,
+            last_http_status: None,
+            last_error_code: None,
             last_response_excerpt: None,
+            lease_owner: None,
+            lease_token: None,
+            lease_expires_at: None,
+            policy_version: None,
+            supersedes_outbox_id: None,
             created_at: now.timestamp(),
-            delivered_at: None,
+            completed_at: None,
         }],
     };
     assert!(stores.unit_of_work.commit_event(failed).await.is_err());
@@ -897,6 +915,563 @@ pub async fn assert_event_commit_unit_of_work_contract(
             .await
             .expect("outbox rollback")
             .is_none()
+    );
+}
+
+/// Every invariant the federation outbox owes the dispatcher, asserted
+/// identically against the in-memory and PostgreSQL adapters:
+///
+/// 1. `(peer, idempotency_key)` re-enqueue is a no-op, not an error;
+/// 2. claiming is exclusive — a second worker sees nothing;
+/// 3. only the current lease holder may complete or reschedule a row;
+/// 4. an expired lease is reclaimable by another worker;
+/// 5. terminal state and its dead-letter row commit together;
+/// 6. a superseded attempt and its replacement commit together;
+/// 7. `policy_suppressed` only leaves that state through revalidation.
+pub async fn assert_federation_outbox_store_contract(
+    store: &dyn FederationOutboxStore,
+    namespace: &str,
+) {
+    let peer_did = format!("did:web:peer-{namespace}.example");
+    let row = |suffix: &str, created_at: i64| {
+        FederationOutboxRecord::pending(
+            format!("outbox:{namespace}:{suffix}"),
+            peer_did.clone(),
+            "https://peer.example".to_owned(),
+            "/_arkret/peer/events".to_owned(),
+            format!("ak:outbox:event:{namespace}:{suffix}"),
+            "{}".to_owned(),
+            created_at,
+        )
+    };
+
+    // (1) Re-enqueueing the same logical request collapses onto the first row.
+    let first = row("first", 100);
+    assert!(store.enqueue(&first).await.expect("enqueue"));
+    let mut duplicate = first.clone();
+    duplicate.id = format!("outbox:{namespace}:duplicate");
+    assert!(
+        !store.enqueue(&duplicate).await.expect("duplicate enqueue"),
+        "a re-enqueue of the same (peer, key) is an idempotent no-op"
+    );
+    assert!(
+        store
+            .get(&duplicate.id)
+            .await
+            .expect("read duplicate")
+            .is_none()
+    );
+
+    let claim = |token: &str, owner: &str, now: i64, lease: i64| FederationOutboxClaim {
+        now_unix_secs: now,
+        limit: 8,
+        lease_owner: owner.to_owned(),
+        lease_token: token.to_owned(),
+        lease_duration_secs: lease,
+    };
+
+    // (2) Claiming is exclusive.
+    let claimed = store
+        .claim_due(&claim("token-a", "worker-a", 200, 60))
+        .await
+        .expect("claim");
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].id, first.id);
+    assert_eq!(claimed[0].state, FederationOutboxState::Leased);
+    assert_eq!(claimed[0].lease_token.as_deref(), Some("token-a"));
+    assert!(
+        store
+            .claim_due(&claim("token-b", "worker-b", 200, 60))
+            .await
+            .expect("concurrent claim")
+            .is_empty(),
+        "a leased row is invisible to a second worker until the lease expires"
+    );
+
+    // (3) Only the lease holder may write the attempt's result.
+    let transition = |token: &str, outcome: FederationOutboxOutcome| FederationOutboxTransition {
+        id: first.id.clone(),
+        lease_token: token.to_owned(),
+        attempts: 1,
+        semantic_attempts: 0,
+        last_http_status: Some(503),
+        last_error_code: Some("retryable_http_status".to_owned()),
+        last_response_excerpt: Some("unavailable".to_owned()),
+        observed_at: 210,
+        outcome,
+    };
+    assert!(
+        !store
+            .complete(&transition(
+                "token-b",
+                FederationOutboxOutcome::Retry {
+                    next_attempt_at: 300,
+                },
+            ))
+            .await
+            .expect("stale-lease complete"),
+        "a stale holder's late write MUST be dropped"
+    );
+    assert!(
+        store
+            .complete(&transition(
+                "token-a",
+                FederationOutboxOutcome::Retry {
+                    next_attempt_at: 300,
+                },
+            ))
+            .await
+            .expect("holder complete")
+    );
+    let rescheduled = store
+        .get(&first.id)
+        .await
+        .expect("read rescheduled")
+        .expect("row present");
+    assert_eq!(rescheduled.state, FederationOutboxState::Pending);
+    assert_eq!(rescheduled.attempts, 1);
+    assert_eq!(rescheduled.next_attempt_at, 300);
+    assert!(rescheduled.lease_token.is_none());
+    assert!(rescheduled.completed_at.is_none());
+
+    // (4) An expired lease returns to the pool for another worker.
+    assert_eq!(
+        store
+            .claim_due(&claim("token-c", "worker-a", 300, 10))
+            .await
+            .expect("reclaim")
+            .len(),
+        1
+    );
+    let takeover = store
+        .claim_due(&claim("token-d", "worker-b", 400, 60))
+        .await
+        .expect("expired-lease takeover");
+    assert_eq!(takeover.len(), 1, "an expired lease is claimable again");
+    assert_eq!(takeover[0].lease_owner.as_deref(), Some("worker-b"));
+
+    // (5) Terminal state and failure ledger land together.
+    let dead_letter_id = format!("dead-letter:{namespace}");
+    assert!(
+        store
+            .complete(&FederationOutboxTransition {
+                id: first.id.clone(),
+                lease_token: "token-d".to_owned(),
+                attempts: 10,
+                semantic_attempts: 0,
+                last_http_status: Some(404),
+                last_error_code: Some("terminal_http_status".to_owned()),
+                last_response_excerpt: Some("not found".to_owned()),
+                observed_at: 500,
+                outcome: FederationOutboxOutcome::DeadLettered(FederationOutboxDeadLetterRecord {
+                    id: dead_letter_id.clone(),
+                    outbox_id: first.id.clone(),
+                    peer_did: peer_did.clone(),
+                    endpoint: "/_arkret/peer/events".to_owned(),
+                    idempotency_key: first.idempotency_key.clone(),
+                    last_http_status: Some(404),
+                    attempts: 10,
+                    response_excerpt: Some("not found".to_owned()),
+                    reason: "terminal_http_status".to_owned(),
+                    failed_at: 500,
+                    requeued_outbox_id: None,
+                    requeued_by: None,
+                    requeue_reason: None,
+                    requeue_request_digest: None,
+                    requeued_at: None,
+                }),
+            })
+            .await
+            .expect("dead-letter transition")
+    );
+    let dead_lettered = store
+        .get(&first.id)
+        .await
+        .expect("read dead-lettered")
+        .expect("row present");
+    assert_eq!(dead_lettered.state, FederationOutboxState::DeadLettered);
+    assert_eq!(dead_lettered.completed_at, Some(500));
+    assert!(
+        store
+            .dead_letter(&dead_letter_id)
+            .await
+            .expect("read dead letter")
+            .is_some(),
+        "the terminal state and its ledger row are one transaction"
+    );
+    assert!(
+        store
+            .claim_due(&claim("token-e", "worker-a", 10_000, 60))
+            .await
+            .expect("terminal claim")
+            .is_empty(),
+        "a terminal row is never claimed again"
+    );
+
+    // Operator replay mints a new intent under a new key, single-shot.
+    let replay = row("replay", 600);
+    assert!(
+        store
+            .requeue_dead_letter(&FederationOutboxRequeue {
+                dead_letter_id: dead_letter_id.clone(),
+                record: FederationOutboxRecord {
+                    supersedes_outbox_id: Some(first.id.clone()),
+                    ..replay.clone()
+                },
+                operator: "did:web:operator.example".to_owned(),
+                reason: "peer restored".to_owned(),
+                request_digest: format!("sha256:{}", "a".repeat(64)),
+                requeued_at: 610,
+            })
+            .await
+            .expect("requeue")
+    );
+    let requeued = store
+        .dead_letter(&dead_letter_id)
+        .await
+        .expect("read requeued dead letter")
+        .expect("dead letter present");
+    assert_eq!(
+        requeued.requeued_outbox_id.as_deref(),
+        Some(replay.id.as_str())
+    );
+    assert_eq!(
+        requeued.requeued_by.as_deref(),
+        Some("did:web:operator.example")
+    );
+    assert!(
+        !store
+            .requeue_dead_letter(&FederationOutboxRequeue {
+                dead_letter_id: dead_letter_id.clone(),
+                record: row("replay-again", 620),
+                operator: "did:web:operator.example".to_owned(),
+                reason: "double click".to_owned(),
+                request_digest: format!("sha256:{}", "b".repeat(64)),
+                requeued_at: 620,
+            })
+            .await
+            .expect("second requeue"),
+        "a dead letter replays at most once"
+    );
+
+    // (6) A superseded attempt and its replacement land together.
+    let superseded = row("superseded", 700);
+    assert!(
+        store
+            .enqueue(&superseded)
+            .await
+            .expect("enqueue superseded")
+    );
+    let claimed = store
+        .claim_due(&claim("token-f", "worker-a", 700, 60))
+        .await
+        .expect("claim superseded");
+    let claimed_ids = claimed
+        .iter()
+        .map(|row| row.id.as_str())
+        .collect::<Vec<_>>();
+    assert!(claimed_ids.contains(&superseded.id.as_str()));
+    let successor = FederationOutboxRecord {
+        supersedes_outbox_id: Some(superseded.id.clone()),
+        ..row("successor", 710)
+    };
+    assert!(
+        store
+            .complete(&FederationOutboxTransition {
+                id: superseded.id.clone(),
+                lease_token: "token-f".to_owned(),
+                attempts: 1,
+                semantic_attempts: 1,
+                last_http_status: Some(200),
+                last_error_code: Some("dependency_missing".to_owned()),
+                last_response_excerpt: Some("partial".to_owned()),
+                observed_at: 710,
+                outcome: FederationOutboxOutcome::Superseded(Box::new(successor.clone())),
+            })
+            .await
+            .expect("supersede transition")
+    );
+    assert_eq!(
+        store
+            .get(&superseded.id)
+            .await
+            .expect("read superseded")
+            .expect("row present")
+            .state,
+        FederationOutboxState::Superseded
+    );
+    let stored_successor = store
+        .get(&successor.id)
+        .await
+        .expect("read successor")
+        .expect("successor present");
+    assert_eq!(stored_successor.state, FederationOutboxState::Pending);
+    assert_eq!(
+        stored_successor.supersedes_outbox_id.as_deref(),
+        Some(superseded.id.as_str())
+    );
+
+    // (7) Policy suppression is its own terminal state, and only revalidation
+    // against a *changed* policy version can return the row to the queue.
+    let suppressed = row("suppressed", 800);
+    assert!(
+        store
+            .enqueue(&suppressed)
+            .await
+            .expect("enqueue suppressed")
+    );
+    let claimed = store
+        .claim_due(&claim("token-g", "worker-a", 800, 60))
+        .await
+        .expect("claim suppressed");
+    assert!(claimed.iter().any(|row| row.id == suppressed.id));
+    assert!(
+        store
+            .complete(&FederationOutboxTransition {
+                id: suppressed.id.clone(),
+                lease_token: "token-g".to_owned(),
+                attempts: 0,
+                semantic_attempts: 0,
+                last_http_status: None,
+                last_error_code: Some("egress_policy_denied".to_owned()),
+                last_response_excerpt: Some("denied".to_owned()),
+                observed_at: 810,
+                outcome: FederationOutboxOutcome::PolicySuppressed {
+                    policy_version: "sha256:policy-v1".to_owned(),
+                },
+            })
+            .await
+            .expect("policy-suppress transition")
+    );
+    assert!(
+        store
+            .claim_due(&claim("token-h", "worker-a", 20_000, 60))
+            .await
+            .expect("suppressed claim")
+            .iter()
+            .all(|row| row.id != suppressed.id),
+        "a suppressed row is not redelivered just because time passed"
+    );
+    assert!(
+        store
+            .policy_suppressed_stale("sha256:policy-v1", 8)
+            .await
+            .expect("unchanged policy sweep")
+            .iter()
+            .all(|row| row.id != suppressed.id),
+        "an unchanged policy version produces no revalidation candidates"
+    );
+    let stale = store
+        .policy_suppressed_stale("sha256:policy-v2", 8)
+        .await
+        .expect("changed policy sweep");
+    assert!(stale.iter().any(|row| row.id == suppressed.id));
+    assert!(
+        store
+            .resolve_policy_suppressed(
+                &suppressed.id,
+                &FederationOutboxPolicyResolution::Repin {
+                    policy_version: "sha256:policy-v2".to_owned(),
+                },
+            )
+            .await
+            .expect("repin")
+    );
+    assert_eq!(
+        store
+            .get(&suppressed.id)
+            .await
+            .expect("read repinned")
+            .expect("row present")
+            .state,
+        FederationOutboxState::PolicySuppressed,
+        "a repin records the newer policy without releasing the row"
+    );
+    assert!(
+        store
+            .resolve_policy_suppressed(
+                &suppressed.id,
+                &FederationOutboxPolicyResolution::Release {
+                    next_attempt_at: 900,
+                },
+            )
+            .await
+            .expect("release")
+    );
+    let released = store
+        .get(&suppressed.id)
+        .await
+        .expect("read released")
+        .expect("row present");
+    assert_eq!(released.state, FederationOutboxState::Pending);
+    assert_eq!(released.next_attempt_at, 900);
+    assert!(released.policy_version.is_none());
+
+    let depth = store.state_depth().await.expect("state depth");
+    assert!(
+        depth
+            .iter()
+            .any(|bucket| bucket.state == FederationOutboxState::DeadLettered
+                && bucket.peer_did == peer_did
+                && bucket.depth >= 1)
+    );
+}
+
+/// §6.3 — the atomic Event batches must roll the **outbox** back too.
+///
+/// The ordinary single-Event path has committed its outbox rows transactionally
+/// for a while; the Realm genesis and identity-anchor units did not, and an
+/// Event accepted without its delivery intent is unroutable forever after a
+/// crash. This asserts the joint rollback on both adapters by injecting a
+/// failure in the outbox insert itself (a colliding primary key), so the Events
+/// are known-good and only the delivery intent can be what aborts the batch.
+pub async fn assert_atomic_batch_outbox_rollback_contract(
+    events: &dyn EventStore,
+    outbox: &dyn FederationOutboxStore,
+    namespace: &str,
+) {
+    let now = database_timestamp_now();
+    let principal_id = format!("did:web:{namespace}.example");
+    let realm_id = format!("ak:realm:{}", uuid::Uuid::now_v7());
+    // The Realm genesis unit requires one proposal receipt per Event. Supplying
+    // them is what makes this test actually about the outbox: without them the
+    // batch would abort on receipt cardinality and never reach the outbox
+    // insert, so the rollback assertion below would pass for the wrong reason.
+    let proposal_receipt = |record: &CanonicalEventRecord| arkret_wire::ControlProposalReceipt {
+        kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+        realm_id: arkret_wire::RealmId::new(realm_id.clone()).expect("typed realm id"),
+        proposal_digest: Hash::new(record.canonical_digest.clone()).expect("typed digest"),
+        received_at: now,
+        decision_due_at: now + Duration::hours(1),
+        absolute_due_at: now + Duration::hours(24),
+        defer_count: 0,
+        authority_set_ref: Hash::new(format!("sha256:{}", "a".repeat(64)))
+            .expect("typed authority set ref"),
+        member_receipts: Vec::new(),
+    };
+    let colliding_id = format!("outbox:{namespace}:collision");
+    // Two intents sharing one primary key: the first inserts, the second must
+    // abort the batch.
+    let colliding_outbox = |suffix: &str| {
+        vec![
+            FederationOutboxRecord::pending(
+                colliding_id.clone(),
+                format!("did:web:peer-{namespace}.example"),
+                "https://peer.example".to_owned(),
+                "/_arkret/peer/events".to_owned(),
+                format!("ak:outbox:{namespace}:{suffix}:a"),
+                "{}".to_owned(),
+                now.timestamp(),
+            ),
+            FederationOutboxRecord::pending(
+                colliding_id.clone(),
+                format!("did:web:peer-{namespace}.example"),
+                "https://peer.example".to_owned(),
+                "/_arkret/peer/events".to_owned(),
+                format!("ak:outbox:{namespace}:{suffix}:b"),
+                "{}".to_owned(),
+                now.timestamp(),
+            ),
+        ]
+    };
+
+    let bootstrap_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
+    let bootstrap_record =
+        canonical_wire_event_record(&bootstrap_event_id, &principal_id, &realm_id, 0, now);
+    assert!(
+        events
+            .put_realm_bootstrap_batch_atomic(
+                vec![bootstrap_record.clone()],
+                vec![proposal_receipt(&bootstrap_record)],
+                colliding_outbox("bootstrap"),
+            )
+            .await
+            .is_err(),
+        "a failing outbox insert must abort the Realm genesis unit"
+    );
+    assert!(
+        !events
+            .contains(&bootstrap_event_id)
+            .await
+            .expect("bootstrap event rollback"),
+        "the Realm genesis Events roll back with their delivery intents"
+    );
+    assert!(
+        outbox
+            .get(&colliding_id)
+            .await
+            .expect("bootstrap outbox rollback")
+            .is_none(),
+        "the partially-inserted delivery intent rolls back too"
+    );
+
+    let anchor_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
+    assert!(
+        events
+            .put_identity_anchor_batch_atomic(
+                vec![canonical_wire_event_record(
+                    &anchor_event_id,
+                    &principal_id,
+                    &realm_id,
+                    0,
+                    now,
+                )],
+                Vec::new(),
+                None,
+                None,
+                None,
+                None,
+                Vec::new(),
+                colliding_outbox("anchor"),
+            )
+            .await
+            .is_err(),
+        "a failing outbox insert must abort the identity anchor unit"
+    );
+    assert!(
+        !events
+            .contains(&anchor_event_id)
+            .await
+            .expect("anchor event rollback"),
+        "the identity anchor Events roll back with their delivery intents"
+    );
+    assert!(
+        outbox
+            .get(&colliding_id)
+            .await
+            .expect("anchor outbox rollback")
+            .is_none()
+    );
+
+    // The happy path still commits both halves together.
+    let committed_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
+    let committed_outbox_id = format!("outbox:{namespace}:committed");
+    let committed_record =
+        canonical_wire_event_record(&committed_event_id, &principal_id, &realm_id, 0, now);
+    events
+        .put_realm_bootstrap_batch_atomic(
+            vec![committed_record.clone()],
+            vec![proposal_receipt(&committed_record)],
+            vec![FederationOutboxRecord::pending(
+                committed_outbox_id.clone(),
+                format!("did:web:peer-{namespace}.example"),
+                "https://peer.example".to_owned(),
+                "/_arkret/peer/events".to_owned(),
+                format!("ak:outbox:{namespace}:committed"),
+                "{}".to_owned(),
+                now.timestamp(),
+            )],
+        )
+        .await
+        .expect("Realm genesis unit commits with its delivery intent");
+    assert!(events.contains(&committed_event_id).await.expect("event"));
+    assert!(
+        outbox
+            .get(&committed_outbox_id)
+            .await
+            .expect("outbox")
+            .is_some(),
+        "an accepted genesis unit always has its delivery intent"
     );
 }
 

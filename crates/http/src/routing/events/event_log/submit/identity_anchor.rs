@@ -322,6 +322,16 @@ pub(super) async fn submit_identity_anchor_batch(
     } else {
         None
     };
+    // Same rule as the ordinary Event path: the delivery intents are built
+    // before the commit and land inside it, so an accepted identity anchor can
+    // never outlive its federation fanout.
+    let deliveries = identity_anchor_fanout_records(
+        state,
+        session,
+        &[(&first, &envelopes[0]), (&second, &envelopes[1])],
+        &publication_evidence,
+    )
+    .await?;
     let commit_outcome = state
         .event_queries()
         .store_identity_anchor_batch(
@@ -332,6 +342,7 @@ pub(super) async fn submit_identity_anchor_batch(
             frontier_cas,
             reanchor_slot,
             publication_evidence,
+            deliveries,
         )
         .await
         .map_err(|error| {
@@ -404,10 +415,7 @@ pub(super) async fn submit_identity_anchor_batch(
         )
         .await;
     }
-    for (parsed, envelope) in [(&first, &envelopes[0]), (&second, &envelopes[1])] {
-        if !session.token_hash.starts_with("federation:") {
-            enqueue_peer_event_fanout(state, parsed, envelope).await;
-        }
+    for parsed in [&first, &second] {
         append_audit_log(
             state,
             Some(&session.actor),
@@ -630,6 +638,13 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         .collect::<Vec<_>>();
     let device =
         identity_anchor_device_projection(state, &first, &envelopes[0], None, received_at).await?;
+    let deliveries = identity_anchor_fanout_records(
+        state,
+        session,
+        &[(&first, &envelopes[0]), (&second, &envelopes[1])],
+        &publication_evidence,
+    )
+    .await?;
     state
         .event_queries()
         .store_identity_anchor_batch(
@@ -640,6 +655,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             None,
             None,
             publication_evidence,
+            deliveries,
         )
         .await
         .map_err(|error| {
@@ -659,7 +675,6 @@ pub(super) async fn submit_cross_signing_recovery_batch(
             )
             .await;
         }
-        enqueue_peer_event_fanout(state, parsed, envelope).await;
         append_audit_log(
             state,
             Some(&session.actor),
@@ -688,6 +703,41 @@ pub(super) async fn submit_cross_signing_recovery_batch(
     );
     outcome.ingress_receipts = ingress_receipts;
     Ok(outcome)
+}
+
+/// Federation delivery intents for one identity-anchor unit, built before the
+/// commit so they can travel inside it.
+///
+/// Each Event in the unit fans out under its own idempotency key — unlike a
+/// Realm genesis unit, the receiver does not need them in one request. A
+/// construction failure propagates: the local admission fails rather than
+/// accepting an anchor whose fanout would be lost on the next crash.
+async fn identity_anchor_fanout_records(
+    state: &AppState,
+    session: &SessionRecord,
+    unit: &[(&ValidatedEventEnvelope, &Value)],
+    publication_evidence: &[soland_services::events::PublicationEvidenceRecord],
+) -> Result<Vec<soland_services::events::FederationDelivery>, SubmitOneError> {
+    if session.token_hash.starts_with("federation:") {
+        return Ok(Vec::new());
+    }
+    let mut deliveries = Vec::new();
+    for (parsed, envelope) in unit {
+        deliveries.extend(
+            // This unit's ingress receipts are minted but not yet durable —
+            // they commit alongside these very outbox rows.
+            peer_event_fanout_records(state, parsed, envelope, None, publication_evidence)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "federation_fanout_unavailable",
+                        format!("identity anchor federation delivery intent unavailable: {error}"),
+                    )
+                })?,
+        );
+    }
+    Ok(deliveries)
 }
 
 fn validate_self_principal_pcr_bootstrap_context(

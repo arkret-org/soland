@@ -255,9 +255,26 @@ pub(super) async fn submit_realm_bootstrap_batch(
         .zip(envelopes.iter().cloned())
         .map(|(parsed, envelope)| canonical_record(parsed, envelope, received_at))
         .collect::<Vec<_>>();
+    // Build the federation delivery intents *before* the commit so they land in
+    // the same transaction as the Events. A construction failure rejects the
+    // admission: a Realm genesis unit accepted locally without its outbox rows
+    // would be a silently unroutable Realm after any crash.
+    let deliveries = if session.token_hash.starts_with("federation:") {
+        Vec::new()
+    } else {
+        peer_event_batch_fanout_records(state, &validated, &envelopes)
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "federation_fanout_unavailable",
+                    format!("Realm bootstrap federation delivery intent unavailable: {error}"),
+                )
+            })?
+    };
     state
         .event_queries()
-        .store_realm_bootstrap_batch(records, proposal_receipts.clone())
+        .store_realm_bootstrap_batch(records, proposal_receipts.clone(), deliveries)
         .await
         .map_err(|error| {
             if error.is_realm_already_exists() {
@@ -316,9 +333,6 @@ pub(super) async fn submit_realm_bootstrap_batch(
                 "failed to persist accepted Realm bootstrap projection event"
             );
         }
-    }
-    if !session.token_hash.starts_with("federation:") {
-        enqueue_peer_event_batch_fanout(state, &validated, &envelopes).await;
     }
     organizations::record_realm_organizations_from_event(state, &unit.realm_id, &envelopes[0])
         .await;

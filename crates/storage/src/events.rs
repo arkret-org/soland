@@ -1,7 +1,7 @@
 use super::{
     BTreeMap, BTreeSet, CanonicalEventRecord, DeviceInventoryRecord, EventBatchReceipt,
-    MessageRecord, PersistenceError, PersistenceResult, PublicationEvidenceRecord, Value,
-    async_trait,
+    FederationOutboxRecord, MessageRecord, PersistenceError, PersistenceResult,
+    PublicationEvidenceRecord, Value, async_trait,
 };
 /// Trait for message storage operations.
 #[async_trait]
@@ -25,14 +25,19 @@ pub trait MessageStore: Send + Sync {
 pub trait EventStore: Send + Sync {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()>;
     /// Commit one validated ordinary-Realm bootstrap unit. Implementations
-    /// MUST insert every canonical Event in one transaction or insert none.
+    /// MUST insert every canonical Event **and every federation outbox row** in
+    /// one transaction or insert none: an accepted Event whose delivery intent
+    /// did not land is exactly the silent-loss window this unit exists to close.
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
         proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()>;
     /// Commit the closed identity-anchor unit, its signed receipt (for
-    /// re-anchor), and the replacement device projection as one durable unit.
+    /// re-anchor), the replacement device projection and its federation outbox
+    /// rows as one durable unit.
+    #[allow(clippy::too_many_arguments)]
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
@@ -42,6 +47,7 @@ pub trait EventStore: Send + Sync {
         frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
+        outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome>;
     async fn batch_receipts_for_event(
         &self,

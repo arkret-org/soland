@@ -476,6 +476,72 @@ pub struct BlobRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
+/// Explicit outbound-delivery lifecycle for one `federation_outbox` row.
+///
+/// ```text
+/// pending
+///   -> leased
+///   -> pending            retry scheduled / lease expired
+///   -> delivered          peer accepted or duplicate
+///   -> policy_suppressed  local egress policy denied the target
+///   -> dead_lettered      terminal failure with an operator ledger entry
+///   -> superseded         semantic resubmission replaced this attempt
+/// ```
+///
+/// `delivered`, `policy_suppressed`, `dead_lettered` and `superseded` are
+/// mutually exclusive terminal states. Business state is never inferred from a
+/// sentinel status code or from a non-null completion timestamp.
+#[derive(Clone, Copy, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub enum FederationOutboxState {
+    Pending,
+    Leased,
+    Delivered,
+    PolicySuppressed,
+    DeadLettered,
+    Superseded,
+}
+
+impl FederationOutboxState {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Leased => "leased",
+            Self::Delivered => "delivered",
+            Self::PolicySuppressed => "policy_suppressed",
+            Self::DeadLettered => "dead_lettered",
+            Self::Superseded => "superseded",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "leased" => Some(Self::Leased),
+            "delivered" => Some(Self::Delivered),
+            "policy_suppressed" => Some(Self::PolicySuppressed),
+            "dead_lettered" => Some(Self::DeadLettered),
+            "superseded" => Some(Self::Superseded),
+            _ => None,
+        }
+    }
+
+    /// Whether the row has left the delivery pipeline for good. A terminal row
+    /// is never claimed again; `policy_suppressed` only returns to `pending`
+    /// through the explicit revalidation path (`sync/federation.md` §4.4).
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::Delivered | Self::PolicySuppressed | Self::DeadLettered | Self::Superseded
+        )
+    }
+}
+
+impl std::fmt::Display for FederationOutboxState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// G3.S0 — one outbound federation HTTP POST queued for the
 /// `FederationDispatcher` background worker. See
 /// `routing/federation/outbox.rs` for the worker loop and
@@ -500,27 +566,85 @@ pub struct FederationOutboxRecord {
     pub endpoint: String,
     /// `Idempotency-Key` header value the dispatcher sends. Derived
     /// deterministically from `(origin, resource_kind, resource_id)` so
-    /// retries collapse onto the same row server-side per
-    /// `federation.md` §8.5.
+    /// transport retries collapse onto the same row server-side per
+    /// `federation.md` §8.5. A semantic resubmission never reuses it.
     pub idempotency_key: String,
     /// Canonical request body the dispatcher POSTs verbatim.
     pub payload_json: String,
-    /// Number of completed delivery attempts (excluding the next one).
+    /// Explicit lifecycle state — the single source of truth for whether this
+    /// intent is still owed to the peer.
+    pub state: FederationOutboxState,
+    /// Number of completed transport attempts (excluding the next one).
     pub attempts: i32,
-    /// Unix seconds — earliest time the worker may pick this row.
+    /// Number of semantic resubmissions that produced this row. Bounded
+    /// independently of the transport budget (`federation.md` §4.1 quarantine
+    /// convergence bounds).
+    pub semantic_attempts: i32,
+    /// Unix seconds — earliest time the worker may claim this row.
     pub next_attempt_at: i64,
-    /// Last observed HTTP status code, or `-1` after the worker gave up
-    /// (attempts cap reached on retryable error). `None` until the first
-    /// attempt completes.
-    pub last_status: Option<i32>,
+    /// Last observed HTTP status code. `None` when the attempt never reached a
+    /// response (transport error) or before the first attempt.
+    pub last_http_status: Option<i32>,
+    /// Stable machine-readable classification of the last failure.
+    pub last_error_code: Option<String>,
     /// First ~1 KiB of the most recent response body, for postmortem.
     pub last_response_excerpt: Option<String>,
+    /// Worker identity currently holding the delivery lease.
+    pub lease_owner: Option<String>,
+    /// Random token proving lease ownership. Every terminal/retry write MUST
+    /// present the matching token, so a stale holder's late response cannot
+    /// overwrite the state a newer holder already wrote.
+    pub lease_token: Option<String>,
+    /// Unix seconds — when the current lease expires and the row becomes
+    /// claimable again.
+    pub lease_expires_at: Option<i64>,
+    /// Egress policy version that suppressed this row, when
+    /// `state == policy_suppressed`.
+    pub policy_version: Option<String>,
+    /// Diagnostic back-reference: the outbox row this one replaced through a
+    /// semantic resubmission or an operator requeue.
+    pub supersedes_outbox_id: Option<String>,
     /// Unix seconds — when the row was enqueued.
     pub created_at: i64,
-    /// Unix seconds — when delivery terminated (2xx success, permanent
-    /// 4xx failure, or the gave-up sentinel). `None` while the row is
-    /// still pending.
-    pub delivered_at: Option<i64>,
+    /// Unix seconds — when the row reached a terminal state. `None` while the
+    /// row is still pending or leased.
+    pub completed_at: Option<i64>,
+}
+
+impl FederationOutboxRecord {
+    /// A freshly enqueued, never-attempted delivery intent.
+    pub fn pending(
+        id: String,
+        peer_did: String,
+        peer_url: String,
+        endpoint: String,
+        idempotency_key: String,
+        payload_json: String,
+        created_at: i64,
+    ) -> Self {
+        Self {
+            id,
+            peer_did,
+            peer_url,
+            endpoint,
+            idempotency_key,
+            payload_json,
+            state: FederationOutboxState::Pending,
+            attempts: 0,
+            semantic_attempts: 0,
+            next_attempt_at: created_at,
+            last_http_status: None,
+            last_error_code: None,
+            last_response_excerpt: None,
+            lease_owner: None,
+            lease_token: None,
+            lease_expires_at: None,
+            policy_version: None,
+            supersedes_outbox_id: None,
+            created_at,
+            completed_at: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -530,11 +654,17 @@ pub struct FederationOutboxDeadLetterRecord {
     pub peer_did: String,
     pub endpoint: String,
     pub idempotency_key: String,
-    pub terminal_status: i32,
+    pub last_http_status: Option<i32>,
     pub attempts: i32,
     pub response_excerpt: Option<String>,
-    pub failed_at: i64,
     pub reason: String,
+    pub failed_at: i64,
+    /// Set when an operator replayed this dead letter into a fresh outbox row.
+    pub requeued_outbox_id: Option<String>,
+    pub requeued_by: Option<String>,
+    pub requeue_reason: Option<String>,
+    pub requeue_request_digest: Option<String>,
+    pub requeued_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -1424,6 +1424,33 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///    [`arkret_identifiers::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ak:trust_domain:`.
+/// `sync/federation.md` §4.1 deployment gate: outbound federation on a
+/// non-durable outbox is a silent data-loss configuration.
+///
+/// The in-memory outbox loses every pending delivery intent on restart, so an
+/// Event this service accepted — and told the client was accepted — would never
+/// reach its peer, with no record that it was owed. Refuse to boot instead.
+///
+/// The gate deliberately does **not** also require "a federation peer is
+/// currently configured". A remote delivery binding can appear at any moment
+/// from an accepted member join, long after boot, so that condition is not
+/// decidable when it needs to be checked. A deployment that genuinely never
+/// federates sets `SOLAND_FEDERATION_OUTBOUND=0`, which is an explicit
+/// statement rather than an accident of having no peers on the day it started.
+pub fn assert_durable_outbox_backend(
+    config: &AppConfig,
+    durable_persistence: bool,
+) -> anyhow::Result<()> {
+    if config.development_mode || !config.federation_outbound_enabled || durable_persistence {
+        return Ok(());
+    }
+    anyhow::bail!(
+        "outbound federation is enabled without durable persistence: the in-memory federation \
+         outbox drops every pending delivery on restart. Configure DATABASE_URL, or set \
+         SOLAND_FEDERATION_OUTBOUND=0 if this deployment must not federate."
+    )
+}
+
 pub fn derive_trust_domain(service_id: &str) -> anyhow::Result<String> {
     if let Some(value) = env_non_empty("SOLAND_TRUST_DOMAIN") {
         // Validate via SDK typed id — rejects bad shape at boot.

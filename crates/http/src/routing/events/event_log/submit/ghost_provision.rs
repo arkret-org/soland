@@ -176,7 +176,15 @@ async fn prepare_ghost_event(
             Some(&parsed.actor_id),
         )
     });
-    let outbox = peer_event_fanout_records(state, &parsed, &envelope, None).await;
+    let outbox = peer_event_fanout_records(state, &parsed, &envelope, None, &[])
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "federation_fanout_unavailable",
+                format!("applet ghost federation delivery intent unavailable: {error}"),
+            )
+        })?;
     let command = soland_services::events::CommitAcceptedEventCommand {
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id,
@@ -206,18 +214,7 @@ async fn prepare_ghost_event(
             })
             .collect(),
         idempotency: None,
-        deliveries: outbox
-            .into_iter()
-            .map(|record| soland_services::events::FederationDelivery {
-                id: record.id,
-                peer_did: record.peer_did,
-                peer_url: record.peer_url,
-                endpoint: record.endpoint,
-                idempotency_key: record.idempotency_key,
-                payload_json: record.payload_json,
-                created_at: record.created_at,
-            })
-            .collect(),
+        deliveries: outbox,
     };
     Ok(PreparedGhostEvent {
         command,

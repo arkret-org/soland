@@ -1,5 +1,6 @@
 use soland_storage::contract_tests::{
-    EventCommitContractStores, assert_event_commit_unit_of_work_contract,
+    EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
+    assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
     assert_mls_keypackage_retirement_contract, assert_organization_registration_store_contract,
     assert_proposal_member_receipt_store_contract,
@@ -75,6 +76,29 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
         &namespace,
     )
     .await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_rolls_atomic_batches_back_with_their_outbox_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let events = PgEventStore { pool: pool.clone() };
+    let outbox = PgFederationOutboxStore { pool };
+    let namespace = format!("postgres-batch-outbox-{}", uuid::Uuid::now_v7());
+    assert_atomic_batch_outbox_rollback_contract(&events, &outbox, &namespace).await;
+}
+
+#[tokio::test]
+async fn postgres_adapter_satisfies_shared_federation_outbox_contract_when_configured() {
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let store = PgFederationOutboxStore { pool };
+    let namespace = format!("postgres-federation-outbox-{}", uuid::Uuid::now_v7());
+    assert_federation_outbox_store_contract(&store, &namespace).await;
 }
 
 #[tokio::test]

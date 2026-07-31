@@ -18,20 +18,15 @@ struct PersistenceMaintenance(Arc<dyn PersistenceStore>);
 fn federation_delivery_record(
     record: crate::federation::FederationDeliveryRecord,
 ) -> FederationOutboxRecord {
-    FederationOutboxRecord {
-        id: record.id,
-        peer_did: record.peer_did,
-        peer_url: record.peer_url,
-        endpoint: record.endpoint,
-        idempotency_key: record.idempotency_key,
-        payload_json: record.payload_json,
-        attempts: 0,
-        next_attempt_at: record.created_at,
-        last_status: None,
-        last_response_excerpt: None,
-        created_at: record.created_at,
-        delivered_at: None,
-    }
+    FederationOutboxRecord::pending(
+        record.id,
+        record.peer_did,
+        record.peer_url,
+        record.endpoint,
+        record.idempotency_key,
+        record.payload_json,
+        record.created_at,
+    )
 }
 
 fn application_delivery_record(
@@ -53,30 +48,63 @@ fn application_pending_delivery(
 ) -> crate::federation::PendingFederationDelivery {
     crate::federation::PendingFederationDelivery {
         delivery: application_delivery_record(&record),
+        state: record.state,
         attempts: record.attempts,
+        semantic_attempts: record.semantic_attempts,
         next_attempt_at: record.next_attempt_at,
-        last_status: record.last_status,
+        last_http_status: record.last_http_status,
+        last_error_code: record.last_error_code,
         last_response_excerpt: record.last_response_excerpt,
-        delivered_at: record.delivered_at,
+        lease_owner: record.lease_owner,
+        lease_token: record.lease_token,
+        lease_expires_at: record.lease_expires_at,
+        policy_version: record.policy_version,
+        supersedes_outbox_id: record.supersedes_outbox_id,
+        completed_at: record.completed_at,
     }
 }
 
-fn persistence_pending_delivery(
-    record: &crate::federation::PendingFederationDelivery,
-) -> FederationOutboxRecord {
-    FederationOutboxRecord {
-        id: record.delivery.id.clone(),
-        peer_did: record.delivery.peer_did.clone(),
-        peer_url: record.delivery.peer_url.clone(),
-        endpoint: record.delivery.endpoint.clone(),
-        idempotency_key: record.delivery.idempotency_key.clone(),
-        payload_json: record.delivery.payload_json.clone(),
+fn application_dead_letter(
+    record: FederationOutboxDeadLetterRecord,
+) -> crate::federation::FederationDeadLetter {
+    crate::federation::FederationDeadLetter {
+        id: record.id,
+        outbox_id: record.outbox_id,
+        peer_did: record.peer_did,
+        endpoint: record.endpoint,
+        idempotency_key: record.idempotency_key,
+        last_http_status: record.last_http_status,
         attempts: record.attempts,
-        next_attempt_at: record.next_attempt_at,
-        last_status: record.last_status,
-        last_response_excerpt: record.last_response_excerpt.clone(),
-        created_at: record.delivery.created_at,
-        delivered_at: record.delivered_at,
+        response_excerpt: record.response_excerpt,
+        reason: record.reason,
+        failed_at: record.failed_at,
+        requeued_outbox_id: record.requeued_outbox_id,
+        requeued_by: record.requeued_by,
+        requeue_reason: record.requeue_reason,
+        requeue_request_digest: record.requeue_request_digest,
+        requeued_at: record.requeued_at,
+    }
+}
+
+fn persistence_dead_letter(
+    record: &crate::federation::FederationDeadLetter,
+) -> FederationOutboxDeadLetterRecord {
+    FederationOutboxDeadLetterRecord {
+        id: record.id.clone(),
+        outbox_id: record.outbox_id.clone(),
+        peer_did: record.peer_did.clone(),
+        endpoint: record.endpoint.clone(),
+        idempotency_key: record.idempotency_key.clone(),
+        last_http_status: record.last_http_status,
+        attempts: record.attempts,
+        response_excerpt: record.response_excerpt.clone(),
+        reason: record.reason.clone(),
+        failed_at: record.failed_at,
+        requeued_outbox_id: record.requeued_outbox_id.clone(),
+        requeued_by: record.requeued_by.clone(),
+        requeue_reason: record.requeue_reason.clone(),
+        requeue_request_digest: record.requeue_request_digest.clone(),
+        requeued_at: record.requeued_at,
     }
 }
 
@@ -124,52 +152,178 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
             .map(|row| application_delivery_record(&row)))
     }
 
-    async fn pending_due(
+    async fn claim_due(
         &self,
-        now: i64,
-        limit: usize,
+        command: &crate::federation::ClaimFederationDeliveriesCommand,
     ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
         Ok(self
             .0
             .federation_outbox()
-            .pending_due(now, limit)
+            .claim_due(&FederationOutboxClaim {
+                now_unix_secs: command.now,
+                limit: command.limit,
+                lease_owner: command.lease_owner.clone(),
+                lease_token: command.lease_token.clone(),
+                lease_duration_secs: command.lease_duration_secs,
+            })
             .await?
             .into_iter()
             .map(application_pending_delivery)
             .collect())
     }
 
-    async fn update(
+    async fn record_attempt(
         &self,
-        delivery: &crate::federation::PendingFederationDelivery,
-    ) -> crate::ServiceResult<()> {
-        self.0
+        command: &crate::federation::RecordFederationAttemptCommand,
+    ) -> crate::ServiceResult<bool> {
+        let outcome = match &command.outcome {
+            crate::federation::FederationDeliveryOutcome::Retry { next_attempt_at } => {
+                FederationOutboxOutcome::Retry {
+                    next_attempt_at: *next_attempt_at,
+                }
+            }
+            crate::federation::FederationDeliveryOutcome::Delivered => {
+                FederationOutboxOutcome::Delivered
+            }
+            crate::federation::FederationDeliveryOutcome::PolicySuppressed { policy_version } => {
+                FederationOutboxOutcome::PolicySuppressed {
+                    policy_version: policy_version.clone(),
+                }
+            }
+            crate::federation::FederationDeliveryOutcome::DeadLettered(record) => {
+                FederationOutboxOutcome::DeadLettered(persistence_dead_letter(record))
+            }
+            crate::federation::FederationDeliveryOutcome::Superseded {
+                delivery,
+                next_attempt_at,
+            } => {
+                let mut successor = federation_delivery_record((**delivery).clone());
+                successor.semantic_attempts = command.semantic_attempts;
+                successor.supersedes_outbox_id = Some(command.id.clone());
+                successor.next_attempt_at = *next_attempt_at;
+                FederationOutboxOutcome::Superseded(Box::new(successor))
+            }
+        };
+        Ok(self
+            .0
             .federation_outbox()
-            .update(&persistence_pending_delivery(delivery))
-            .await?;
-        Ok(())
+            .complete(&FederationOutboxTransition {
+                id: command.id.clone(),
+                lease_token: command.lease_token.clone(),
+                attempts: command.attempts,
+                semantic_attempts: command.semantic_attempts,
+                last_http_status: command.last_http_status,
+                last_error_code: command.last_error_code.clone(),
+                last_response_excerpt: command.last_response_excerpt.clone(),
+                observed_at: command.observed_at,
+                outcome,
+            })
+            .await?)
     }
 
-    async fn insert_dead_letter(
+    async fn policy_suppressed_stale(
         &self,
-        record: &crate::federation::FederationDeadLetter,
-    ) -> crate::ServiceResult<()> {
-        self.0
+        current_policy_version: &str,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
+        Ok(self
+            .0
             .federation_outbox()
-            .insert_dead_letter(&soland_storage::FederationOutboxDeadLetterRecord {
-                id: record.id.clone(),
-                outbox_id: record.outbox_id.clone(),
-                peer_did: record.peer_did.clone(),
-                endpoint: record.endpoint.clone(),
-                idempotency_key: record.idempotency_key.clone(),
-                terminal_status: record.terminal_status,
-                attempts: record.attempts,
-                response_excerpt: record.response_excerpt.clone(),
-                failed_at: record.failed_at,
-                reason: record.reason.clone(),
+            .policy_suppressed_stale(current_policy_version, limit)
+            .await?
+            .into_iter()
+            .map(application_pending_delivery)
+            .collect())
+    }
+
+    async fn resolve_policy_suppressed(
+        &self,
+        id: &str,
+        resolution: &crate::federation::FederationPolicyResolution,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .resolve_policy_suppressed(id, resolution)
+            .await?)
+    }
+
+    async fn delivery(
+        &self,
+        id: &str,
+    ) -> crate::ServiceResult<Option<crate::federation::PendingFederationDelivery>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .get(id)
+            .await?
+            .map(application_pending_delivery))
+    }
+
+    async fn deliveries_by_state(
+        &self,
+        state: crate::federation::FederationDeliveryState,
+        limit: usize,
+    ) -> crate::ServiceResult<Vec<crate::federation::PendingFederationDelivery>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .list_by_state(state, limit)
+            .await?
+            .into_iter()
+            .map(application_pending_delivery)
+            .collect())
+    }
+
+    async fn state_depth(
+        &self,
+    ) -> crate::ServiceResult<Vec<crate::federation::FederationDeliveryStateDepth>> {
+        Ok(self.0.federation_outbox().state_depth().await?)
+    }
+
+    async fn dead_letter(
+        &self,
+        id: &str,
+    ) -> crate::ServiceResult<Option<crate::federation::FederationDeadLetter>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .dead_letter(id)
+            .await?
+            .map(application_dead_letter))
+    }
+
+    async fn dead_letters(
+        &self,
+    ) -> crate::ServiceResult<Vec<crate::federation::FederationDeadLetter>> {
+        Ok(self
+            .0
+            .federation_outbox()
+            .dead_letters_snapshot()
+            .await?
+            .into_iter()
+            .map(application_dead_letter)
+            .collect())
+    }
+
+    async fn requeue_dead_letter(
+        &self,
+        command: &crate::federation::RequeueFederationDeadLetterCommand,
+    ) -> crate::ServiceResult<bool> {
+        let mut record = federation_delivery_record(command.delivery.clone());
+        record.supersedes_outbox_id = Some(command.supersedes_outbox_id.clone());
+        Ok(self
+            .0
+            .federation_outbox()
+            .requeue_dead_letter(&FederationOutboxRequeue {
+                dead_letter_id: command.dead_letter_id.clone(),
+                record,
+                operator: command.operator.clone(),
+                reason: command.reason.clone(),
+                request_digest: command.request_digest.clone(),
+                requeued_at: command.requeued_at,
             })
-            .await?;
-        Ok(())
+            .await?)
     }
 
     async fn deliveries(

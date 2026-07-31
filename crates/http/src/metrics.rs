@@ -42,8 +42,19 @@ const FEDERATION_DLQ: &str = "soland_federation_outbox_dead_letter_total";
 const EGRESS_DENIED: &str = "soland_egress_denied_total";
 const DIGEST_MISMATCH: &str = "soland_digest_mismatch_total";
 const FEDERATION_RETRY: &str = "soland_federation_retry_total";
+const FEDERATION_RETRY_DELAY: &str = "soland_federation_retry_delay_seconds";
+const FEDERATION_LEASE_TAKEOVER: &str = "soland_federation_outbox_lease_takeover_total";
 const DB_POOL_IN_USE: &str = "soland_db_pool_in_use";
 const FEDERATION_OUTBOX_DEPTH: &str = "soland_federation_outbox_depth";
+const FEDERATION_OUTBOX_STATE_DEPTH: &str = "soland_federation_outbox_state_depth";
+const FEDERATION_OUTBOX_OLDEST_PENDING_AGE: &str =
+    "soland_federation_outbox_oldest_pending_age_seconds";
+
+/// Buckets for `soland_federation_retry_delay_seconds` — spans the whole
+/// scheduling range from a 1s dependency resubmission to the 1h transport cap.
+const RETRY_DELAY_BUCKETS: [f64; 9] = [
+    1.0, 5.0, 15.0, 60.0, 300.0, 900.0, 1_800.0, 3_600.0, 7_200.0,
+];
 
 static PROMETHEUS_HANDLE: OnceLock<Result<PrometheusHandle, String>> = OnceLock::new();
 
@@ -90,6 +101,11 @@ fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
                 &DURATION_BUCKETS,
             )
             .map_err(|err| err.to_string())?
+            .set_buckets_for_metric(
+                Matcher::Full(FEDERATION_RETRY_DELAY.to_owned()),
+                &RETRY_DELAY_BUCKETS,
+            )
+            .map_err(|err| err.to_string())?
             .install_recorder()
             .map_err(|err| err.to_string())?;
 
@@ -115,13 +131,29 @@ fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
             FEDERATION_RETRY,
             "Federation delivery retry state transitions."
         );
+        describe_histogram!(
+            FEDERATION_RETRY_DELAY,
+            "Scheduled delay until the next federation delivery attempt."
+        );
+        describe_counter!(
+            FEDERATION_LEASE_TAKEOVER,
+            "Federation delivery results discarded because the row's lease had already moved to another worker."
+        );
         describe_gauge!(
             DB_POOL_IN_USE,
             "PostgreSQL pool connections currently checked out."
         );
         describe_gauge!(
             FEDERATION_OUTBOX_DEPTH,
-            "Undelivered federation outbox rows."
+            "Federation outbox rows still owed to a peer (pending or leased)."
+        );
+        describe_gauge!(
+            FEDERATION_OUTBOX_STATE_DEPTH,
+            "Federation outbox rows by lifecycle state and peer."
+        );
+        describe_gauge!(
+            FEDERATION_OUTBOX_OLDEST_PENDING_AGE,
+            "Age of the oldest federation outbox row still owed to a peer."
         );
         Ok(handle)
     }) {
@@ -232,7 +264,7 @@ async fn handle_metrics_connection(mut stream: TcpStream, state: AppState) -> an
 pub async fn render_metrics(state: &AppState) -> String {
     // Sample scrape-time gauges into the recorder right before rendering.
     gauge!(DB_POOL_IN_USE).set(state.jobs().database_pool_in_use() as f64);
-    gauge!(FEDERATION_OUTBOX_DEPTH).set(federation_outbox_depth(state).await as f64);
+    sample_federation_outbox_gauges(state).await;
 
     match prometheus_handle() {
         Ok(handle) => handle.render(),
@@ -251,14 +283,25 @@ pub fn record_audit_append_failure() {
     counter!(AUDIT_APPEND_FAILURES).increment(1);
 }
 
-/// P5 (5.4) — bump the federation-outbox dead-letter counter. Called
-/// from `routing::federation::outbox::insert_dead_letter` immediately
-/// after the persistence ledger write (regardless of write outcome —
-/// we count the *decision* to give up on a row, not whether the row
-/// landed in the ledger). Feeds
+/// P5 (5.4) — bump the federation-outbox dead-letter counter. Called from
+/// `routing::federation::outbox` at the *decision* boundary (we have given up
+/// on this row), not at the persistence outcome, so an alert fires even if the
+/// durable ledger write also failed. Feeds
 /// `soland_federation_outbox_dead_letter_total`.
-pub fn record_federation_outbox_dead_letter() {
-    counter!(FEDERATION_DLQ).increment(1);
+pub fn record_federation_outbox_dead_letter(reason: &str) {
+    counter!(FEDERATION_DLQ, "reason" => normalize_label(reason)).increment(1);
+}
+
+/// Delay the dispatcher scheduled before the next attempt on one row.
+pub fn record_federation_retry_delay(delay_secs: i64) {
+    histogram!(FEDERATION_RETRY_DELAY).record(delay_secs.max(0) as f64);
+}
+
+/// One worker's delivery result was dropped because the row's lease had
+/// already been taken over — the signal that a dispatcher replica overran its
+/// lease or died mid-delivery and another replica resumed the row.
+pub fn record_federation_outbox_lease_takeover() {
+    counter!(FEDERATION_LEASE_TAKEOVER).increment(1);
 }
 
 pub fn record_egress_denied(reason: &str, target_class: &str) {
@@ -278,13 +321,40 @@ pub fn record_federation_retry_state(state: &str) {
     counter!(FEDERATION_RETRY, "state" => normalize_label(state)).increment(1);
 }
 
-async fn federation_outbox_depth(state: &AppState) -> usize {
-    state
-        .federation()
-        .deliveries()
-        .await
-        .map(|rows| rows.iter().filter(|row| row.delivered_at.is_none()).count())
-        .unwrap_or(0)
+/// Sample the outbox depth gauges from the aggregate the store computes.
+///
+/// Per-`(state, peer)` depth plus the oldest still-owed row's age are what an
+/// operator needs to tell "one peer is down" from "the dispatcher is stuck",
+/// which a single scalar depth cannot express.
+async fn sample_federation_outbox_gauges(state: &AppState) {
+    let buckets = match state.federation().delivery_state_depth().await {
+        Ok(buckets) => buckets,
+        Err(error) => {
+            tracing::warn!(%error, "federation outbox depth gauge unavailable");
+            return;
+        }
+    };
+    let now = chrono::Utc::now().timestamp();
+    let mut owed = 0_i64;
+    let mut oldest_owed: Option<i64> = None;
+    for bucket in &buckets {
+        gauge!(
+            FEDERATION_OUTBOX_STATE_DEPTH,
+            "state" => bucket.state.as_str(),
+            "peer" => normalize_label(&bucket.peer_did),
+        )
+        .set(bucket.depth as f64);
+        if bucket.state.is_terminal() {
+            continue;
+        }
+        owed += bucket.depth;
+        if let Some(created_at) = bucket.oldest_created_at {
+            oldest_owed = Some(oldest_owed.map_or(created_at, |oldest| oldest.min(created_at)));
+        }
+    }
+    gauge!(FEDERATION_OUTBOX_DEPTH).set(owed as f64);
+    gauge!(FEDERATION_OUTBOX_OLDEST_PENDING_AGE)
+        .set(oldest_owed.map_or(0.0, |created_at| (now - created_at).max(0) as f64));
 }
 
 fn record_http_request(op: &str, status: u16, duration: Duration) {
@@ -419,7 +489,9 @@ mod tests {
         record_digest_mismatch("blob upload");
         record_federation_retry_state("retry scheduled");
         record_audit_append_failure();
-        record_federation_outbox_dead_letter();
+        record_federation_outbox_dead_letter("retry_budget_exhausted");
+        record_federation_retry_delay(42);
+        record_federation_outbox_lease_takeover();
         let rendered = render();
 
         // Byte-stable wire names (counters carry the exporter `_total` suffix).
@@ -432,6 +504,9 @@ mod tests {
         assert!(rendered.contains("state=\"retry_scheduled\""));
         assert!(rendered.contains("soland_audit_append_failures_total"));
         assert!(rendered.contains("soland_federation_outbox_dead_letter_total"));
+        assert!(rendered.contains("reason=\"retry_budget_exhausted\""));
+        assert!(rendered.contains("soland_federation_retry_delay_seconds"));
+        assert!(rendered.contains("soland_federation_outbox_lease_takeover_total"));
     }
 
     #[test]

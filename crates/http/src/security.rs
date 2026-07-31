@@ -33,6 +33,58 @@ pub fn private_networks_allowed(development_mode: bool) -> bool {
     env_bool(SOLAND_EGRESS_ALLOW_PRIVATE_NETWORKS).unwrap_or(development_mode)
 }
 
+/// Stable digest of every input that can change an egress verdict.
+///
+/// A `policy_suppressed` federation outbox row records the version that denied
+/// it; the dispatcher only revalidates rows whose recorded version differs from
+/// the live one. Without this, a restart would either re-run the whole
+/// suppressed backlog every tick or — worse — silently bypass a policy that
+/// still denies the target.
+pub fn egress_policy_version(development_mode: bool) -> String {
+    let mut canonical = String::new();
+    canonical.push_str("allow_private=");
+    canonical.push_str(if private_networks_allowed(development_mode) {
+        "1"
+    } else {
+        "0"
+    });
+    for (name, entries) in [
+        (
+            SOLAND_EGRESS_ALLOWED_HOSTS,
+            host_policy_entries(SOLAND_EGRESS_ALLOWED_HOSTS),
+        ),
+        (
+            SOLAND_EGRESS_DENYLIST,
+            host_policy_entries(SOLAND_EGRESS_DENYLIST),
+        ),
+    ] {
+        canonical.push('\n');
+        canonical.push_str(name);
+        canonical.push('=');
+        let mut entries = entries;
+        entries.sort();
+        entries.dedup();
+        canonical.push_str(&entries.join(","));
+    }
+    let mut federation = federation_denylist_entries();
+    federation.sort();
+    federation.dedup();
+    canonical.push_str("\nfederation_denylist=");
+    canonical.push_str(&federation.join(","));
+    canonical.push_str("\nsovereign_enclave=");
+    canonical.push_str(if env_bool(SOLAND_SOVEREIGN_ENCLAVE).unwrap_or(false) {
+        "1"
+    } else {
+        "0"
+    });
+    let mut enclave_hosts = host_policy_entries(SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS);
+    enclave_hosts.sort();
+    enclave_hosts.dedup();
+    canonical.push_str("\nsovereign_enclave_allowed_hosts=");
+    canonical.push_str(&enclave_hosts.join(","));
+    arkret_canonical::sha256_digest(canonical.as_bytes())
+}
+
 pub fn validate_http_url_for_egress(
     raw_url: &str,
     purpose: &str,

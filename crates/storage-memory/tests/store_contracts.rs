@@ -1,5 +1,6 @@
 use soland_storage::contract_tests::{
-    EventCommitContractStores, assert_event_commit_unit_of_work_contract,
+    EventCommitContractStores, assert_atomic_batch_outbox_rollback_contract,
+    assert_event_commit_unit_of_work_contract, assert_federation_outbox_store_contract,
     assert_idempotency_store_contract, assert_last_resort_claim_ledger_contract,
     assert_mls_keypackage_retirement_contract, assert_proposal_member_receipt_store_contract,
 };
@@ -40,6 +41,24 @@ async fn memory_adapter_satisfies_shared_event_commit_contract() {
         "memory-event-commit",
     )
     .await;
+}
+
+#[tokio::test]
+async fn memory_adapter_rolls_atomic_batches_back_with_their_outbox() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_atomic_batch_outbox_rollback_contract(
+        store.events(),
+        store.federation_outbox(),
+        "memory-batch-outbox",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn memory_adapter_satisfies_shared_federation_outbox_contract() {
+    let store = SolandMemoryPersistenceStore::new();
+    assert_federation_outbox_store_contract(store.federation_outbox(), "memory-federation-outbox")
+        .await;
 }
 
 #[tokio::test]

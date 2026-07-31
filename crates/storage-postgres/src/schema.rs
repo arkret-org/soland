@@ -497,12 +497,20 @@ diesel::table! {
         endpoint -> Text,
         idempotency_key -> Text,
         payload_json -> Text,
+        state -> Text,
         attempts -> Int4,
+        semantic_attempts -> Int4,
         next_attempt_at -> Int8,
-        last_status -> Nullable<Int4>,
+        last_http_status -> Nullable<Int4>,
+        last_error_code -> Nullable<Text>,
         last_response_excerpt -> Nullable<Text>,
+        lease_owner -> Nullable<Text>,
+        lease_token -> Nullable<Text>,
+        lease_expires_at -> Nullable<Int8>,
+        policy_version -> Nullable<Text>,
+        supersedes_outbox_id -> Nullable<Text>,
         created_at -> Int8,
-        delivered_at -> Nullable<Int8>,
+        completed_at -> Nullable<Int8>,
     }
 }
 
@@ -513,11 +521,16 @@ diesel::table! {
         peer_id -> Text,
         endpoint -> Text,
         idempotency_key -> Text,
-        terminal_status -> Int4,
+        last_http_status -> Nullable<Int4>,
         attempts -> Int4,
         response_excerpt -> Nullable<Text>,
-        failed_at -> Int8,
         reason -> Text,
+        failed_at -> Int8,
+        requeued_outbox_id -> Nullable<Text>,
+        requeued_by -> Nullable<Text>,
+        requeue_reason -> Nullable<Text>,
+        requeue_request_digest -> Nullable<Text>,
+        requeued_at -> Nullable<Int8>,
     }
 }
 

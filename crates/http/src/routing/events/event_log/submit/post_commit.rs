@@ -178,54 +178,55 @@ fn federation_cba_proof_bundles(
 /// one ingress receipt covering that exact digest, and this service must never
 /// mint a replacement receipt for an Event it did not itself receipt — that
 /// would re-stamp `received_at` and silently widen a fixed revocation window.
-/// Such an Event is dropped from the batch with a warning.
+/// That is a hard construction failure, not something to drop quietly: the
+/// caller turns it into a rejected admission.
 async fn federation_submissions(
     state: &AppState,
     events: &[Event],
     current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
-) -> Option<Vec<arkret_wire::EventFederationSubmission>> {
+    pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
+) -> Result<Vec<arkret_wire::EventFederationSubmission>, String> {
     let mut digests = Vec::with_capacity(events.len());
     for event in events {
-        match event.event_digest() {
-            Ok(digest) => digests.push(digest),
-            Err(error) => {
-                tracing::warn!(%error, event_id = %event.event_id, "failed to digest an Event for federation");
-                return None;
-            }
-        }
+        let digest = event.event_digest().map_err(|error| {
+            format!(
+                "failed to digest Event {} for federation: {error}",
+                event.event_id
+            )
+        })?;
+        digests.push(digest);
     }
-    let evidence = match state
+    let evidence = state
         .event_queries()
         .publication_evidence_for_digests(&digests)
         .await
-    {
-        Ok(evidence) => evidence,
-        Err(error) => {
-            tracing::warn!(%error, "failed to read federation publication evidence");
-            return None;
-        }
-    };
+        .map_err(|error| format!("failed to read federation publication evidence: {error}"))?;
+    // `pending_evidence` is this unit's own evidence, minted but not yet
+    // durable: the identity-anchor batch commits its receipts in the same
+    // transaction as the Events, and the outbox rows are built before that
+    // transaction runs. Prefer it over the store so a first-time anchor can
+    // still assemble its fanout.
     let by_digest = evidence
         .into_iter()
+        .chain(pending_evidence.iter().cloned())
         .map(|record| (record.event_digest.clone(), record))
         .collect::<BTreeMap<_, _>>();
     let mut submissions = Vec::with_capacity(events.len());
     for (event, digest) in events.iter().zip(digests) {
-        let Some(record) = by_digest.get(&digest) else {
-            tracing::warn!(
-                event_id = %event.event_id,
-                "Event has no stored publication evidence and cannot be federated"
-            );
-            return None;
-        };
+        let record = by_digest.get(&digest).ok_or_else(|| {
+            format!(
+                "Event {} has no stored publication evidence and cannot be federated",
+                event.event_id
+            )
+        })?;
         let control_proposal_receipt = if event.seal_basis.is_some() {
-            let Ok(proposal_digest) = arkret_identifiers::Hash::new(digest.clone()) else {
-                tracing::warn!(
-                    event_id = %event.event_id,
-                    "Control Move digest is not a typed Hash and cannot be federated"
-                );
-                return None;
-            };
+            let proposal_digest =
+                arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
+                    format!(
+                        "Control Move {} digest is not a typed Hash: {error}",
+                        event.event_id
+                    )
+                })?;
             if let Some(receipt) = current_control_proposal_receipt
                 .filter(|receipt| receipt.proposal_digest == proposal_digest)
             {
@@ -237,19 +238,16 @@ async fn federation_submissions(
                 {
                     Ok(Some(receipt)) => Some(receipt),
                     Ok(None) => {
-                        tracing::warn!(
-                            event_id = %event.event_id,
-                            "Control Move has no stored proposal receipt and cannot be federated"
-                        );
-                        return None;
+                        return Err(format!(
+                            "Control Move {} has no stored proposal receipt and cannot be federated",
+                            event.event_id
+                        ));
                     }
                     Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            event_id = %event.event_id,
-                            "failed to read Control Move proposal receipt for federation"
-                        );
-                        return None;
+                        return Err(format!(
+                            "failed to read Control Move {} proposal receipt for federation: {error}",
+                            event.event_id
+                        ));
                     }
                 }
             }
@@ -263,50 +261,28 @@ async fn federation_submissions(
             control_proposal_receipt,
         });
     }
-    Some(submissions)
-}
-
-pub(super) async fn enqueue_peer_event_fanout(
-    state: &AppState,
-    parsed: &ValidatedEventEnvelope,
-    envelope: &Value,
-) {
-    for record in peer_event_fanout_records(state, parsed, envelope, None).await {
-        if let Err(error) = state
-            .federation()
-            .enqueue_delivery(
-                soland_services::federation::EnqueueFederationDeliveryCommand {
-                    delivery: record.clone(),
-                },
-            )
-            .await
-        {
-            tracing::warn!(
-                %error,
-                event_id = %parsed.event_id,
-                peer = %record.peer_url,
-                peer_did = %record.peer_did,
-                "failed to enqueue dynamic ak.peer.events.command.submit fanout"
-            );
-        }
-    }
+    Ok(submissions)
 }
 
 /// Preserve a protocol-atomic local Event batch as one federation request.
 /// Realm genesis units cannot be split into independent outbox rows because
 /// receivers must validate and commit create + closed facets as one
 /// transaction.
-pub(super) async fn enqueue_peer_event_batch_fanout(
+///
+/// Built **before** the Event transaction so the rows can be committed with
+/// it. Any construction failure is returned, never logged and swallowed: an
+/// Event that needs fanout must not be accepted locally without a durable
+/// delivery intent to go with it.
+pub(super) async fn peer_event_batch_fanout_records(
     state: &AppState,
     parsed_events: &[ValidatedEventEnvelope],
     envelopes: &[Value],
-) {
+) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     let Some(first) = parsed_events.first() else {
-        return;
+        return Ok(Vec::new());
     };
     if parsed_events.len() != envelopes.len() {
-        tracing::error!("peer Event batch fanout cardinality mismatch");
-        return;
+        return Err("peer Event batch fanout cardinality mismatch".to_owned());
     }
     let mut peers = dynamic_peer_event_targets(state, first).await;
     // The atomic genesis unit is routed after acceptance, but its canonical
@@ -343,35 +319,25 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         });
     }
     if peers.is_empty() {
-        return;
+        return Ok(Vec::new());
     }
-    let events = match envelopes
+    let events = envelopes
         .iter()
         .cloned()
         .map(serde_json::from_value::<Event>)
         .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(events) => events,
-        Err(error) => {
-            tracing::warn!(%error, realm_id = %first.realm_id, "failed to type check peer Event batch");
-            return;
-        }
-    };
+        .map_err(|error| format!("failed to type check peer Event batch: {error}"))?;
     let mut signer_key_evidence = Vec::new();
     let mut evidence_methods = std::collections::BTreeSet::new();
     for event in &events {
-        let evidence = match crate::jws_verify::federated_event_signer_evidence(state, event).await
-        {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    event_id = %event.event_id,
-                    "failed to resolve peer Event batch signer evidence"
-                );
-                return;
-            }
-        };
+        let evidence = crate::jws_verify::federated_event_signer_evidence(state, event)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to resolve peer Event batch signer evidence for {}: {error}",
+                    event.event_id
+                )
+            })?;
         for entry in evidence {
             if evidence_methods.insert(entry.verification_method.clone()) {
                 signer_key_evidence.push(entry);
@@ -383,16 +349,12 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             state, &events,
         )
         .await;
-    let cba_proof_bundles = match federation_cba_proof_bundles(state, &events) {
-        Ok(bundles) => bundles,
-        Err(error) => {
-            tracing::warn!(%error, realm_id = %first.realm_id, "failed to resolve peer Event batch CBA proof bundles");
-            return;
-        }
-    };
-    let Some(submissions) = federation_submissions(state, &events, None).await else {
-        return;
-    };
+    let cba_proof_bundles = federation_cba_proof_bundles(state, &events).map_err(|error| {
+        format!("failed to resolve peer Event batch CBA proof bundles: {error}")
+    })?;
+    // The Realm genesis path stores its ingress receipts before it gets here
+    // (`mint_and_store_ingress_receipt`), so the store is the only source.
+    let submissions = federation_submissions(state, &events, None, &[]).await?;
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -400,16 +362,18 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
         "canonical_digests": parsed_events.iter().map(|event| event.canonical_digest.as_str()).collect::<Vec<_>>(),
     });
     let now = chrono::Utc::now().timestamp();
+    let mut records = Vec::new();
     for peer in peers {
-        let Some(service_binding_ref) =
-            service_binding_ref_for_target(first, &binding_payload, &peer)
-        else {
-            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to build peer Event batch service binding");
-            continue;
-        };
         if peer.service_id == *state.service_id() {
             continue;
         }
+        let service_binding_ref = service_binding_ref_for_target(first, &binding_payload, &peer)
+            .ok_or_else(|| {
+                format!(
+                    "failed to build peer Event batch service binding for {}",
+                    peer.service_id
+                )
+            })?;
         let mut hasher_input = Vec::new();
         hasher_input.extend_from_slice(state.service_id().as_bytes());
         hasher_input.extend_from_slice(b"|");
@@ -428,18 +392,17 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             signer_key_evidence: signer_key_evidence.clone(),
             agent_signer_evidence_bundle: agent_signer_evidence_bundle.clone(),
         };
-        if let Err(error) = body.validate_federation_transport() {
-            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, %error, "peer Event batch violates the federation transport contract");
-            continue;
-        }
-        let Some(payload_json) = canonical::canonical_json_bytes(&body)
+        body.validate_federation_transport().map_err(|error| {
+            format!(
+                "peer Event batch for {} violates the federation transport contract: {error}",
+                peer.service_id
+            )
+        })?;
+        let payload_json = canonical::canonical_json_bytes(&body)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
-        else {
-            tracing::warn!(peer_did = %peer.service_id, realm_id = %first.realm_id, "failed to encode peer Event batch");
-            continue;
-        };
-        let record = soland_services::federation::FederationDeliveryRecord {
+            .ok_or_else(|| format!("failed to encode peer Event batch for {}", peer.service_id))?;
+        records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id,
             peer_url: peer.url.trim_end_matches('/').to_owned(),
@@ -447,24 +410,9 @@ pub(super) async fn enqueue_peer_event_batch_fanout(
             idempotency_key,
             payload_json,
             created_at: now,
-        };
-        if let Err(error) = state
-            .federation()
-            .enqueue_delivery(
-                soland_services::federation::EnqueueFederationDeliveryCommand {
-                    delivery: record.clone(),
-                },
-            )
-            .await
-        {
-            tracing::warn!(
-                %error,
-                peer_did = %record.peer_did,
-                realm_id = %first.realm_id,
-                "failed to enqueue peer Event batch fanout"
-            );
-        }
+        });
     }
+    Ok(records)
 }
 
 fn routable_member_delivery_service<'a>(kind: &str, envelope: &'a Value) -> Option<&'a str> {
@@ -486,15 +434,23 @@ fn routable_member_delivery_service<'a>(kind: &str, envelope: &'a Value) -> Opti
         .filter(|service_id| !service_id.is_empty())
 }
 
+/// Federation delivery intents for one accepted Event, built **before** its
+/// commit so they can travel inside the same transaction.
+///
+/// `pending_evidence` carries publication evidence this unit minted but has not
+/// yet persisted — the identity-anchor batch writes its ingress receipts in the
+/// very transaction these rows join, so the store cannot see them yet. Paths
+/// that store their receipts up front pass an empty slice.
 pub(super) async fn peer_event_fanout_records(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
     current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
-) -> Vec<soland_services::federation::FederationDeliveryRecord> {
+    pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
+) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     let peers = dynamic_peer_event_targets(state, parsed).await;
     if peers.is_empty() {
-        return Vec::new();
+        return Ok(Vec::new());
     }
     let event_id = parsed.event_id.as_str();
     let binding_payload = json!({
@@ -503,25 +459,13 @@ pub(super) async fn peer_event_fanout_records(
         "event_id": event_id,
         "canonical_digest": parsed.canonical_digest,
     });
-    let event = match serde_json::from_value::<Event>(envelope.clone()) {
-        Ok(event) => event,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                event_id,
-                "failed to type checked peer fanout event envelope"
-            );
-            return Vec::new();
-        }
-    };
-    let signer_key_evidence =
-        match crate::jws_verify::federated_event_signer_evidence(state, &event).await {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                tracing::warn!(%error, event_id, "failed to resolve peer Event signer evidence");
-                return Vec::new();
-            }
-        };
+    let event = serde_json::from_value::<Event>(envelope.clone())
+        .map_err(|error| format!("failed to type check peer fanout Event {event_id}: {error}"))?;
+    let signer_key_evidence = crate::jws_verify::federated_event_signer_evidence(state, &event)
+        .await
+        .map_err(|error| {
+            format!("failed to resolve peer Event {event_id} signer evidence: {error}")
+        })?;
     let agent_signer_evidence_bundle =
         crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
             state,
@@ -531,7 +475,10 @@ pub(super) async fn peer_event_fanout_records(
     let now = chrono::Utc::now().timestamp();
     let mut records = Vec::new();
     for peer in peers {
-        let dependencies = realm_event_dependency_records(state, parsed, envelope, &peer).await;
+        if peer.service_id == *state.service_id() {
+            continue;
+        }
+        let dependencies = realm_event_dependency_records(state, parsed, envelope, &peer).await?;
         // A directed Event can be the first reason this Realm is routed to a
         // remote principal server. Preserve the receiver's fail-closed
         // dependency admission by delivering the original atomic Realm
@@ -539,25 +486,18 @@ pub(super) async fn peer_event_fanout_records(
         // idempotency key collapses this prerequisite for later fanout.
         if !peer.realm_sync_endpoint
             && let Some(bootstrap) =
-                realm_bootstrap_fanout_record(state, parsed, &peer, now.saturating_sub(1)).await
+                realm_bootstrap_fanout_record(state, parsed, &peer, now.saturating_sub(1)).await?
         {
             records.push(bootstrap);
         }
-        let service_binding_ref = match service_binding_ref_for_target(
-            parsed,
-            &binding_payload,
-            &peer,
-        ) {
-            Some(value) => value,
-            None => {
-                tracing::warn!(
-                    event_id,
-                    peer_did = %peer.service_id,
-                    "failed to build typed dynamic ak.peer.events.command.submit service binding"
-                );
-                continue;
-            }
-        };
+        let service_binding_ref = service_binding_ref_for_target(parsed, &binding_payload, &peer)
+            .ok_or_else(|| {
+            format!(
+                "failed to build typed dynamic ak.peer.events.command.submit service binding \
+                     for {}",
+                peer.service_id
+            )
+        })?;
         let mut hasher_input = Vec::new();
         hasher_input.extend_from_slice(state.service_id().as_bytes());
         hasher_input.extend_from_slice(b"|");
@@ -579,16 +519,14 @@ pub(super) async fn peer_event_fanout_records(
         let idempotency_key = format!("ak:outbox:event:{}", sha256_hex(&hasher_input));
         let mut peer_events = dependencies
             .iter()
-            .filter_map(|record| serde_json::from_value::<Event>(record.envelope.clone()).ok())
-            .collect::<Vec<_>>();
-        if peer_events.len() != dependencies.len() {
-            tracing::warn!(
-                event_id,
-                peer_did = %peer.service_id,
-                "failed to type check a causal prerequisite for peer Event fanout"
-            );
-            continue;
-        }
+            .map(|record| serde_json::from_value::<Event>(record.envelope.clone()))
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| {
+                format!(
+                    "failed to type check a causal prerequisite of {event_id} for {}: {error}",
+                    peer.service_id
+                )
+            })?;
         peer_events.push(event.clone());
         peer_events.sort_by_key(|event| {
             match event
@@ -605,30 +543,20 @@ pub(super) async fn peer_event_fanout_records(
             .iter()
             .map(|evidence| evidence.verification_method.clone())
             .collect::<std::collections::BTreeSet<_>>();
-        let mut dependency_evidence_failed = false;
         for dependency in &peer_events {
-            let evidence =
-                match crate::jws_verify::federated_event_signer_evidence(state, dependency).await {
-                    Ok(evidence) => evidence,
-                    Err(error) => {
-                        tracing::warn!(
-                            %error,
-                            event_id = %dependency.event_id,
-                            peer_did = %peer.service_id,
-                            "failed to resolve causal prerequisite signer evidence"
-                        );
-                        dependency_evidence_failed = true;
-                        break;
-                    }
-                };
+            let evidence = crate::jws_verify::federated_event_signer_evidence(state, dependency)
+                .await
+                .map_err(|error| {
+                    format!(
+                        "failed to resolve causal prerequisite {} signer evidence: {error}",
+                        dependency.event_id
+                    )
+                })?;
             for entry in evidence {
                 if evidence_methods.insert(entry.verification_method.clone()) {
                     peer_signer_key_evidence.push(entry);
                 }
             }
-        }
-        if dependency_evidence_failed {
-            continue;
         }
         let peer_agent_signer_evidence_bundle =
             crate::routing::identity::agents::evidence::signer_evidence_bundle_for_events(
@@ -637,23 +565,19 @@ pub(super) async fn peer_event_fanout_records(
             )
             .await
             .or_else(|| agent_signer_evidence_bundle.clone());
-        let cba_proof_bundles = match federation_cba_proof_bundles(state, &peer_events) {
-            Ok(bundles) => bundles,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    event_id,
-                    peer_did = %peer.service_id,
-                    "failed to resolve dynamic peer Event CBA proof bundles"
-                );
-                continue;
-            }
-        };
-        let Some(submissions) =
-            federation_submissions(state, &peer_events, current_control_proposal_receipt).await
-        else {
-            continue;
-        };
+        let cba_proof_bundles =
+            federation_cba_proof_bundles(state, &peer_events).map_err(|error| {
+                format!(
+                    "failed to resolve dynamic peer Event {event_id} CBA proof bundles: {error}"
+                )
+            })?;
+        let submissions = federation_submissions(
+            state,
+            &peer_events,
+            current_control_proposal_receipt,
+            pending_evidence,
+        )
+        .await?;
         let body = EventsSubmitFederationRequestBody {
             service_binding_ref,
             events: submissions,
@@ -661,27 +585,19 @@ pub(super) async fn peer_event_fanout_records(
             signer_key_evidence: peer_signer_key_evidence,
             agent_signer_evidence_bundle: peer_agent_signer_evidence_bundle,
         };
-        if let Err(error) = body.validate_federation_transport() {
-            tracing::warn!(event_id, peer_did = %peer.service_id, %error, "dynamic peer Event violates the federation transport contract");
-            continue;
-        }
-        let payload = match canonical::canonical_json_bytes(&body)
+        body.validate_federation_transport().map_err(|error| {
+            format!(
+                "dynamic peer Event {event_id} violates the federation transport contract: {error}"
+            )
+        })?;
+        let payload = canonical::canonical_json_bytes(&body)
             .ok()
             .and_then(|bytes| String::from_utf8(bytes).ok())
-        {
-            Some(payload) => payload,
-            None => {
-                tracing::warn!(
-                    event_id,
-                    peer_did = %peer.service_id,
-                    "failed to encode dynamic ak.peer.events.command.submit body"
-                );
-                continue;
-            }
-        };
-        if peer.service_id == *state.service_id() {
-            continue;
-        }
+            .ok_or_else(|| {
+                format!(
+                    "failed to encode dynamic ak.peer.events.command.submit body for {event_id}"
+                )
+            })?;
         records.push(soland_services::federation::FederationDeliveryRecord {
             id: uuid::Uuid::new_v4().to_string(),
             peer_did: peer.service_id,
@@ -692,7 +608,7 @@ pub(super) async fn peer_event_fanout_records(
             created_at: now,
         });
     }
-    records
+    Ok(records)
 }
 
 async fn realm_event_dependency_records(
@@ -700,28 +616,22 @@ async fn realm_event_dependency_records(
     parsed: &ValidatedEventEnvelope,
     envelope: &Value,
     peer: &DynamicPeerEventTarget,
-) -> Vec<CanonicalEventRecord> {
-    let records = match state
+) -> Result<Vec<CanonicalEventRecord>, String> {
+    let records = state
         .event_queries()
         .realm_events_newest_first(&parsed.realm_id)
         .await
-    {
-        Ok(records) => records,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                realm_id = %parsed.realm_id,
-                peer_did = %peer.service_id,
-                "failed to load causal prerequisites for peer Event fanout"
-            );
-            return Vec::new();
-        }
-    };
+        .map_err(|error| {
+            format!(
+                "failed to load causal prerequisites of Realm {} for {}: {error}",
+                parsed.realm_id, peer.service_id
+            )
+        })?;
     let Some(create) = records
         .iter()
         .find(|record| record.kind == arkret_wire::events::EventKind::REALM_CREATE)
     else {
-        return Vec::new();
+        return Ok(Vec::new());
     };
     let bootstrap_ids = records
         .iter()
@@ -770,7 +680,7 @@ async fn realm_event_dependency_records(
         }
     }
 
-    ordered
+    Ok(ordered)
 }
 
 fn append_stored_event_dependencies(
@@ -793,33 +703,35 @@ fn append_stored_event_dependencies(
     ordered.push(record.clone());
 }
 
+/// The Realm genesis unit this peer needs before the Event itself, when one
+/// applies.
+///
+/// `Ok(None)` means "not applicable" (no stored Realm-create, or a
+/// managed-agent PCR genesis, which is a different protocol unit). `Err` means
+/// the prerequisite exists but could not be assembled — the caller must reject
+/// the admission rather than accept an Event whose prerequisite would never
+/// arrive.
 async fn realm_bootstrap_fanout_record(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
     peer: &DynamicPeerEventTarget,
     created_at: i64,
-) -> Option<soland_services::federation::FederationDeliveryRecord> {
-    let records = match state
+) -> Result<Option<soland_services::federation::FederationDeliveryRecord>, String> {
+    let records = state
         .event_queries()
         .realm_events_newest_first(&parsed.realm_id)
         .await
-    {
-        Ok(records) => records,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                realm_id = %parsed.realm_id,
-                peer_did = %peer.service_id,
-                "failed to load Realm bootstrap prerequisite for peer Event fanout"
-            );
-            return None;
-        }
-    };
+        .map_err(|error| {
+            format!(
+                "failed to load Realm {} bootstrap prerequisite for {}: {error}",
+                parsed.realm_id, peer.service_id
+            )
+        })?;
     let Some(create) = records.iter().find(|record| {
         record.kind == arkret_wire::events::EventKind::REALM_CREATE
             && record.realm_id.as_deref() == Some(parsed.realm_id.as_str())
     }) else {
-        return None;
+        return Ok(None);
     };
     let bootstrap_received_at = create.received_at;
     let bootstrap_actor_id = create.actor_id.clone();
@@ -836,44 +748,33 @@ async fn realm_bootstrap_fanout_record(
             .cmp(&right.actor_seq)
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
-    let events = match bootstrap_records
+    let events = bootstrap_records
         .iter()
         .map(|record| serde_json::from_value::<Event>(record.envelope.clone()))
         .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(events) => events,
-        Err(error) => {
-            tracing::warn!(
-                %error,
-                realm_id = %parsed.realm_id,
-                peer_did = %peer.service_id,
-                "failed to type check stored Realm bootstrap prerequisite"
-            );
-            return None;
-        }
-    };
+        .map_err(|error| {
+            format!(
+                "failed to type check stored Realm {} bootstrap prerequisite: {error}",
+                parsed.realm_id
+            )
+        })?;
     if arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(&events).is_err() {
         // Managed-agent PCR genesis is a different protocol unit and does not
         // use ordinary Realm bootstrap fanout.
-        return None;
+        return Ok(None);
     }
 
     let mut signer_key_evidence = Vec::new();
     let mut evidence_methods = std::collections::BTreeSet::new();
     for event in &events {
-        let evidence = match crate::jws_verify::federated_event_signer_evidence(state, event).await
-        {
-            Ok(evidence) => evidence,
-            Err(error) => {
-                tracing::warn!(
-                    %error,
-                    event_id = %event.event_id,
-                    peer_did = %peer.service_id,
-                    "failed to resolve Realm bootstrap prerequisite signer evidence"
-                );
-                return None;
-            }
-        };
+        let evidence = crate::jws_verify::federated_event_signer_evidence(state, event)
+            .await
+            .map_err(|error| {
+                format!(
+                    "failed to resolve Realm bootstrap prerequisite {} signer evidence: {error}",
+                    event.event_id
+                )
+            })?;
         for entry in evidence {
             if evidence_methods.insert(entry.verification_method.clone()) {
                 signer_key_evidence.push(entry);
@@ -899,13 +800,21 @@ async fn realm_bootstrap_fanout_record(
         "event_ids": event_ids,
         "canonical_digests": canonical_digests,
     });
-    let first_event_id = bootstrap_records.first()?.event_id.as_str();
+    let Some(first_record) = bootstrap_records.first() else {
+        return Ok(None);
+    };
     let service_binding_ref = service_binding_ref_for_realm_target(
         &parsed.realm_id,
-        first_event_id,
+        first_record.event_id.as_str(),
         &binding_payload,
         peer,
-    )?;
+    )
+    .ok_or_else(|| {
+        format!(
+            "failed to build Realm {} bootstrap service binding for {}",
+            parsed.realm_id, peer.service_id
+        )
+    })?;
     let mut hasher_input = Vec::new();
     hasher_input.extend_from_slice(state.service_id().as_bytes());
     hasher_input.extend_from_slice(b"|");
@@ -919,9 +828,9 @@ async fn realm_bootstrap_fanout_record(
         hasher_input.extend_from_slice(record.canonical_digest.as_bytes());
     }
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
-    let Some(submissions) = federation_submissions(state, &events, None).await else {
-        return None;
-    };
+    // This prerequisite is a *stored* Realm genesis unit, so its evidence is
+    // already durable — nothing pending to fold in.
+    let submissions = federation_submissions(state, &events, None, &[]).await?;
     let body = EventsSubmitFederationRequestBody {
         service_binding_ref,
         events: submissions,
@@ -931,19 +840,32 @@ async fn realm_bootstrap_fanout_record(
         signer_key_evidence,
         agent_signer_evidence_bundle,
     };
-    body.validate_federation_transport().ok()?;
+    body.validate_federation_transport().map_err(|error| {
+        format!(
+            "Realm {} bootstrap prerequisite violates the federation transport contract: {error}",
+            parsed.realm_id
+        )
+    })?;
     let payload_json = canonical::canonical_json_bytes(&body)
         .ok()
-        .and_then(|bytes| String::from_utf8(bytes).ok())?;
-    Some(soland_services::federation::FederationDeliveryRecord {
-        id: uuid::Uuid::new_v4().to_string(),
-        peer_did: peer.service_id.clone(),
-        peer_url: peer.url.trim_end_matches('/').to_owned(),
-        endpoint: "/_arkret/peer/events".to_owned(),
-        idempotency_key,
-        payload_json,
-        created_at,
-    })
+        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .ok_or_else(|| {
+            format!(
+                "failed to encode Realm {} bootstrap prerequisite",
+                parsed.realm_id
+            )
+        })?;
+    Ok(Some(
+        soland_services::federation::FederationDeliveryRecord {
+            id: uuid::Uuid::new_v4().to_string(),
+            peer_did: peer.service_id.clone(),
+            peer_url: peer.url.trim_end_matches('/').to_owned(),
+            endpoint: "/_arkret/peer/events".to_owned(),
+            idempotency_key,
+            payload_json,
+            created_at,
+        },
+    ))
 }
 
 struct DynamicPeerEventTarget {

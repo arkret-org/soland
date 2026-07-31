@@ -677,16 +677,10 @@ pub struct IdempotentResponse {
     pub expires_at: DateTime<Utc>,
 }
 
-#[derive(Clone, Debug)]
-pub struct FederationDelivery {
-    pub id: String,
-    pub peer_did: String,
-    pub peer_url: String,
-    pub endpoint: String,
-    pub idempotency_key: String,
-    pub payload_json: String,
-    pub created_at: i64,
-}
+/// One outbound delivery intent committed together with its Event. Same type
+/// the federation service enqueues and the dispatcher claims — there is exactly
+/// one shape for "a request this service owes a peer".
+pub use crate::federation::FederationDeliveryRecord as FederationDelivery;
 
 #[derive(Clone, Debug)]
 pub struct CommitAcceptedEventCommand {
@@ -755,11 +749,18 @@ pub struct IdentityAnchorCommitResult {
 #[async_trait::async_trait]
 pub trait EventReadPort: Send + Sync {
     async fn store_canonical_event(&self, record: CanonicalEventRecord) -> ServiceResult<()>;
+    /// Commit one Realm genesis unit. `deliveries` are the federation outbox
+    /// rows for that unit; they land in the same transaction as the Events, so
+    /// a crash can never leave an accepted Event without its delivery intent.
     async fn store_realm_bootstrap_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
         proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()>;
+    /// Commit the closed identity-anchor unit together with its federation
+    /// outbox rows — same atomicity requirement as the Realm genesis unit.
+    #[allow(clippy::too_many_arguments)]
     async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
@@ -769,6 +770,7 @@ pub trait EventReadPort: Send + Sync {
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
+        deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<IdentityAnchorCommitResult>;
     async fn canonical_event(&self, event_id: &str) -> ServiceResult<Option<CanonicalEventRecord>>;
     async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool>;
@@ -1039,11 +1041,13 @@ impl EventQueryService {
         &self,
         records: Vec<CanonicalEventRecord>,
         proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<()> {
         self.events
-            .store_realm_bootstrap_batch(records, proposal_receipts)
+            .store_realm_bootstrap_batch(records, proposal_receipts, deliveries)
             .await
     }
+    #[allow(clippy::too_many_arguments)]
     pub async fn store_identity_anchor_batch(
         &self,
         records: Vec<CanonicalEventRecord>,
@@ -1053,6 +1057,7 @@ impl EventQueryService {
         frontier_cas: Option<IdentityAnchorFrontierState>,
         reanchor_slot: Option<IdentityAnchorReanchorState>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
+        deliveries: Vec<FederationDelivery>,
     ) -> ServiceResult<IdentityAnchorCommitResult> {
         self.events
             .store_identity_anchor_batch(
@@ -1063,6 +1068,7 @@ impl EventQueryService {
                 frontier_cas,
                 reanchor_slot,
                 publication_evidence,
+                deliveries,
             )
             .await
     }

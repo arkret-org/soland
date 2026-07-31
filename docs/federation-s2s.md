@@ -57,7 +57,9 @@ locked value reject with `cross_domain_replay_rejected`. This means:
    proxy / API gateway is not stricter than your outbox dispatcher's
    send rate. If the peer rate-limits at 60 r/m and the dispatcher
    sends 200 r/m, every burst will land in the dead-letter ledger
-   after `MAX_ATTEMPTS` retries.
+   after `MAX_ATTEMPTS` retries. The dispatcher honours the peer's
+   `Retry-After` (header, or `retry_after_ms` in the error envelope) as
+   a floor, so a peer that paces us explicitly is respected.
 5. **Wire alerts.** Subscribe to
    `soland_federation_outbox_dead_letter_total` on your side — any
    non-zero rate against a freshly-onboarded peer typically means the
@@ -79,8 +81,11 @@ security intent.
 
 ## Operator references
 
-- `src/routing/federation/outbox.rs` — dispatcher loop, retry policy,
-  dead-letter ledger entry.
+- `src/routing/federation/outbox.rs` — dispatcher loop, lease claim,
+  transport-retry vs semantic-resubmission classification, dead-letter
+  ledger entry.
+- `src/routing/federation/outbox_operator.rs` — list / inspect / requeue,
+  driven by the `soland-federation-outbox` binary.
 - `src/routing/federation/federation.rs` — receive-side header
   verification, idempotency cache, trust-domain guard.
 - `docs/architecture.md` §2 — outbox enqueue / dispatch pipeline.

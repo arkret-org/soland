@@ -2,27 +2,33 @@
 //!
 //! ## Surface
 //!
-//! - [`enqueue_outbound`] — synchronous insert into the `federation_outbox` table. Called by the
-//!   standard peer-event post-commit path. Returns the row's [`FederationOutboxRecord`] (newly
-//!   inserted or pre-existing when `(peer_did, idempotency_key)` already matched a prior row).
-//! - [`FederationDispatcher`] / [`spawn`] — background tokio task. Polls the outbox every
-//!   [`POLL_INTERVAL`], picks up to [`POLL_BATCH_LIMIT`] rows whose `next_attempt_at <= now`, POSTs
-//!   each one to its peer with the spec-required headers, and writes the resulting delivery state
-//!   (`delivered_at`, `last_status`, `last_response_excerpt`, `next_attempt_at`, `attempts`) back
-//!   to the row.
+//! - [`enqueue_outbound`] — synchronous insert into the `federation_outbox` table, for the few call
+//!   sites that are not themselves inside an Event commit transaction. Every path that accepts an
+//!   Event builds its outbox rows *before* the commit and hands them to the storage unit-of-work
+//!   instead.
+//! - [`FederationDispatcher`] / [`spawn`] — background tokio task. Every [`POLL_INTERVAL`] it
+//!   atomically claims up to [`POLL_BATCH_LIMIT`] due rows under a lease, POSTs each one to its
+//!   peer with the spec-required headers, and applies the resulting terminal-or-retry transition
+//!   under the same lease token.
 //!
-//! ## What this lands today
+//! ## Delivery guarantees
 //!
-//! Real HTTP POST. Real `Idempotency-Key` + `Content-Digest` (RFC 9530)
-//! headers. RFC 9421-style HTTP Message Signature headers over the
-//! federation transcript. Exponential backoff capped at 1h. Permanent
-//! 4xx handling. Retry-cap "give up" handling. The integration suite
-//! pins the contract — see `soland/tests/federation_outbox.rs`.
+//! - source outbox to peer ingress: **at-least-once**;
+//! - peer reducer side effect: idempotent on `(source, destination, idempotency_key,
+//!   canonical_digest)` (`sync/federation.md` §8.5);
+//! - every intent ends as `delivered`, `policy_suppressed`, `dead_lettered` or `superseded`;
+//! - **no** exactly-once transport is promised.
 //!
-//! ## What's deferred
+//! ## Two retry classes (`sync/federation.md` §8.5 + §4.1)
 //!
-//! - **Operator replay API**. Terminal failures are mirrored into `federation_outbox_dead_letter`,
-//!   but there is not yet an HTTP endpoint that re-queues them with a fresh idempotency key.
+//! - **Transport retry** — no response was received at all (timeout, connection reset, DNS). Same
+//!   canonical body, same `Idempotency-Key`, fresh short-lived HTTP Message Signature, `attempts +
+//!   1`, exponential backoff with bounded jitter and never earlier than the peer's `Retry-After`.
+//! - **Semantic resubmission** — a response *was* received and requires re-evaluation
+//!   (`dependency_missing`, partial outcome). The old attempt is terminated as `superseded`, the
+//!   batch is mechanically diffed down to the still-unconfirmed Events, and a brand-new intent with
+//!   a **new** `Idempotency-Key` is inserted in the same transaction. Reusing the old key here
+//!   would keep hitting the receiver's cached failure.
 //!
 //! ## Parallel-work coordination
 //!
@@ -34,7 +40,13 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use rand::RngExt;
 use soland_http::http_signature::{self, SignatureBaseComponent};
+use soland_services::federation::{
+    ClaimFederationDeliveriesCommand, FederationDeadLetter, FederationDeliveryOutcome,
+    FederationDeliveryRecord, FederationPolicyResolution, PendingFederationDelivery,
+    RecordFederationAttemptCommand,
+};
 use uuid::Uuid;
 
 use crate::state::AppState;
@@ -44,42 +56,51 @@ pub const POLL_INTERVAL: Duration = Duration::from_secs(5);
 /// Maximum rows the dispatcher claims per poll. Keeps a backlog from
 /// monopolizing the tokio runtime; subsequent ticks drain the rest.
 pub const POLL_BATCH_LIMIT: usize = 32;
+/// How long a claimed row stays owned by one worker. Comfortably longer than
+/// [`REQUEST_TIMEOUT`] so a slow peer never causes a second worker to take the
+/// row over mid-flight, but short enough that a crashed worker's backlog
+/// resumes promptly.
+pub const LEASE_DURATION_SECS: i64 = 120;
 /// Per-request connect timeout — keep this short so a dead peer can't
 /// stall the entire dispatcher loop.
 pub const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 /// Per-request full-response timeout.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// Maximum delivery attempts before the worker gives up. Matches the
-/// spec recommendation in `federation.md` §8 (≈ 10 attempts ≈ ~1h
-/// wallclock with the capped exponential backoff below).
+/// Maximum transport attempts before the row is dead-lettered. Matches the
+/// spec recommendation in `federation.md` §8 (≈ 10 attempts ≈ ~1h wallclock
+/// with the capped exponential backoff below).
 pub const MAX_ATTEMPTS: i32 = 10;
-/// Sentinel `last_status` written when the worker gives up after the
-/// attempts cap. Negative so it cannot collide with any real HTTP code.
-pub const GAVE_UP_STATUS_SENTINEL: i32 = -1;
-/// Sentinel `last_status` written when a row is suppressed by the
-/// deployment egress policy before any socket is opened.
-pub const EGRESS_POLICY_DENIED_STATUS_SENTINEL: i32 = -2;
-/// Sentinel written when peer Event HTTP transport succeeded but the typed
-/// `EventsSubmitOutcome` reported a partial or otherwise non-success result.
-pub const PEER_EVENT_OUTCOME_REJECTED_STATUS_SENTINEL: i32 = -3;
+/// Maximum semantic resubmissions for one delivery intent chain. Independent
+/// of the transport budget: `federation.md` §4.1 caps automatic re-submission
+/// of a convergent dependency quarantine and requires the sender to stop and
+/// raise an operator diagnostic instead of polling forever.
+pub const MAX_SEMANTIC_ATTEMPTS: i32 = 8;
+/// Transport backoff base — `5 * 2^attempts`, capped at 1h.
+const TRANSPORT_BACKOFF_BASE_SECS: u64 = 5;
+const TRANSPORT_BACKOFF_CAP_SECS: u64 = 3_600;
+/// Semantic (dependency) backoff — `federation.md` §4.1 requires a start of
+/// at least 1s and an upper bound of at least 60s, with jitter.
+const SEMANTIC_BACKOFF_BASE_SECS: u64 = 1;
+const SEMANTIC_BACKOFF_CAP_SECS: u64 = 300;
+/// Fraction of the computed backoff spread randomly on top of it, so a fleet
+/// that failed together does not retry together when the peer recovers.
+const BACKOFF_JITTER_RATIO: f64 = 0.25;
+/// Rows revalidated per pass when the egress policy version changed.
+const POLICY_REVALIDATION_BATCH_LIMIT: usize = 32;
 /// Cap on the response excerpt we persist. 1 KiB matches the spec's
 /// postmortem-evidence size budget.
 const RESPONSE_EXCERPT_BYTES: usize = 1024;
 
-#[derive(Clone, Debug)]
-struct FederationDispatchState {
-    id: String,
-    peer_did: String,
-    peer_url: String,
-    endpoint: String,
-    idempotency_key: String,
-    payload_json: String,
-    attempts: i32,
-    next_attempt_at: i64,
-    last_status: Option<i32>,
-    last_response_excerpt: Option<String>,
-    created_at: i64,
-    delivered_at: Option<i64>,
+/// Stable `last_error_code` values. These are the operator-facing failure
+/// vocabulary; they are also the `reason` on the dead-letter ledger rows.
+pub mod error_code {
+    pub const TRANSPORT_ERROR: &str = "transport_error";
+    pub const RETRYABLE_HTTP_STATUS: &str = "retryable_http_status";
+    pub const TERMINAL_HTTP_STATUS: &str = "terminal_http_status";
+    pub const EGRESS_POLICY_DENIED: &str = "egress_policy_denied";
+    pub const RETRY_BUDGET_EXHAUSTED: &str = "retry_budget_exhausted";
+    pub const SEMANTIC_RETRY_BUDGET_EXHAUSTED: &str = "semantic_retry_budget_exhausted";
+    pub const DEPENDENCY_MISSING: &str = "dependency_missing";
 }
 
 /// Compute the unix-second `now` the dispatcher and the enqueue path
@@ -87,46 +108,6 @@ struct FederationDispatchState {
 /// clock without leaking `chrono` through the trait surfaces.
 fn now_unix_secs() -> i64 {
     chrono::Utc::now().timestamp()
-}
-
-fn persistence_delivery(
-    record: soland_services::federation::PendingFederationDelivery,
-) -> FederationDispatchState {
-    FederationDispatchState {
-        id: record.delivery.id,
-        peer_did: record.delivery.peer_did,
-        peer_url: record.delivery.peer_url,
-        endpoint: record.delivery.endpoint,
-        idempotency_key: record.delivery.idempotency_key,
-        payload_json: record.delivery.payload_json,
-        attempts: record.attempts,
-        next_attempt_at: record.next_attempt_at,
-        last_status: record.last_status,
-        last_response_excerpt: record.last_response_excerpt,
-        created_at: record.delivery.created_at,
-        delivered_at: record.delivered_at,
-    }
-}
-
-fn application_delivery(
-    record: &FederationDispatchState,
-) -> soland_services::federation::PendingFederationDelivery {
-    soland_services::federation::PendingFederationDelivery {
-        delivery: soland_services::federation::FederationDeliveryRecord {
-            id: record.id.clone(),
-            peer_did: record.peer_did.clone(),
-            peer_url: record.peer_url.clone(),
-            endpoint: record.endpoint.clone(),
-            idempotency_key: record.idempotency_key.clone(),
-            payload_json: record.payload_json.clone(),
-            created_at: record.created_at,
-        },
-        attempts: record.attempts,
-        next_attempt_at: record.next_attempt_at,
-        last_status: record.last_status,
-        last_response_excerpt: record.last_response_excerpt.clone(),
-        delivered_at: record.delivered_at,
-    }
 }
 
 /// G3.S0 — synchronous outbox enqueue.
@@ -397,19 +378,60 @@ fn peer_event_application_failure(endpoint: &str, body: &str) -> Option<&'static
     }
 }
 
+/// A rebuilt request that replaces a finished transport identity.
 #[derive(Debug, PartialEq, Eq)]
-enum PeerEventPartialRetry {
-    Rebuilt {
-        payload_json: String,
-        idempotency_key: String,
-    },
+struct SemanticResubmission {
+    payload_json: String,
+    idempotency_key: String,
 }
 
+/// `sync/federation.md` §8.5 — once a response has been received the old
+/// `Idempotency-Key` is spent; re-evaluation MUST use a new one. The key is a
+/// pure function of `(previous key, resubmission ordinal, new canonical body)`
+/// so a crash between "decided to resubmit" and "wrote the successor row"
+/// recomputes the same key, and the `(peer, idempotency_key)` unique index
+/// collapses the replay instead of double-sending.
+fn semantic_resubmission_key(
+    previous_key: &str,
+    semantic_attempts: i32,
+    payload_json: &str,
+) -> String {
+    let mut input = Vec::new();
+    input.extend_from_slice(previous_key.as_bytes());
+    input.push(0);
+    input.extend_from_slice(semantic_attempts.to_string().as_bytes());
+    input.push(0);
+    input.extend_from_slice(payload_json.as_bytes());
+    format!(
+        "ak:outbox:resubmit:{}",
+        arkret_canonical::sha256_digest(&input)
+    )
+}
+
+/// Whole-batch rejection that is convergent once the dependency lands. The
+/// request body is unchanged (nothing was accepted), but the transport
+/// identity is spent, so the resubmission still needs a fresh key.
+fn dependency_resubmission(
+    previous_key: &str,
+    semantic_attempts: i32,
+    request_body: &str,
+) -> SemanticResubmission {
+    SemanticResubmission {
+        payload_json: request_body.to_owned(),
+        idempotency_key: semantic_resubmission_key(previous_key, semantic_attempts, request_body),
+    }
+}
+
+/// Mechanically diff a `partial` outcome down to the Events the receiver has
+/// not confirmed, per `operations-sync.md` §5 ("subtract `accepted ∪
+/// duplicate`, then reassemble"), and mint a fresh key for the remainder.
 fn peer_event_partial_retry(
     endpoint: &str,
     request_body: &str,
     response_body: &str,
-) -> Option<PeerEventPartialRetry> {
+    previous_key: &str,
+    semantic_attempts: i32,
+) -> Option<SemanticResubmission> {
     if endpoint != "/_arkret/peer/events" {
         return None;
     }
@@ -478,30 +500,78 @@ fn peer_event_partial_retry(
         .retain(|bundle| required_targets.contains(&bundle.target_seal_ref));
     request.validate_federation_transport().ok()?;
     let bytes = arkret_canonical::canonical_json_bytes(&request).ok()?;
-    let payload_json = String::from_utf8(bytes.clone()).ok()?;
-    let idempotency_key = format!(
-        "ak:outbox:partial:{}",
-        arkret_canonical::sha256_digest(&bytes)
-    );
-    Some(PeerEventPartialRetry::Rebuilt {
+    let payload_json = String::from_utf8(bytes).ok()?;
+    let idempotency_key = semantic_resubmission_key(previous_key, semantic_attempts, &payload_json);
+    Some(SemanticResubmission {
         payload_json,
         idempotency_key,
     })
 }
 
-/// Compute the next retry timestamp for a retryable failure. Doubles
-/// the backoff on each attempt and caps at 1h.
-fn next_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
-    // 2^attempts * 5, capped at 3600 (1h). The cast saturates because
-    // 2^30 already exceeds the cap.
-    let raw = (attempts as u32).min(20);
-    let backoff = 5u64.saturating_mul(1u64 << raw).min(3_600);
-    now + backoff as i64
+/// Exponential backoff with bounded jitter.
+///
+/// The deterministic part doubles per attempt and clamps at `cap`; the jitter
+/// adds `[0, BACKOFF_JITTER_RATIO * delay]` so a fleet that failed against the
+/// same peer does not stampede it the moment it recovers
+/// (`federation.md` §4.1 requires jitter on convergent resubmission, §8.1
+/// forbids retry storms generally).
+fn backoff_delay_secs(attempts: i32, base: u64, cap: u64) -> u64 {
+    let shift = (attempts.max(0) as u32).min(20);
+    let delay = base.saturating_mul(1u64 << shift).min(cap);
+    let spread = ((delay as f64) * BACKOFF_JITTER_RATIO) as u64;
+    if spread == 0 {
+        return delay;
+    }
+    delay + rand::rng().random_range(0..=spread)
 }
 
-/// Causal dependency misses are expected while a related batch is still in
-/// flight. Retry them on the next dispatcher tick instead of applying the
-/// exponential transport-failure backoff.
+fn transport_backoff_unix_secs(attempts: i32, now: i64) -> i64 {
+    now + backoff_delay_secs(
+        attempts,
+        TRANSPORT_BACKOFF_BASE_SECS,
+        TRANSPORT_BACKOFF_CAP_SECS,
+    ) as i64
+}
+
+fn semantic_backoff_unix_secs(semantic_attempts: i32, now: i64) -> i64 {
+    now + backoff_delay_secs(
+        semantic_attempts.saturating_sub(1),
+        SEMANTIC_BACKOFF_BASE_SECS,
+        SEMANTIC_BACKOFF_CAP_SECS,
+    ) as i64
+}
+
+/// The peer's own pacing instruction, as an absolute unix second.
+///
+/// `Retry-After` wins; the canonical `retry_after_ms` in the error envelope is
+/// the fallback when the header is absent (`federation.md` §8.1 / §8.5).
+fn peer_requested_retry_at(
+    headers: &reqwest::header::HeaderMap,
+    body: &str,
+    now: i64,
+) -> Option<i64> {
+    if let Some(value) = headers
+        .get(reqwest::header::RETRY_AFTER)
+        .and_then(|value| value.to_str().ok())
+    {
+        let value = value.trim();
+        if let Ok(seconds) = value.parse::<i64>() {
+            return Some(now + seconds.max(0));
+        }
+        if let Ok(date) = chrono::DateTime::parse_from_rfc2822(value) {
+            return Some(date.timestamp().max(now));
+        }
+    }
+    let value: serde_json::Value = serde_json::from_str(body).ok()?;
+    let retry_after_ms = value
+        .pointer("/error/retry_after_ms")
+        .or_else(|| value.pointer("/retry_after_ms"))?
+        .as_i64()?;
+    Some(now + retry_after_ms.max(0).div_euclid(1_000))
+}
+
+/// Whether a received response asks the sender to re-evaluate and resubmit
+/// rather than replay the same transport identity.
 fn causal_dependencies_pending(body: &str) -> bool {
     matches!(
         serde_json::from_str::<serde_json::Value>(body)
@@ -520,11 +590,20 @@ fn causal_dependencies_pending(body: &str) -> bool {
 /// Background outbound federation dispatcher.
 pub struct FederationDispatcher {
     state: AppState,
+    /// Durable-enough worker identity for the lease ledger: which process
+    /// currently owns a row. Regenerated per process, which is exactly the
+    /// granularity a crash-takeover needs to be attributable.
+    worker_id: String,
 }
 
 impl FederationDispatcher {
     pub fn new(state: AppState) -> Self {
-        Self { state }
+        let worker_id = format!("{}#{}", state.service_id(), Uuid::new_v4());
+        Self { state, worker_id }
+    }
+
+    pub fn worker_id(&self) -> &str {
+        &self.worker_id
     }
 
     /// Spawn the dispatcher loop on the current tokio runtime. Returns
@@ -551,27 +630,114 @@ impl FederationDispatcher {
     /// Run one dispatch pass. Pulled out of [`spawn`] so the
     /// integration test can drive the loop deterministically.
     pub async fn run_one_pass(&self) -> Result<(), String> {
+        self.revalidate_policy_suppressed().await;
         let now = now_unix_secs();
+        // One random token per pass. A row re-claimed by anyone (including this
+        // worker on a later pass) gets a different token, which is exactly what
+        // invalidates an in-flight holder's late write.
+        let lease_token = Uuid::new_v4().to_string();
         let rows = self
             .state
             .federation()
-            .pending_deliveries(now, POLL_BATCH_LIMIT)
+            .claim_deliveries(ClaimFederationDeliveriesCommand {
+                now,
+                limit: POLL_BATCH_LIMIT,
+                lease_owner: self.worker_id.clone(),
+                lease_token: lease_token.clone(),
+                lease_duration_secs: LEASE_DURATION_SECS,
+            })
             .await
             .map_err(|e| e.to_string())?;
         for row in rows {
-            self.deliver_one(persistence_delivery(row)).await;
+            self.deliver_one(row).await;
         }
         Ok(())
     }
 
-    /// Deliver a single row. The result is recorded back to the outbox.
-    async fn deliver_one(&self, mut row: FederationDispatchState) {
-        let url = format!("{}{}", row.peer_url, row.endpoint);
-        let body_bytes = row.payload_json.as_bytes().to_vec();
+    /// `federation.md` §4.4 — a row the local egress policy suppressed is not
+    /// a delivery and not a network failure. It returns to the queue only when
+    /// the policy version actually changed *and* the target revalidates; a
+    /// bare restart never bypasses a policy that still denies the peer.
+    async fn revalidate_policy_suppressed(&self) {
+        let policy_version =
+            crate::security::egress_policy_version(self.state.config().development_mode);
+        let rows = match self
+            .state
+            .federation()
+            .policy_suppressed_stale(&policy_version, POLICY_REVALIDATION_BATCH_LIMIT)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::warn!(
+                    %error,
+                    worker = "federation_outbox",
+                    target = "federation_outbox",
+                    "failed to read policy-suppressed federation outbox rows"
+                );
+                return;
+            }
+        };
+        for row in rows {
+            let url = format!("{}{}", row.delivery.peer_url, row.delivery.endpoint);
+            let resolution = match crate::security::validate_http_url_for_egress(
+                &url,
+                "federation outbox",
+                self.state.config().development_mode,
+            ) {
+                Ok(_) => FederationPolicyResolution::Release {
+                    next_attempt_at: now_unix_secs(),
+                },
+                Err(_) => FederationPolicyResolution::Repin {
+                    policy_version: policy_version.clone(),
+                },
+            };
+            let released = matches!(resolution, FederationPolicyResolution::Release { .. });
+            match self
+                .state
+                .federation()
+                .resolve_policy_suppressed(&row.delivery.id, resolution)
+                .await
+            {
+                Ok(true) if released => {
+                    crate::metrics::record_federation_retry_state("policy_suppressed_released");
+                    tracing::info!(
+                        target = "federation_outbox",
+                        worker = "federation_outbox",
+                        outbox_id = %row.delivery.id,
+                        peer_did = %row.delivery.peer_did,
+                        "federation outbox row revalidated under the new egress policy"
+                    );
+                }
+                Ok(_) => {}
+                Err(error) => tracing::warn!(
+                    %error,
+                    worker = "federation_outbox",
+                    outbox_id = %row.delivery.id,
+                    target = "federation_outbox",
+                    "failed to resolve policy-suppressed federation outbox row"
+                ),
+            }
+        }
+    }
+
+    /// Deliver a single claimed row and apply its transition under the lease.
+    async fn deliver_one(&self, row: PendingFederationDelivery) {
+        let Some(lease_token) = row.lease_token.clone() else {
+            tracing::error!(
+                target = "federation_outbox",
+                worker = "federation_outbox",
+                outbox_id = %row.delivery.id,
+                "claimed federation outbox row carries no lease token"
+            );
+            return;
+        };
+        let url = format!("{}{}", row.delivery.peer_url, row.delivery.endpoint);
+        let body_bytes = row.delivery.payload_json.as_bytes().to_vec();
         // SOL-03-002: build a per-delivery client that pins the validated IPs
         // (egress check and connection resolve to the same addresses), closing
         // the DNS-rebinding TOCTOU window. Peer URLs vary per delivery, so the
-        // pinning is per-row rather than on the long-lived `self.client`.
+        // pinning is per-row rather than on a long-lived client.
         let (parsed_url, client) =
             match crate::security::validate_http_url_for_egress_with_pinned_client(
                 &url,
@@ -581,34 +747,36 @@ impl FederationDispatcher {
             ) {
                 Ok(pair) => pair,
                 Err(error) => {
-                    row.attempts = row.attempts.saturating_add(1);
-                    row.delivered_at = Some(now_unix_secs());
-                    row.last_status = Some(EGRESS_POLICY_DENIED_STATUS_SENTINEL);
-                    row.last_response_excerpt =
-                        Some(excerpt(&format!("egress_policy_denied: {error}")));
                     tracing::warn!(
                         target = "federation_outbox",
                         worker = "federation_outbox",
-                        outbox_id = %row.id,
-                        peer_did = %row.peer_did,
-                        endpoint = %row.endpoint,
+                        outbox_id = %row.delivery.id,
+                        peer_did = %row.delivery.peer_did,
+                        endpoint = %row.delivery.endpoint,
                         %error,
-                        "federation outbox delivery denied by egress policy"
+                        "federation outbox delivery suppressed by egress policy"
                     );
-                    if let Err(error) = self
-                        .state
-                        .federation()
-                        .record_delivery_attempt(&application_delivery(&row))
-                        .await
-                    {
-                        tracing::warn!(
-                            %error,
-                            worker = "federation_outbox",
-                            outbox_id = %row.id,
-                            target = "federation_outbox",
-                            "failed to persist federation outbox egress-policy denial"
-                        );
-                    }
+                    crate::metrics::record_federation_retry_state("policy_suppressed");
+                    // A policy denial never opened a socket, so it MUST NOT
+                    // consume the transport retry budget.
+                    self.commit(RecordFederationAttemptCommand {
+                        id: row.delivery.id.clone(),
+                        lease_token,
+                        attempts: row.attempts,
+                        semantic_attempts: row.semantic_attempts,
+                        last_http_status: None,
+                        last_error_code: Some(error_code::EGRESS_POLICY_DENIED.to_owned()),
+                        last_response_excerpt: Some(excerpt(&format!(
+                            "egress_policy_denied: {error}"
+                        ))),
+                        observed_at: now_unix_secs(),
+                        outcome: FederationDeliveryOutcome::PolicySuppressed {
+                            policy_version: crate::security::egress_policy_version(
+                                self.state.config().development_mode,
+                            ),
+                        },
+                    })
+                    .await;
                     return;
                 }
             };
@@ -622,8 +790,8 @@ impl FederationDispatcher {
         // transcript, which does not cover Idempotency-Key. Outbox persistence
         // still deduplicates the delivery by this key; only the HTTP header is
         // omitted for that wire profile.
-        if row.endpoint != "/_soland/peer/federation/operations"
-            && let Ok(value) = reqwest::header::HeaderValue::from_str(&row.idempotency_key)
+        if row.delivery.endpoint != "/_soland/peer/federation/operations"
+            && let Ok(value) = reqwest::header::HeaderValue::from_str(&row.delivery.idempotency_key)
         {
             headers.insert("idempotency-key", value);
         }
@@ -632,7 +800,11 @@ impl FederationDispatcher {
             headers.insert("content-digest", value);
         }
         insert_header_if_valid(&mut headers, "source-service-id", self.state.service_id());
-        insert_header_if_valid(&mut headers, "destination-service-id", &row.peer_did);
+        insert_header_if_valid(
+            &mut headers,
+            "destination-service-id",
+            &row.delivery.peer_did,
+        );
         insert_header_if_valid(
             &mut headers,
             "source-trust-domain",
@@ -641,8 +813,10 @@ impl FederationDispatcher {
         insert_header_if_valid(
             &mut headers,
             "destination-trust-domain",
-            &trust_domain_from_service_id(&row.peer_did),
+            &trust_domain_from_service_id(&row.delivery.peer_did),
         );
+        // A transport retry keeps the body and the key but always re-signs:
+        // the signature window is short-lived and the old one has expired.
         let headers = rfc9421_sign(&self.state, headers, "POST", &url, &body_bytes);
 
         let response = client
@@ -652,182 +826,334 @@ impl FederationDispatcher {
             .send()
             .await;
 
-        row.attempts = row.attempts.saturating_add(1);
-        match response {
+        let attempts = row.attempts.saturating_add(1);
+        let now = now_unix_secs();
+        let command = match response {
             Ok(resp) => {
                 let status = resp.status().as_u16() as i32;
+                let response_headers = resp.headers().clone();
                 let body_text = resp.text().await.unwrap_or_default();
-                row.last_status = Some(status);
-                row.last_response_excerpt = Some(excerpt(&body_text));
-                let application_failure = peer_event_application_failure(&row.endpoint, &body_text);
-                if (200..300).contains(&status) && application_failure.is_none() {
-                    row.delivered_at = Some(now_unix_secs());
-                    crate::metrics::record_federation_retry_state("delivered");
-                    tracing::info!(
-                        target = "federation_outbox",
-                        worker = "federation_outbox",
-                        outbox_id = %row.id,
-                        peer_did = %row.peer_did,
-                        endpoint = %row.endpoint,
-                        status,
-                        "federation outbox delivery succeeded"
-                    );
-                } else if (200..300).contains(&status) {
-                    match peer_event_partial_retry(&row.endpoint, &row.payload_json, &body_text) {
-                        Some(PeerEventPartialRetry::Rebuilt {
-                            payload_json,
-                            idempotency_key,
-                        }) => {
-                            row.payload_json = payload_json;
-                            row.idempotency_key = idempotency_key;
-                            self.schedule_retry(&mut row, status, true).await;
-                        }
-                        None => {
-                            self.mark_application_failure(
-                                &mut row,
-                                application_failure.expect("checked as present"),
-                            )
-                            .await;
-                        }
-                    }
-                } else if is_retryable_status(status) {
-                    let dependencies_pending = causal_dependencies_pending(&body_text);
-                    self.schedule_retry(&mut row, status, dependencies_pending)
-                        .await;
-                } else {
-                    // Permanent 4xx — record and stop retrying.
-                    self.mark_terminal_failure(&mut row, status).await;
-                }
+                self.classify_response(
+                    &row,
+                    &lease_token,
+                    attempts,
+                    status,
+                    &response_headers,
+                    &body_text,
+                    now,
+                )
             }
             Err(error) => {
-                // Network error / timeout — always retryable.
-                row.last_status = None;
-                row.last_response_excerpt = Some(excerpt(&format!("network_error: {error}")));
-                self.schedule_retry(&mut row, 0, false).await;
+                // No response at all — transport retry: same body, same key.
+                self.transport_retry(
+                    &row,
+                    &lease_token,
+                    attempts,
+                    None,
+                    error_code::TRANSPORT_ERROR,
+                    excerpt(&format!("network_error: {error}")),
+                    None,
+                    now,
+                )
             }
-        }
-
-        if let Err(error) = self
-            .state
-            .federation()
-            .record_delivery_attempt(&application_delivery(&row))
-            .await
-        {
-            tracing::warn!(
-                %error,
-                worker = "federation_outbox",
-                outbox_id = %row.id,
-                target = "federation_outbox",
-                "failed to persist federation outbox row after delivery attempt"
-            );
-        }
+        };
+        self.commit(command).await;
     }
 
-    async fn schedule_retry(
+    #[allow(clippy::too_many_arguments)]
+    fn classify_response(
         &self,
-        row: &mut FederationDispatchState,
-        observed_status: i32,
-        dependencies_pending: bool,
-    ) {
-        if row.attempts >= MAX_ATTEMPTS {
-            // Out of retries — mark as gave-up with the sentinel status
-            // so observability tools can distinguish "permanent 4xx" from
-            // "exceeded retry budget on a retryable error".
-            row.delivered_at = Some(now_unix_secs());
-            row.last_status = Some(GAVE_UP_STATUS_SENTINEL);
-            self.insert_dead_letter(row, GAVE_UP_STATUS_SENTINEL, "retry_budget_exhausted")
-                .await;
-            crate::metrics::record_federation_retry_state("retry_budget_exhausted");
-            tracing::warn!(
+        row: &PendingFederationDelivery,
+        lease_token: &str,
+        attempts: i32,
+        status: i32,
+        headers: &reqwest::header::HeaderMap,
+        body_text: &str,
+        now: i64,
+    ) -> RecordFederationAttemptCommand {
+        let response_excerpt = excerpt(body_text);
+        let transport_succeeded = (200..300).contains(&status);
+        // The typed outcome only classifies a *successful* transport. On a
+        // non-2xx the status is the verdict: an error envelope that happens not
+        // to look like an `EventsSubmitOutcome` must not be mistaken for an
+        // application-level rejection and skip the retry classification below.
+        let application_failure = transport_succeeded
+            .then(|| peer_event_application_failure(&row.delivery.endpoint, body_text))
+            .flatten();
+        if transport_succeeded && application_failure.is_none() {
+            crate::metrics::record_federation_retry_state("delivered");
+            tracing::info!(
                 target = "federation_outbox",
                 worker = "federation_outbox",
-                outbox_id = %row.id,
-                peer_did = %row.peer_did,
-                attempts = row.attempts,
-                observed_status,
-                "federation outbox giving up after MAX_ATTEMPTS (dead-letter follow-up pending)"
+                outbox_id = %row.delivery.id,
+                peer_did = %row.delivery.peer_did,
+                endpoint = %row.delivery.endpoint,
+                status,
+                "federation outbox delivery succeeded"
             );
-        } else {
-            row.next_attempt_at = if dependencies_pending {
-                now_unix_secs()
-            } else {
-                next_backoff_unix_secs(row.attempts, now_unix_secs())
+            return RecordFederationAttemptCommand {
+                id: row.delivery.id.clone(),
+                lease_token: lease_token.to_owned(),
+                attempts,
+                semantic_attempts: row.semantic_attempts,
+                last_http_status: Some(status),
+                last_error_code: None,
+                last_response_excerpt: Some(response_excerpt),
+                observed_at: now,
+                outcome: FederationDeliveryOutcome::Delivered,
             };
-            crate::metrics::record_federation_retry_state("retry_scheduled");
         }
-    }
 
-    async fn mark_terminal_failure(&self, row: &mut FederationDispatchState, status: i32) {
-        row.delivered_at = Some(now_unix_secs());
-        self.insert_dead_letter(row, status, "terminal_http_status")
-            .await;
-        crate::metrics::record_federation_retry_state("terminal_http_status");
+        // A response was received. Anything that needs re-evaluation is a
+        // semantic resubmission with a brand-new key, never a replay of this
+        // transport identity (`federation.md` §8.5).
+        let semantic_attempts = row.semantic_attempts.saturating_add(1);
+        let resubmission = if transport_succeeded {
+            peer_event_partial_retry(
+                &row.delivery.endpoint,
+                &row.delivery.payload_json,
+                body_text,
+                &row.delivery.idempotency_key,
+                semantic_attempts,
+            )
+        } else if causal_dependencies_pending(body_text) {
+            Some(dependency_resubmission(
+                &row.delivery.idempotency_key,
+                semantic_attempts,
+                &row.delivery.payload_json,
+            ))
+        } else {
+            None
+        };
+
+        if let Some(resubmission) = resubmission {
+            let reason = application_failure.unwrap_or(error_code::DEPENDENCY_MISSING);
+            if semantic_attempts > MAX_SEMANTIC_ATTEMPTS {
+                // `federation.md` §4.1: bounded resubmission. Stop the loop and
+                // hand the case to an operator instead of polling forever.
+                return self.dead_letter(
+                    row,
+                    lease_token,
+                    attempts,
+                    Some(status),
+                    error_code::SEMANTIC_RETRY_BUDGET_EXHAUSTED,
+                    response_excerpt,
+                    now,
+                );
+            }
+            let next_attempt_at = peer_requested_retry_at(headers, body_text, now)
+                .unwrap_or(0)
+                .max(semantic_backoff_unix_secs(semantic_attempts, now));
+            crate::metrics::record_federation_retry_state("semantic_resubmission");
+            crate::metrics::record_federation_retry_delay(next_attempt_at - now);
+            tracing::info!(
+                target = "federation_outbox",
+                worker = "federation_outbox",
+                outbox_id = %row.delivery.id,
+                peer_did = %row.delivery.peer_did,
+                endpoint = %row.delivery.endpoint,
+                status,
+                reason,
+                semantic_attempts,
+                "federation outbox attempt superseded by a resubmission with a fresh key"
+            );
+            return RecordFederationAttemptCommand {
+                id: row.delivery.id.clone(),
+                lease_token: lease_token.to_owned(),
+                attempts,
+                semantic_attempts,
+                last_http_status: Some(status),
+                last_error_code: Some(reason.to_owned()),
+                last_response_excerpt: Some(response_excerpt),
+                observed_at: now,
+                outcome: FederationDeliveryOutcome::Superseded {
+                    delivery: Box::new(FederationDeliveryRecord {
+                        id: Uuid::new_v4().to_string(),
+                        peer_did: row.delivery.peer_did.clone(),
+                        peer_url: row.delivery.peer_url.clone(),
+                        endpoint: row.delivery.endpoint.clone(),
+                        idempotency_key: resubmission.idempotency_key,
+                        payload_json: resubmission.payload_json,
+                        created_at: now,
+                    }),
+                    next_attempt_at,
+                },
+            };
+        }
+
+        if let Some(reason) = application_failure {
+            // 2xx transport, non-success application outcome that no diff can
+            // converge — terminal.
+            return self.dead_letter(
+                row,
+                lease_token,
+                attempts,
+                Some(status),
+                reason,
+                response_excerpt,
+                now,
+            );
+        }
+
+        if is_retryable_status(status) {
+            return self.transport_retry(
+                row,
+                lease_token,
+                attempts,
+                Some(status),
+                error_code::RETRYABLE_HTTP_STATUS,
+                response_excerpt,
+                peer_requested_retry_at(headers, body_text, now),
+                now,
+            );
+        }
+
         tracing::warn!(
             target = "federation_outbox",
             worker = "federation_outbox",
-            outbox_id = %row.id,
-            peer_did = %row.peer_did,
-            endpoint = %row.endpoint,
+            outbox_id = %row.delivery.id,
+            peer_did = %row.delivery.peer_did,
+            endpoint = %row.delivery.endpoint,
             status,
-            attempts = row.attempts,
-            response_excerpt = ?row.last_response_excerpt,
-            "federation outbox permanent failure (4xx, no retry, dead-letter follow-up pending)"
+            attempts,
+            "federation outbox permanent failure (no retry, dead-lettered)"
         );
+        self.dead_letter(
+            row,
+            lease_token,
+            attempts,
+            Some(status),
+            error_code::TERMINAL_HTTP_STATUS,
+            response_excerpt,
+            now,
+        )
     }
 
-    async fn mark_application_failure(
+    /// Same transport identity, later. The peer's `Retry-After` is a floor:
+    /// exponential backoff may push the retry later, never earlier.
+    #[allow(clippy::too_many_arguments)]
+    fn transport_retry(
         &self,
-        row: &mut FederationDispatchState,
-        reason: &'static str,
-    ) {
-        row.delivered_at = Some(now_unix_secs());
-        row.last_status = Some(PEER_EVENT_OUTCOME_REJECTED_STATUS_SENTINEL);
-        self.insert_dead_letter(row, PEER_EVENT_OUTCOME_REJECTED_STATUS_SENTINEL, reason)
-            .await;
+        row: &PendingFederationDelivery,
+        lease_token: &str,
+        attempts: i32,
+        status: Option<i32>,
+        failure_code: &str,
+        response_excerpt: String,
+        peer_retry_at: Option<i64>,
+        now: i64,
+    ) -> RecordFederationAttemptCommand {
+        if attempts >= MAX_ATTEMPTS {
+            return self.dead_letter(
+                row,
+                lease_token,
+                attempts,
+                status,
+                error_code::RETRY_BUDGET_EXHAUSTED,
+                response_excerpt,
+                now,
+            );
+        }
+        let next_attempt_at =
+            transport_backoff_unix_secs(attempts, now).max(peer_retry_at.unwrap_or(0));
+        crate::metrics::record_federation_retry_state("retry_scheduled");
+        crate::metrics::record_federation_retry_delay(next_attempt_at - now);
+        RecordFederationAttemptCommand {
+            id: row.delivery.id.clone(),
+            lease_token: lease_token.to_owned(),
+            attempts,
+            semantic_attempts: row.semantic_attempts,
+            last_http_status: status,
+            last_error_code: Some(failure_code.to_owned()),
+            last_response_excerpt: Some(response_excerpt),
+            observed_at: now,
+            outcome: FederationDeliveryOutcome::Retry { next_attempt_at },
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn dead_letter(
+        &self,
+        row: &PendingFederationDelivery,
+        lease_token: &str,
+        attempts: i32,
+        status: Option<i32>,
+        reason: &str,
+        response_excerpt: String,
+        now: i64,
+    ) -> RecordFederationAttemptCommand {
+        // P5 (5.4) — bump the DLQ counter at the *decision* boundary (we have
+        // given up on this row) rather than the persistence outcome, so an
+        // alert fires even if the whole transaction later fails.
+        crate::metrics::record_federation_outbox_dead_letter(reason);
         crate::metrics::record_federation_retry_state(reason);
         tracing::warn!(
-            target: "federation_outbox",
+            target = "federation_outbox",
             worker = "federation_outbox",
-            outbox_id = %row.id,
-            peer_did = %row.peer_did,
-            endpoint = %row.endpoint,
+            outbox_id = %row.delivery.id,
+            peer_did = %row.delivery.peer_did,
+            endpoint = %row.delivery.endpoint,
+            ?status,
+            attempts,
             reason,
-            response_excerpt = ?row.last_response_excerpt,
-            "federation outbox peer Event outcome requires dead-letter follow-up"
+            "federation outbox row dead-lettered"
         );
+        RecordFederationAttemptCommand {
+            id: row.delivery.id.clone(),
+            lease_token: lease_token.to_owned(),
+            attempts,
+            semantic_attempts: row.semantic_attempts,
+            last_http_status: status,
+            last_error_code: Some(reason.to_owned()),
+            last_response_excerpt: Some(response_excerpt.clone()),
+            observed_at: now,
+            // Terminal state and failure ledger travel in one transaction, so
+            // "stopped delivering" and "has evidence" can never disagree.
+            outcome: FederationDeliveryOutcome::DeadLettered(FederationDeadLetter {
+                id: Uuid::new_v4().to_string(),
+                outbox_id: row.delivery.id.clone(),
+                peer_did: row.delivery.peer_did.clone(),
+                endpoint: row.delivery.endpoint.clone(),
+                idempotency_key: row.delivery.idempotency_key.clone(),
+                last_http_status: status,
+                attempts,
+                response_excerpt: Some(response_excerpt),
+                reason: reason.to_owned(),
+                failed_at: now,
+                requeued_outbox_id: None,
+                requeued_by: None,
+                requeue_reason: None,
+                requeue_request_digest: None,
+                requeued_at: None,
+            }),
+        }
     }
 
-    async fn insert_dead_letter(
-        &self,
-        row: &FederationDispatchState,
-        terminal_status: i32,
-        reason: &str,
-    ) {
-        let failed_at = row.delivered_at.unwrap_or_else(now_unix_secs);
-        let record = soland_services::federation::FederationDeadLetter {
-            id: Uuid::new_v4().to_string(),
-            outbox_id: row.id.clone(),
-            peer_did: row.peer_did.clone(),
-            endpoint: row.endpoint.clone(),
-            idempotency_key: row.idempotency_key.clone(),
-            terminal_status,
-            attempts: row.attempts,
-            response_excerpt: row.last_response_excerpt.clone(),
-            failed_at,
-            reason: reason.to_owned(),
-        };
-        // P5 (5.4) — bump the DLQ counter at the *decision* boundary
-        // (we have given up on this row) rather than the persistence
-        // outcome so an alert fires even if the durable ledger write
-        // also failed.
-        crate::metrics::record_federation_outbox_dead_letter();
-        if let Err(error) = self.state.federation().record_dead_letter(&record).await {
-            tracing::warn!(
+    async fn commit(&self, command: RecordFederationAttemptCommand) {
+        let outbox_id = command.id.clone();
+        match self
+            .state
+            .federation()
+            .record_delivery_attempt(command)
+            .await
+        {
+            Ok(true) => {}
+            Ok(false) => {
+                crate::metrics::record_federation_outbox_lease_takeover();
+                tracing::warn!(
+                    worker = "federation_outbox",
+                    outbox_id = %outbox_id,
+                    target = "federation_outbox",
+                    "federation outbox lease moved on mid-delivery; discarding this worker's result"
+                );
+            }
+            Err(error) => tracing::warn!(
                 %error,
-                outbox_id = %row.id,
+                worker = "federation_outbox",
+                outbox_id = %outbox_id,
                 target = "federation_outbox",
-                "failed to insert federation outbox dead-letter row"
-            );
+                "failed to persist federation outbox transition after delivery attempt"
+            ),
         }
     }
 }
@@ -853,16 +1179,96 @@ mod tests {
     use super::*;
 
     #[test]
-    fn backoff_doubles_then_caps_at_one_hour() {
+    fn transport_backoff_doubles_caps_at_one_hour_and_carries_jitter() {
         let base: i64 = 1_000_000;
-        // 2^0 * 5 = 5
-        assert_eq!(next_backoff_unix_secs(0, base) - base, 5);
-        // 2^1 * 5 = 10
-        assert_eq!(next_backoff_unix_secs(1, base) - base, 10);
-        // 2^9 * 5 = 2560
-        assert_eq!(next_backoff_unix_secs(9, base) - base, 2560);
-        // 2^20 * 5 saturates well above 3600 — clamps to cap.
-        assert_eq!(next_backoff_unix_secs(20, base) - base, 3_600);
+        for (attempts, deterministic) in [(0_i32, 5_i64), (1, 10), (9, 2_560), (20, 3_600)] {
+            let mut observed = std::collections::BTreeSet::new();
+            for _ in 0..64 {
+                let delay = transport_backoff_unix_secs(attempts, base) - base;
+                // The deterministic floor is never undercut, and the jitter is
+                // bounded so backoff stays predictable for capacity planning.
+                assert!(delay >= deterministic, "attempts={attempts} delay={delay}");
+                assert!(
+                    delay <= deterministic + (deterministic as f64 * BACKOFF_JITTER_RATIO) as i64,
+                    "attempts={attempts} delay={delay}"
+                );
+                observed.insert(delay);
+            }
+            // Anything above the 1s floor must actually spread, or a whole
+            // fleet retries in lockstep the moment a peer recovers.
+            assert!(observed.len() > 1, "attempts={attempts} produced no jitter");
+        }
+    }
+
+    #[test]
+    fn semantic_backoff_starts_at_one_second_and_bounds_above_a_minute() {
+        let base: i64 = 1_000_000;
+        // `federation.md` §4.1 — start >= 1s, upper bound >= 60s, with jitter.
+        assert!(semantic_backoff_unix_secs(1, base) - base >= 1);
+        assert!(semantic_backoff_unix_secs(20, base) - base >= 60);
+        assert!(
+            semantic_backoff_unix_secs(20, base) - base
+                <= SEMANTIC_BACKOFF_CAP_SECS as i64
+                    + (SEMANTIC_BACKOFF_CAP_SECS as f64 * BACKOFF_JITTER_RATIO) as i64
+        );
+    }
+
+    #[test]
+    fn peer_retry_after_header_and_body_are_honoured() {
+        // A present-day `now`, so the fixed HTTP-date below is genuinely in the
+        // past and exercises the clamp rather than the ordering.
+        let now = 1_800_000_000;
+        let mut headers = reqwest::header::HeaderMap::new();
+        headers.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_static("120"),
+        );
+        assert_eq!(peer_requested_retry_at(&headers, "", now), Some(now + 120));
+
+        let mut dated = reqwest::header::HeaderMap::new();
+        dated.insert(
+            reqwest::header::RETRY_AFTER,
+            reqwest::header::HeaderValue::from_static("Sun, 06 Nov 1994 08:49:37 GMT"),
+        );
+        // Past dates clamp to `now` — a peer can delay us, never rush us.
+        assert_eq!(peer_requested_retry_at(&dated, "", now), Some(now));
+
+        // Header absent: the canonical `retry_after_ms` in the error envelope.
+        assert_eq!(
+            peer_requested_retry_at(
+                &reqwest::header::HeaderMap::new(),
+                r#"{"error":{"code":"rate_limited","retry_after_ms":4500}}"#,
+                now,
+            ),
+            Some(now + 4)
+        );
+        assert_eq!(
+            peer_requested_retry_at(&reqwest::header::HeaderMap::new(), "not json", now),
+            None
+        );
+    }
+
+    #[test]
+    fn semantic_resubmission_keys_are_deterministic_and_never_reuse_the_old_key() {
+        let first = semantic_resubmission_key("ak:outbox:event:sha256:aa", 1, "{}");
+        let again = semantic_resubmission_key("ak:outbox:event:sha256:aa", 1, "{}");
+        let next_round = semantic_resubmission_key("ak:outbox:event:sha256:aa", 2, "{}");
+        // Deterministic: a crash between "decided to resubmit" and "wrote the
+        // successor" recomputes the same key, so the unique index collapses it.
+        assert_eq!(first, again);
+        // But each resubmission round is a distinct transport identity, even
+        // when the body is byte-identical (whole-batch dependency rejection).
+        assert_ne!(first, next_round);
+        assert_ne!(first, "ak:outbox:event:sha256:aa");
+        assert!(first.starts_with("ak:outbox:resubmit:sha256:"));
+    }
+
+    #[test]
+    fn whole_batch_dependency_rejection_resubmits_the_same_body_under_a_new_key() {
+        let body = r#"{"events":[]}"#;
+        let resubmission = dependency_resubmission("ak:outbox:event:sha256:aa", 1, body);
+        assert_eq!(resubmission.payload_json, body);
+        assert_ne!(resubmission.idempotency_key, "ak:outbox:event:sha256:aa");
     }
 
     #[test]
@@ -946,7 +1352,16 @@ mod tests {
                 "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
             }]
         }"#;
-        assert!(peer_event_partial_retry("/_arkret/peer/events", "not-read", response).is_none());
+        assert!(
+            peer_event_partial_retry(
+                "/_arkret/peer/events",
+                "not-read",
+                response,
+                "ak:outbox:event:sha256:aa",
+                1,
+            )
+            .is_none()
+        );
     }
 
     #[test]
@@ -1153,13 +1568,16 @@ mod tests {
         }}"#,
             request.events[0].event.event_id.as_str()
         );
-        let Some(PeerEventPartialRetry::Rebuilt {
+        let previous_key = "ak:outbox:event:sha256:aa";
+        let Some(SemanticResubmission {
             payload_json,
             idempotency_key,
         }) = peer_event_partial_retry(
             "/_arkret/peer/events",
             &serde_json::to_string(&request).unwrap(),
             &response,
+            previous_key,
+            1,
         )
         else {
             panic!("expected a rebuilt partial retry");
@@ -1172,7 +1590,10 @@ mod tests {
             "the retry carries the original ingress receipt byte-identically"
         );
         assert!(rebuilt.get("idempotency_key").is_none());
-        assert!(idempotency_key.starts_with("ak:outbox:partial:sha256:"));
+        // The response was received, so the old transport identity is spent
+        // (`federation.md` §8.5): the remainder travels under a fresh key.
+        assert!(idempotency_key.starts_with("ak:outbox:resubmit:sha256:"));
+        assert_ne!(idempotency_key, previous_key);
     }
 
     #[test]

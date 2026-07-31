@@ -1521,6 +1521,9 @@ pub(super) async fn submit_event_value_with_context(
             Some(&parsed.actor_id),
         )
     });
+    // Built before the commit and committed with it. Failing to construct the
+    // delivery intent rejects the admission rather than accepting an Event this
+    // service can never route (`sync/federation.md` §4.1).
     let outbox = if session.token_hash.starts_with("federation:") {
         Vec::new()
     } else {
@@ -1529,8 +1532,18 @@ pub(super) async fn submit_event_value_with_context(
             &parsed,
             &envelope_for_bootstrap,
             control_proposal_receipt.as_ref(),
+            // This path stores its ingress receipt up front
+            // (`mint_and_store_ingress_receipt`), so nothing is pending.
+            &[],
         )
         .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "federation_fanout_unavailable",
+                format!("federation delivery intent unavailable: {error}"),
+            )
+        })?
     };
     let next_actor_seq = parsed.actor_seq.checked_add(1).ok_or_else(|| {
         SubmitOneError::new(
@@ -1646,18 +1659,7 @@ pub(super) async fn submit_event_value_with_context(
                 expires_at: created_at + Duration::seconds(IDEMPOTENCY_KEY_TTL_SECONDS),
             }
         }),
-        deliveries: outbox
-            .into_iter()
-            .map(|record| soland_services::events::FederationDelivery {
-                id: record.id,
-                peer_did: record.peer_did,
-                peer_url: record.peer_url,
-                endpoint: record.endpoint,
-                idempotency_key: record.idempotency_key,
-                payload_json: record.payload_json,
-                created_at: record.created_at,
-            })
-            .collect(),
+        deliveries: outbox,
     };
     if let Err(error) = state.events().commit_accepted_event(command).await {
         if parsed.kind == arkret_wire::events::EventKind::REALM_CREATE

@@ -2,13 +2,14 @@ use std::collections::BTreeMap;
 
 use super::{
     Array, AsyncConnection, AsyncPgConnection, BigInt, Binary, Bool, CanonicalEventRecord,
-    DeviceInventoryRecord, EventBatchReceipt, EventStore, ExistsRow, IdentityAnchorCommitOutcome,
-    IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb, MaxSeqRow, Nullable,
-    OptionalExtension, PeerEventsPageQuery, PersistenceError, PersistenceResult, PgPool,
-    PgTransactionError, PublicationEvidenceRecord, QueryableByName, RealmEventStats, RunQueryDsl,
-    SqlUuid, Text, Timestamptz, Uuid, Value, async_trait, identity_anchor_slot_conflicts, ids,
-    pg_conn, sql_query,
+    DeviceInventoryRecord, EventBatchReceipt, EventStore, ExistsRow, FederationOutboxRecord,
+    IdentityAnchorCommitOutcome, IdentityAnchorFrontierCas, IdentityAnchorReanchorSlot, Jsonb,
+    MaxSeqRow, Nullable, OptionalExtension, PeerEventsPageQuery, PersistenceError,
+    PersistenceResult, PgPool, PgTransactionError, PublicationEvidenceRecord, QueryableByName,
+    RealmEventStats, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid, Value, async_trait,
+    identity_anchor_slot_conflicts, ids, pg_conn, sql_query,
 };
+use crate::federation::insert_federation_outbox_row;
 pub struct PgEventStore {
     pub pool: PgPool,
 }
@@ -346,6 +347,7 @@ impl EventStore for PgEventStore {
         &self,
         records: Vec<CanonicalEventRecord>,
         proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut receipts = BTreeMap::new();
         for receipt in proposal_receipts {
@@ -377,6 +379,11 @@ impl EventStore for PgEventStore {
                 })?;
                 insert_pending_control_event(conn, &record, proposal_receipt).await?;
             }
+            // Same transaction as the Events: the delivery intent for a Realm
+            // genesis unit is not a post-commit best-effort follow-up.
+            for delivery in outbox {
+                insert_federation_outbox_row(conn, &delivery).await?;
+            }
             Ok(())
         })
         .await
@@ -392,6 +399,7 @@ impl EventStore for PgEventStore {
         frontier_cas: Option<IdentityAnchorFrontierCas>,
         reanchor_slot: Option<IdentityAnchorReanchorSlot>,
         publication_evidence: Vec<PublicationEvidenceRecord>,
+        outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut proposal_receipts_by_digest = BTreeMap::new();
         for receipt in proposal_receipts {
@@ -500,6 +508,12 @@ impl EventStore for PgEventStore {
                         .execute(&mut *conn)
                         .await
                         .map_err(PersistenceError::database)?;
+                    }
+                    // A quarantined re-anchor conflict is not accepted locally,
+                    // so it owes no peer anything; every other outcome commits
+                    // its delivery intents right here.
+                    for delivery in outbox {
+                        insert_federation_outbox_row(conn, &delivery).await?;
                     }
                 }
             Ok(IdentityAnchorCommitOutcome {
