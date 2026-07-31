@@ -40,6 +40,12 @@ status="$gate_dir/status.txt"
 
 echo "gate: jobs=$jobs target=$target_dir log=$log"
 
+# Cheap checks first: a retired protocol literal is a fixture bug the compiler
+# cannot see, and finding it after a 15-minute test run wastes the run. The
+# scanner proves itself before it is trusted, same as the secret scan does.
+sh "$(dirname -- "$0")/tests/stale-literal-scan.tests.sh"
+sh "$(dirname -- "$0")/stale-literal-scan.sh"
+
 set +e
 CARGO_TARGET_DIR="$target_dir" cargo test --locked --quiet \
     --jobs "$jobs" --no-fail-fast "$@" > "$log" 2>&1
