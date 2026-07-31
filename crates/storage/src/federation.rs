@@ -36,7 +36,8 @@ pub enum FederationOutboxOutcome {
     /// Terminal failure. The dead-letter row is written in the same
     /// transaction as the state change, so "stopped delivering" and "has a
     /// failure ledger entry" can never disagree.
-    DeadLettered(FederationOutboxDeadLetterRecord),
+    // Boxed for the same reason as `FederationDeliveryOutcome::DeadLettered`.
+    DeadLettered(Box<FederationOutboxDeadLetterRecord>),
     /// A response was received that requires re-evaluation. The old transport
     /// identity is finished and a fresh pending row (new body, new
     /// `Idempotency-Key`, `supersedes_outbox_id` back-reference) replaces it in

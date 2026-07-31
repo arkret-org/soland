@@ -48,10 +48,10 @@ jobs:
           path: arkret-rust-sdk
           token: ${{ secrets.CI_REPO_TOKEN || github.token }}
 
-      - name: Install Rust 1.96
+      - name: Install Rust 1.97
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: "1.96"
+          toolchain: "1.97"
           components: clippy
 
       - name: Install nightly rustfmt
@@ -75,7 +75,7 @@ jobs:
         working-directory: soland
 
       - name: Crate layering gate
-        run: cargo +1.96 run -p xtask --bin check_layering --locked
+        run: cargo +1.97 run -p xtask --bin check_layering --locked
         working-directory: soland
 
       - name: Rustfmt
@@ -83,11 +83,11 @@ jobs:
         working-directory: soland
 
       - name: Clippy
-        run: cargo +1.96 clippy --all-targets --locked -- -D warnings
+        run: cargo +1.97 clippy --all-targets --locked -- -D warnings
         working-directory: soland
 
       - name: Clippy with OpenTelemetry
-        run: cargo +1.96 clippy --features otel --all-targets --locked -- -D warnings
+        run: cargo +1.97 clippy --features otel --all-targets --locked -- -D warnings
         working-directory: soland
 
       # Keep test binaries separate from `target/dev`, matching the local
@@ -96,7 +96,7 @@ jobs:
       - name: Test (includes HTTP API suite)
         env:
           CARGO_TARGET_DIR: target/test
-        run: cargo +1.96 test --locked
+        run: cargo +1.97 test --locked
         working-directory: soland
 
   migration-cycle:

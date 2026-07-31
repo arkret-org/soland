@@ -343,24 +343,6 @@ fn normalize_pair_device_public_key(public_key: &str) -> Result<String, AppError
     ))
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn pairing_public_key_requires_raw_base64url_and_normalizes_for_directory_storage() {
-        let raw = arkret_canonical::base64url_encode(&[7_u8; 32]);
-        let normalized = normalize_pair_device_public_key(&raw).expect("raw Ed25519 key");
-        assert_eq!(
-            arkret_canonical::decode_ed25519_multibase(&normalized).unwrap(),
-            [7_u8; 32]
-        );
-
-        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7_u8; 32]);
-        assert!(normalize_pair_device_public_key(&multibase).is_err());
-    }
-}
-
 fn device_pairing_gate_audience(public_base_url: &str) -> Result<String, AppError> {
     let url = reqwest::Url::parse(public_base_url)
         .map_err(|error| AppError::internal(format!("public_base_url is invalid: {error}")))?;
@@ -386,4 +368,22 @@ fn device_pairing_proof_failed(
     )
     .with_reason_code("proof_invalid")
     .with_private_detail(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pairing_public_key_requires_raw_base64url_and_normalizes_for_directory_storage() {
+        let raw = arkret_canonical::base64url_encode([7_u8; 32]);
+        let normalized = normalize_pair_device_public_key(&raw).expect("raw Ed25519 key");
+        assert_eq!(
+            arkret_canonical::decode_ed25519_multibase(&normalized).unwrap(),
+            [7_u8; 32]
+        );
+
+        let multibase = arkret_canonical::ed25519_pubkey_to_did_key_multibase(&[7_u8; 32]);
+        assert!(normalize_pair_device_public_key(&multibase).is_err());
+    }
 }

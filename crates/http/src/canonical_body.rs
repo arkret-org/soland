@@ -93,21 +93,19 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        if is_canonical_json_request(req) {
-            if let Ok(payload) = req.payload().await {
-                if canonical_body_size(payload)
-                    .is_some_and(|size| size > MAX_OPERATION_CANONICAL_BODY_BYTES)
-                {
-                    let error = AppError::new(
-                        ErrorCode::PayloadTooLarge,
-                        "canonical JSON operation body exceeds 8 MiB",
-                    )
-                    .with_wire_code("payload_too_large");
-                    error.write(req, depot, res).await;
-                    ctrl.skip_rest();
-                    return;
-                }
-            }
+        if is_canonical_json_request(req)
+            && let Ok(payload) = req.payload().await
+            && canonical_body_size(payload)
+                .is_some_and(|size| size > MAX_OPERATION_CANONICAL_BODY_BYTES)
+        {
+            let error = AppError::new(
+                ErrorCode::PayloadTooLarge,
+                "canonical JSON operation body exceeds 8 MiB",
+            )
+            .with_wire_code("payload_too_large");
+            error.write(req, depot, res).await;
+            ctrl.skip_rest();
+            return;
         }
         ctrl.call_next(req, depot, res).await;
     }

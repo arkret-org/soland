@@ -21,7 +21,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
     let directory_public = {
         let directory = state.realm_directory();
         if directory.entry(&realm_id).is_some() {
-            let public = directory
+            directory
                 .update_entry(&realm_id, |entry| {
                     if let Some(title) = operation_realm_title(operation) {
                         entry.title = title.to_owned();
@@ -40,8 +40,7 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
                     }
                     entry.public
                 })
-                .unwrap_or(false);
-            public
+                .unwrap_or(false)
         } else {
             let title = operation_realm_title(operation).unwrap_or_else(|| realm_id.as_str());
             let mut entry = RealmDirectoryEntry::new(realm_id.clone(), title);

@@ -90,6 +90,7 @@ impl InheritanceMode {
 ///   spec §6.2 derived grants MUST NOT be wider than the source — at this layer we surface the
 ///   union; the policy evaluator applies the narrow-only intersection at decision time (see
 ///   `routing/access/policy.rs`).
+///
 /// Cap on the depth the DFS walks while assembling the inheritance
 /// chain. Spec §6.4 currently caps `max_depth` at 1, but the cap here
 /// is set higher so a misconfigured profile can't make the response

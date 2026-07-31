@@ -1417,6 +1417,7 @@ fn load_notary_signing_key_seed() -> anyhow::Result<Option<[u8; 32]>> {
 ///    [`arkret_identifiers::TypedTrustDomainId`]).
 /// 2. Synthesised from the configured `service_id` — strip the DID method prefix and lowercase the
 ///    remainder, then prefix with `ak:trust_domain:`.
+///
 /// `sync/federation.md` §4.1 deployment gate: outbound federation on a
 /// non-durable outbox is a silent data-loss configuration.
 ///

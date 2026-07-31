@@ -822,19 +822,20 @@ async fn submit_event_batch_outcome_with_leases(
     // the bootstrap context. The ordinary-Realm branch already returned above;
     // reaching here with a leading create means this branch, and
     // `batch_is_managed_agent_pcr_create` has already materialized the unit.
-    if batch_begins_realm_create(&envelopes) && batch_is_managed_agent_pcr_create(&envelopes) {
-        if let (Some(realm_id), Some(actor_id)) = (
+    if batch_begins_realm_create(&envelopes)
+        && batch_is_managed_agent_pcr_create(&envelopes)
+        && let (Some(realm_id), Some(actor_id)) = (
             event_string_field_from_value(&envelopes[0], "realm_id"),
             event_string_field_from_value(&envelopes[0], "actor_id"),
-        ) {
-            realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
-                realm_id,
-                actor_id,
-                identity_anchor_event_id: None,
-                self_principal_pcr_bootstrap: false,
-                authority_root: None,
-            });
-        }
+        )
+    {
+        realm_bootstrap_contexts.push(RealmBootstrapBatchContext {
+            realm_id,
+            actor_id,
+            identity_anchor_event_id: None,
+            self_principal_pcr_bootstrap: false,
+            authority_root: None,
+        });
     }
 
     for (index, envelope) in envelopes.into_iter().enumerate() {

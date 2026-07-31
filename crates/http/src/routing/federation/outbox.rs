@@ -1109,7 +1109,7 @@ impl FederationDispatcher {
             observed_at: now,
             // Terminal state and failure ledger travel in one transaction, so
             // "stopped delivering" and "has evidence" can never disagree.
-            outcome: FederationDeliveryOutcome::DeadLettered(FederationDeadLetter {
+            outcome: FederationDeliveryOutcome::DeadLettered(Box::new(FederationDeadLetter {
                 id: Uuid::new_v4().to_string(),
                 outbox_id: row.delivery.id.clone(),
                 peer_did: row.delivery.peer_did.clone(),
@@ -1125,7 +1125,7 @@ impl FederationDispatcher {
                 requeue_reason: None,
                 requeue_request_digest: None,
                 requeued_at: None,
-            }),
+            })),
         }
     }
 

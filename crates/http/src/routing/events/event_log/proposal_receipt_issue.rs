@@ -82,7 +82,7 @@ pub(super) async fn issue_control_proposal_receipt(
         authority_set_ref.as_str(),
         verification_method
     );
-    match state
+    if let Some(record) = state
         .jobs()
         .proposal_member_receipt(&receipt_key)
         .await
@@ -91,22 +91,20 @@ pub(super) async fn issue_control_proposal_receipt(
                 ErrorCode::InternalError,
                 format!("proposal receipt replay lookup failed: {error}"),
             )
-        })? {
-        Some(record) => {
-            // The protocol replay identity is the proposal digest plus the
-            // authority set, not the complete publication-proof bytes. A
-            // durable client may refresh an expired AuthorizationLease while
-            // retrying the same signed Event; after the request has passed
-            // current admission above, return the immutable original receipt.
-            let outcome = serde_json::from_value(record.response_body).map_err(|error| {
-                AppError::new(
-                    ErrorCode::InternalError,
-                    format!("stored proposal receipt outcome is invalid: {error}"),
-                )
-            })?;
-            return json_ok(outcome);
-        }
-        None => {}
+        })?
+    {
+        // The protocol replay identity is the proposal digest plus the
+        // authority set, not the complete publication-proof bytes. A
+        // durable client may refresh an expired AuthorizationLease while
+        // retrying the same signed Event; after the request has passed
+        // current admission above, return the immutable original receipt.
+        let outcome = serde_json::from_value(record.response_body).map_err(|error| {
+            AppError::new(
+                ErrorCode::InternalError,
+                format!("stored proposal receipt outcome is invalid: {error}"),
+            )
+        })?;
+        return json_ok(outcome);
     }
 
     let request_hash = arkret_canonical::canonical_sha256(&request).map_err(|error| {

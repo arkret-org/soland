@@ -4,6 +4,7 @@
 //!
 //! - `GET /_arkret/root/identity/recovery-policy` — read the active recovery policy.
 //! - `POST /_arkret/root/identity/recovery-policy` — persist + advance a recovery policy.
+//!
 //! Wire-level validation lands here (proof_kind enum, recovery_session
 //! uuid pattern, expires/policy_version monotonicity,
 //! `recovery_witness_revoke_lagging` freshness window).

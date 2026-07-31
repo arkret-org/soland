@@ -1595,9 +1595,12 @@ pub(crate) struct TestRealmBasis {
 /// value is the enclosing Seal's own id, which does not exist until the body —
 /// `state_root` included — has been hashed. See the report note on
 /// `capability_refs.rs::validate_data_event_covered_seals`.
-static TEST_REALM_BASES: LazyLock<
-    std::sync::Mutex<std::collections::BTreeMap<(String, String, String), TestRealmBasis>>,
-> = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
+/// Cached per-(realm, subject, notary) genesis basis shared by the fixtures.
+type TestRealmBasisCache =
+    std::sync::Mutex<std::collections::BTreeMap<(String, String, String), TestRealmBasis>>;
+
+static TEST_REALM_BASES: LazyLock<TestRealmBasisCache> =
+    LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
 
 fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
     TEST_REALM_BASES

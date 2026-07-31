@@ -221,22 +221,20 @@ pub(in crate::routing) fn projection_operation_from_event(
     if matches!(
         parsed.kind.as_str(),
         arkret_wire::events::EventKind::RSVP_SET | arkret_wire::events::EventKind::STRAND_UPDATE
-    ) {
-        if let Some(causal_refs) = envelope.get("causal_refs") {
-            payload_object.insert("envelope_causal_refs".to_owned(), causal_refs.clone());
-        }
+    ) && let Some(causal_refs) = envelope.get("causal_refs")
+    {
+        payload_object.insert("envelope_causal_refs".to_owned(), causal_refs.clone());
     }
-    if parsed.kind == arkret_wire::events::EventKind::RSVP_SET {
-        if let Some(digest) = envelope
+    if parsed.kind == arkret_wire::events::EventKind::RSVP_SET
+        && let Some(digest) = envelope
             .get("proofs")
             .and_then(Value::as_array)
             .and_then(|proofs| proofs.first())
             .and_then(|proof| proof.get("event_digest"))
-        {
-            payload_object
-                .entry("canonical_event_digest".to_owned())
-                .or_insert_with(|| digest.clone());
-        }
+    {
+        payload_object
+            .entry("canonical_event_digest".to_owned())
+            .or_insert_with(|| digest.clone());
     }
     if parsed.kind == arkret_wire::events::EventKind::APPLET_REGISTRATION
         && let Some(scope_ref) = envelope.get("scope_ref")

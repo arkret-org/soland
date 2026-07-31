@@ -23,6 +23,7 @@
 //!   `SOLAND_NOTARY_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
 //!   `routing/move_seal.rs`) still accepts both real and shape-only JWSes for local fixtures.
+//!
 //! The production control-seal coordinator invokes this worker behind a durable, fenced,
 //! profile-aware signing lease. The admin endpoint remains an operator diagnostic surface.
 

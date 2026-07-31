@@ -1509,7 +1509,8 @@ pub struct PublishRecoveryPolicyCommand {
 
 #[derive(Clone, Debug)]
 pub enum PublishRecoveryPolicyResult {
-    Accepted(RecoveryPolicyState),
+    // Boxed: the accepted policy is the only large payload here.
+    Accepted(Box<RecoveryPolicyState>),
     GenesisVersionInvalid {
         actual: u32,
     },
@@ -1580,7 +1581,7 @@ impl RecoveryPolicyService {
             });
         }
         self.policies.insert_policy(policy.clone()).await?;
-        Ok(PublishRecoveryPolicyResult::Accepted(policy))
+        Ok(PublishRecoveryPolicyResult::Accepted(Box::new(policy)))
     }
 }
 

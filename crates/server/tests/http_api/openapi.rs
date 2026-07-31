@@ -92,9 +92,7 @@ fn assert_required_migrated_operations(root: &Value) {
         "org.arkret.soland.well_known.arkret",
     ] {
         assert!(
-            operation_ids
-                .iter()
-                .any(|operation_id| *operation_id == expected),
+            operation_ids.contains(&expected),
             "migrated operation is absent from generated OpenAPI: {expected}"
         );
     }

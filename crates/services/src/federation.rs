@@ -183,7 +183,9 @@ pub enum FederationDeliveryOutcome {
     PolicySuppressed {
         policy_version: String,
     },
-    DeadLettered(FederationDeadLetter),
+    // Boxed: the dead-letter record dwarfs every other outcome, which are
+    // one or two words each.
+    DeadLettered(Box<FederationDeadLetter>),
     /// A response arrived that requires re-evaluation: finish this transport
     /// identity and hand the remainder to a fresh intent with a new key.
     Superseded {
@@ -603,7 +605,7 @@ mod tests {
                     self.dead_letters
                         .lock()
                         .expect("dead-letter lock")
-                        .push(record.clone());
+                        .push((**record).clone());
                     FederationDeliveryState::DeadLettered
                 }
                 FederationDeliveryOutcome::Superseded { .. } => FederationDeliveryState::Superseded,

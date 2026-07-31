@@ -339,6 +339,8 @@ async fn ingest_extension_admin_document(state: &AppState) {
         .unwrap();
 }
 
+// Each parameter is a separate signed field of the ghost provision body.
+#[allow(clippy::too_many_arguments)]
 fn signed_ghost_provision_body(
     package: &AppletPackage,
     install: &Value,

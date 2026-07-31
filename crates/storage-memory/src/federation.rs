@@ -123,7 +123,7 @@ impl FederationOutboxStore for MemoryFederationOutboxStore {
                 row.state = FederationOutboxState::DeadLettered;
                 row.next_attempt_at = transition.observed_at;
                 row.completed_at = Some(transition.observed_at);
-                dead_letter = Some(record.clone());
+                dead_letter = Some((**record).clone());
             }
             FederationOutboxOutcome::Superseded(record) => {
                 row.state = FederationOutboxState::Superseded;

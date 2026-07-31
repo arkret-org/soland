@@ -17,6 +17,9 @@ use super::*;
 /// gated by federation authentication.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(untagged)]
+// Untagged wire union mirroring the SDK submit bodies; boxing a variant would
+// change the public constructor shape without changing the JSON.
+#[allow(clippy::large_enum_variant)]
 pub enum SolandEventsSubmitRequestBody {
     /// Federation form — `service_binding_ref` is REQUIRED and all 6
     /// fields validated.

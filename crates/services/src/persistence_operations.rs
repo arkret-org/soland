@@ -191,7 +191,7 @@ impl crate::federation::FederationOutboxPort for PersistenceFederationOutbox {
                 }
             }
             crate::federation::FederationDeliveryOutcome::DeadLettered(record) => {
-                FederationOutboxOutcome::DeadLettered(persistence_dead_letter(record))
+                FederationOutboxOutcome::DeadLettered(Box::new(persistence_dead_letter(record)))
             }
             crate::federation::FederationDeliveryOutcome::Superseded {
                 delivery,

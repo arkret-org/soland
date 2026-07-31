@@ -783,11 +783,15 @@ async fn keys_query_keeps_historical_member_signing_key_visible_after_ban() {
 
     let realm_id = RealmId::new(DEMO_REALM_ID.to_owned()).unwrap();
     let bob_did = Did::new(bob.to_owned()).unwrap();
-    let mut realms = state.test_realms().lock();
-    let mut realm = realms.get(&realm_id).cloned().expect("demo realm exists");
-    realm.members.remove(&bob_did);
-    realms.upsert(realm);
-    drop(realms);
+    // Scoped rather than `drop`ed: the guard must be provably released before
+    // the awaits further down, and a block says so to the reader and to
+    // `clippy::await_holding_lock` alike.
+    {
+        let mut realms = state.test_realms().lock();
+        let mut realm = realms.get(&realm_id).cloned().expect("demo realm exists");
+        realm.members.remove(&bob_did);
+        realms.upsert(realm);
+    }
     state
         .test_projection()
         .lock()

@@ -763,10 +763,7 @@ pub(super) fn grant_covers_data_event_effect(
         candidate == action
             || arkret_schema::capability_action(candidate).is_some_and(|descriptor| {
                 descriptor.event_mapping_kind != "non_event_surface"
-                    && descriptor
-                        .target_event_kinds
-                        .iter()
-                        .any(|target| *target == action)
+                    && descriptor.target_event_kinds.contains(&action)
             })
     }) && effect_resource_candidates(state, cell, realm_id)
         .iter()

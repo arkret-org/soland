@@ -1436,55 +1436,6 @@ async fn notification_account_data_events(
     events
 }
 
-#[cfg(test)]
-mod account_notification_tests {
-    use super::*;
-
-    #[test]
-    fn typed_agent_approval_uses_notification_delta_wire_field() {
-        let delta =
-            arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
-                arkret_wire::NotificationId::new(
-                    "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475".to_owned(),
-                )
-                .expect("test notification id"),
-                arkret_wire::NotificationKind::Agent,
-                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Add,
-                Some(
-                    arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
-                        arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
-                            kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
-                            approval_request_id: arkret_wire::OpaqueLocalId::new(
-                                "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
-                            )
-                            .unwrap(),
-                            agent_id: arkret_wire::Did::new("did:web:agent.example".to_owned())
-                                .expect("test Agent DID"),
-                            requested_at: "2026-07-27T04:57:02.959Z"
-                                .parse()
-                                .expect("test requested_at"),
-                            expires_at: "2026-07-27T05:07:02.959Z"
-                                .parse()
-                                .expect("test expires_at"),
-                        },
-                    ),
-                ),
-            )
-            .expect("typed Agent approval must be valid");
-        let wire = serde_json::to_value(delta).expect("NotificationDelta must serialize");
-
-        assert_eq!(
-            wire.get("notification_kind").and_then(Value::as_str),
-            Some("agent")
-        );
-        assert_eq!(wire.get("action").and_then(Value::as_str), Some("add"));
-        assert_eq!(
-            wire.pointer("/data/kind").and_then(Value::as_str),
-            Some("agent_runtime_approval")
-        );
-    }
-}
-
 async fn timeline_event_received_at(
     state: &AppState,
     event_id: &str,
@@ -1662,4 +1613,53 @@ fn circle_scope_visible_to_session(
         return false;
     };
     projection.circle_scope_visible_to_actor_at(scope_circle_id, &session.actor, event_created_at)
+}
+
+#[cfg(test)]
+mod account_notification_tests {
+    use super::*;
+
+    #[test]
+    fn typed_agent_approval_uses_notification_delta_wire_field() {
+        let delta =
+            arkret_models_collaboration::sync_frames::account_sync::NotificationDelta::try_new(
+                arkret_wire::NotificationId::new(
+                    "ak:notification:019fa1ef-00ee-77e0-9f06-2f2d36bf2475".to_owned(),
+                )
+                .expect("test notification id"),
+                arkret_wire::NotificationKind::Agent,
+                arkret_models_collaboration::sync_frames::account_sync::NotificationDeltaAction::Add,
+                Some(
+                    arkret_models_collaboration::sync_frames::account_sync::NotificationData::AgentRuntimeApproval(
+                        arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalNotificationData {
+                            kind: arkret_models_collaboration::sync_frames::account_sync::AccountNotificationDataKind::AgentRuntimeApproval,
+                            approval_request_id: arkret_wire::OpaqueLocalId::new(
+                                "agent_runtime_approval:019fa1ef-00ee-77e0-9f06-2f1d9ed5e3fa",
+                            )
+                            .unwrap(),
+                            agent_id: arkret_wire::Did::new("did:web:agent.example".to_owned())
+                                .expect("test Agent DID"),
+                            requested_at: "2026-07-27T04:57:02.959Z"
+                                .parse()
+                                .expect("test requested_at"),
+                            expires_at: "2026-07-27T05:07:02.959Z"
+                                .parse()
+                                .expect("test expires_at"),
+                        },
+                    ),
+                ),
+            )
+            .expect("typed Agent approval must be valid");
+        let wire = serde_json::to_value(delta).expect("NotificationDelta must serialize");
+
+        assert_eq!(
+            wire.get("notification_kind").and_then(Value::as_str),
+            Some("agent")
+        );
+        assert_eq!(wire.get("action").and_then(Value::as_str), Some("add"));
+        assert_eq!(
+            wire.pointer("/data/kind").and_then(Value::as_str),
+            Some("agent_runtime_approval")
+        );
+    }
 }

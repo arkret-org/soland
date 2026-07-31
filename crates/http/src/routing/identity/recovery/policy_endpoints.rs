@@ -347,7 +347,7 @@ pub(super) async fn recovery_policy_put(
         .await
         .map_err(recovery_policy_service_error)?;
     let record = match publish_result {
-        soland_services::identity::PublishRecoveryPolicyResult::Accepted(policy) => policy,
+        soland_services::identity::PublishRecoveryPolicyResult::Accepted(policy) => *policy,
         soland_services::identity::PublishRecoveryPolicyResult::GenesisVersionInvalid {
             actual,
         } => {

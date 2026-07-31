@@ -426,7 +426,7 @@ mod tests {
 
     #[test]
     fn staged_pairing_key_rejects_directory_multibase() {
-        let raw = arkret_canonical::base64url_encode(&[7_u8; 32]);
+        let raw = arkret_canonical::base64url_encode([7_u8; 32]);
         let canonical: PublicKey = serde_json::from_value(serde_json::json!({
             "kty": "OKP",
             "kid": "ak:device:01964137-0000-7000-8000-0000000000c1",

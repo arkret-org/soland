@@ -1064,23 +1064,25 @@ pub async fn assert_federation_outbox_store_contract(
                 last_error_code: Some("terminal_http_status".to_owned()),
                 last_response_excerpt: Some("not found".to_owned()),
                 observed_at: 500,
-                outcome: FederationOutboxOutcome::DeadLettered(FederationOutboxDeadLetterRecord {
-                    id: dead_letter_id.clone(),
-                    outbox_id: first.id.clone(),
-                    peer_did: peer_did.clone(),
-                    endpoint: "/_arkret/peer/events".to_owned(),
-                    idempotency_key: first.idempotency_key.clone(),
-                    last_http_status: Some(404),
-                    attempts: 10,
-                    response_excerpt: Some("not found".to_owned()),
-                    reason: "terminal_http_status".to_owned(),
-                    failed_at: 500,
-                    requeued_outbox_id: None,
-                    requeued_by: None,
-                    requeue_reason: None,
-                    requeue_request_digest: None,
-                    requeued_at: None,
-                }),
+                outcome: FederationOutboxOutcome::DeadLettered(Box::new(
+                    FederationOutboxDeadLetterRecord {
+                        id: dead_letter_id.clone(),
+                        outbox_id: first.id.clone(),
+                        peer_did: peer_did.clone(),
+                        endpoint: "/_arkret/peer/events".to_owned(),
+                        idempotency_key: first.idempotency_key.clone(),
+                        last_http_status: Some(404),
+                        attempts: 10,
+                        response_excerpt: Some("not found".to_owned()),
+                        reason: "terminal_http_status".to_owned(),
+                        failed_at: 500,
+                        requeued_outbox_id: None,
+                        requeued_by: None,
+                        requeue_reason: None,
+                        requeue_request_digest: None,
+                        requeued_at: None,
+                    }
+                )),
             })
             .await
             .expect("dead-letter transition")

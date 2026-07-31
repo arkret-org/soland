@@ -348,9 +348,7 @@ pub(crate) fn verify_call_state_participant_bindings(
         {
             return Ok(());
         }
-        return Err(
-            "participant_binding_invalid: participant_binding.sig failed Ed25519 verification",
-        );
+        Err("participant_binding_invalid: participant_binding.sig failed Ed25519 verification")
     }
 }
 

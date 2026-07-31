@@ -881,7 +881,7 @@ pub(super) async fn lifecycle_transition(
     let status_changed_at = chrono::Utc::now();
     // Read the current persisted state so the durable transition carries the
     // accurate `previous_status` (resume comes from `paused`, etc.).
-    let previous_status = record.state.clone();
+    let previous_status = record.state;
     // Drive the FSM reducer with the exact durable
     // `ak.self.agent.{pause,resume,deactivate}` Event authored as the Agent and
     // executed/signed by its controller. Deactivate revocations are admitted

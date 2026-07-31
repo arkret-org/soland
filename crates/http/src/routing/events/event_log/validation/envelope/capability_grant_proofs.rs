@@ -255,10 +255,10 @@ mod tests {
         // Two different rejections, on purpose:
         //
         // * the bare issuer DID no longer even decodes — `CapabilityGrant.proofs[]
-        //   .verification_method` is a typed `DidUrl`, so wire ingress refuses it
-        //   as a schema violation before any rooting logic runs;
-        // * a sibling DID that merely shares the issuer's prefix decodes fine and
-        //   is refused by the rooting gate.
+        //   .verification_method` is a typed `DidUrl`, so wire ingress refuses it as a schema
+        //   violation before any rooting logic runs;
+        // * a sibling DID that merely shares the issuer's prefix decodes fine and is refused by the
+        //   rooting gate.
         let cases: [(String, StatusCode, &str); 2] = [
             (issuer.clone(), StatusCode::BAD_REQUEST, "capability grant"),
             (

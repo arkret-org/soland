@@ -886,7 +886,6 @@ pub(super) async fn recovery_session_proof_submit(
 /// created_at, expires_at)`.
 /// Because the transcript is reconstructed server-side from the stored session,
 /// any proof signed over a different binding (stale policy, replayed across
-
 /// principal/domain, different session) fails verification — this gives the
 /// `recovery_evidence_unbound` guarantee for free.
 pub(super) async fn verify_principal_signing_proof(

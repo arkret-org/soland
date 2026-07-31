@@ -238,7 +238,12 @@ pub struct AppError {
     /// `unauthenticated` and the discriminator travels in `reason`.
     pub top_level_reason: Option<Box<str>>,
     /// Typed protocol details inserted into `error.details`.
-    pub wire_details: std::collections::BTreeMap<String, serde_json::Value>,
+    ///
+    /// Boxed and optional because it is empty on the overwhelming majority of
+    /// errors: inline, the map's three words push `AppError` past clippy's
+    /// 128-byte `result_large_err` threshold and widen every `AppResult` in
+    /// the crate. `None` costs one word and allocates nothing.
+    pub wire_details: Option<Box<std::collections::BTreeMap<String, serde_json::Value>>>,
 }
 
 impl AppError {
@@ -252,7 +257,7 @@ impl AppError {
             reason_detail: None,
             private_detail: None,
             top_level_reason: None,
-            wire_details: std::collections::BTreeMap::new(),
+            wire_details: None,
         }
     }
 
@@ -307,7 +312,9 @@ impl AppError {
         value: impl serde::Serialize,
     ) -> Self {
         if let Ok(value) = serde_json::to_value(value) {
-            self.wire_details.insert(key.into(), value);
+            self.wire_details
+                .get_or_insert_with(Box::default)
+                .insert(key.into(), value);
         }
         self
     }
@@ -420,11 +427,11 @@ impl Writer for AppError {
                 .then_some(self.private_detail.as_deref())
                 .flatten()
         });
-        if !self.wire_details.is_empty() {
+        if let Some(wire_details) = self.wire_details.filter(|details| !details.is_empty()) {
             let mut envelope =
                 arkret_wire::problem_details::ErrorEnvelope::new(&wire, public_message)
                     .with_request_id(request_id());
-            for (key, value) in self.wire_details {
+            for (key, value) in *wire_details {
                 envelope = envelope.with_detail(key, value);
             }
             if let Some(reason_code) = self.reason_code.as_deref() {
