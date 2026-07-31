@@ -533,7 +533,10 @@ async fn resolve_events(
     let body = body.into_inner();
     body.validate()
         .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    if body.event_ids.len() + body.event_digests.len() > MAX_EVENT_RESOLVE {
+    // `max_resolve` is advertised as one selector budget, so every selector
+    // kind spends from it. Leaving `seal_refs` out let a caller draw the full
+    // event budget and 64 Seal lookups on top of it.
+    if body.event_ids.len() + body.event_digests.len() + body.seal_refs.len() > MAX_EVENT_RESOLVE {
         return Err(AppError::new(
             ErrorCode::QuotaExceeded,
             "too many events requested",

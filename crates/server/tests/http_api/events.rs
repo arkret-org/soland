@@ -578,6 +578,36 @@ async fn events_describe_and_single_event_submit_work() {
         serde_json::json!(["ak:event:01904100-0000-7000-8000-30f4e405b35e"])
     );
 
+    // `max_resolve` is one budget across every selector kind: Seal selectors
+    // spend from the same 100 as ids and digests rather than riding along free.
+    let event_ids: Vec<String> = (0..arkret_wire::MAX_EVENT_RESOLVE)
+        .map(|index| format!("ak:event:01904100-0000-7000-8000-{index:012x}"))
+        .collect();
+    let mut over_budget = TestClient::post("http://server/_arkret/self/events/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({
+            "event_ids": event_ids,
+            "seal_refs": [format!("ak:seal:sha256:{}", "1".repeat(64))]
+        }))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let over_budget_body: Value = over_budget.take_json().await.unwrap();
+    assert_eq!(over_budget_body["error"]["code"], "quota_exceeded");
+
+    // The same request without the Seal selector stays inside the budget.
+    let at_budget: Value = TestClient::post("http://server/_arkret/self/events/resolve")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"event_ids": event_ids}))
+        .send(&app_from_state(state.clone()))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+    assert_eq!(
+        at_budget["missing"].as_array().unwrap().len(),
+        arkret_wire::MAX_EVENT_RESOLVE
+    );
+
     let listed: Value =
         TestClient::get("http://server/_arkret/self/events?actors=did:web:alice.example&limit=10")
             .add_header("authorization", format!("Bearer {token}"), true)

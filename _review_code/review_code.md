@@ -190,3 +190,17 @@
   handlers use those bounded queries and critical lookup failures propagate.
 - Prevention dimension: online handlers must not expose an unbounded `projected_events()` API;
   new lookup shapes require a storage predicate and an explicit error policy.
+
+## 2026-07-31 — the whole `http_api` integration suite fails on main
+
+- Severity: P0 verification blocker: every change touching an HTTP route currently ships without
+  integration evidence.
+- Status: open. Pre-existing at `soland@2bf010fa`; confirmed by running the suite on a stashed
+  working tree.
+- Evidence: `cargo test -p soland --test http_api` fails broadly. The narrowest case,
+  `health::health_and_describe_work`, asserts at `crates/server/tests/http_api/health.rs:80` that
+  `describe.supported_reducer_profiles` contains `ak.reducer.v1`; the served describe no longer
+  lists it, so every test that boots the app through the same describe path fails with it.
+- Prevention dimension: a reducer-profile identifier that the describe surface stops advertising
+  should fail one contract assertion, not the entire integration suite. The suite's shared bootstrap
+  makes a single describe drift indistinguishable from a real regression in 200+ unrelated cases.

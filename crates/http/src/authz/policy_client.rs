@@ -1030,6 +1030,101 @@ mod tests {
         }
     }
 
+    /// Sign a decision that carries obligations and a `next_retry_at`, then
+    /// hand `tamper` the signed response so it can rewrite a transcript-covered
+    /// field. The mutated response must fail verification.
+    async fn expect_tampered_decision_rejected(
+        tamper: impl FnOnce(&mut PolicyCheckOutcome),
+        label: &str,
+    ) {
+        let signing = signing_key();
+        let input = sample_input(true);
+        let mut response = signed_sample_response(&input, &signing);
+        response.next_retry_at = Some(Utc::now() + chrono::Duration::seconds(30));
+        response.obligations = vec![
+            serde_json::json!({"kind": "ak.obligation.audit_receipt.v1"}),
+            serde_json::json!({"kind": "ak.obligation.rate_limit.v1", "window_ms": 1_000}),
+        ];
+        let mut response = sign_policy_response(&input, &signing, response);
+
+        tamper(&mut response);
+
+        let resp_body = serde_json::to_string(&response).unwrap();
+        let (addr, _) = spawn_mock_http_once(resp_body).await;
+        let url = format!("http://{addr}/_arkret/self/policy/check");
+        let cfg = realm_config(&url);
+        let client = client_with_policy_key(&signing);
+        let err = client
+            .check(input, move |_| Some(cfg.clone()))
+            .await
+            .unwrap_err();
+        match err {
+            PolicyClientError::SignatureInvalid(message) => assert!(
+                message.contains("Ed25519 verify failed"),
+                "{label}: unexpected message: {message}"
+            ),
+            other => panic!("{label}: expected SignatureInvalid, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn check_rejects_a_removed_obligation() {
+        expect_tampered_decision_rejected(
+            |response| {
+                response.obligations.pop();
+            },
+            "removed obligation",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn check_rejects_a_modified_obligation() {
+        expect_tampered_decision_rejected(
+            |response| {
+                response.obligations[1] =
+                    serde_json::json!({"kind": "ak.obligation.rate_limit.v1", "window_ms": 60_000});
+            },
+            "modified obligation",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn check_rejects_reordered_obligations() {
+        // The transcript covers obligations as an ordered array, so a permuted
+        // list is a different decision even though the set is unchanged.
+        expect_tampered_decision_rejected(
+            |response| response.obligations.reverse(),
+            "reordered obligations",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn check_rejects_a_modified_next_retry_at() {
+        expect_tampered_decision_rejected(
+            |response| {
+                response.next_retry_at = response
+                    .next_retry_at
+                    .map(|at| at + chrono::Duration::hours(1));
+            },
+            "modified next_retry_at",
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn check_rejects_a_dropped_next_retry_at() {
+        // `next_retry_at` is omitted from the transcript when absent, so a
+        // stripped field must not canonicalize back to the signed transcript.
+        expect_tampered_decision_rejected(
+            |response| response.next_retry_at = None,
+            "dropped next_retry_at",
+        )
+        .await;
+    }
+
     #[tokio::test]
     async fn check_forged_signature_rejected() {
         let signing = signing_key();

@@ -271,6 +271,84 @@ fn view_admission_rejects_retired_collection_and_actor_lifecycle_fields() {
     validate_view_payload(&current).unwrap();
 }
 
+#[test]
+fn shared_view_events_never_carry_a_private_view() {
+    // `models/views.md` §3.1: a `visibility="private"` View lives only in
+    // `ak.views.private.<view_id>` account data. Admission is what keeps the
+    // shared surface clean — a private View that is refused entry to the Event
+    // log can never surface from a shared View query, so this is the read-side
+    // guarantee as well as the write-side one.
+    let realm_id =
+        arkret_identifiers::RealmId::new("ak:realm:01904100-0000-7000-8000-000000000613").unwrap();
+    let private_view = json!({
+        "id": "ak:view:01904100-0000-7000-8000-000000000613",
+        "schema": "ak.schema.view.v1",
+        "realm_id": realm_id.as_str(),
+        "kind": "collection",
+        "visibility": "private",
+        "title": "personal board",
+        "query": {"realm_id": realm_id.as_str()},
+        "created_by": "did:web:alice.example",
+        "created_at": "2026-07-30T00:00:00.000Z"
+    });
+    for (seed, kind, payload) in [
+        (
+            "000000000613",
+            arkret_wire::events::EventKind::VIEW_CREATE,
+            json!({
+                "view_id": "ak:view:01904100-0000-7000-8000-000000000613",
+                "object": private_view.clone()
+            }),
+        ),
+        (
+            "000000000614",
+            arkret_wire::events::EventKind::VIEW_UPDATE,
+            json!({
+                "view_id": "ak:view:01904100-0000-7000-8000-000000000613",
+                "patch": {"visibility": "private"}
+            }),
+        ),
+        (
+            "000000000615",
+            arkret_wire::events::EventKind::VIEW_RECONCILE,
+            json!({
+                "view_id": "ak:view:01904100-0000-7000-8000-000000000613",
+                "definition": private_view.clone()
+            }),
+        ),
+        (
+            "000000000616",
+            arkret_wire::events::EventKind::VIEW_UPDATE,
+            json!({
+                "view_id": "ak:view:01904100-0000-7000-8000-000000000613",
+                "visibility": "private"
+            }),
+        ),
+    ] {
+        let operation = op(realm_id.clone(), seed, kind, payload);
+        assert_eq!(
+            validate_view_payload(&operation),
+            Err("private_view_requires_account_data"),
+            "{kind} must refuse a private View on the shared Event surface"
+        );
+    }
+
+    // The same shapes with the shared visibility are admitted, so the rejection
+    // above is about `visibility`, not about the payload shape.
+    let mut shared_view = private_view;
+    shared_view["visibility"] = json!("shared");
+    let shared = op(
+        realm_id,
+        "000000000617",
+        arkret_wire::events::EventKind::VIEW_CREATE,
+        json!({
+            "view_id": "ak:view:01904100-0000-7000-8000-000000000613",
+            "object": shared_view
+        }),
+    );
+    validate_view_payload(&shared).unwrap();
+}
+
 fn test_state() -> AppState {
     AppState::new(test_config(), Db { pool: None })
 }
