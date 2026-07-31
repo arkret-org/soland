@@ -219,10 +219,7 @@ pub struct OutboundPushBridgeCacheSnapshot {
     pub fetch_state: String,
     pub cache_state: String,
     pub contract_digest: String,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub fetched_at: DateTime<Utc>,
     pub remote_contract: Value,
     /// C33.1: trust state for the cached snapshot (`pending` / `trusted` /
@@ -232,8 +229,7 @@ pub struct OutboundPushBridgeCacheSnapshot {
     /// Last freshness check timestamp, distinct from `fetched_at`.
     #[serde(
         default,
-        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub freshness_at: Option<DateTime<Utc>>,
     /// Opaque server ETag from the upstream describe response.
@@ -323,8 +319,7 @@ pub struct OutboundPushBridgeFetchOutcome {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub fetched_at: Option<DateTime<Utc>>,
     pub fetched_contract: OutboundPushResolvedContract,
@@ -336,8 +331,7 @@ pub struct OutboundPushBridgeFetchOutcome {
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub freshness_at: Option<DateTime<Utc>>,
     #[serde(default)]
@@ -360,19 +354,13 @@ pub struct OutboundPushBridgeCacheEntry {
     pub fetch_state: String,
     pub cache_state: String,
     pub contract_digest: String,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub fetched_at: DateTime<Utc>,
     pub fetched_contract: OutboundPushResolvedContract,
     /// C33.1: trust state surfaced to status callers so dashboards can flag
     /// `pending` / `revoked` snapshots without round-tripping the export API.
     pub trust_level: String,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub freshness_at: DateTime<Utc>,
     pub etag: String,
 }

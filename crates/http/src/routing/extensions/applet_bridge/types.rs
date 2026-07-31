@@ -35,15 +35,11 @@ pub struct AppletRecord {
     #[serde(default)]
     pub ghost_actors_allowed: bool,
     pub status: String,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub registered_at: chrono::DateTime<chrono::Utc>,
     #[serde(
         default,
-        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
     #[serde(default)]
@@ -78,15 +74,11 @@ pub struct GhostActorRecord {
     pub accountability_grant_ref: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_ref: Option<String>,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub created_at: chrono::DateTime<chrono::Utc>,
     #[serde(
         default,
-        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
 }
@@ -95,10 +87,7 @@ pub struct GhostActorRecord {
 pub struct AppletRevokeRecordOutcome {
     pub applet_id: String,
     pub status: String,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub revoked_at: chrono::DateTime<chrono::Utc>,
     pub bot_actor_id: String,
     pub ghost_actor_ids: Vec<String>,
@@ -145,16 +134,12 @@ pub struct AppletView {
     pub portal_realm_id: String,
     pub capabilities: Vec<String>,
     pub status: String,
-    #[serde(
-        serialize_with = "arkret_canonical::serde_helpers::serialize_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_canonical_timestamp"
-    )]
+    #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]
     pub registered_at: chrono::DateTime<chrono::Utc>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
-        serialize_with = "arkret_canonical::serde_helpers::serialize_optional_canonical_timestamp",
-        deserialize_with = "arkret_canonical::serde_helpers::deserialize_optional_canonical_timestamp"
+        with = "arkret_canonical::serde_helpers::optional_canonical_timestamp"
     )]
     pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
     pub ghost_actor_ids: Vec<String>,
