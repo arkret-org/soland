@@ -2,16 +2,14 @@
 
 use arkret_identifiers::{BackupId, DeviceId, Did, EventId};
 use arkret_models_crypto::{
-    BackupKind, KEY_BACKUP_DELETE_DEVELOPMENT_PROOF_KIND, KeyBackup,
-    KeyBackupDeleteDetachedJwsProof, KeyBackupDeleteProof, KeyBackupKdfName,
-    KeyBackupRecipientMethod, KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
+    BackupKind, KeyBackup, KeyBackupKdfName, KeyBackupRecipientMethod,
+    KeysBackupsDeleteRequestBody, KeysBackupsUnlockRequestBody,
 };
 use base64::Engine as _;
 use base64::engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD};
 use ed25519_dalek::{Signature, Verifier as _};
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
 use salvo::prelude::*;
-use serde::Serialize;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
@@ -40,6 +38,13 @@ pub(super) fn protocol_router() -> Router {
             Router::with_path("keys/backups/{backup_id}")
                 .put(put_key_backup)
                 .delete(delete_key_backup),
+        )
+        .push(
+            // key-management.md §7.8.1 step 1: the server mints every freshness
+            // value for a high-risk delete. Without this endpoint the DELETE
+            // below has nothing valid to consume.
+            Router::with_path("keys/backups/{backup_id}/delete-challenge")
+                .post(issue_key_backup_delete_challenge),
         )
         .push(Router::with_path("keys/backups/{backup_id}/unlock").post(unlock_key_backup))
         .push(Router::with_path("keys/backups").get(list_key_backups))
@@ -537,35 +542,108 @@ mod tests {
         assert_eq!(err.http_status(), StatusCode::CONFLICT);
     }
 
-    #[test]
-    fn delete_dev_proof_binds_actor_and_backup_id_exactly() {
-        let proof = format!("dev-ssk-delete:v1:{ACTOR}:{BACKUP_ID}");
-
-        assert!(is_development_delete_proof(&proof, BACKUP_ID, ACTOR));
-        assert!(!is_development_delete_proof(
-            &proof,
-            BACKUP_ID,
-            "did:web:bob.example"
-        ));
-        assert!(!is_development_delete_proof(
-            &proof,
-            "ak:backup:01964137-0000-7000-8000-000000000099",
-            ACTOR
-        ));
+    fn delete_challenge_fixture() -> arkret_models_crypto::KeysBackupsDeleteChallenge {
+        arkret_models_crypto::KeysBackupsDeleteChallenge {
+            challenge_id: arkret_wire::Base64UrlString::new("Y2hhbGxlbmdlLWlk").unwrap(),
+            challenge: arkret_wire::Base64UrlString::new("Y2hhbGxlbmdlLWJ5dGVz").unwrap(),
+            nonce: arkret_wire::Base64UrlString::new("bm9uY2UtYnl0ZXM").unwrap(),
+            operation: "ak.self.keys.backups.resource.delete".to_owned(),
+            principal_id: Did::new(ACTOR.to_owned()).unwrap(),
+            backup_id: BackupId::new(BACKUP_ID.to_owned()).unwrap(),
+            audience: arkret_wire::NonEmptyString::new("https://soland.test").unwrap(),
+            service_id: Did::new("did:web:soland.test".to_owned()).unwrap(),
+            request_id: arkret_wire::Base64UrlString::new("cmVxdWVzdC1pZA").unwrap(),
+            issued_at: "2026-08-01T00:00:00.000Z".parse().unwrap(),
+            expires_at: "2026-08-01T00:05:00.000Z".parse().unwrap(),
+        }
     }
 
+    /// §7.8.1 step 2: the transcript's key set is fixed, and an absent `reason`
+    /// is encoded as JSON `null` rather than omitted.
+    ///
+    /// Omitting the key would make "no reason given" and "reason tampered away"
+    /// produce different bytes on different implementations — which is exactly
+    /// the kind of divergence the canonical form exists to prevent.
     #[test]
-    fn delete_jws_proof_transcript_is_stable() {
-        let canonical = key_backup_delete_proof_canonical_bytes(ACTOR, BACKUP_ID)
-            .expect("canonical delete proof transcript");
-        let value: Value = serde_json::from_slice(&canonical).expect("canonical JSON");
-
-        assert_eq!(value["kind"], "ak.key_backup.delete_proof.v1");
-        assert_eq!(value["actor_id"], ACTOR);
-        assert_eq!(value["backup_id"], BACKUP_ID);
+    fn delete_intent_transcript_has_the_fixed_key_set_and_null_reason() {
+        let transcript = delete_challenge_fixture().delete_intent_transcript(None);
+        let object = transcript.as_object().expect("transcript is an object");
+        let mut keys: Vec<&str> = object.keys().map(String::as_str).collect();
+        keys.sort_unstable();
         assert_eq!(
-            arkret_canonical::sha256_digest(&canonical),
-            "sha256:0488d1f92328d1c7f0261963d88ac2705904456fffa7a3113fe23cad044ac34c"
+            keys,
+            [
+                "audience",
+                "backup_id",
+                "challenge",
+                "challenge_id",
+                "context",
+                "expires_at",
+                "issued_at",
+                "nonce",
+                "operation",
+                "principal_id",
+                "reason",
+                "request_id",
+                "service_id",
+            ]
+        );
+        assert_eq!(object["context"], "ak.keys.backup_delete.v1");
+        assert_eq!(object["operation"], "ak.self.keys.backups.resource.delete");
+        assert!(
+            object["reason"].is_null(),
+            "an absent reason MUST be encoded as JSON null, not omitted"
+        );
+    }
+
+    /// §7.8.1 step 5: tampering with any transcript field MUST make signature
+    /// verification fail. The digest is what the signature covers, so this
+    /// states that property at the digest.
+    #[test]
+    fn tampering_any_transcript_field_changes_the_delete_intent_digest() {
+        let base = delete_challenge_fixture();
+        let baseline = base.delete_intent_digest(None).expect("digest");
+
+        // `reason` is signed, so adding one moves the digest.
+        assert_ne!(
+            baseline,
+            base.delete_intent_digest(Some("device lost"))
+                .expect("digest")
+        );
+
+        let mut tampered_backup = base.clone();
+        tampered_backup.backup_id =
+            BackupId::new("ak:backup:01964137-0000-7000-8000-000000000099".to_owned()).unwrap();
+        assert_ne!(
+            baseline,
+            tampered_backup.delete_intent_digest(None).unwrap()
+        );
+
+        let mut tampered_audience = base.clone();
+        tampered_audience.audience = arkret_wire::NonEmptyString::new("https://evil.test").unwrap();
+        assert_ne!(
+            baseline,
+            tampered_audience.delete_intent_digest(None).unwrap()
+        );
+
+        let mut tampered_nonce = base.clone();
+        tampered_nonce.nonce = arkret_wire::Base64UrlString::new("b3RoZXItbm9uY2U").unwrap();
+        assert_ne!(baseline, tampered_nonce.delete_intent_digest(None).unwrap());
+
+        let mut tampered_service = base.clone();
+        tampered_service.service_id = Did::new("did:web:other.test".to_owned()).unwrap();
+        assert_ne!(
+            baseline,
+            tampered_service.delete_intent_digest(None).unwrap()
+        );
+
+        // The freshness window is signed too, so a replayed challenge cannot be
+        // re-dated into a fresh one.
+        let mut tampered_window = base;
+        tampered_window.expires_at = "2026-08-01T01:00:00.000Z".parse().unwrap();
+        assert_ne!(
+            baseline,
+            tampered_window.delete_intent_digest(None).unwrap()
         );
     }
 

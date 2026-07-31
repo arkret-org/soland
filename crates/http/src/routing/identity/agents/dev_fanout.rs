@@ -520,6 +520,7 @@ pub(super) async fn submit_durable_agent_lifecycle(
 
 #[cfg(test)]
 mod tests {
+    use arkret_wire::{CapabilityActionId, ServiceOperationId};
     use soland_storage_postgres::Db;
 
     use super::*;

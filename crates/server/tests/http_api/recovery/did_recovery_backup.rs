@@ -103,7 +103,7 @@ async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
     let backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
     put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
 
-    let body = delete_key_backup(state, &token, &principal_id, backup_id, StatusCode::OK).await;
+    let body = delete_key_backup(state, &token, &signing, backup_id, StatusCode::OK).await;
     assert_eq!(body["deleted"], true);
 }
 
@@ -127,7 +127,7 @@ async fn key_backup_delete_allows_stale_did_recovery_backup() {
 
     seed_recovery_policy(&state, &principal_id, &vm, 2, Some(&v1_policy_id)).await;
 
-    let body = delete_key_backup(state, &token, &principal_id, backup_id, StatusCode::OK).await;
+    let body = delete_key_backup(state, &token, &signing, backup_id, StatusCode::OK).await;
     assert_eq!(body["deleted"], true);
     assert_eq!(body["backup_id"], backup_id);
 }

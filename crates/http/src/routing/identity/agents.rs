@@ -159,6 +159,8 @@ pub(crate) fn open_router() -> Router {
 
 #[cfg(test)]
 mod tests {
+    use arkret_wire::SchemaId;
+
     use super::*;
 
     fn test_session(actor: &str) -> SessionRecord {

@@ -428,7 +428,7 @@ mod tests {
         BackupObjectRef, BackupRotationBinding, BackupRotationKind, BackupRotationPlan,
         BackupSeriesId, CanonicalEncoding, CanonicalPublicMaterial, DeviceId, Did, DidUrl, Event,
         EventId, EventInitialSubmission, EventsSubmitBatchRequestBody, Hash, Hlc, LeaseBasisRef,
-        PayloadProof, PreparedEventUnit, RealmId, RiskTier, ScopeRef, SealId,
+        PayloadProof, PreparedEventUnit, RealmId, RiskTier, SchemaId, ScopeRef, SealId,
         SecurityRotationTransactionCreateRequest, SecurityTransactionBinding,
         SecurityTransactionCreateRequest, SecurityTransactionState, SecurityTransactionStep,
         TransactionId, proof_kind,

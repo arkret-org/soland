@@ -23,7 +23,7 @@ use arkret_models_collaboration::events_payloads::MlsWelcomeClaimEnvelope;
 use arkret_models_identity::{
     CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };
-use arkret_wire::{CORE_REDUCER_PROFILE, NonEmptyString};
+use arkret_wire::{CORE_REDUCER_PROFILE, DidUrl, NonEmptyString, ProfileId};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Utc;
@@ -225,13 +225,13 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
         principal_id: principal_id.clone(),
         trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland-mls-test.local").unwrap(),
         principal_signing_key: PublishedKey {
-            kid: NonEmptyString::new(format!("{principal}#principal-signing")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new("z6MkPrincipalAlice").unwrap(),
             key_format: KeyFormat::Multibase,
         },
         self_signing_key: SubordinateSignedKey {
-            kid: NonEmptyString::new(format!("{principal}#self-signing")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new(self_signing_public_key).unwrap(),
             key_format: KeyFormat::Multibase,
@@ -245,7 +245,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             },
         },
         user_signing_key: SubordinateSignedKey {
-            kid: NonEmptyString::new(format!("{principal}#user-signing")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
             key_format: KeyFormat::Multibase,

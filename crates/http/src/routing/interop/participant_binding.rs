@@ -404,6 +404,7 @@ mod cross_impl_tests {
     //! inkson round-trip). This test fails the moment either construction drifts.
 
     use arkret_identifiers::{CallId, DeviceId, Did, RealmId};
+    use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
     use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
     use arkret_signatures::media::participant_binding_signing_input;
     use chrono::{DateTime, Utc};

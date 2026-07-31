@@ -1838,12 +1838,32 @@ impl AgentParticipationService {
     }
 }
 
+/// Re-exported so the HTTP layer can name a delete challenge without depending
+/// on `soland-storage` directly (it is a dev-dependency there): the service
+/// facade is the only boundary the routing code crosses.
+pub use soland_storage::KeyBackupDeleteChallengeRecord;
+
 #[async_trait]
 pub trait KeyBackupPort: Send + Sync {
     async fn backup(&self, backup_id: &str) -> ServiceResult<Option<Value>>;
     async fn backups_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<Value>>;
     async fn store_backup(&self, backup_id: String, payload: Value) -> ServiceResult<()>;
     async fn delete_backup(&self, backup_id: &str) -> ServiceResult<bool>;
+    async fn issue_delete_challenge(
+        &self,
+        record: soland_storage::KeyBackupDeleteChallengeRecord,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<soland_storage::KeyBackupDeleteChallengeRecord>;
+    async fn delete_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> ServiceResult<Option<soland_storage::KeyBackupDeleteChallengeRecord>>;
+    async fn consume_delete_challenge(
+        &self,
+        challenge_id: &str,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<bool>;
+    async fn prune_expired_delete_challenges(&self, now: DateTime<Utc>) -> ServiceResult<usize>;
 }
 
 #[derive(Clone)]
@@ -2064,6 +2084,42 @@ impl KeyBackupService {
 
     pub async fn store_backup(&self, backup_id: String, payload: Value) -> ServiceResult<()> {
         self.backups.store_backup(backup_id, payload).await
+    }
+
+    /// Issue, or re-issue verbatim, the delete challenge for one
+    /// `(principal_id, backup_id, request_id)` (`key-management.md` §7.8.1).
+    pub async fn issue_delete_challenge(
+        &self,
+        record: soland_storage::KeyBackupDeleteChallengeRecord,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<soland_storage::KeyBackupDeleteChallengeRecord> {
+        self.backups.issue_delete_challenge(record, now).await
+    }
+
+    pub async fn delete_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> ServiceResult<Option<soland_storage::KeyBackupDeleteChallengeRecord>> {
+        self.backups.delete_challenge(challenge_id).await
+    }
+
+    /// Consume a challenge exactly once. `false` means it was already consumed
+    /// or never existed.
+    pub async fn consume_delete_challenge(
+        &self,
+        challenge_id: &str,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<bool> {
+        self.backups
+            .consume_delete_challenge(challenge_id, now)
+            .await
+    }
+
+    pub async fn prune_expired_delete_challenges(
+        &self,
+        now: DateTime<Utc>,
+    ) -> ServiceResult<usize> {
+        self.backups.prune_expired_delete_challenges(now).await
     }
 
     pub async fn delete_backup(&self, backup_id: &str) -> ServiceResult<bool> {

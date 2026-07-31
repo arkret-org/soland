@@ -463,7 +463,7 @@ async fn verify_device_quorum_reset(
     Ok(())
 }
 
-fn device_quorum_method_matches(
+pub(crate) fn device_quorum_method_matches(
     principal_id: &str,
     device_id: &str,
     device_public_key: &str,
@@ -476,7 +476,7 @@ fn device_quorum_method_matches(
         || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
 }
 
-fn policy_mentions_identifier(
+pub(crate) fn policy_mentions_identifier(
     policy: &RecoveryPolicyState,
     top_level_keys: &[&str],
     identifier: &str,
@@ -502,7 +502,7 @@ fn value_mentions_identifier(value: &Value, identifier: &str) -> bool {
     }
 }
 
-fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
+pub(crate) fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
     [
         "/device_quorum/k",
         "/device_quorum/threshold",
@@ -521,7 +521,7 @@ fn policy_device_quorum_threshold(policy: &RecoveryPolicyState) -> Option<u32> {
     })
 }
 
-fn policy_requires_trusted_service_attestation(policy: &RecoveryPolicyState) -> bool {
+pub(crate) fn policy_requires_trusted_service_attestation(policy: &RecoveryPolicyState) -> bool {
     [
         "/trusted_recovery_service/attestation_required",
         "/trusted_recovery_services/attestation_required",

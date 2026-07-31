@@ -2649,6 +2649,7 @@ mod federation_revoke_fanout_tests {
 mod realm_owner_authority_tests {
     use arkret_event_draft::Operation;
     use arkret_identifiers::{OperationId, RealmId};
+    use arkret_wire::CapabilityActionId;
     use serde_json::json;
 
     use crate::reducer::{ProjectionEffect, ProjectionState, SolandRealmState};

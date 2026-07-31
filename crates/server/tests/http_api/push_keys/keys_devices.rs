@@ -1038,7 +1038,7 @@ fn tier2_publish_and_authorize(
         CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey,
         SubordinateSignedKeyBinding,
     };
-    use arkret_wire::NonEmptyString;
+    use arkret_wire::{DidUrl, NonEmptyString};
 
     let principal_did = Did::new(principal.to_owned()).unwrap();
     let device_id = DeviceId::new(device.to_owned()).unwrap();
@@ -1051,13 +1051,13 @@ fn tier2_publish_and_authorize(
         trust_domain: arkret_identifiers::TypedTrustDomainId::new("ak:trust_domain:example.net")
             .unwrap(),
         principal_signing_key: PublishedKey {
-            kid: NonEmptyString::new(format!("{principal}#ak_principal_signing_v1")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#ak_principal_signing_v1")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new(psk_multibase.clone()).unwrap(),
             key_format: KeyFormat::Multibase,
         },
         self_signing_key: SubordinateSignedKey {
-            kid: NonEmptyString::new(format!("{principal}#ak_self_signing_v1")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#ak_self_signing_v1")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new(ssk_multibase.clone()).unwrap(),
             key_format: KeyFormat::Multibase,
@@ -1071,7 +1071,7 @@ fn tier2_publish_and_authorize(
             },
         },
         user_signing_key: SubordinateSignedKey {
-            kid: NonEmptyString::new(format!("{principal}#ak_user_signing_v1")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#ak_user_signing_v1")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new("z6MkUserDistinctKey").unwrap(),
             key_format: KeyFormat::Multibase,

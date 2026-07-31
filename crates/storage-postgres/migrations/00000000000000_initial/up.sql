@@ -662,6 +662,33 @@ CREATE TABLE public.key_backups (
     series_seq bigint GENERATED ALWAYS AS (((payload ->> 'series_seq'))::bigint) STORED
 );
 
+-- key-management.md 7.8.1: the server-issued, durable, single-use delete
+-- challenge a high-risk key-backup DELETE must consume. The whole challenge is
+-- kept in `challenge` so the wire shape has one definition (the SDK type); the
+-- columns beside it back the only two lookups -- by `challenge_id` when
+-- verifying a DELETE, and by (principal_id, backup_id, request_id) when
+-- re-issuing. That triple is UNIQUE because 7.8.1 requires the same request_id
+-- to receive the same challenge while it is still valid, so a client retrying
+-- the issue call cannot invalidate the challenge it is already signing.
+-- `consumed_at` is the single-use flag: it is set under
+-- `WHERE consumed_at IS NULL`, so two concurrent DELETEs consume exactly once.
+CREATE TABLE public.key_backup_delete_challenges (
+    challenge_id text NOT NULL,
+    principal_id text NOT NULL,
+    backup_id text NOT NULL,
+    request_id text NOT NULL,
+    challenge jsonb NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    consumed_at timestamp with time zone,
+    PRIMARY KEY (challenge_id),
+    CONSTRAINT key_backup_delete_challenges_request_key
+        UNIQUE (principal_id, backup_id, request_id)
+);
+
+CREATE INDEX key_backup_delete_challenges_expiry_idx
+    ON public.key_backup_delete_challenges (expires_at);
+
 CREATE TABLE public.mls_commits (
     id uuid NOT NULL,
     effective_scope_kind text NOT NULL,
