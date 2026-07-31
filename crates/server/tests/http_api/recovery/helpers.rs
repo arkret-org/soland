@@ -8,7 +8,8 @@ use std::sync::Arc;
 
 use arkret_identifiers::Hash;
 use arkret_models_crypto::{
-    KeyBackupDeleteDevelopmentProof, KeyBackupDeleteProof, KeysBackupsDeleteRequestBody,
+    KeyBackupDeleteProof, KeysBackupsDeleteChallenge, KeysBackupsDeleteRequestBody,
+    KeysBackupsIssueDeleteChallengeRequestBody,
 };
 use serde_json::{Map, Value};
 use soland_storage::{
@@ -528,16 +529,53 @@ pub(crate) async fn put_key_backup(
     body
 }
 
+/// Drive the whole §7.8.1 delete protocol: ask for a challenge, sign the
+/// canonical delete-intent transcript with the principal's control key, then
+/// DELETE.
+///
+/// It has to be the whole protocol. The previous helper posted a
+/// `dev-ssk-delete:v1:{actor}:{backup}` string, which `key-management.md` §7.8
+/// judged dead precisely because it carried no server-issued freshness — a
+/// helper that skipped the challenge would be testing a path the server no
+/// longer has.
 pub(crate) async fn delete_key_backup(
     state: AppState,
     token: &str,
-    principal_id: &str,
+    signing: &SigningKey,
     backup_id: &str,
     expected_status: StatusCode,
 ) -> Value {
-    let proof = format!("dev-ssk-delete:v1:{principal_id}:{backup_id}");
+    let request_id = arkret_wire::Base64UrlString::new("dGVzdC1yZXF1ZXN0LWlk")
+        .expect("fixture request_id is base64url");
+    let challenge =
+        issue_key_backup_delete_challenge(state.clone(), token, backup_id, request_id.clone())
+            .await;
+
+    let (_, verification_method) = did_key_principal(signing);
+    let transcript = challenge.delete_intent_transcript(None);
+    let canonical =
+        arkret_canonical::canonical_json_bytes(&transcript).expect("canonical transcript");
+    let payload_digest = challenge
+        .delete_intent_digest(None)
+        .expect("delete-intent digest");
+    let proof = arkret_wire::PayloadProof {
+        kind: "detached_jws".to_owned(),
+        verification_method: arkret_wire::DidUrl::new(verification_method)
+            .expect("fixture verification method is a DID URL"),
+        alg: "EdDSA".to_owned(),
+        payload_digest,
+        // Inside the challenge window, which the server checks.
+        created_at: challenge.issued_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: arkret_signatures::jws::sign_jws_ed25519(&canonical, signing).expect("sign"),
+    };
+
     let body = KeysBackupsDeleteRequestBody {
-        proof: KeyBackupDeleteProof::Development(KeyBackupDeleteDevelopmentProof::new(proof)),
+        request_id,
+        challenge_id: challenge.challenge_id.clone(),
+        proof: KeyBackupDeleteProof::PrincipalSigning { proof },
         reason: None,
     };
     let mut response = TestClient::delete(format!(
@@ -551,6 +589,25 @@ pub(crate) async fn delete_key_backup(
     let body: Value = response.take_json().await.unwrap();
     assert_eq!(status, expected_status, "response body: {body}");
     body
+}
+
+pub(crate) async fn issue_key_backup_delete_challenge(
+    state: AppState,
+    token: &str,
+    backup_id: &str,
+    request_id: arkret_wire::Base64UrlString,
+) -> KeysBackupsDeleteChallenge {
+    let mut response = TestClient::post(format!(
+        "http://server/_arkret/self/keys/backups/{backup_id}/delete-challenge"
+    ))
+    .add_header("authorization", format!("Bearer {token}"), true)
+    .json(&KeysBackupsIssueDeleteChallengeRequestBody { request_id })
+    .send(&app_from_state(state))
+    .await;
+    let status = response.status_code.unwrap();
+    let body: Value = response.take_json().await.unwrap();
+    assert_eq!(status, StatusCode::OK, "response body: {body}");
+    serde_json::from_value(body).expect("issued challenge decodes")
 }
 
 pub(crate) async fn post_recovery(

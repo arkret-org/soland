@@ -6,7 +6,7 @@ use arkret_identifiers::TypedTrustDomainId;
 use arkret_models_identity::{
     CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };
-use arkret_wire::{NonEmptyString, PayloadSigner as _};
+use arkret_wire::{DidUrl, NonEmptyString, PayloadSigner as _};
 use chrono::Utc;
 
 use super::common::*;
@@ -246,13 +246,13 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
         principal_id: principal_id.clone(),
         trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland.local".to_owned()).unwrap(),
         principal_signing_key: PublishedKey {
-            kid: NonEmptyString::new(format!("{principal}#principal-signing")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new("z6MkPrincipalDirect").unwrap(),
             key_format: KeyFormat::Multibase,
         },
         self_signing_key: SubordinateSignedKey {
-            kid: NonEmptyString::new(format!("{principal}#self-signing")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new("z6MkSelfDirect").unwrap(),
             key_format: KeyFormat::Multibase,
@@ -267,7 +267,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             },
         },
         user_signing_key: SubordinateSignedKey {
-            kid: NonEmptyString::new(format!("{principal}#user-signing")).unwrap(),
+            kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
             alg: NonEmptyString::new("EdDSA").unwrap(),
             public_key: NonEmptyString::new("z6MkUserDirect").unwrap(),
             key_format: KeyFormat::Multibase,

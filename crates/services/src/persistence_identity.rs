@@ -1307,6 +1307,48 @@ impl crate::identity::KeyBackupPort for PersistenceKeyBackups {
     async fn delete_backup(&self, backup_id: &str) -> crate::ServiceResult<bool> {
         Ok(self.0.key_backups().delete(backup_id).await?)
     }
+
+    async fn issue_delete_challenge(
+        &self,
+        record: soland_storage::KeyBackupDeleteChallengeRecord,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<soland_storage::KeyBackupDeleteChallengeRecord> {
+        Ok(self
+            .0
+            .key_backups()
+            .issue_delete_challenge(record, now)
+            .await?)
+    }
+
+    async fn delete_challenge(
+        &self,
+        challenge_id: &str,
+    ) -> crate::ServiceResult<Option<soland_storage::KeyBackupDeleteChallengeRecord>> {
+        Ok(self.0.key_backups().delete_challenge(challenge_id).await?)
+    }
+
+    async fn consume_delete_challenge(
+        &self,
+        challenge_id: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .key_backups()
+            .consume_delete_challenge(challenge_id, now)
+            .await?)
+    }
+
+    async fn prune_expired_delete_challenges(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<usize> {
+        Ok(self
+            .0
+            .key_backups()
+            .prune_expired_delete_challenges(now)
+            .await?)
+    }
 }
 
 #[async_trait::async_trait]

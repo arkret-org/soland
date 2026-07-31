@@ -2,7 +2,7 @@
 
 use std::collections::BTreeSet;
 
-use arkret_wire::CORE_REDUCER_PROFILE;
+use arkret_wire::{CORE_REDUCER_PROFILE, ProfileId};
 use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use soland_domain::reducer::{CircleLifecycleState, CircleProjection};
 use soland_storage::{CanonicalEventRecord, RealmMetaRecord};

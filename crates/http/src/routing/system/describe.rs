@@ -884,7 +884,7 @@ async fn integration_describe() -> JsonResult<IntegrationDescribeOutcome> {
 #[cfg(test)]
 mod tests {
     use arkret_models_discovery::service_description::ServiceDescribe;
-    use arkret_wire::{Did, ServiceKind, TypedTrustDomainId};
+    use arkret_wire::{Did, ProfileId, ServiceKind, TypedTrustDomainId};
 
     use super::apply_claim_level_partition;
 

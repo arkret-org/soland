@@ -635,6 +635,60 @@ pub(super) async fn delete_key_backup(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let backup_id = backup_id.into_inner();
+    // spec `keys_backups_delete_request_body` (additionalProperties: false):
+    // `{request_id, challenge_id, proof, reason?}` travels in the JSON body,
+    // never a header.
+    let body = req
+        .parse_json::<KeysBackupsDeleteRequestBody>()
+        .await
+        .map_err(|error| {
+            AppError::invalid_param(format!(
+                "ak.self.keys.backups.resource.delete request body is invalid: {error}"
+            ))
+        })?;
+
+    // key-management.md §7.8.1 step 4. The ledger is keyed on
+    // `(principal_id, backup_id, request_id)`, so an identical network retry
+    // replays the stored terminal outcome instead of re-verifying an already
+    // consumed challenge, and the same `request_id` with a different body is a
+    // duplicate conflict. This is what lets "single-use challenge" coexist with
+    // the registry's retry-safe DELETE.
+    let idempotency_key = format!(
+        "{}:{backup_id}:{}",
+        KEY_BACKUP_DELETE_OPERATION,
+        body.request_id.as_str()
+    );
+    let request_hash = arkret_canonical::canonical_sha256(&body).map_err(|error| {
+        AppError::invalid_param(format!(
+            "delete request body is not canonical-hashable: {error}"
+        ))
+    })?;
+    match state
+        .jobs()
+        .idempotency_record(&session.actor, &idempotency_key)
+        .await
+    {
+        Ok(Some(record)) if record.request_hash == request_hash => {
+            let outcome: KeysBackupsDeleteOutcome = serde_json::from_value(record.response_body)
+                .map_err(|error| {
+                    AppError::internal(format!("stored delete outcome is corrupt: {error}"))
+                })?;
+            return json_ok(outcome);
+        }
+        Ok(Some(_)) => {
+            return Err(AppError::conflict(
+                "request_id was reused with a different delete request body",
+            )
+            .with_wire_code("duplicate_conflict"));
+        }
+        Ok(None) => {}
+        Err(error) => {
+            return Err(AppError::internal(format!(
+                "delete idempotency lookup failed: {error}"
+            )));
+        }
+    }
+
     let owned_backup = state
         .key_backups()
         .backup(&backup_id)
@@ -647,8 +701,16 @@ pub(super) async fn delete_key_backup(
         // represented as a success outcome, so report it as not-found.
         return Err(AppError::not_found("key backup not found"));
     };
-    verify_delete_ownership_proof(state, req, &backup_id, &session.actor).await?;
+    let now = chrono::Utc::now();
+    let authorized =
+        authorize_key_backup_delete(state, &body, &backup_id, &session.actor, now).await?;
     ensure_key_backup_delete_allowed(state, &session.actor, &backup).await?;
+    // §7.8.1 step 3: consume the challenge in the same step as the delete it
+    // authorizes. Consuming first means a delete that then fails cannot be
+    // retried with the same challenge — which is the intended direction for a
+    // single-use high-risk authorization, and the idempotency ledger above is
+    // what makes an honest network retry still work.
+    consume_key_backup_delete_challenge(state, &authorized.challenge_id, now).await?;
     let deleted = state
         .key_backups()
         .delete_backup(&backup_id)
@@ -668,12 +730,56 @@ pub(super) async fn delete_key_backup(
             "backup_kind": backup.get("backup_kind").cloned().unwrap_or(Value::Null),
             "series_id": backup.get("series_id").cloned().unwrap_or(Value::Null),
             "series_seq": backup.get("series_seq").cloned().unwrap_or(Value::Null),
+            // Which of the three §7.8 authority branches carried this delete.
+            "delete_proof_kind": authorized.proof_branch,
         }),
         "deleted",
     )
     .await;
-    json_ok(KeysBackupsDeleteOutcome {
+    let outcome = KeysBackupsDeleteOutcome {
         deleted: true,
         backup_id: BackupId::new(backup_id).ok(),
-    })
+    };
+    record_delete_idempotency(
+        state,
+        &session.actor,
+        &idempotency_key,
+        &request_hash,
+        &outcome,
+    )
+    .await;
+    json_ok(outcome)
+}
+
+/// Persist the terminal outcome so an identical retry replays it.
+///
+/// A persist failure is logged rather than surfaced: the delete has already
+/// happened, and turning a successful delete into a 5xx would be worse than
+/// losing the replay shortcut (the retry then hits the consumed challenge and
+/// fails closed, which is safe).
+async fn record_delete_idempotency(
+    state: &AppState,
+    actor_id: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+    outcome: &KeysBackupsDeleteOutcome,
+) {
+    let Ok(response_body) = serde_json::to_value(outcome) else {
+        return;
+    };
+    let created_at = chrono::Utc::now();
+    let record = soland_services::jobs::IdempotencyState {
+        principal_id: actor_id.to_owned(),
+        idempotency_key: idempotency_key.to_owned(),
+        service_id: state.service_id().clone(),
+        request_hash: request_hash.to_owned(),
+        response_status: 200,
+        response_body,
+        created_at,
+        expires_at: created_at
+            + chrono::Duration::seconds(KEY_BACKUP_DELETE_IDEMPOTENCY_TTL_SECONDS),
+    };
+    if let Err(error) = state.jobs().store_idempotency_record(record).await {
+        tracing::warn!(%error, idempotency_key, "key backup delete idempotency persist failed");
+    }
 }

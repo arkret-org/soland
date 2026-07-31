@@ -49,6 +49,7 @@ DROP TABLE IF EXISTS invite_receive_policies CASCADE;
 DROP TABLE IF EXISTS invite_locators CASCADE;
 DROP TABLE IF EXISTS join_application_idempotency CASCADE;
 DROP TABLE IF EXISTS join_applications CASCADE;
+DROP TABLE IF EXISTS key_backup_delete_challenges CASCADE;
 DROP TABLE IF EXISTS key_backups CASCADE;
 DROP TABLE IF EXISTS mls_commits CASCADE;
 DROP TABLE IF EXISTS mls_key_packages CASCADE;
