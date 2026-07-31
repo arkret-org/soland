@@ -2148,7 +2148,9 @@ pub(crate) fn signed_signal_envelope(
     signing_key: &SigningKey,
 ) -> arkret_wire::SignalEnvelope {
     let sent_at = chrono::DateTime::from_timestamp_millis(sent_at.timestamp_millis()).unwrap();
-    let verification_method = arkret_wire::DidUrl::new(format!("{sender_actor}#device-key"))
+    // `signal.md` §1 — the method is the directory lookup key and MUST equal
+    // `{sender_actor_id}#{sender_device_id}` verbatim.
+    let verification_method = arkret_wire::DidUrl::new(format!("{sender_actor}#{sender_device}"))
         .expect("fixture verification method is a DID URL");
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: RealmId::new(realm_id.to_owned()).unwrap(),

@@ -321,8 +321,10 @@ fn signal_envelope(
         },
         proof: arkret_wire::SignalProof {
             kind: "detached_jws".to_owned(),
-            verification_method: arkret_wire::DidUrl::new(format!("{sender_actor}#device-key"))
-                .unwrap(),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{sender_actor}#{sender_device}"
+            ))
+            .unwrap(),
             alg: "EdDSA".to_owned(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),

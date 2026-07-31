@@ -364,23 +364,12 @@ async fn verify_signal_device_proof(
             "signal sender device is not active and authorized",
         ));
     }
-    // §1 — `verification_method` must RESOLVE to the sending device's
-    // authorized active signing method. The controller check below is the
-    // resolution step's precondition; the method's key material is then taken
-    // from the accepted device directory (`signing_key_did`) rather than from
-    // anything the envelope carries, so no fragment-to-device-id string
-    // equality stands in for the authorization lookup.
-    let controller = arkret_identity::verification_method_did(&envelope.proof.verification_method)
-        .map_err(|error| {
-            signal_proof_invalid(format!(
-                "signal proof verification_method is unusable: {error}"
-            ))
-        })?;
-    if controller.as_str() != envelope.sender_actor_id.as_str() {
-        return Err(signal_proof_invalid(
-            "signal proof verification_method is not controlled by sender_actor_id",
-        ));
-    }
+    // §1 — `verification_method` is the directory lookup key and the SDK's
+    // shared structural contract has already required it to equal
+    // `{sender_actor_id}#{sender_device_id}` verbatim. That equality is never
+    // the authorization: the key material verified against comes from the
+    // accepted device directory row (`signing_key_did`), not from anything the
+    // envelope carries.
     let multibase = facet
         .signing_key_did
         .as_deref()
