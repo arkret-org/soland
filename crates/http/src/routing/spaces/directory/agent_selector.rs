@@ -98,7 +98,13 @@ pub(super) fn signed_agent_selector_claim(
     let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
         issuer.clone(),
-        format!("{service_id}#directory-agent-selector-claim"),
+        arkret_wire::DidUrl::new(format!("{service_id}#directory-agent-selector-claim")).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "directory claim verification method is invalid: {error}"
+                ))
+            },
+        )?,
     );
     let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;

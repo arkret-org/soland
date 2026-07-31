@@ -115,10 +115,11 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
         .as_str()
         .to_owned();
     for proof in &event.proofs {
-        if proof.verification_method != signer_root
-            && !proof
-                .verification_method
-                .starts_with(&format!("{signer_root}#"))
+        // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL
+        // under the signer, never the bare signer DID.
+        if !proof
+            .verification_method
+            .starts_with(&format!("{signer_root}#"))
         {
             return Err(format!(
                 "Control Move proof verification method {} is not rooted in the signer {signer_root}",
@@ -345,9 +346,11 @@ fn device_verification_method_matches(
     device_public_key: &str,
     verification_method: &str,
 ) -> bool {
+    // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`; a bare DID never names a concrete
+    // verification method.
     verification_method == format!("{principal_id}#{device_id}")
         || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
-        || verification_method == format!("did:key:{device_public_key}")
 }
 
 fn first_seal_signer_matches(
@@ -1632,9 +1635,12 @@ mod seal_delta_tests {
             previous_state_root: None,
             previous_digest_algorithm: None,
             notary_signature: NotarySig::Single(arkret_wire::PayloadSignature {
+                extra: Default::default(),
                 alg: "EdDSA".to_owned(),
-                verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
-                    .to_owned(),
+                verification_method: arkret_wire::DidUrl::new(
+                    "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+                )
+                .unwrap(),
                 payload_digest: placeholder_digest,
                 created_at: chrono::Utc::now(),
                 jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
@@ -1646,9 +1652,12 @@ mod seal_delta_tests {
         let canonical_bytes = seal.canonical_bytes_for_id().unwrap();
         seal.id = Seal::id_from_canonical_bytes(&canonical_bytes).unwrap();
         seal.notary_signature = NotarySig::Single(arkret_wire::PayloadSignature {
+            extra: Default::default(),
             alg: "EdDSA".to_owned(),
-            verification_method: "did:webvh:z6mkfixture:alice.example#ak:device:recovery"
-                .to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
+            )
+            .unwrap(),
             payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
                 &canonical_bytes,
             ))
@@ -1676,7 +1685,7 @@ mod seal_delta_tests {
             principal,
             device,
             key,
-            &format!("did:key:{key}"),
+            &format!("did:key:{key}#{key}"),
         ));
         assert!(!device_verification_method_matches(
             principal,
@@ -1684,6 +1693,87 @@ mod seal_delta_tests {
             key,
             &format!("{principal}#ak:device:other"),
         ));
+    }
+
+    // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`. A bare `did:key:<mb>` (or the bare
+    // principal DID) names no concrete verification method.
+    #[test]
+    fn device_verification_method_rejects_bare_dids() {
+        let principal = "did:webvh:z6mkfixture:alice.example";
+        let device = "ak:device:recovery";
+        let key = "z6MkRecovery";
+
+        assert!(!device_verification_method_matches(
+            principal,
+            device,
+            key,
+            &format!("did:key:{key}"),
+        ));
+        assert!(!device_verification_method_matches(
+            principal, device, key, principal
+        ));
+    }
+
+    // did-usage-and-verification.md §2.2 — a Control Move proof must name a
+    // verification method rooted in the signer as a `#fragment` DID URL; the
+    // bare signer DID is not a verification method.
+    #[test]
+    fn control_move_proof_rejects_bare_signer_did() {
+        let state = AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        );
+        let actor_id = arkret_identifiers::Did::new("did:web:alice.example").unwrap();
+        let realm_id =
+            RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned()).unwrap();
+        let issued_at = chrono::Utc::now();
+        let mut event = Event::new_with_id_at(
+            arkret_wire::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
+            arkret_wire::events::EventKind::MESSAGE_CREATE,
+            arkret_wire::ScopeRef::Realm { realm_id },
+            actor_id.clone(),
+            1,
+            arkret_identifiers::Hlc::new("019f00000000-0000-a11ce001").unwrap(),
+            serde_json::json!({}),
+            issued_at,
+        )
+        .unwrap();
+        let event_digest = Hash::new(event.event_digest().unwrap()).unwrap();
+        let proof = |verification_method: &str| arkret_wire::primitives::Proof {
+            kind: "detached_jws".to_owned(),
+            alg: "EdDSA".to_owned(),
+            verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
+                .expect("fixture verification method is a DID URL"),
+            event_digest: event_digest.clone(),
+            created_at: issued_at,
+            domain: None,
+            audience: None,
+            proof_purpose: None,
+            jws: "a..b".to_owned(),
+        };
+
+        // §2.2 — the bare signer DID is no longer merely rejected at runtime:
+        // `Proof.verification_method` is a typed `DidUrl`, so a fragment-less
+        // value cannot be built at all. Pin that at the type boundary, which is
+        // where the guarantee now lives.
+        assert!(
+            arkret_wire::DidUrl::new(actor_id.as_str().to_owned()).is_err(),
+            "a bare signer DID must not be constructible as a verification method"
+        );
+
+        event.proofs = vec![proof(&format!("{}.evil#device-1", actor_id.as_str()))];
+        assert!(
+            verify_control_move_proofs(&state, &event).is_err(),
+            "a sibling DID sharing the signer prefix must not be accepted"
+        );
+
+        // The `#fragment` form still gets past the rooting gate and fails
+        // later, in the signature check.
+        event.proofs = vec![proof(&format!("{}#device-1", actor_id.as_str()))];
+        let error = verify_control_move_proofs(&state, &event)
+            .expect_err("the placeholder JWS cannot verify");
+        assert!(!error.contains("is not rooted in the signer"), "{error}");
     }
 }
 

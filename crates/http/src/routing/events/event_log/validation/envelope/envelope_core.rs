@@ -546,6 +546,7 @@ async fn validate_event_envelope_with_ingress(
         session,
         &actor_id,
         &canonical_digest,
+        &canonical_bytes,
         internal_admission,
     )
     .await?;

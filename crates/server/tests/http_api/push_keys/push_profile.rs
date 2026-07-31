@@ -1102,7 +1102,7 @@ async fn signal_envelope_structural_contract_is_enforced() {
     reserved_suite.proof.envelope_digest = reserved_suite.envelope_digest().unwrap();
     reserved_suite.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
         signing_key.clone(),
-        reserved_suite.proof.verification_method.clone(),
+        reserved_suite.proof.verification_method.as_str().to_owned(),
     )
     .sign_detached_jws(&reserved_suite.proof_binding_bytes().unwrap());
     let mut reserved = post_signal(state.clone(), &token, &reserved_suite).await;

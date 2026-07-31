@@ -963,11 +963,16 @@ fn sdk_event_proofs(
         .and_then(Value::as_array)
         .and_then(|proofs| proofs.first())
         .and_then(Value::as_object);
-    let verification_method = proof
-        .and_then(|proof| proof.get("verification_method"))
-        .and_then(Value::as_str)
-        .unwrap_or("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#dev")
-        .to_owned();
+    let verification_method = arkret_wire::DidUrl::new(
+        proof
+            .and_then(|proof| proof.get("verification_method"))
+            .and_then(Value::as_str)
+            .unwrap_or("did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service#dev")
+            .to_owned(),
+    )
+    .map_err(|error| {
+        AppError::internal(format!("projected proof verification_method is invalid: {error}"))
+    })?;
     let domain = proof
         .and_then(|proof| proof.get("domain"))
         .or_else(|| object.get("domain"))

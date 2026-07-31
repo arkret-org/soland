@@ -24,7 +24,7 @@ use crate::state::AppState;
 
 struct CurrentReceiptSigner {
     issuer_service_id: Did,
-    verification_method: String,
+    verification_method: arkret_wire::DidUrl,
     signer: Ed25519DetachedJwsSigner,
 }
 
@@ -32,10 +32,17 @@ impl CurrentReceiptSigner {
     fn from_state(state: &AppState) -> Result<Self, AppError> {
         let issuer_service_id = Did::new(state.service_id().clone())
             .map_err(|error| AppError::internal(format!("service DID is invalid: {error}")))?;
-        let verification_method = format!("{issuer_service_id}#notary-key");
+        let verification_method = arkret_wire::DidUrl::new(format!(
+            "{issuer_service_id}#notary-key"
+        ))
+        .map_err(|error| {
+            AppError::internal(format!(
+                "service notary verification method is invalid: {error}"
+            ))
+        })?;
         let signer = Ed25519DetachedJwsSigner::new(
             state.notary_signing_key().as_ref().clone(),
-            verification_method.clone(),
+            verification_method.as_str().to_owned(),
         );
         Ok(Self {
             issuer_service_id,
@@ -50,7 +57,7 @@ impl OrganizationRegistrationReceiptSigner for CurrentReceiptSigner {
         &self.issuer_service_id
     }
 
-    fn verification_method(&self) -> &str {
+    fn verification_method(&self) -> &arkret_wire::DidUrl {
         &self.verification_method
     }
 

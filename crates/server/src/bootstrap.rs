@@ -1169,7 +1169,10 @@ fn sign_registration_receipt(
             .strip_prefix("sha256:")
             .unwrap_or(&receipt_digest)
     );
-    let verification_method = format!("{provider_service_id}#notary-key");
+    let verification_method = arkret_wire::DidUrl::new(format!("{provider_service_id}#notary-key"))
+        .map_err(|error| {
+            anyhow::anyhow!("provider notary verification method is invalid: {error}")
+        })?;
     let signing_input = registration_receipt_signing_input(
         &receipt_id,
         key,

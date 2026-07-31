@@ -136,7 +136,8 @@ pub async fn seed_sealed_capability_grant(
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
         Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
-        FIXTURE_NOTARY_VERIFICATION_METHOD,
+        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
+            .expect("fixture notary verification method"),
     );
     let seal = Seal::sign_single(
         realm.clone(),
@@ -184,7 +185,8 @@ pub fn seed_historical_capability_grant(
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
         Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
-        FIXTURE_NOTARY_VERIFICATION_METHOD,
+        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
+            .expect("fixture notary verification method"),
     );
     let seal = Seal::sign_single(
         realm.clone(),

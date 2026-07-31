@@ -102,8 +102,10 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             public_key: NonEmptyString::new(ed25519_public_multibase(&ssk)).unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
-                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
-                    .unwrap(),
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{principal}#principal-signing"
+                ))
+                .unwrap(),
                 alg: NonEmptyString::new("EdDSA").unwrap(),
                 signature: NonEmptyString::new(format!("psk-sig-ssk-gen-{generation}")).unwrap(),
             },
@@ -114,8 +116,10 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
-                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
-                    .unwrap(),
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{principal}#principal-signing"
+                ))
+                .unwrap(),
                 alg: NonEmptyString::new("EdDSA").unwrap(),
                 signature: NonEmptyString::new(format!("psk-sig-usk-gen-{generation}")).unwrap(),
             },
@@ -166,7 +170,8 @@ fn signed_event(
 ) -> Value {
     let now = Utc::now();
     let actor = Did::new(actor.to_owned()).unwrap();
-    let verification_method = format!("{}#{device_id}", actor.as_str());
+    let verification_method = arkret_wire::DidUrl::new(format!("{}#{device_id}", actor.as_str()))
+        .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         kind,

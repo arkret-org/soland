@@ -66,10 +66,11 @@ pub(super) async fn validate_capability_grant_proofs(
                 "capability grant proof purpose must be issuer_attestation",
             ));
         }
-        if proof.verification_method != grant.issuer.as_str()
-            && !proof
-                .verification_method
-                .starts_with(&format!("{}#", grant.issuer))
+        // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL
+        // under the issuer, never the bare issuer DID.
+        if !proof
+            .verification_method
+            .starts_with(&format!("{}#", grant.issuer))
         {
             return Err(event_validation_error(
                 StatusCode::FORBIDDEN,
@@ -143,7 +144,8 @@ mod tests {
             signing_key.verifying_key().as_bytes(),
         );
         let issuer = format!("did:key:{multibase}");
-        let verification_method = format!("{issuer}#{multibase}");
+        let verification_method =
+            arkret_wire::DidUrl::new(format!("{issuer}#{multibase}")).expect("fixture DID URL");
         let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant =
             serde_json::from_value(json!({
                 "id": "ak:grant:01904100-0000-7000-8000-000000000013",
@@ -239,5 +241,55 @@ mod tests {
             .await
             .is_err()
         );
+    }
+
+    // did-usage-and-verification.md §2.2 — `proof.verification_method` MUST be
+    // a `#fragment` DID URL rooted in the issuer. The bare issuer DID names no
+    // concrete verification method and must be refused.
+    #[tokio::test]
+    async fn rejects_bare_issuer_did_as_verification_method() {
+        let state = state();
+        let (issuer, mut payload) = signed_payload();
+        let session = session(&issuer, &state);
+
+        // Two different rejections, on purpose:
+        //
+        // * the bare issuer DID no longer even decodes — `CapabilityGrant.proofs[]
+        //   .verification_method` is a typed `DidUrl`, so wire ingress refuses it
+        //   as a schema violation before any rooting logic runs;
+        // * a sibling DID that merely shares the issuer's prefix decodes fine and
+        //   is refused by the rooting gate.
+        let cases: [(String, StatusCode, &str); 2] = [
+            (issuer.clone(), StatusCode::BAD_REQUEST, "capability grant"),
+            (
+                format!("{issuer}.evil#k1"),
+                StatusCode::FORBIDDEN,
+                "must be rooted in the issuer",
+            ),
+        ];
+        for (verification_method, expected_status, expected_fragment) in cases {
+            payload["grant"]["proofs"][0]["verification_method"] = json!(verification_method);
+            let event = json!({"payload": payload.clone()});
+            let error = validate_capability_grant_proofs(
+                &state,
+                &session,
+                arkret_wire::events::EventKind::CAPABILITY_GRANT,
+                &issuer,
+                event.as_object().unwrap(),
+                None,
+            )
+            .await
+            .expect_err("verification method must be a DID URL under the issuer");
+            assert_eq!(
+                error.status, expected_status,
+                "{verification_method}: {}",
+                error.message
+            );
+            assert!(
+                error.message.contains(expected_fragment),
+                "{verification_method}: {}",
+                error.message
+            );
+        }
     }
 }

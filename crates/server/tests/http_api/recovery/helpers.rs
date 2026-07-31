@@ -358,7 +358,7 @@ pub(crate) async fn seed_cross_signing(
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [0x61; 32],
         Did::new(principal_id.to_owned()).unwrap(),
-        format!("{principal_id}#fixture-notary"),
+        arkret_wire::DidUrl::new(format!("{principal_id}#fixture-notary")).unwrap(),
     );
     let seal = arkret_wire::Seal::sign_single(
         realm,
@@ -672,7 +672,8 @@ pub(crate) async fn recovery_token_for_principal(state: AppState, principal_id: 
 pub(crate) async fn ingest_fresh_recovery_did_document(state: &AppState, did: &str) {
     let now = chrono::Utc::now();
     let did_document = if let Some(public_key_multibase) = did.strip_prefix("did:key:") {
-        let verification_method = format!("{did}#{public_key_multibase}");
+        let verification_method = arkret_wire::DidUrl::new(format!("{did}#{public_key_multibase}"))
+            .expect("fixture verification method is a DID URL");
         serde_json::json!({
             "id": did,
             "verificationMethod": [{
@@ -781,8 +782,9 @@ pub(crate) fn test_session_credential_hash(token: &str, audience: &str) -> Strin
 pub(crate) fn did_key_principal(signing: &SigningKey) -> (String, String) {
     let multibase = test_ed25519_multibase_public(signing);
     let principal_id = format!("did:key:{multibase}");
-    let verification_method = format!("{principal_id}#{multibase}");
-    (principal_id, verification_method)
+    let verification_method = arkret_wire::DidUrl::new(format!("{principal_id}#{multibase}"))
+        .expect("fixture verification method is a DID URL");
+    (principal_id, verification_method.as_str().to_owned())
 }
 
 pub(crate) fn signed_recovery_policy(
@@ -861,13 +863,27 @@ pub(crate) async fn post_recovery_policy(
     let principal_id = policy["principal_id"]
         .as_str()
         .expect("recovery policy principal_id");
-    let verification_method = policy["auth_data"]["verification_method"]
-        .as_str()
-        .expect("recovery policy verification method");
-    let event_verification_method = principal_id.strip_prefix("did:key:").map_or_else(
-        || verification_method.to_owned(),
+    let verification_method = arkret_wire::DidUrl::new(
+        policy["auth_data"]["verification_method"]
+            .as_str()
+            .expect("recovery policy verification method"),
+    )
+    .expect("fixture verification method is a DID URL");
+    // did-usage-and-verification.md §2.2 — the Event proof method MUST be a
+    // `#fragment` DID URL under the principal. The non-`did:key:` fallback
+    // reuses the policy's own method, so pin the invariant here instead of
+    // letting a bare DID reach the Event.
+    let event_verification_method = arkret_wire::DidUrl::new(principal_id.strip_prefix("did:key:").map_or_else(
+        || {
+            assert!(
+                verification_method.starts_with(&format!("{principal_id}#")),
+                "fixture verification_method `{verification_method}` must be a DID URL rooted in {principal_id}"
+            );
+            verification_method.as_str().to_owned()
+        },
         |key| format!("{principal_id}#{key}"),
-    );
+    ))
+    .expect("fixture Event verification method is a DID URL");
     ingest_fresh_recovery_did_document(&state, principal_id).await;
 
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
@@ -1035,7 +1051,7 @@ pub(crate) async fn post_recovery_policy(
         let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
             [0x62; 32],
             Did::new(principal_id.to_owned()).unwrap(),
-            format!("{principal_id}#recovery-policy-notary"),
+            arkret_wire::DidUrl::new(format!("{principal_id}#recovery-policy-notary")).unwrap(),
         );
         let successor = arkret_wire::Seal::sign_single_kind_with_control_root(
             realm,

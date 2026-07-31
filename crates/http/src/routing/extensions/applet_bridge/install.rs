@@ -1531,9 +1531,14 @@ mod tests {
         let signer = Ed25519PayloadSigner::from_did_key_seed(
             signer_seed,
             controller_id,
-            verification_method.to_owned(),
+            arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
         );
-        package.sign(&signer, verification_method).unwrap();
+        package
+            .sign(
+                &signer,
+                &arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
+            )
+            .unwrap();
         package
     }
 

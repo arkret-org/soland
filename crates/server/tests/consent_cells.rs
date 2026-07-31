@@ -311,7 +311,8 @@ fn signed_event_with_prev_refs(
     let key = actor
         .strip_prefix("did:key:")
         .expect("fixture did:key actor");
-    let verification_method = format!("{actor}#{key}");
+    let verification_method = arkret_wire::DidUrl::new(format!("{actor}#{key}"))
+        .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(ids::generate_event_id()).expect("fixture Event id"),
         kind,

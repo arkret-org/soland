@@ -366,7 +366,14 @@ async fn persist_account_data_event(
             .sort_by(|left, right| left.as_str().cmp(right.as_str()));
         event.prev_refs.dedup();
     }
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,

@@ -382,7 +382,7 @@ mod tests {
             .expect("fixed future expiry")
             .with_timezone(&chrono::Utc);
         let signing_input = arkret_signatures::agent::agent_key_pair_proof_signing_input(
-            verification_method.to_owned(),
+            arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
             pairing_request_id,
             service_id.to_owned(),
             expires_at,
@@ -519,7 +519,8 @@ mod tests {
     ) {
         let device_id = body.authorize_event.authorization_lease.device_id.as_str();
         let mut proof = body.requested_scope_disclosure.proofs[0].clone();
-        proof.verification_method = format!("{controller_id}#{device_id}");
+        proof.verification_method =
+            arkret_wire::DidUrl::new(format!("{controller_id}#{device_id}")).unwrap();
         body.authorize_event.event.executed_by =
             Some(Did::new(controller_id.to_owned()).expect("controller DID"));
         body.authorize_event.event.proofs = vec![proof];
@@ -553,8 +554,10 @@ mod tests {
             "did:web:soland.example",
         );
         bind_pairing_request_to_controller_device(&mut body, controller_id);
-        body.authorize_event.event.proofs[0].verification_method =
-            format!("{controller_id}#ak:device:01904100-0000-7000-8000-000000000099");
+        body.authorize_event.event.proofs[0].verification_method = arkret_wire::DidUrl::new(
+            format!("{controller_id}#ak:device:01904100-0000-7000-8000-000000000099"),
+        )
+        .unwrap();
 
         assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
     }
@@ -568,7 +571,8 @@ mod tests {
             "did:web:soland.example",
         );
         bind_pairing_request_to_controller_device(&mut body, controller_id);
-        body.authorize_event.event.proofs[0].verification_method = format!("{controller_id}#key-1");
+        body.authorize_event.event.proofs[0].verification_method =
+            arkret_wire::DidUrl::new(format!("{controller_id}#key-1")).unwrap();
 
         assert!(service_pairing_controller_device_id(&body, controller_id).is_err());
     }

@@ -310,7 +310,11 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
         proof_purpose: None,
-        verification_method: verification_method.to_owned(),
+        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(
+            |error| {
+                author_credential_invalid(format!("verification_method is not a DID URL: {error}"))
+            },
+        )?,
         event_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
             proof_binding_bytes,
         ))
@@ -323,9 +327,18 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     let material = PublicKeyMaterial::Ed25519Raw {
         bytes: proof_public_key.to_vec(),
     };
-    Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(&proof.jws, proof_binding_bytes, &material)
-        .map_err(|error| author_credential_invalid(format!("proof JWS: {error}")))
+    // §2.10.3 / §3 — the key is the active MLS LeafNode signature key; this
+    // branch performs zero DID resolution.
+    let outcome = Ed25519DetachedJwsVerifier::new().verify_detached_jws(
+        &proof.jws,
+        proof_binding_bytes,
+        &material,
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_MINIMAL_METADATA,
+        outcome.is_ok(),
+    );
+    outcome.map_err(|error| author_credential_invalid(format!("proof JWS: {error}")))
 }
 
 #[cfg(test)]

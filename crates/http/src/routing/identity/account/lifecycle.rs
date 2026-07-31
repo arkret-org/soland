@@ -869,7 +869,14 @@ fn build_erasure_receipt_value(
     let proof_payload = receipt
         .canonical_proof_input()
         .map_err(|error| AppError::internal(format!("erasure receipt proof input: {error}")))?;
-    let verification_method = format!("{}#notary-key", receipt.issuer.as_str());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", receipt.issuer.as_str())).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "erasure receipt verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let signature = erasure_receipt_proof_signature(state, &proof_payload, &verification_method)?;
     let mut extra = std::collections::BTreeMap::new();
     extra.insert("alg".to_owned(), Value::String("EdDSA".to_owned()));

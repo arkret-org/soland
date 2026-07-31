@@ -403,7 +403,8 @@ fn build_realm_basis(
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
         Did::new(FIXTURE_NOTARY_DID.to_owned()).expect("fixture notary DID"),
-        FIXTURE_NOTARY_VERIFICATION_METHOD,
+        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
+            .expect("fixture notary verification method"),
     );
     // `Seal.delta` is a sorted, unique digest list
     // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`

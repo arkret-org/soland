@@ -287,7 +287,14 @@ fn sign_ingress_receipt(
         .map_err(|error| publication_reject(format!("minted receipt_id is invalid: {error}")))?;
     let service_id = arkret_identifiers::Did::new(state.service_id().clone())
         .map_err(|error| publication_reject(format!("service_id is not a DID: {error}")))?;
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                publication_reject(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let mut receipt = IngressReceipt {
         receipt_id,
         event_digest: event_digest.clone(),

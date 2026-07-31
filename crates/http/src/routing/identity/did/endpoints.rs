@@ -487,7 +487,7 @@ pub(crate) async fn embedded_webvh_register(
             "embedded did:webvh inception conflicts with existing history",
         ));
     }
-    if let Err(error) = state.dids().cache_resolved_document_state(document_record) {
+    if let Err(error) = state.cache_resolved_did_document(document_record) {
         tracing::warn!(%error, "failed to cache embedded webvh DID document");
     }
     append_audit_log(
@@ -668,7 +668,7 @@ pub(crate) async fn embedded_webvh_rotate(
             "did:webvh rotation lost the current head comparison",
         ));
     }
-    if let Err(error) = state.dids().cache_resolved_document_state(document_record) {
+    if let Err(error) = state.cache_resolved_did_document(document_record) {
         tracing::warn!(%error, "failed to cache rotated webvh DID document");
     }
     events.push(WebvhLogRecord {
@@ -1192,7 +1192,7 @@ pub(crate) async fn identity_submit_did_operation(
         }
         WebvhLogCommitOutcome::Accepted => {}
     }
-    if let Err(error) = state.dids().cache_resolved_document_state(document_record) {
+    if let Err(error) = state.cache_resolved_did_document(document_record) {
         tracing::warn!(%error, "failed to cache submitted DID document");
     }
     append_audit_log(

@@ -605,7 +605,8 @@ fn sign_lease_fields(
     let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
-        verification_method: format!("{}#notary-key", state.service_id()),
+        verification_method: arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id()))
+            .map_err(lease_internal_error)?,
         payload_digest: digest,
         created_at: issued_at,
         domain: None,

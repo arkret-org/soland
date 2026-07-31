@@ -599,10 +599,12 @@ async fn signed_event(input: SignedEvent<'_>) -> Value {
     let prev_refs = frontier.frontier_event_ids;
     let now = chrono::Utc::now();
     let actor = arkret_identifiers::Did::new(actor_id.to_owned()).expect("fixture actor DID");
-    let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
-        || format!("{actor_id}#{device_id}"),
-        |key| format!("{actor_id}#{key}"),
-    );
+    let verification_method =
+        arkret_wire::DidUrl::new(actor_id.strip_prefix("did:key:").map_or_else(
+            || format!("{actor_id}#{device_id}"),
+            |key| format!("{actor_id}#{key}"),
+        ))
+        .expect("fixture verification method is a DID URL");
     let scope_ref = derived_scope_ref(state, realm_id, kind, &payload);
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),

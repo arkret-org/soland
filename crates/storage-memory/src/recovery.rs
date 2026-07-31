@@ -527,7 +527,10 @@ mod tests {
         lease.proofs = vec![PayloadProof {
             kind: proof_kind::DETACHED_JWS.to_owned(),
             alg: "EdDSA".to_owned(),
-            verification_method: "did:web:principal.example#backup-erase-authority".to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:principal.example#backup-erase-authority",
+            )
+            .unwrap(),
             payload_digest: digest,
             created_at: lease.issued_at,
             domain: None,

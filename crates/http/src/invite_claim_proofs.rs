@@ -519,7 +519,7 @@ mod tests {
         .unwrap();
         let transcript = transcript_body.canonical_bytes().unwrap();
         serde_json::to_value(InviteSubjectProof::new(
-            verification_method,
+            arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
             transcript_body.transcript_digest().unwrap(),
             sign_b64(signing_key, &transcript),
         ))

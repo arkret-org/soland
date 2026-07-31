@@ -122,7 +122,14 @@ pub(crate) async fn persist_canonical_moderation_report_event(
         key_epoch: 0,
         credential_epoch: None,
     });
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,

@@ -161,7 +161,8 @@ pub fn build_conformance_realm_basis(
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         FIXTURE_NOTARY_SEED,
         Did::new(FIXTURE_NOTARY_DID.to_owned()).map_err(|error| error.to_string())?,
-        FIXTURE_NOTARY_VERIFICATION_METHOD,
+        arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
+            .map_err(|error| error.to_string())?,
     );
     let mut delta = vec![
         authority_root_move.clone(),

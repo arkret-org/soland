@@ -147,6 +147,13 @@ fn reconcile_self_realm_owner_projection(
     Ok(())
 }
 
+/// `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST be
+/// a DID URL with a `#fragment` rooted in `root`. A bare `root` DID names no
+/// concrete verification method and is rejected.
+fn verification_method_rooted_in(verification_method: &str, root: &str) -> bool {
+    verification_method.starts_with(&format!("{root}#"))
+}
+
 /// Fan out the controller-owned provisioning facts. Agent Profile and Agent
 /// PCR genesis are intentionally absent: the controller E2EE client authors
 /// them after it has locally created the Agent PCR MLS state. Provisioning
@@ -210,11 +217,7 @@ pub(super) async fn fanout_provision_subevents(
             AppError::invalid_param(format!("accountability payload proof is invalid: {error}"))
         })?;
     let accountability_proof = &accountability_payload.proof;
-    if accountability_proof.verification_method != session.actor
-        && !accountability_proof
-            .verification_method
-            .starts_with(&format!("{}#", session.actor))
-    {
+    if !verification_method_rooted_in(&accountability_proof.verification_method, &session.actor) {
         return Err(AppError::capability_denied(
             "accountability payload proof must be rooted in the authenticated controller",
         ));
@@ -281,11 +284,7 @@ pub(super) async fn fanout_provision_subevents(
         ));
     }
     let selector_proof = &selector_payload.proofs[0];
-    if selector_proof.verification_method != session.actor
-        && !selector_proof
-            .verification_method
-            .starts_with(&format!("{}#", session.actor))
-    {
+    if !verification_method_rooted_in(&selector_proof.verification_method, &session.actor) {
         return Err(AppError::capability_denied(
             "selector payload proof must be rooted in the authenticated controller",
         ));
@@ -654,6 +653,30 @@ mod tests {
                 "deprecated self-events shortcut `{action}` must not be used as an agent runtime scope"
             );
         }
+    }
+
+    // did-usage-and-verification.md §2.2 — the accountability-grant and
+    // selector-claim proofs MUST name a `#fragment` DID URL rooted in the
+    // authenticated controller. The bare controller DID names no concrete
+    // verification method, and a sibling DID that merely shares the prefix
+    // must not slip through the `starts_with` check.
+    #[test]
+    fn provision_proof_verification_method_rejects_bare_controller_did() {
+        let controller = "did:webvh:z6mkfixture:example.test:users:alice";
+
+        assert!(verification_method_rooted_in(
+            &format!("{controller}#device-1"),
+            controller
+        ));
+        assert!(!verification_method_rooted_in(controller, controller));
+        assert!(!verification_method_rooted_in(
+            &format!("{controller}:bob#device-1"),
+            controller
+        ));
+        assert!(!verification_method_rooted_in(
+            "did:webvh:z6mkfixture:example.test:users:bob#device-1",
+            controller
+        ));
     }
 
     #[test]

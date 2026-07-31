@@ -1138,7 +1138,12 @@ async fn range_completeness_for_query(
 
     let issuer = arkret_identifiers::Did::new(state.service_id().clone())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    let verification_method = format!("{}#notary-key", issuer);
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{issuer}#notary-key")).map_err(|error| {
+            soland_http::error::AppError::internal(format!(
+                "service notary verification method is invalid: {error}"
+            ))
+        })?;
     let observed_at = arkret_canonical::normalize_timestamp_canonical(Utc::now());
     let event_id = EventId::new(ids::generate_event_id())
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;

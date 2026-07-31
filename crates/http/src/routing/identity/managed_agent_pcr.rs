@@ -627,10 +627,12 @@ fn active_series_verification_method_matches(
     public_key: &str,
     verification_method: &str,
 ) -> bool {
+    // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`; a bare DID never names a concrete
+    // verification method.
     verification_method == format!("{principal_id}#{device_id}")
         || verification_method == format!("did:key:{public_key}#{public_key}")
         || verification_method == format!("did:key:{public_key}#device")
-        || verification_method == format!("did:key:{public_key}")
 }
 
 pub(crate) async fn resolve_agent_pcr_for_principal(
@@ -1567,6 +1569,35 @@ mod tests {
         }
         assert!(!managed_agent_envelope_uses_root_anchor(
             serde_json::json!({"refs": []}).as_object().unwrap()
+        ));
+    }
+
+    // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
+    // verification method and must not satisfy the active-series binding.
+    #[test]
+    fn active_series_verification_method_rejects_bare_did_key() {
+        let principal = "did:webvh:z6mkfixture:agent.example";
+        let device = "ak:device:primary";
+        let key = "z6MkSeries";
+
+        for accepted in [
+            format!("{principal}#{device}"),
+            format!("did:key:{key}#{key}"),
+            format!("did:key:{key}#device"),
+        ] {
+            assert!(active_series_verification_method_matches(
+                principal, device, key, &accepted
+            ));
+        }
+        assert!(!active_series_verification_method_matches(
+            principal,
+            device,
+            key,
+            &format!("did:key:{key}"),
+        ));
+        assert!(!active_series_verification_method_matches(
+            principal, device, key, principal
         ));
     }
 }

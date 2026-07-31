@@ -66,7 +66,14 @@ pub(super) async fn persist_mimi_canonical_message_event(
     )
     .map_err(|error| AppError::internal(format!("MIMI Event build failed: {error}")))?;
     event.prev_refs = prev_refs;
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let realm = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .map_err(|error| AppError::internal(format!("MIMI Realm id invalid: {error}")))?;
     let seal = crate::notary::ensure_realm_seal_head(state, &realm)
@@ -296,7 +303,11 @@ pub(super) fn mimi_provider_directory_value(
             extra: Default::default(),
         },
         proof: Some(ProviderDirectoryProof {
-            verification_method: format!("{}#mimi-provider", state.service_id()),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#mimi-provider",
+                state.service_id()
+            ))
+            .expect("service DID plus #mimi-provider is a DID URL"),
             signature,
             extra: [
                 ("type".to_owned(), json!("dev_service_digest")),

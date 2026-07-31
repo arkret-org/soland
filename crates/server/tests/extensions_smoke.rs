@@ -247,7 +247,7 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
     let signer = Ed25519PayloadSigner::from_did_key_seed(
         [0x21; 32],
         Did::new("did:web:alice.example").unwrap(),
-        "did:web:alice.example#extension-test-notary",
+        arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary").unwrap(),
     );
     let mut delta = vec![move_id, admin_grant_move_id];
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
@@ -293,12 +293,14 @@ async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
 async fn ingest_extension_admin_document(state: &AppState) {
     let now = chrono::Utc::now();
     let did = Did::new("did:web:alice.example").unwrap();
-    let verification_method = "did:web:alice.example#extension-test-notary".to_owned();
+    let verification_method =
+        arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary".to_owned())
+            .expect("fixture verification method is a DID URL");
     let signing_key = SigningKey::from_bytes(&[0x21; 32]);
     let document = arkret_identity::DidDocument {
         id: did.clone(),
         verification_methods: BTreeMap::from([(
-            verification_method,
+            verification_method.as_str().to_owned(),
             arkret_canonical::ed25519_pubkey_to_did_key_multibase(
                 signing_key.verifying_key().as_bytes(),
             ),
@@ -364,7 +366,8 @@ fn signed_ghost_provision_body(
     } else {
         "ak:grant:01904100-0000-7000-8000-000000000099".to_owned()
     };
-    let verification_method = package.webhook_auth.key_ref.clone();
+    let verification_method = arkret_wire::DidUrl::new(package.webhook_auth.key_ref.clone())
+        .expect("fixture verification method is a DID URL");
     let signing_key = applet_service_signing_key(&verification_method);
     let signer = Ed25519PayloadSigner::new(
         signing_key.clone(),
@@ -1051,7 +1054,9 @@ async fn post_signed_applet_message_transaction(
     });
     let body_bytes = arkret_canonical::canonical_json_bytes(&body).unwrap();
     let content_digest = content_digest_header(&body_bytes);
-    let verification_method = format!("{}#applet-service-key", package.service_id);
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#applet-service-key", package.service_id))
+            .expect("fixture verification method is a DID URL");
     let created = chrono::Utc::now().timestamp();
     let signature_params = format!(
         "(\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \
@@ -1145,7 +1150,9 @@ async fn applet_message_event(
         ("protocol".to_owned(), json!("smoke")),
         ("external_id".to_owned(), json!(actor_id)),
     ]));
-    let verification_method = format!("{}#applet-service-key", package.service_id);
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#applet-service-key", package.service_id))
+            .expect("fixture verification method is a DID URL");
     // `ak.message.create` is a DataEvent. Formal Applet install grants are
     // issued to the executing service, while actor_id remains the accountable
     // ghost, so the frozen CBA view must cover the exact install
@@ -1155,9 +1162,10 @@ async fn applet_message_event(
     event.seal_ref = Some(seal_id);
     event.auth_context = Some(arkret_wire::AuthContext {
         did: package.service_id.clone(),
-        key_id: verification_method
-            .split_once('#')
-            .map_or_else(|| verification_method.clone(), |(_, key)| key.to_owned()),
+        key_id: verification_method.as_str().split_once('#').map_or_else(
+            || verification_method.as_str().to_owned(),
+            |(_, key)| key.to_owned(),
+        ),
         key_epoch: 0,
         credential_epoch: None,
     });
@@ -1519,9 +1527,13 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
         .seal_registration_epoch(registration_epoch_evidence)
         .unwrap();
     package.seal().unwrap();
-    let verification_method = format!("{controller_id}#applet-package");
-    let signer =
-        Ed25519PayloadSigner::from_did_key_seed([13u8; 32], controller_id, &verification_method);
+    let verification_method = arkret_wire::DidUrl::new(format!("{controller_id}#applet-package"))
+        .expect("fixture verification method is a DID URL");
+    let signer = Ed25519PayloadSigner::from_did_key_seed(
+        [13u8; 32],
+        controller_id,
+        verification_method.clone(),
+    );
     package.sign(&signer, &verification_method).unwrap();
     package
 }
@@ -1617,10 +1629,15 @@ async fn signed_install_events(
     let scope_ref = ScopeRef::Realm {
         realm_id: realm_id.clone(),
     };
-    let verification_method = "did:web:alice.example#extension-test-notary";
+    let verification_method =
+        arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary")
+            .expect("fixture verification method is a DID URL");
     let signing_key = SigningKey::from_bytes(&[0x21; 32]);
-    let signer =
-        Ed25519PayloadSigner::new(signing_key.clone(), actor_id.clone(), verification_method);
+    let signer = Ed25519PayloadSigner::new(
+        signing_key.clone(),
+        actor_id.clone(),
+        verification_method.clone(),
+    );
     let seal_id = state
         .test_seal_leaves(&realm_id)
         .unwrap()
@@ -1663,7 +1680,7 @@ async fn signed_install_events(
     arkret_signatures::sign_event(
         &mut registration_event,
         &signer,
-        verification_method,
+        &verification_method,
         SignEventOptions::new().with_created_at(now),
     )
     .unwrap();
@@ -1713,7 +1730,7 @@ async fn signed_install_events(
         let mut proof = PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             alg: "EdDSA".to_owned(),
-            verification_method: verification_method.to_owned(),
+            verification_method: verification_method.clone(),
             payload_digest: grant.payload_digest().unwrap(),
             created_at: now,
             domain: None,
@@ -1749,7 +1766,7 @@ async fn signed_install_events(
         arkret_signatures::sign_event(
             &mut event,
             &signer,
-            verification_method,
+            &verification_method,
             SignEventOptions::new().with_created_at(now),
         )
         .unwrap();

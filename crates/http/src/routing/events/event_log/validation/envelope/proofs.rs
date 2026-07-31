@@ -10,6 +10,12 @@ pub(crate) async fn validate_event_proofs(
     session: &SessionRecord,
     actor_id: &str,
     expected_payload_digest: &str,
+    // The Event's canonical bytes with `proofs` / `unsigned` stripped — exactly
+    // what `expected_payload_digest` was computed over. The SDK Event-proof
+    // verifier re-derives `event_digest` from these and constant-time compares
+    // it to `proof.event_digest`, so the transcript the signature covers is
+    // never reconstructed by hand at this call site.
+    envelope_bytes: &[u8],
     internal_admission: Option<&InternalEventAdmission>,
 ) -> Result<(), EventValidationError> {
     let proofs = object
@@ -114,22 +120,35 @@ pub(crate) async fn validate_event_proofs(
                     "proof verification_method is required",
                 )
             })?;
+        // §2.2 — `proof.verification_method` is a DID URL: `{did}#{fragment}`.
+        // Parsing it here (instead of prefix-matching a raw string) is what
+        // makes the bare-DID form unrepresentable: a value equal to the signer
+        // DID with no fragment names no key and is rejected before any
+        // signature check.
+        let verification_method_url = arkret_wire::DidUrl::new(verification_method.clone())
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::FORBIDDEN,
+                    "invalid_proof",
+                    format!("proof verification_method must be a DID URL: {error}"),
+                )
+            })?;
+        let method_root = verification_method_url
+            .as_str()
+            .split_once('#')
+            .map(|(did, _)| did)
+            .expect("DidUrl always carries a fragment");
         let signer_controller = if let Some(expected_root_method) = root_anchor_method.as_deref() {
-            if verification_method != expected_root_method {
+            if verification_method_url != expected_root_method {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
                     "root-anchored Event proof must use the active update authority from the referenced DID entry",
                 ));
             }
-            verification_method
-                .split_once('#')
-                .map_or(verification_method.as_str(), |(did, _)| did)
-                .to_owned()
+            method_root.to_owned()
         } else {
-            if verification_method != ordinary_proof_root
-                && !verification_method.starts_with(&format!("{ordinary_proof_root}#"))
-            {
+            if method_root != ordinary_proof_root {
                 return Err(event_validation_error(
                     StatusCode::FORBIDDEN,
                     "invalid_proof",
@@ -158,7 +177,7 @@ pub(crate) async fn validate_event_proofs(
             // subject) regardless of who signed it (encoding.md §6); only the
             // resolved signer DID (`proof_root`) switches to `executed_by` for
             // delegated execution.
-            let proof_binding_bytes = event_proof_binding_bytes(
+            let (typed_proof, actor_did, proof_binding_bytes) = event_proof_binding_bytes(
                 &proof_event_digest,
                 actor_id,
                 &verification_method,
@@ -228,7 +247,12 @@ pub(crate) async fn validate_event_proofs(
             // §5.4/§8.2: `{principal}#{device_id}` resolves from the current
             // device-set projection. DID control/delegation methods resolve
             // from the DID document and retain the high-risk freshness gate.
-            // Both branches use the SDK detached-JWS verifier.
+            // Both branches go through the SDK's **Event proof** verifier, not
+            // the generic detached-JWS one: the Event protected-header profile
+            // rejects a `kid` member and requires `header.alg == proof.alg`,
+            // neither of which the generic profile checks. Handing hand-built
+            // binding bytes to the generic verifier — as this call site used to
+            // do — silently dropped both checks.
             if !verify_with_federated_signer_evidence(
                 internal_admission,
                 session,
@@ -237,9 +261,10 @@ pub(crate) async fn validate_event_proofs(
                 &proof_binding_bytes,
                 &jws,
             )? {
-                crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
-                    &proof_binding_bytes,
-                    &jws,
+                crate::jws_verify::verify_principal_authorized_event_proof_async(
+                    &typed_proof,
+                    envelope_bytes,
+                    &actor_did,
                     &verification_method,
                     &signer_controller,
                     state,
@@ -330,16 +355,25 @@ fn verify_with_current_recovery_ssk(
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
         bytes: key.to_bytes().to_vec(),
     };
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(jws, canonical_bytes, &material)
-        .map_err(|error| {
-            tracing::debug!(%error, "recovery Event SSK proof verification failed");
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "recovery Event SSK proof verification failed",
-            )
-        })?;
+    // §3 — the key comes from the already-accepted cross-signing publish;
+    // zero resolver calls.
+    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
+        jws,
+        canonical_bytes,
+        &material,
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_RECOVERY_SSK,
+        outcome.is_ok(),
+    );
+    outcome.map_err(|error| {
+        tracing::debug!(%error, "recovery Event SSK proof verification failed");
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "recovery Event SSK proof verification failed",
+        )
+    })?;
     Ok(true)
 }
 
@@ -359,16 +393,25 @@ fn verify_with_federated_agent_signer_evidence(
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
         bytes: evidence.public_key().to_vec(),
     };
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(jws, canonical_bytes, &material)
-        .map_err(|error| {
-            tracing::debug!(%error, "federated Agent Event proof JWS verification failed");
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "federated Agent Event proof JWS verification failed",
-            )
-        })?;
+    // §3 — key material rides in the independently verified federation
+    // evidence; zero resolver calls.
+    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
+        jws,
+        canonical_bytes,
+        &material,
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_FEDERATED_AGENT_EVIDENCE,
+        outcome.is_ok(),
+    );
+    outcome.map_err(|error| {
+        tracing::debug!(%error, "federated Agent Event proof JWS verification failed");
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "federated Agent Event proof JWS verification failed",
+        )
+    })?;
     Ok(true)
 }
 
@@ -504,15 +547,24 @@ async fn verify_with_active_agent_session(
         )
     })?;
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes: key_bytes };
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(jws, canonical_bytes, &material)
-        .map_err(|_| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "Agent Event proof JWS verification failed",
-            )
-        })?;
+    // §3 — key material comes from the active Agent session grant; zero
+    // resolver calls.
+    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
+        jws,
+        canonical_bytes,
+        &material,
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_AGENT_SESSION,
+        outcome.is_ok(),
+    );
+    outcome.map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "Agent Event proof JWS verification failed",
+        )
+    })?;
     Ok(true)
 }
 
@@ -543,26 +595,42 @@ pub(super) fn verify_with_federated_signer_evidence(
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Multibase {
         value: multibase.to_owned(),
     };
-    arkret_signatures::Ed25519DetachedJwsVerifier::new()
-        .verify_detached_jws(jws, canonical_bytes, &material)
-        .map_err(|error| {
-            tracing::debug!(%error, "federated Event proof JWS verification failed");
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "federated Event proof JWS verification failed",
-            )
-        })?;
+    // §3 — key material rides in the independently verified federated
+    // device-signing evidence; zero resolver calls.
+    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
+        jws,
+        canonical_bytes,
+        &material,
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_FEDERATED_SIGNER_EVIDENCE,
+        outcome.is_ok(),
+    );
+    outcome.map_err(|error| {
+        tracing::debug!(%error, "federated Event proof JWS verification failed");
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_proof",
+            "federated Event proof JWS verification failed",
+        )
+    })?;
     Ok(true)
 }
 
+/// Parse the wire proof into the SDK [`arkret_wire::Proof`] and reproduce the
+/// canonical proof-binding transcript it must have signed (`encoding.md` §6).
+///
+/// The typed proof is returned alongside the bytes because the DID-rooted
+/// verification path needs the proof itself: the SDK's Event-profile verifier
+/// derives the transcript from `(proof, actor_id)` on its own and applies header
+/// checks the generic detached-JWS profile does not.
 pub(super) fn event_proof_binding_bytes(
     event_digest: &str,
     actor_id: &str,
     verification_method: &str,
     created_at: &str,
     proof_object: &serde_json::Map<String, Value>,
-) -> Result<Vec<u8>, EventValidationError> {
+) -> Result<(arkret_wire::Proof, arkret_identifiers::Did, Vec<u8>), EventValidationError> {
     let proof: arkret_wire::Proof = serde_json::from_value(Value::Object(proof_object.clone()))
         .map_err(|error| {
             event_validation_error(
@@ -588,11 +656,136 @@ pub(super) fn event_proof_binding_bytes(
             format!("event actor_id is not a valid DID: {error}"),
         )
     })?;
-    proof.canonical_binding_bytes(&actor).map_err(|error| {
+    let bytes = proof.canonical_binding_bytes(&actor).map_err(|error| {
         event_validation_error(
             StatusCode::BAD_REQUEST,
             "invalid_proof",
             format!("proof binding canonicalization failed: {error}"),
         )
-    })
+    })?;
+    Ok((proof, actor, bytes))
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use soland_storage_postgres::Db;
+
+    use super::*;
+
+    fn state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig {
+                object_storage: crate::config::ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-event-proof-root-test"),
+                ),
+                did_resolver_allow_methods: vec!["key".to_owned()],
+                jws_replay_window_seconds: 0,
+                ..crate::config::AppConfig::test_default()
+            },
+            Db { pool: None },
+        )
+    }
+
+    fn session(actor: &str, state: &AppState) -> SessionRecord {
+        let created_at = chrono::Utc::now();
+        SessionRecord {
+            token_hash: "event-proof-root-test".to_owned(),
+            actor: actor.to_owned(),
+            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
+            audience: state.service_id().clone(),
+            session_public_key: None,
+            agent_session: None,
+            expires_at: created_at + chrono::Duration::minutes(1),
+            created_at,
+            revoked_at: None,
+        }
+    }
+
+    /// These fixtures never reach the signature check, so the envelope bytes
+    /// only have to be non-empty.
+    const ENVELOPE_BYTES: &[u8] = br#"{"kind":"ak.test.event"}"#;
+
+    fn event_with_verification_method(actor: &str, verification_method: &str) -> Value {
+        json!({
+            "actor_id": actor,
+            "proofs": [{
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": verification_method,
+                "event_digest": format!("sha256:{}", "1".repeat(64)),
+                "created_at": "2026-07-21T08:00:00.000Z",
+                "jws": "eyJhbGciOiJFZERTQSJ9..signature"
+            }]
+        })
+    }
+
+    /// `did-usage-and-verification.md` §2.2 — a proof `verification_method` is a
+    /// DID URL. The bare actor DID names no key at all, so it must be refused
+    /// before any signature check; a look-alike root must be refused too.
+    #[tokio::test]
+    async fn rejects_a_bare_actor_did_as_proof_verification_method() {
+        let state = state();
+        let actor = "did:key:z6MkfixtureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let session = session(actor, &state);
+        let digest = format!("sha256:{}", "1".repeat(64));
+
+        for verification_method in [
+            // bare DID — the exact form the old `!=` disjunct let through
+            actor.to_owned(),
+            // trailing marker but still no fragment
+            format!("{actor}#"),
+            // a different root that merely starts with the actor DID
+            format!("{actor}.evil#key-1"),
+        ] {
+            let event = event_with_verification_method(actor, &verification_method);
+            let error = validate_event_proofs(
+                event.as_object().unwrap(),
+                &state,
+                &session,
+                actor,
+                &digest,
+                ENVELOPE_BYTES,
+                None,
+            )
+            .await
+            .expect_err("proof verification method must be a DID URL rooted in the signer");
+            assert_eq!(
+                error.status,
+                StatusCode::FORBIDDEN,
+                "{verification_method}: {}",
+                error.message
+            );
+        }
+    }
+
+    /// The positive control: a well-formed `{actor}#{fragment}` gets past the
+    /// rooting gate and fails later, on the signature — proving the gate above
+    /// rejects for the right reason.
+    #[tokio::test]
+    async fn accepts_a_rooted_did_url_and_fails_only_on_the_signature() {
+        let state = state();
+        let actor = "did:key:z6MkfixtureAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+        let session = session(actor, &state);
+        let digest = format!("sha256:{}", "1".repeat(64));
+        let event = event_with_verification_method(actor, &format!("{actor}#key-1"));
+
+        let error = validate_event_proofs(
+            event.as_object().unwrap(),
+            &state,
+            &session,
+            actor,
+            &digest,
+            ENVELOPE_BYTES,
+            None,
+        )
+        .await
+        .expect_err("the fixture signature is not valid");
+        assert_ne!(
+            error.status,
+            StatusCode::FORBIDDEN,
+            "a rooted DID URL must not be rejected by the rooting gate: {}",
+            error.message
+        );
+    }
 }

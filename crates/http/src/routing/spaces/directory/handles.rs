@@ -680,7 +680,13 @@ pub(super) async fn signed_handle_claim(
     let signer = Ed25519PayloadSigner::new(
         (*state.notary_signing_key()).clone(),
         signer_did,
-        format!("{service_id}#directory-handle-claim"),
+        arkret_wire::DidUrl::new(format!("{service_id}#directory-handle-claim")).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "directory claim verification method is invalid: {error}"
+                ))
+            },
+        )?,
     );
     let signature = PayloadSigner::sign_payload(&signer, &canonical_bytes)
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;

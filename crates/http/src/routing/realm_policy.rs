@@ -213,7 +213,14 @@ async fn persist_canonical_policy_server_move(
     event.seal_basis = Some(crate::routing::admin::pick_admin_seal_basis(
         state, &realm_id,
     )?);
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         state.notary_signing_key().as_ref().clone(),
         service_did,

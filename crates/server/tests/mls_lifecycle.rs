@@ -138,7 +138,8 @@ fn signed_event(
 ) -> Value {
     let now = Utc::now();
     let actor = arkret_identifiers::Did::new(actor.to_owned()).unwrap();
-    let verification_method = format!("{}#{device_id}", actor.as_str());
+    let verification_method = arkret_wire::DidUrl::new(format!("{}#{device_id}", actor.as_str()))
+        .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
         kind,
@@ -173,10 +174,13 @@ fn signed_event(
 }
 
 fn set_event_prev_refs(event: &mut Value, prev_refs: &[&str]) {
-    let verification_method = event["proofs"][0]["verification_method"]
-        .as_str()
-        .unwrap()
-        .to_owned();
+    let verification_method = arkret_wire::DidUrl::new(
+        event["proofs"][0]["verification_method"]
+            .as_str()
+            .unwrap()
+            .to_owned(),
+    )
+    .expect("fixture verification method is a DID URL");
     let mut typed: arkret_wire::Event = serde_json::from_value(event.clone()).unwrap();
     typed.prev_refs = prev_refs
         .iter()
@@ -232,8 +236,10 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             public_key: NonEmptyString::new(self_signing_public_key).unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
-                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
-                    .unwrap(),
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{principal}#principal-signing"
+                ))
+                .unwrap(),
                 alg: NonEmptyString::new("EdDSA").unwrap(),
                 signature: NonEmptyString::new(format!("psk-sig-ssk-gen-{generation}")).unwrap(),
             },
@@ -244,8 +250,10 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
             public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
-                verification_method: NonEmptyString::new(format!("{principal}#principal-signing"))
-                    .unwrap(),
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{principal}#principal-signing"
+                ))
+                .unwrap(),
                 alg: NonEmptyString::new("EdDSA").unwrap(),
                 signature: NonEmptyString::new(format!("psk-sig-usk-gen-{generation}")).unwrap(),
             },

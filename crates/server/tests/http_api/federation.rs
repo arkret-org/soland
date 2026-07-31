@@ -67,7 +67,8 @@ fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -
 fn resign_federation_event(event: Value) -> Value {
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("federation fixture is a typed Event");
-    let verification_method = format!("{}#cotest", event.actor_id);
+    let verification_method = arkret_wire::DidUrl::new(format!("{}#cotest", event.actor_id))
+        .expect("fixture verification method is a DID URL");
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         arkret_signatures::development_signing_key_seed(&verification_method),
         event.actor_id.clone(),
@@ -758,8 +759,12 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             absolute_due_at: issued_at + policy.absolute_horizon,
             authority_set_ref: authority_set_digest.clone(),
             signature: arkret_wire::PayloadSignature {
+                extra: Default::default(),
                 alg: "EdDSA".to_owned(),
-                verification_method: format!("{PEER_SOURCE_DID}#notary-key"),
+                verification_method: arkret_wire::DidUrl::new(format!(
+                    "{PEER_SOURCE_DID}#notary-key"
+                ))
+                .unwrap(),
                 payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                     .unwrap(),
                 created_at: issued_at,
@@ -802,7 +807,7 @@ fn publication_proof(
     arkret_wire::primitives::PayloadProof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
-        verification_method: verification_method.to_owned(),
+        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
         payload_digest,
         created_at,
         domain: None,

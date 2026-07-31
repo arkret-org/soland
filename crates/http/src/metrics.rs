@@ -50,6 +50,42 @@ const FEDERATION_OUTBOX_STATE_DEPTH: &str = "soland_federation_outbox_state_dept
 const FEDERATION_OUTBOX_OLDEST_PENDING_AGE: &str =
     "soland_federation_outbox_oldest_pending_age_seconds";
 
+// ─────────────────────────────────────────────────────────────────────────
+// DID boundary counters (`did-usage-and-verification.md` §6, DID-P1-A03).
+//
+// These two counters are deliberately independent: "verify one signature"
+// and "resolve one DID" are separate events, and only the first one is
+// allowed to scale with ordinary traffic. `soland_did_resolve_total` carries
+// a `source` label so a joint test can tell a local/binding-store hit from a
+// real outbound fetch; `authority_network_call_count` is by definition the
+// delta of the `source="network"` series.
+// ─────────────────────────────────────────────────────────────────────────
+const DID_RESOLVE: &str = "soland_did_resolve_total";
+const SIGNATURE_VERIFY: &str = "soland_signature_verify_total";
+
+/// The DID document came from soland's in-process document snapshot or its
+/// durable local DID store. No outbound request.
+pub const DID_RESOLVE_SOURCE_LOCAL_SNAPSHOT: &str = "local_snapshot";
+/// The DID document came from an SDK resolver that performs no I/O
+/// (`did:key` derivation, cached `did:web` / `did:webvh` entries).
+pub const DID_RESOLVE_SOURCE_SDK_CACHE: &str = "sdk_cache";
+/// The key material came from an accepted [`arkret_identity::VerifiedDidBinding`].
+pub const DID_RESOLVE_SOURCE_BINDING_STORE: &str = "binding_store";
+/// An actual outbound DID resolution / history fetch was issued. This is the
+/// only source that counts as an authority network call.
+pub const DID_RESOLVE_SOURCE_NETWORK: &str = "network";
+
+pub const SIGNATURE_SCHEME_ED25519_JWS: &str = "ed25519_detached_jws";
+pub const SIGNATURE_SCHEME_PINNED_DOCUMENT: &str = "ed25519_pinned_document";
+pub const SIGNATURE_SCHEME_ACCEPTED_BINDING: &str = "ed25519_accepted_binding";
+pub const SIGNATURE_SCHEME_DEVICE_DIRECTORY: &str = "ed25519_device_directory";
+pub const SIGNATURE_SCHEME_MINIMAL_METADATA: &str = "ed25519_minimal_metadata";
+pub const SIGNATURE_SCHEME_AGENT_SESSION: &str = "ed25519_agent_session";
+pub const SIGNATURE_SCHEME_FEDERATED_AGENT_EVIDENCE: &str = "ed25519_federated_agent_evidence";
+pub const SIGNATURE_SCHEME_FEDERATED_SIGNER_EVIDENCE: &str = "ed25519_federated_signer_evidence";
+pub const SIGNATURE_SCHEME_RECOVERY_SSK: &str = "ed25519_recovery_ssk";
+pub const SIGNATURE_SCHEME_DEVELOPMENT: &str = "ed25519_development";
+
 /// Buckets for `soland_federation_retry_delay_seconds` — spans the whole
 /// scheduling range from a 1s dependency resubmission to the 1h transport cap.
 const RETRY_DELAY_BUCKETS: [f64; 9] = [
@@ -139,6 +175,14 @@ fn prometheus_handle() -> Result<&'static PrometheusHandle, String> {
             FEDERATION_LEASE_TAKEOVER,
             "Federation delivery results discarded because the row's lease had already moved to another worker."
         );
+        describe_counter!(
+            DID_RESOLVE,
+            "DID document resolutions by method and source; source=\"network\" is the authority network call count."
+        );
+        describe_counter!(
+            SIGNATURE_VERIFY,
+            "Cryptographic signature verifications by scheme and outcome. Counted once per signature, independently of DID resolution."
+        );
         describe_gauge!(
             DB_POOL_IN_USE,
             "PostgreSQL pool connections currently checked out."
@@ -170,19 +214,26 @@ pub async fn spawn_metrics_server(
     state: AppState,
     bind: SocketAddr,
 ) -> anyhow::Result<JoinHandle<()>> {
+    let listener = TcpListener::bind(bind).await?;
+    Ok(spawn_metrics_server_on(state, listener))
+}
+
+/// Serve `/metrics` on an already-bound listener. Split out from
+/// [`spawn_metrics_server`] so a test can bind port 0, learn the port, and then
+/// scrape it without racing another binder.
+pub fn spawn_metrics_server_on(state: AppState, listener: TcpListener) -> JoinHandle<()> {
     // Install the recorder eagerly so the very first request after startup
     // records into the global recorder rather than the no-op fallback.
     if let Err(error) = prometheus_handle() {
         tracing::error!(%error, "failed to install Prometheus metrics recorder");
     }
-    let listener = TcpListener::bind(bind).await?;
     // Bound the number of concurrent in-flight scrape connections so a flood of
     // slow/zombie connections cannot leak unbounded tasks + socket handles
     // (SOL-02-005). A scrape endpoint never needs high concurrency.
     let connection_limit = std::sync::Arc::new(tokio::sync::Semaphore::new(
         METRICS_MAX_CONCURRENT_CONNECTIONS,
     ));
-    Ok(tokio::spawn(async move {
+    tokio::spawn(async move {
         loop {
             let (stream, remote_addr) = match listener.accept().await {
                 Ok(accepted) => accepted,
@@ -219,7 +270,7 @@ pub async fn spawn_metrics_server(
                 }
             });
         }
-    }))
+    })
 }
 
 /// Upper bound on concurrent metrics scrape connections (SOL-02-005).
@@ -309,6 +360,33 @@ pub fn record_egress_denied(reason: &str, target_class: &str) {
         EGRESS_DENIED,
         "reason" => normalize_label(reason),
         "target_class" => normalize_label(target_class)
+    )
+    .increment(1);
+}
+
+/// Record one DID document resolution.
+///
+/// `source` MUST be one of the `DID_RESOLVE_SOURCE_*` constants.
+/// `DID_RESOLVE_SOURCE_NETWORK` MUST only be used when an outbound request was
+/// actually issued — the joint call-count contract reads that series as
+/// `authority_network_call_count`.
+pub fn record_did_resolve(method: &str, source: &'static str) {
+    counter!(
+        DID_RESOLVE,
+        "method" => normalize_label(method),
+        "source" => source,
+    )
+    .increment(1);
+}
+
+/// Record one signature verification. Called once per signature on every
+/// verification path, including the zero-resolver ones, so that
+/// "verified N signatures while resolving 0 DIDs" is directly observable.
+pub fn record_signature_verify(scheme: &'static str, ok: bool) {
+    counter!(
+        SIGNATURE_VERIFY,
+        "scheme" => scheme,
+        "outcome" => if ok { "success" } else { "failure" },
     )
     .increment(1);
 }
@@ -507,6 +585,100 @@ mod tests {
         assert!(rendered.contains("reason=\"retry_budget_exhausted\""));
         assert!(rendered.contains("soland_federation_retry_delay_seconds"));
         assert!(rendered.contains("soland_federation_outbox_lease_takeover_total"));
+    }
+
+    /// Read one Prometheus counter sample value out of a rendered exposition.
+    fn sample(rendered: &str, series_prefix: &str) -> f64 {
+        rendered
+            .lines()
+            .find(|line| line.starts_with(series_prefix))
+            .and_then(|line| line.rsplit(' ').next())
+            .and_then(|value| value.parse::<f64>().ok())
+            .unwrap_or_default()
+    }
+
+    // DID-P1-A03 / DID-P1-C01 — the joint call-count contract reads these two
+    // series, so they must exist, carry their labels, and increase.
+    #[test]
+    fn did_boundary_counters_are_exposed_and_grow() {
+        let _ = prometheus_handle();
+        let resolve_series = "soland_did_resolve_total{method=\"webvh\",source=\"network\"}";
+        // The exporter renders labels in declaration order, so these series
+        // names mirror the `counter!` call sites exactly.
+        let verify_series = "soland_signature_verify_total{scheme=\"ed25519_accepted_binding\",outcome=\"success\"}";
+
+        record_did_resolve("webvh", DID_RESOLVE_SOURCE_NETWORK);
+        record_signature_verify(SIGNATURE_SCHEME_ACCEPTED_BINDING, true);
+        let before = render();
+        let resolve_before = sample(&before, resolve_series);
+        let verify_before = sample(&before, verify_series);
+        assert!(
+            before.contains("soland_did_resolve_total"),
+            "resolve counter must be exposed"
+        );
+        assert!(
+            before.contains("soland_signature_verify_total"),
+            "signature counter must be exposed"
+        );
+        assert!(before.contains(resolve_series), "{before}");
+        assert!(before.contains(verify_series), "{before}");
+
+        // Five ordinary verifications served from accepted bindings, zero
+        // network resolutions: exactly the property the joint test asserts.
+        for _ in 0..5 {
+            record_signature_verify(SIGNATURE_SCHEME_ACCEPTED_BINDING, true);
+            record_did_resolve("webvh", DID_RESOLVE_SOURCE_BINDING_STORE);
+        }
+        let after = render();
+        assert_eq!(
+            sample(&after, verify_series),
+            verify_before + 5.0,
+            "every signature must be counted"
+        );
+        assert_eq!(
+            sample(&after, resolve_series),
+            resolve_before,
+            "binding-store hits must not increment the network source"
+        );
+        assert!(
+            after.contains("source=\"binding_store\""),
+            "binding-store source label must be exposed: {after}"
+        );
+    }
+
+    #[tokio::test]
+    async fn metrics_endpoint_serves_the_did_boundary_counters() {
+        let _ = prometheus_handle();
+        record_did_resolve("key", DID_RESOLVE_SOURCE_SDK_CACHE);
+        record_signature_verify(SIGNATURE_SCHEME_ED25519_JWS, true);
+
+        let state = AppState::new(
+            crate::config::AppConfig {
+                object_storage: crate::config::ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-metrics-endpoint-test"),
+                ),
+                ..crate::config::AppConfig::test_default()
+            },
+            soland_storage_postgres::Db { pool: None },
+        );
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let addr = listener.local_addr().expect("local addr");
+        let server = spawn_metrics_server_on(state, listener);
+
+        let mut stream = TcpStream::connect(addr).await.expect("connect");
+        stream
+            .write_all(b"GET /metrics HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+            .await
+            .expect("request");
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).await.expect("response");
+        server.abort();
+
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.starts_with("HTTP/1.1 200 OK"), "{body}");
+        assert!(body.contains("soland_did_resolve_total"), "{body}");
+        assert!(body.contains("soland_signature_verify_total"), "{body}");
+        assert!(body.contains("source=\"sdk_cache\""), "{body}");
     }
 
     #[test]

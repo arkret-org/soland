@@ -469,9 +469,11 @@ fn device_quorum_method_matches(
     device_public_key: &str,
     verification_method: &str,
 ) -> bool {
+    // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`; a bare DID never names a concrete
+    // verification method.
     verification_method == format!("{principal_id}#{device_id}")
         || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
-        || verification_method == format!("did:key:{device_public_key}")
 }
 
 fn policy_mentions_identifier(
@@ -1167,4 +1169,41 @@ pub(crate) fn ed25519_verify(key: &VerifyingKey, message: &[u8], signature_b64: 
         return false;
     };
     key.verify(message, &signature).is_ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::device_quorum_method_matches;
+
+    // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
+    // verification method and must not satisfy the device-quorum binding.
+    #[test]
+    fn device_quorum_method_rejects_bare_did_key() {
+        let principal = "did:webvh:z6mkfixture:alice.example";
+        let device = "ak:device:primary";
+        let key = "z6MkQuorum";
+
+        assert!(device_quorum_method_matches(
+            principal,
+            device,
+            key,
+            &format!("{principal}#{device}"),
+        ));
+        assert!(device_quorum_method_matches(
+            principal,
+            device,
+            key,
+            &format!("did:key:{key}#{key}"),
+        ));
+        assert!(!device_quorum_method_matches(
+            principal,
+            device,
+            key,
+            &format!("did:key:{key}"),
+        ));
+        assert!(!device_quorum_method_matches(
+            principal, device, key, principal
+        ));
+    }
 }

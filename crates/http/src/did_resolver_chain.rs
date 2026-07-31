@@ -50,6 +50,24 @@ pub fn build_soland_did_resolver(config: &AppConfig) -> SolandDidResolver {
     SolandDidResolver::new(config)
 }
 
+/// This deployment's DID resolution policy in the SDK's shared shape.
+///
+/// One value, two consumers, so they cannot drift: the outbound HTTP resolver
+/// narrows `allowed_methods` to the network-resolvable subset, and
+/// [`crate::state::AppState::did_binding_policy_digest`] digests it whole
+/// through `arkret_identity::PolicyDigestInput`. `allowed_methods` is the
+/// configured method list verbatim; the SDK normalises `"key"` / `"did:key"` /
+/// `"did:key:"` to one canonical prefix before hashing.
+pub fn did_resolver_policy(config: &AppConfig) -> ResolverPolicy {
+    ResolverPolicy {
+        allowed_methods: config.did_resolver_allow_methods.clone(),
+        default_principal_method: Some("did:webvh:".to_owned()),
+        trust_roots: Vec::new(),
+        ttl: Some(chrono::Duration::days(7)),
+        fail_mode: ResolverFailMode::FailClosed,
+    }
+}
+
 fn build_fallback_did_resolver_chain(config: &AppConfig) -> CompositeDidResolver {
     let mut resolver = CompositeDidResolver::new();
     if method_allowed(config, "webvh") && config.external_webvh_provider_active {
@@ -105,11 +123,10 @@ impl SolandDidResolver {
         };
         let external = HttpDidResolver::with_policy_and_egress(
             ResolverPolicy {
+                // Only the two network-resolvable methods reach the outbound
+                // resolver; every other dimension is the deployment policy.
                 allowed_methods: external_allowed_methods,
-                default_principal_method: Some("did:webvh:".to_owned()),
-                trust_roots: Vec::new(),
-                ttl: Some(chrono::Duration::days(7)),
-                fail_mode: ResolverFailMode::FailClosed,
+                ..did_resolver_policy(config)
             },
             outbound_policy,
         )
@@ -192,16 +209,30 @@ impl SolandDidResolver {
             return Err(IdentityError::Protocol("DID method not allowed".to_owned()));
         }
         if let Some(document) = self.cached_document(did) {
+            crate::metrics::record_did_resolve(
+                did.method(),
+                crate::metrics::DID_RESOLVE_SOURCE_LOCAL_SNAPSHOT,
+            );
             return Ok(document);
         }
         if matches!(did.method(), "web" | "webvh")
             && let Some(external) = &self.external
         {
+            // The only outbound DID resolution in soland. This is what the
+            // joint call-count contract reads as `authority_network_call_count`.
+            crate::metrics::record_did_resolve(
+                did.method(),
+                crate::metrics::DID_RESOLVE_SOURCE_NETWORK,
+            );
             return external
                 .resolve_did_async(did)
                 .await
                 .map_err(|error| IdentityError::Protocol(error.to_string()));
         }
+        crate::metrics::record_did_resolve(
+            did.method(),
+            crate::metrics::DID_RESOLVE_SOURCE_SDK_CACHE,
+        );
         self.fallback.resolve_did(did)
     }
 
@@ -218,6 +249,12 @@ impl SolandDidResolver {
         let log_url = self.webvh_url_for_environment(
             DidWebvhResolver::log_url(did).map_err(|error| error.to_string())?,
         )?;
+        // Pinned/historical did:webvh resolution is an authority path (§4 row
+        // 4) and does fetch over the network.
+        crate::metrics::record_did_resolve(
+            did.method(),
+            crate::metrics::DID_RESOLVE_SOURCE_NETWORK,
+        );
         let log_body = self
             .fetch_webvh_bytes(
                 &log_url,
@@ -660,14 +697,20 @@ mod tests {
         assert_eq!(pinned.status, PinnedDidVersionStatus::Rotated);
 
         let payload = br#"{"context":"pinned-old-version"}"#;
+        let verification_method_url =
+            arkret_wire::DidUrl::new(verification_method.clone()).expect("fixture DID URL");
         let current_signer = arkret_signatures::Ed25519PayloadSigner::new(
             current_signing_key,
             did.clone(),
-            verification_method.clone(),
+            verification_method_url.clone(),
         );
         let signature = current_signer.sign_payload(payload).unwrap();
+        let current_document =
+            crate::jws_verify::decode_pinned_did_document(&current_document).unwrap();
+        let pinned_document = crate::jws_verify::decode_pinned_did_document(&pinned.document)
+            .expect("pinned document decodes");
         assert!(
-            crate::jws_verify::verify_jws_ed25519_with_document(
+            crate::jws_verify::verify_jws_with_pinned_document(
                 payload,
                 &signature.jws,
                 &verification_method,
@@ -678,12 +721,12 @@ mod tests {
             "test signature must be valid under the current key"
         );
         assert!(
-            crate::jws_verify::verify_jws_ed25519_with_document(
+            crate::jws_verify::verify_jws_with_pinned_document(
                 payload,
                 &signature.jws,
                 &verification_method,
                 did.as_str(),
-                &pinned.document,
+                &pinned_document,
             )
             .is_err(),
             "a current key must not authenticate a transcript pinned to the old version"

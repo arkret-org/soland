@@ -6,7 +6,7 @@ use super::common::*;
 
 struct ControllerSealSigner {
     did: arkret_identifiers::Did,
-    verification_method: String,
+    verification_method: arkret_wire::DidUrl,
     signing_key: SigningKey,
 }
 
@@ -20,7 +20,7 @@ impl arkret_wire::PayloadSigner for ControllerSealSigner {
         &self.did
     }
 
-    fn verification_method_id(&self) -> &str {
+    fn verification_method_id(&self) -> &arkret_wire::DidUrl {
         &self.verification_method
     }
 
@@ -31,6 +31,7 @@ impl arkret_wire::PayloadSigner for ControllerSealSigner {
         Ok(arkret_wire::PayloadSignature {
             alg: "EdDSA".to_owned(),
             verification_method: self.verification_method.clone(),
+            extra: Default::default(),
             payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(
                 canonical_bytes,
             ))?,
@@ -1229,7 +1230,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         proof_purpose: None,
         kind: "detached_jws".to_owned(),
         alg: "EdDSA".to_owned(),
-        verification_method: "did:web:alice.example#device-key".to_owned(),
+        verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-key").unwrap(),
         event_digest: digest.clone(),
         created_at: event.created_at,
         domain: None,
@@ -1499,7 +1500,11 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     );
     let signer = ControllerSealSigner {
         did: Did::new(controller_id).unwrap(),
-        verification_method: format!("{controller_id}#{}", super::agents::CONTROLLER_DEVICE_ID),
+        verification_method: arkret_wire::DidUrl::new(format!(
+            "{controller_id}#{}",
+            super::agents::CONTROLLER_DEVICE_ID
+        ))
+        .unwrap(),
         signing_key: SigningKey::from_bytes(&super::agents::CONTROLLER_DEVICE_SIGNING_SEED),
     };
     let event_verification_method = signer.verification_method.clone();

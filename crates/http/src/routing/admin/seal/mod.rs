@@ -75,7 +75,12 @@ pub(super) fn service_admin_signer(state: &AppState) -> Result<Ed25519PayloadSig
     let service_id = state.service_id().as_str();
     let did = Did::new(service_id.to_owned())
         .map_err(|e| app_error!(InternalError, "invalid service DID `{service_id}`: {e}"))?;
-    let kid = format!("{service_id}#notary-key");
+    let kid = arkret_wire::DidUrl::new(format!("{service_id}#notary-key")).map_err(|e| {
+        app_error!(
+            InternalError,
+            "invalid service notary verification method: {e}"
+        )
+    })?;
     // `state.notary_signing_key()` returns `Arc<SigningKey>` (lock-free
     // `ArcSwap` snapshot). `Ed25519PayloadSigner::new` takes a `SigningKey`
     // by value, so dereference + clone.
@@ -100,7 +105,8 @@ pub(super) fn admin_signer_for(
             let mut seed = [0u8; 32];
             seed.copy_from_slice(&bytes);
             let signing_key = ed25519_dalek::SigningKey::from_bytes(&seed);
-            let kid = format!("{}#admin-key", admin_did_str);
+            let kid = arkret_wire::DidUrl::new(format!("{admin_did_str}#admin-key"))
+                .map_err(|e| app_error!(InvalidParam, "invalid admin verification method: {e}"))?;
             Ok(Ed25519PayloadSigner::new(signing_key, admin_did, kid))
         }
         Ok(other) => {

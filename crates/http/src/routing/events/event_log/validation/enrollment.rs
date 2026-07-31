@@ -206,7 +206,13 @@ pub(crate) async fn validate_federated_device_signing_key_evidence(
             evidence.authorization_accepted_at,
         )
         .await?;
-        crate::jws_verify::verify_jws_ed25519_with_document(
+        // §4 row 4 / §3 — replay of an already-accepted portable device
+        // authorization is verified against the DID document pinned to the
+        // acceptance time. `verify_jws_with_pinned_document` delegates to the
+        // SDK's resolver-free verifier, so this path never resolves a DID.
+        let authority_document =
+            crate::jws_verify::decode_pinned_did_document(&authority_document)?;
+        crate::jws_verify::verify_jws_with_pinned_document(
             &signing_bytes,
             &proof.jws,
             &proof.verification_method,

@@ -1586,9 +1586,14 @@ async fn continue_issue_terminal_receipt(
         result_model_generation_ref: result_generation,
         completed_at,
         auth_data: arkret_wire::RecoveryCompletionAttestationAuthData {
-            verification_method: crate::routing::federation::federation_service_signature_key_id(
-                state.service_id(),
-            ),
+            verification_method: arkret_wire::DidUrl::new(
+                crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+            )
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "federation signature verification method is invalid: {error}"
+                ))
+            })?,
             alg: "EdDSA".to_owned(),
             signature: String::new(),
             signed_fields: arkret_wire::RECOVERY_COMPLETION_ATTESTATION_SIGNED_FIELDS
@@ -2514,9 +2519,14 @@ pub(super) async fn recovery_authority_ticket_issue(
         issued_at,
         expires_at,
         auth_data: RecoveryAuthorityTicketAuthData {
-            verification_method: crate::routing::federation::federation_service_signature_key_id(
-                state.service_id(),
-            ),
+            verification_method: arkret_wire::DidUrl::new(
+                crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+            )
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "federation signature verification method is invalid: {error}"
+                ))
+            })?,
             alg: ServiceSignatureAlgorithm::EdDSA,
             signature: String::new(),
             signed_fields: RECOVERY_AUTHORITY_TICKET_SIGNED_FIELDS

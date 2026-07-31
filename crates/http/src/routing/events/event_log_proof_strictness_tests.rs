@@ -91,7 +91,8 @@ fn signed_member_identity_payload(signing_key: &ed25519_dalek::SigningKey) -> (S
 
     let did = did_key_for(signing_key);
     let did_key_fragment = did.strip_prefix("did:key:").expect("did:key prefix");
-    let verification_method = format!("{did}#{did_key_fragment}");
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{did}#{did_key_fragment}")).expect("fixture DID URL");
     let realm_id = arkret_identifiers::RealmId::new(
         "ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned(),
     )
@@ -1352,6 +1353,7 @@ async fn production_rejects_dev_proof_type_field() {
         &session,
         "did:web:alice.example",
         "sha256:dead",
+        b"{}",
         None,
     )
     .await
@@ -1381,6 +1383,7 @@ async fn development_rejects_dev_proof_type_field_even_when_hash_matches() {
         &session,
         "did:web:alice.example",
         "sha256:dead",
+        b"{}",
         None,
     )
     .await
@@ -1417,6 +1420,7 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         &session,
         "did:web:alice.example",
         &arkret_canonical::sha256_digest(canonical_bytes),
+        canonical_bytes,
         None,
     )
     .await
@@ -1460,6 +1464,7 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         &session,
         "did:web:alice.example",
         &arkret_canonical::sha256_digest(canonical_bytes),
+        canonical_bytes,
         None,
     )
     .await
@@ -1504,7 +1509,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
     let dev = build_proof_envelope(
         "dev",
         "EdDSA",
-        "did:web:alice.example#k1",
+        arkret_wire::DidUrl::new("did:web:alice.example#k1").unwrap(),
         Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
             .unwrap(),
         None,
@@ -1524,7 +1529,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
     let prod = build_proof_envelope(
         arkret_signatures::detached_jws_kind(),
         "EdDSA",
-        "did:web:alice.example#k1",
+        arkret_wire::DidUrl::new("did:web:alice.example#k1").unwrap(),
         Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
             .unwrap(),
         None,
@@ -1556,8 +1561,9 @@ fn data_event_dummy_signature() -> arkret_wire::PayloadSignature {
     use chrono::TimeZone;
 
     arkret_wire::PayloadSignature {
+        extra: Default::default(),
         alg: "EdDSA".to_owned(),
-        verification_method: "did:web:notary.example#k1".to_owned(),
+        verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
         payload_digest: data_event_hash(0xff),
         created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),
         jws: "AAAA.BBBB.CCCC".to_owned(),

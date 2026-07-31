@@ -122,8 +122,13 @@ pub(crate) fn mint_control_proposal_receipt(
         absolute_due_at: received_at + policy.absolute_horizon,
         authority_set_ref: authority_set_ref.clone(),
         signature: PayloadSignature {
+            extra: Default::default(),
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{}#notary-key", state.service_id()),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#notary-key",
+                state.service_id()
+            ))
+            .map_err(|error| error.to_string())?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: received_at,
@@ -385,8 +390,13 @@ pub(crate) fn sign_control_proposal_reject(
         reason_code,
         authority_set_ref: receipt.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
+            extra: Default::default(),
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{}#notary-key", state.service_id()),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#notary-key",
+                state.service_id()
+            ))
+            .map_err(|error| error.to_string())?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: decided_at,
@@ -439,8 +449,13 @@ pub(crate) fn sign_control_proposal_defer(
         reason_code,
         authority_set_ref: receipt.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
+            extra: Default::default(),
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{}#notary-key", state.service_id()),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#notary-key",
+                state.service_id()
+            ))
+            .map_err(|error| error.to_string())?,
             payload_digest: Hash::new(format!("sha256:{}", "00".repeat(32)))
                 .map_err(|error| error.to_string())?,
             created_at: decided_at,

@@ -90,7 +90,7 @@ pub(crate) async fn ensure(
         .map_err(provider_unavailable)?
     {
         ServiceRegistrationCommitResult::Created(outcome) => {
-            if let Err(error) = state.dids().cache_resolved_document_state(document) {
+            if let Err(error) = state.cache_resolved_did_document(document) {
                 tracing::warn!(%error, "failed to cache newly registered service DID document");
             }
             json_ok(outcome)
@@ -187,7 +187,7 @@ fn sign_registration_receipt(
             .strip_prefix("sha256:")
             .unwrap_or(&receipt_digest)
     );
-    let verification_method = provider_verification_method(&provider_service_id);
+    let verification_method = provider_verification_method(&provider_service_id)?;
     let proof_config = json!({
         "type": "DataIntegrityProof",
         "cryptosuite": "eddsa-jcs-2022",
@@ -236,12 +236,19 @@ fn sign_registration_receipt(
     Ok(receipt)
 }
 
-fn provider_verification_method(provider_service_id: &Did) -> String {
-    if let Some(multibase) = provider_service_id.as_str().strip_prefix("did:key:") {
+fn provider_verification_method(
+    provider_service_id: &Did,
+) -> Result<arkret_wire::DidUrl, AppError> {
+    let raw = if let Some(multibase) = provider_service_id.as_str().strip_prefix("did:key:") {
         format!("{provider_service_id}#{multibase}")
     } else {
         format!("{provider_service_id}#notary-key")
-    }
+    };
+    arkret_wire::DidUrl::new(raw).map_err(|error| {
+        AppError::internal(format!(
+            "provider verification method is not a DID URL: {error}"
+        ))
+    })
 }
 
 fn registration_rejected(error: impl std::fmt::Display) -> AppError {

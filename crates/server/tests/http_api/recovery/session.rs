@@ -36,10 +36,11 @@ fn cross_signing_reset_event(
     let mut event: arkret_wire::Event =
         serde_json::from_value(event).expect("reset Event roundtrip");
     event.proofs.clear();
-    let verification_method = actor.strip_prefix("did:key:").map_or_else(
+    let verification_method = arkret_wire::DidUrl::new(actor.strip_prefix("did:key:").map_or_else(
         || format!("{actor}#{device_id}"),
         |key| format!("{actor}#{key}"),
-    );
+    ))
+    .expect("fixture verification method is a DID URL");
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         actor_signing_key.clone(),
         event.actor_id.clone(),

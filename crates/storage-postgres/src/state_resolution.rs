@@ -1729,10 +1729,14 @@ mod proposal_decision_tests {
     fn signature(payload_digest: Hash, created_at: DateTime<Utc>) -> PayloadSignature {
         PayloadSignature {
             alg: "EdDSA".to_owned(),
-            verification_method: "did:webvh:z6mkfixture:notary.example#k1".to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:webvh:z6mkfixture:notary.example#k1",
+            )
+            .unwrap(),
             payload_digest,
             created_at,
             jws: "e30..c2ln".to_owned(),
+            extra: Default::default(),
         }
     }
 
@@ -1891,10 +1895,12 @@ mod event_seal_commit_tests {
             previous_digest_algorithm: None,
             notary_signature: NotarySig::Single(PayloadSignature {
                 alg: "EdDSA".to_owned(),
-                verification_method: "did:key:z6MkFixture".to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:key:z6MkFixture#z6MkFixture")
+                    .unwrap(),
                 payload_digest: placeholder_hash,
                 created_at: Utc::now(),
                 jws: "eyJhbGciOiJFZERTQSJ9..AQ".to_owned(),
+                extra: Default::default(),
             }),
             sealed_at: Utc::now(),
             hlc: Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),

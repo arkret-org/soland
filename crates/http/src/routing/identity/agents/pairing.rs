@@ -1674,7 +1674,11 @@ fn verify_runtime_key_proof_of_possession(
     let request_digest = Hash::new(proof.request_canonical_digest.clone())
         .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
     let signing_input = arkret_signatures::agent::agent_key_pair_proof_signing_input(
-        verification_method.to_owned(),
+        arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
+            AppError::invalid_param(format!(
+                "runtime verification_method is not a DID URL: {error}"
+            ))
+        })?,
         proof.challenge,
         proof.audience,
         proof.expires_at,

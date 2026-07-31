@@ -581,7 +581,8 @@ fn registration_outcome(
         proof: PayloadProof {
             kind: "detached_jws".to_owned(),
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{issuer}#registry-key-1"),
+            verification_method: arkret_wire::DidUrl::new(format!("{issuer}#registry-key-1"))
+                .expect("registry verification method is a DID URL"),
             payload_digest: test_hash("placeholder-payload"),
             created_at: issued_at,
             domain: None,

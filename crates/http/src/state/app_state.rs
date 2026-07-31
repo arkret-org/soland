@@ -58,6 +58,11 @@ use crate::authz::SolandAuthzEngine;
 use crate::config::{AppConfig, NotarySigningKeyOrigin};
 use crate::verified_profiles::VerifiedProfileDescriptor;
 
+/// Upper bound on accepted DID bindings held in process. Eviction is
+/// deterministic (oldest `verified_at` first) in the SDK store, and evicting a
+/// binding only costs one re-acceptance — never a downgrade of trust.
+const DID_BINDING_STORE_CAPACITY: usize = 4_096;
+
 /// Single-process service state. Every long-lived data surface lives behind
 /// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
 /// either non-record state (config, db pool, hlc, authz engine) or runtime
@@ -101,6 +106,13 @@ pub struct AppState {
     recovery_sessions: RecoverySessionService,
     security_transactions: SecurityTransactionService,
     dids: DidService,
+    /// Accepted DID authority bindings (`did-usage-and-verification.md` §5).
+    ///
+    /// This is the SDK's shared value object + store — soland deliberately does
+    /// not define a parallel model. Ordinary Event ingress consults it before
+    /// touching the authority path, so a second Event signed by the same
+    /// accepted key resolves nothing.
+    did_bindings: Arc<dyn arkret_identity::VerifiedDidBindingStore>,
     organization_registrations: OrganizationRegistrationService,
     federation: FederationService,
     governance: GovernanceService,
@@ -659,6 +671,12 @@ impl AppState {
         // borrow `&config` for the helper before `config` itself is
         // moved into `Self.config`.
         let did_resolver = Arc::new(did_resolver_chain::build_soland_did_resolver(&config));
+        // §5 — one process-wide accepted-binding store. Building it here (not
+        // per request) is what makes "second Event under the same accepted key
+        // costs zero resolver calls" structural rather than incidental.
+        let did_bindings: Arc<dyn arkret_identity::VerifiedDidBindingStore> = Arc::new(
+            arkret_identity::InMemoryVerifiedDidBindingStore::new(DID_BINDING_STORE_CAPACITY),
+        );
 
         // Bootstrap has already validated that this exact seed is the key
         // published by the resolved service DID document. Re-reading a
@@ -819,6 +837,7 @@ impl AppState {
             recovery_sessions,
             security_transactions,
             dids,
+            did_bindings,
             organization_registrations,
             federation,
             governance,
@@ -911,6 +930,93 @@ impl AppState {
 
     pub(crate) fn dids(&self) -> &DidService {
         &self.dids
+    }
+
+    /// Accepted DID authority bindings (`did-usage-and-verification.md` §5).
+    pub fn did_bindings(&self) -> &dyn arkret_identity::VerifiedDidBindingStore {
+        self.did_bindings.as_ref()
+    }
+
+    /// Inject a spy / pre-seeded binding store. Tests use this to assert the
+    /// DID-P1-A03 call-count contract without reaching the network.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_set_did_binding_store(
+        &mut self,
+        store: Arc<dyn arkret_identity::VerifiedDidBindingStore>,
+    ) {
+        self.did_bindings = store;
+    }
+
+    /// The resolver / Realm policy digest every binding this deployment accepts
+    /// is scoped to (`did-usage-and-verification.md` §5 `policy_digest`).
+    ///
+    /// It covers the values that decide whether a resolution is admissible at
+    /// all: the DID method allow list, the default principal method, the trust
+    /// roots, the cache TTL, the resolver fail mode and soland's one
+    /// deployment-local switch, `development_mode`. Changing any of them yields
+    /// a different digest, so bindings accepted under the old policy stop
+    /// matching instead of being silently reused.
+    ///
+    /// The canonical encoding is the SDK's
+    /// [`arkret_identity::PolicyDigestInput`], not a soland-private JSON shape,
+    /// so soland, inkson, floria and cotest derive byte-identical digests from
+    /// the same policy value.
+    ///
+    /// `trust_domain` is deliberately **not** an input:
+    /// [`arkret_identity::VerifiedDidBindingKey`] already carries it as its own
+    /// key dimension, so folding it in here scopes nothing extra.
+    pub fn did_binding_policy_digest(
+        &self,
+    ) -> Result<arkret_identifiers::Hash, arkret_identity::DigestError> {
+        let config = self.config();
+        let policy = crate::state::did_resolver_chain::did_resolver_policy(config);
+        arkret_identity::PolicyDigestInput::new(&policy)
+            .with_extension("development_mode", config.development_mode)
+            .digest()
+    }
+
+    /// Drop every accepted binding for `did` in this trust domain
+    /// (`did-usage-and-verification.md` §5: rotation / deactivation /
+    /// controller or service delegation change MUST invalidate).
+    ///
+    /// Called from the single place soland learns a DID document moved —
+    /// [`Self::cache_resolved_did_document`] — so an ordinary Event can never
+    /// keep verifying against a superseded key.
+    pub fn invalidate_did_bindings(&self, did: &arkret_identifiers::Did) -> usize {
+        self.did_bindings
+            .invalidate(&arkret_identity::BindingInvalidation::for_did(did.clone()))
+    }
+
+    /// Ingest a freshly resolved / verified DID document into the resolver
+    /// snapshot **and** invalidate any binding that pinned the previous one.
+    pub(crate) fn cache_resolved_did_document(
+        &self,
+        record: soland_services::identity::DidDocumentState,
+    ) -> Result<arkret_identity::DidDocument, String> {
+        let document = self.dids.cache_resolved_document_state(record)?;
+        // Only a document that actually moved invalidates: re-caching the same
+        // bytes (which the freshness gate does on every high-risk check) must
+        // not churn accepted bindings.
+        if let Ok(digest) = arkret_identity::document_canonical_digest(&document) {
+            let superseded = self.did_bindings.snapshot().into_iter().any(|accepted| {
+                accepted.binding().did() == &document.id
+                    && accepted.binding().document_digest() != &digest
+            });
+            if superseded {
+                self.invalidate_did_bindings(&document.id);
+            }
+        }
+        Ok(document)
+    }
+
+    /// This deployment's trust domain as the typed identifier the SDK binding
+    /// key expects.
+    pub fn did_binding_trust_domain(
+        &self,
+    ) -> Result<arkret_identifiers::TypedTrustDomainId, String> {
+        arkret_identifiers::TypedTrustDomainId::new(self.config().trust_domain.clone())
+            .map_err(|error| format!("configured trust_domain is invalid: {error}"))
     }
 
     pub(crate) fn organization_registrations(&self) -> &OrganizationRegistrationService {

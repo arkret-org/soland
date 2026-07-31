@@ -77,7 +77,14 @@ pub(crate) async fn snapshot_manifest_for_realm(
         &frontier_event_ids,
         created_at,
     )?;
-    let verification_method = format!("{}#snapshot-key-1", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#snapshot-key-1", state.service_id())).map_err(
+            |error| {
+                soland_http::error::AppError::internal(format!(
+                    "snapshot verification method is invalid: {error}"
+                ))
+            },
+        )?;
     let mut manifest = arkret_state::SnapshotManifest {
         id: snapshot_id,
         realm_id: realm_id_value,

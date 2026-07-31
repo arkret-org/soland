@@ -667,7 +667,7 @@ pub(crate) async fn seed_test_realm(
     let seal_signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [21_u8; 32],
         Did::new(owner.to_owned()).unwrap(),
-        format!("{owner}#test-realm-notary"),
+        arkret_wire::DidUrl::new(format!("{owner}#test-realm-notary")).unwrap(),
     );
     let bootstrap_seal = arkret_wire::Seal::sign_single(
         RealmId::new(realm_id.clone()).unwrap(),
@@ -972,10 +972,12 @@ pub(crate) fn signed_canonical_event(
     } else {
         format!("ak:device:{device_id}")
     };
-    let verification_method = actor_id.strip_prefix("did:key:").map_or_else(
-        || format!("{actor_id}#{device_id}"),
-        |key| format!("{actor_id}#{key}"),
-    );
+    let verification_method =
+        arkret_wire::DidUrl::new(actor_id.strip_prefix("did:key:").map_or_else(
+            || format!("{actor_id}#{device_id}"),
+            |key| format!("{actor_id}#{key}"),
+        ))
+        .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(event_id.to_owned()).expect("fixture Event id"),
         kind,
@@ -1019,10 +1021,13 @@ pub(crate) fn signed_canonical_event(
 }
 
 pub(crate) fn resign_canonical_event(event: &mut Value) {
-    let verification_method = event["proofs"][0]["verification_method"]
-        .as_str()
-        .expect("fixture verification method")
-        .to_owned();
+    let verification_method = arkret_wire::DidUrl::new(
+        event["proofs"][0]["verification_method"]
+            .as_str()
+            .expect("fixture verification method")
+            .to_owned(),
+    )
+    .expect("fixture verification method is a DID URL");
     let mut typed: arkret_wire::Event =
         serde_json::from_value(event.clone()).expect("fixture Event roundtrip");
     typed.proofs.clear();
@@ -1731,7 +1736,7 @@ pub(crate) fn test_realm_uncovered_basis_seal(realm_id: &str) -> arkret_wire::Se
             let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
                 [0x53; 32],
                 Did::new("did:web:alice.example").unwrap(),
-                "did:web:alice.example#fixture-notary",
+                arkret_wire::DidUrl::new("did:web:alice.example#fixture-notary").unwrap(),
             );
             arkret_wire::Seal::sign_single(
                 RealmId::new(realm_id.to_owned()).unwrap(),
@@ -1855,7 +1860,7 @@ fn build_test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRe
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
         [0x53; 32],
         Did::new("did:web:alice.example").unwrap(),
-        "did:web:alice.example#fixture-notary",
+        arkret_wire::DidUrl::new("did:web:alice.example#fixture-notary").unwrap(),
     );
     // `Seal.delta` is a sorted, unique digest list
     // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`
@@ -2140,7 +2145,8 @@ pub(crate) fn signed_signal_envelope(
     signing_key: &SigningKey,
 ) -> arkret_wire::SignalEnvelope {
     let sent_at = chrono::DateTime::from_timestamp_millis(sent_at.timestamp_millis()).unwrap();
-    let verification_method = format!("{sender_actor}#device-key");
+    let verification_method = arkret_wire::DidUrl::new(format!("{sender_actor}#device-key"))
+        .expect("fixture verification method is a DID URL");
     let mut envelope = arkret_wire::SignalEnvelope {
         realm_id: RealmId::new(realm_id.to_owned()).unwrap(),
         scope_ref,
@@ -2179,9 +2185,11 @@ pub(crate) fn signed_signal_envelope(
     envelope.encrypted_payload.aad_digest = envelope.expected_aad_digest().unwrap();
     envelope.proof.envelope_digest = envelope.envelope_digest().unwrap();
     let binding = envelope.proof_binding_bytes().unwrap();
-    envelope.proof.jws =
-        arkret_signatures::Ed25519DetachedJwsSigner::new(signing_key.clone(), verification_method)
-            .sign_detached_jws(&binding);
+    envelope.proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
+        signing_key.clone(),
+        verification_method.as_str().to_owned(),
+    )
+    .sign_detached_jws(&binding);
     envelope
 }
 

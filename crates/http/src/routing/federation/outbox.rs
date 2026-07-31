@@ -1446,7 +1446,8 @@ mod tests {
             event.proofs = vec![arkret_wire::primitives::Proof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
-                verification_method: "did:web:alice.example#device-1".to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
+                    .unwrap(),
                 event_digest: event_digest.clone(),
                 created_at: issued_at,
                 domain: None,
@@ -1485,7 +1486,8 @@ mod tests {
             lease.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
-                verification_method: "did:web:authority.example#key-1".to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:web:authority.example#key-1")
+                    .unwrap(),
                 payload_digest: lease_digest,
                 created_at: issued_at,
                 domain: None,
@@ -1510,7 +1512,8 @@ mod tests {
             receipt.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
-                verification_method: "did:web:alpha.example#notary-key".to_owned(),
+                verification_method: arkret_wire::DidUrl::new("did:web:alpha.example#notary-key")
+                    .unwrap(),
                 payload_digest: receipt_digest,
                 created_at: received_at,
                 domain: None,

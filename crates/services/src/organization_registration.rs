@@ -10,7 +10,7 @@ use arkret_models_identity::{
     OrganizationRegistrationStatus, next_organization_registration_generation,
 };
 use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
-use arkret_wire::{Did, Hash, PayloadProof};
+use arkret_wire::{Did, DidUrl, Hash, PayloadProof};
 use chrono::{DateTime, Duration, Utc};
 use serde_json::{Map, Value, json};
 use soland_storage::{
@@ -68,7 +68,10 @@ impl OrganizationRegistrationError {
 
 pub trait OrganizationRegistrationReceiptSigner: Send + Sync {
     fn issuer_service_id(&self) -> &Did;
-    fn verification_method(&self) -> &str;
+    /// `did-usage-and-verification.md` §2.2 / §6: a receipt-signing key is a
+    /// concrete verification method, so the identifier is a typed DID URL and
+    /// a bare DID cannot be handed in.
+    fn verification_method(&self) -> &DidUrl;
     fn sign_detached_jws(&self, signing_bytes: &[u8]) -> Result<String, String>;
 }
 
@@ -899,7 +902,7 @@ fn verify_control_proof_inner(
     };
 
     for item in &proof.proofs {
-        if !authorized.contains(&item.verification_method) {
+        if !authorized.contains(item.verification_method.as_str()) {
             return Err(control_proof_error(
                 proof.proof_kind,
                 format!(
@@ -909,9 +912,9 @@ fn verify_control_proof_inner(
             ));
         }
         let material = methods
-            .get(&item.verification_method)
+            .get(item.verification_method.as_str())
             .cloned()
-            .or_else(|| update_key_material(pinned, &item.verification_method))
+            .or_else(|| update_key_material(pinned, item.verification_method.as_str()))
             .ok_or_else(|| {
                 control_proof_error(
                     proof.proof_kind,
@@ -936,7 +939,7 @@ fn verify_control_proof_inner(
 
     match proof.proof_kind {
         OrganizationControlProofKind::ResolvedVerificationMethod => {
-            let method = &proof.proofs[0].verification_method;
+            let method = proof.proofs[0].verification_method.as_str();
             let material = methods
                 .get(method)
                 .cloned()
@@ -1005,8 +1008,29 @@ fn resolved_control_methods(
     for update_key in &pinned.update_keys {
         methods.insert(format!("did:key:{update_key}#{update_key}"));
     }
+    // `did-usage-and-verification.md` §2.2 — every control method is a DID URL
+    // with a `#fragment`. Two roots are legitimate here:
+    //
+    // * `{organization_id}#…` — a verification method the organization DID document itself
+    //   declares; and
+    // * `did:key:…#…` — the self-describing `updateKeys` synthesised just above from
+    //   `pinned.update_keys`, which is how did:webvh expresses its own update authority.
+    //
+    // The second disjunct used to be a bare `starts_with("did:key:")`, which
+    // also retained an arbitrary (including fragment-less) `did:key:` value
+    // that merely appeared in the document's `authentication` /
+    // `assertionMethod` arrays. Parsing through `DidUrl` removes the bare form
+    // from the value domain, so only fragment-carrying methods survive.
     methods.retain(|method| {
-        method.starts_with(&format!("{organization_id}#")) || method.starts_with("did:key:")
+        let Ok(method_url) = DidUrl::new(method.clone()) else {
+            return false;
+        };
+        let root = method_url
+            .as_str()
+            .split_once('#')
+            .map(|(did, _)| did)
+            .expect("DidUrl always carries a fragment");
+        root == organization_id.as_str() || root.starts_with("did:key:")
     });
     if methods.is_empty() {
         return Err(OrganizationRegistrationError::proof(
@@ -1395,7 +1419,7 @@ mod tests {
 
     struct TestReceiptSigner {
         issuer: Did,
-        verification_method: String,
+        verification_method: DidUrl,
         signer: Ed25519DetachedJwsSigner,
     }
 
@@ -1404,7 +1428,7 @@ mod tests {
             &self.issuer
         }
 
-        fn verification_method(&self) -> &str {
+        fn verification_method(&self) -> &DidUrl {
             &self.verification_method
         }
 
@@ -1514,7 +1538,8 @@ mod tests {
             governance_signers: vec![governance_key_1, governance_key_2],
             receipt_signer: TestReceiptSigner {
                 issuer,
-                verification_method: receipt_vm.clone(),
+                verification_method: DidUrl::new(receipt_vm.clone())
+                    .expect("registry receipt verification method is a DID URL"),
                 signer: Ed25519DetachedJwsSigner::from_seed([41; 32], receipt_vm),
             },
             now: DateTime::parse_from_rfc3339("2026-05-01T00:00:00Z")
@@ -1547,7 +1572,8 @@ mod tests {
             let mut proof = PayloadProof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
                 alg: "EdDSA".to_owned(),
-                verification_method: signer.verification_method().to_owned(),
+                verification_method: DidUrl::new(signer.verification_method().to_owned())
+                    .expect("fixture signer verification method is a DID URL"),
                 payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
                 created_at,
                 domain: None,

@@ -578,7 +578,15 @@ async fn resolve_invite_locator(
         proof_purpose: PrincipalLocatorProofPurpose::RecipientServiceAcceptance,
         proof: DetachedPayloadProof {
             kind: "detached_jws".to_owned(),
-            verification_method: format!("{}#notary-key", state.service_id()),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#notary-key",
+                state.service_id()
+            ))
+            .map_err(|error| {
+                AppError::internal(format!(
+                    "service notary verification method is invalid: {error}"
+                ))
+            })?,
             alg: "EdDSA".to_owned(),
             payload_digest,
             created_at: now(),

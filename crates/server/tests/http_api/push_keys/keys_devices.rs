@@ -1058,7 +1058,7 @@ fn tier2_publish_and_authorize(
             public_key: NonEmptyString::new(ssk_multibase.clone()).unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
-                verification_method: NonEmptyString::new(format!(
+                verification_method: arkret_wire::DidUrl::new(format!(
                     "{principal}#ak_principal_signing_v1"
                 ))
                 .unwrap(),
@@ -1072,7 +1072,7 @@ fn tier2_publish_and_authorize(
             public_key: NonEmptyString::new("z6MkUserDistinctKey").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
-                verification_method: NonEmptyString::new(format!(
+                verification_method: arkret_wire::DidUrl::new(format!(
                     "{principal}#ak_principal_signing_v1"
                 ))
                 .unwrap(),
@@ -1222,7 +1222,7 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
     let binding: QueryDeviceCrossSigningBinding =
         serde_json::from_value(entry["cross_signing_binding"].clone()).unwrap();
     let trust_binding = DeviceTrustBinding {
-        verification_method: binding.verification_method.to_string(),
+        verification_method: binding.verification_method.clone(),
         alg: binding
             .alg
             .as_ref()

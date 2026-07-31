@@ -169,10 +169,11 @@ fn signed_actor_private_event_envelope(
 ) -> Value {
     let now = chrono::Utc::now();
     let actor_id = arkret_identifiers::Did::new(actor.to_owned()).expect("fixture actor DID");
-    let verification_method = actor.strip_prefix("did:key:").map_or_else(
+    let verification_method = arkret_wire::DidUrl::new(actor.strip_prefix("did:key:").map_or_else(
         || format!("{actor}#{device_id}"),
         |key| format!("{actor}#{key}"),
-    );
+    ))
+    .expect("fixture verification method is a DID URL");
     let mut event = arkret_wire::Event::new_with_id_at(
         arkret_wire::EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
             .expect("fixture Event id"),

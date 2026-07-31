@@ -230,7 +230,12 @@ fn try_aggregate_partials(
             .map_err(|e| format!("partial signature decode failed: {e}"))?;
         let did = Did::new(signer_did.clone())
             .map_err(|e| format!("invalid signer_did {signer_did}: {e}"))?;
-        let p = PartialSignature::new(did, sig_bytes, kid.to_owned());
+        // §2.2 — a partial signature's `kid` names a concrete verification
+        // method, so a bare DID or malformed value fails closed here rather
+        // than being aggregated into a threshold signature.
+        let kid = arkret_wire::DidUrl::new(kid.to_owned())
+            .map_err(|e| format!("partial kid is not a DID URL: {e}"))?;
+        let p = PartialSignature::new(did, sig_bytes, kid);
         aggregator
             .add_partial(p)
             .map_err(|e| format!("aggregator add_partial: {e}"))?;

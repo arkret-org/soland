@@ -89,6 +89,10 @@ pub fn verify_jws_shape(
 
     let payload_digest = Hash::new(arkret_canonical::sha256_digest(canonical_bytes))
         .map_err(|error| error.to_string())?;
+    // §2.2 — even the development-mode shape verifier refuses a bare DID: a
+    // proof key is always a `#fragment` DID URL.
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
     let proof = build_proof_envelope(
         "detached_jws",
         "EdDSA",
@@ -137,14 +141,33 @@ pub fn verify_jws_ed25519(
     issuer: &str,
     state: &AppState,
 ) -> Result<(), String> {
-    arkret_identity::jws::verify_jws_ed25519(
+    // MIGRATION NOTE (`did-usage-and-verification.md` §3/§6):
+    // `arkret_identity::jws::verify_jws_ed25519` is deprecated. The replacement
+    // `verify_jws_with_document` additionally compares `document.id == issuer`
+    // — a semantic the deprecated function accepts and silently ignores. The
+    // remaining call sites of this wrapper (`applet_bridge::install`,
+    // `federation::move_seal`) have not each been shown to pass an `issuer`
+    // equal to the verification method's DID root, so flipping them here would
+    // be an unreviewed behaviour change rather than a refactor. Kept explicit
+    // rather than silenced crate-wide.
+    //
+    // The resolver handed in is `SolandDidResolver`'s **synchronous**
+    // `DidResolver` impl: snapshot lookup plus the no-IO SDK fallback chain, so
+    // this path cannot reach the network regardless.
+    #[allow(deprecated)]
+    let outcome = arkret_identity::jws::verify_jws_ed25519(
         canonical_bytes,
         jws,
         verification_method,
         issuer,
         state.dids().resolver(),
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string());
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_ED25519_JWS,
+        outcome.is_ok(),
+    );
+    outcome
 }
 
 /// Async-native production Ed25519 detached-JWS verifier.
@@ -160,8 +183,44 @@ pub async fn verify_jws_ed25519_async(
 ) -> Result<(), String> {
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
-    let document = if is_local_service_notary_method(state, &did, verification_method) {
-        DidDocument {
+    let document = document_for_verification(state, &did, verification_method).await?;
+    let resolver = ResolvedDidDocumentResolver {
+        document: &document,
+    };
+    // See the migration note on [`verify_jws_ed25519`]: the document is already
+    // pinned here (the "resolver" only replays it), so the only thing the
+    // replacement API would add is the `document.id == issuer` comparison. Nine
+    // call sites depend on the current looser behaviour and are migrated
+    // separately.
+    #[allow(deprecated)]
+    let outcome = arkret_identity::jws::verify_jws_ed25519(
+        canonical_bytes,
+        jws,
+        verification_method,
+        issuer,
+        &resolver,
+    )
+    .map_err(|error| error.to_string());
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_ED25519_JWS,
+        outcome.is_ok(),
+    );
+    outcome
+}
+
+/// Produce the DID document a JWS should be verified against.
+///
+/// Two deployment-local sources short-circuit any resolution: this service's
+/// own notary key and an already-accepted federation peer key. Everything else
+/// goes through [`resolve_did_document_async`], which prefers the durable local
+/// DID store and only then the resolver chain.
+async fn document_for_verification(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+) -> Result<DidDocument, String> {
+    if is_local_service_notary_method(state, did, verification_method) {
+        return Ok(DidDocument {
             id: did.clone(),
             verification_methods: BTreeMap::from([(
                 verification_method.to_owned(),
@@ -172,9 +231,10 @@ pub async fn verify_jws_ed25519_async(
             also_known_as: Vec::new(),
             updated_at: Some(chrono::Utc::now()),
             raw_properties: BTreeMap::new(),
-        }
-    } else if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
-        DidDocument {
+        });
+    }
+    if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
+        return Ok(DidDocument {
             id: did.clone(),
             verification_methods: BTreeMap::from([(
                 verification_method.to_owned(),
@@ -183,48 +243,55 @@ pub async fn verify_jws_ed25519_async(
             also_known_as: Vec::new(),
             updated_at: Some(chrono::Utc::now()),
             raw_properties: BTreeMap::new(),
-        }
-    } else {
-        resolve_did_document_async(state, &did).await?
-    };
-    let resolver = ResolvedDidDocumentResolver {
-        document: &document,
-    };
-    arkret_identity::jws::verify_jws_ed25519(
-        canonical_bytes,
-        jws,
-        verification_method,
-        issuer,
-        &resolver,
-    )
-    .map_err(|error| error.to_string())
+        });
+    }
+    resolve_did_document_async(state, did).await
 }
 
-pub fn verify_jws_ed25519_with_document(
+/// Decode a pinned/historical DID document that a caller already selected by
+/// version, log head or `accepted_at`, so it can be handed to the SDK's
+/// zero-resolver verifier [`arkret_identity::verify_jws_with_document`].
+///
+/// This is a serde adapter, not a verifier: soland deliberately keeps **no**
+/// private JWS-with-document implementation
+/// (`did-usage-and-verification.md` §6 — one shared verifier layer).
+pub fn decode_pinned_did_document(
+    document_value: &serde_json::Value,
+) -> Result<DidDocument, String> {
+    serde_json::from_value::<DidDocument>(document_value.clone())
+        .map_err(|error| format!("historical DID document decode failed: {error}"))
+}
+
+/// Verify a detached JWS against an already-pinned historical DID document.
+///
+/// Thin typed adapter over [`arkret_identity::verify_jws_with_document`]:
+/// it parses the wire strings into `DidUrl` / `Did`, records the signature
+/// verification in metrics, and delegates every semantic check to the SDK.
+/// **Zero resolver calls by construction** — the SDK entry point has no
+/// resolver parameter.
+pub fn verify_jws_with_pinned_document(
     canonical_bytes: &[u8],
     jws: &str,
     verification_method: &str,
     issuer: &str,
-    document_value: &serde_json::Value,
+    document: &DidDocument,
 ) -> Result<(), String> {
-    let document = serde_json::from_value::<DidDocument>(document_value.clone())
-        .map_err(|error| format!("historical DID document decode failed: {error}"))?;
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
     let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
-    if document.id != issuer_did {
-        return Err("historical DID document id does not match issuer".to_owned());
-    }
-    require_verification_method_in_document(&document, verification_method)?;
-    let resolver = ResolvedDidDocumentResolver {
-        document: &document,
-    };
-    arkret_identity::jws::verify_jws_ed25519(
+    let outcome = arkret_identity::verify_jws_with_document(
         canonical_bytes,
         jws,
-        verification_method,
-        issuer,
-        &resolver,
+        &verification_method,
+        &issuer_did,
+        document,
     )
-    .map_err(|error| error.to_string())
+    .map_err(|error| error.to_string());
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT,
+        outcome.is_ok(),
+    );
+    outcome
 }
 
 /// Verify a proof made by either a principal DID control method or one of the
@@ -252,13 +319,36 @@ impl std::fmt::Display for PrincipalAuthorizedJwsError {
     }
 }
 
-pub async fn verify_principal_authorized_jws_ed25519_async(
-    canonical_bytes: &[u8],
-    jws: &str,
+/// Where the key for a principal-authorized verification method came from.
+///
+/// Resolving the source and verifying the signature are separate steps so the
+/// generic-JWS and the Event-proof entry points can share one lookup order —
+/// `device directory → accepted binding → development fixture → authority
+/// document` — while each applies its own JWS profile. The two profiles are not
+/// interchangeable: see [`verify_principal_authorized_event_proof_async`].
+enum PrincipalVerificationSource {
+    /// Active device signing key from the principal-control device-set
+    /// projection (`device-lifecycle.md` §5.4/§8.2). Zero DID resolution.
+    DeviceDirectory(PublicKeyMaterial),
+    /// An acceptance already in the binding store. Zero DID resolution.
+    AcceptedBinding(Box<arkret_identity::AcceptedDidBinding>),
+    /// Development-mode deterministic fixture key.
+    Development(PublicKeyMaterial),
+    /// A freshly resolved (or locally synthesised) DID document. The caller
+    /// records the acceptance only after the signature verifies.
+    AuthorityDocument(Box<DidDocument>),
+}
+
+/// Resolve the key source for `verification_method` under `principal_id`.
+///
+/// Every branch that can answer without touching the network is tried before
+/// the authority path, and the high-risk freshness gate still runs before any
+/// document is handed back.
+async fn principal_verification_source(
     verification_method: &str,
     principal_id: &str,
     state: &AppState,
-) -> Result<(), PrincipalAuthorizedJwsError> {
+) -> Result<(Did, PrincipalVerificationSource), PrincipalAuthorizedJwsError> {
     let method_did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
     if method_did.as_str() != principal_id {
@@ -300,12 +390,30 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
                     "authorized device signing key is unavailable".to_owned(),
                 )
             })?;
+        // §3 — key material comes from the already-accepted device-signing
+        // directory projection, so this branch performs zero DID resolution.
         let material = PublicKeyMaterial::Ed25519Multibase {
             value: multibase.to_owned(),
         };
-        return Ed25519DetachedJwsVerifier::new()
-            .verify_detached_jws(jws, canonical_bytes, &material)
-            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+        return Ok((
+            method_did,
+            PrincipalVerificationSource::DeviceDirectory(material),
+        ));
+    }
+
+    // §3 + §6 — before anything that could reach the authority path, consume an
+    // already-accepted binding. A hit verifies the signature against the DID
+    // document that binding pinned and performs **zero** DID resolution: the
+    // SDK entry points take no resolver.
+    if let Some(accepted) = accepted_principal_binding(state, &method_did, verification_method) {
+        crate::metrics::record_did_resolve(
+            method_did.method(),
+            crate::metrics::DID_RESOLVE_SOURCE_BINDING_STORE,
+        );
+        return Ok((
+            method_did,
+            PrincipalVerificationSource::AcceptedBinding(Box::new(accepted)),
+        ));
     }
 
     if method_did.method() != "key"
@@ -331,24 +439,333 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
                 let material = PublicKeyMaterial::Ed25519Raw {
                     bytes: key.to_bytes().to_vec(),
                 };
-                return Ed25519DetachedJwsVerifier::new()
-                    .verify_detached_jws(jws, canonical_bytes, &material)
-                    .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+                return Ok((
+                    method_did,
+                    PrincipalVerificationSource::Development(material),
+                ));
             }
         }
         enforce_high_risk_did_freshness(state, &method_did)
             .await
             .map_err(PrincipalAuthorizedJwsError::HighRiskDidFreshness)?;
     }
-    verify_jws_ed25519_async(
-        canonical_bytes,
-        jws,
-        verification_method,
-        principal_id,
-        state,
-    )
-    .await
-    .map_err(PrincipalAuthorizedJwsError::Verification)
+    // Authority path. Resolve the document once so the caller can verify
+    // against it and record the acceptance, so the *next* Event signed by the
+    // same key is served from the binding store above with no resolution at all
+    // (`did-usage-and-verification.md` §4: "已有结果绑定相同 DID、trust domain、
+    // purpose、policy digest 与可接受 freshness 时可复用").
+    let document = document_for_verification(state, &method_did, verification_method)
+        .await
+        .map_err(PrincipalAuthorizedJwsError::Verification)?;
+    Ok((
+        method_did,
+        PrincipalVerificationSource::AuthorityDocument(Box::new(document)),
+    ))
+}
+
+pub async fn verify_principal_authorized_jws_ed25519_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    principal_id: &str,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let (method_did, source) =
+        principal_verification_source(verification_method, principal_id, state).await?;
+    match source {
+        PrincipalVerificationSource::DeviceDirectory(material) => {
+            let outcome = Ed25519DetachedJwsVerifier::new()
+                .verify_detached_jws(jws, canonical_bytes, &material)
+                .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+            crate::metrics::record_signature_verify(
+                crate::metrics::SIGNATURE_SCHEME_DEVICE_DIRECTORY,
+                outcome.is_ok(),
+            );
+            outcome
+        }
+        PrincipalVerificationSource::AcceptedBinding(accepted) => {
+            let method_url = arkret_wire::DidUrl::new(verification_method.to_owned())
+                .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()))?;
+            let outcome = arkret_identity::verify_jws_with_binding(
+                canonical_bytes,
+                jws,
+                &method_url,
+                &accepted,
+            )
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+            crate::metrics::record_signature_verify(
+                crate::metrics::SIGNATURE_SCHEME_ACCEPTED_BINDING,
+                outcome.is_ok(),
+            );
+            outcome
+        }
+        PrincipalVerificationSource::Development(material) => {
+            let outcome = Ed25519DetachedJwsVerifier::new()
+                .verify_detached_jws(jws, canonical_bytes, &material)
+                .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+            crate::metrics::record_signature_verify(
+                crate::metrics::SIGNATURE_SCHEME_DEVELOPMENT,
+                outcome.is_ok(),
+            );
+            outcome
+        }
+        PrincipalVerificationSource::AuthorityDocument(document) => {
+            // The document is pinned at this point, so the signature check
+            // itself uses the SDK's resolver-free entry point rather than the
+            // deprecated resolver-driven one.
+            verify_jws_with_pinned_document(
+                canonical_bytes,
+                jws,
+                verification_method,
+                principal_id,
+                &document,
+            )
+            .map_err(PrincipalAuthorizedJwsError::Verification)?;
+            accept_principal_binding(state, &method_did, verification_method, &document);
+            Ok(())
+        }
+    }
+}
+
+/// Event-proof counterpart of [`verify_principal_authorized_jws_ed25519_async`].
+///
+/// # Why Event proofs may not use the generic entry point
+///
+/// An Event proof's JWS does not sign the bytes handed to a generic detached-JWS
+/// verifier: per `encoding.md` §6 it signs the canonical **proof binding
+/// object**, and the Event profile's protected header
+/// (`arkret_signatures`' `DetachedJwsProtectedHeader`, `deny_unknown_fields`)
+/// is strictly narrower than the generic one:
+///
+/// | check | Event profile (here) | generic profile |
+/// | --- | --- | --- |
+/// | `kid` header member | rejected | accepted and ignored |
+/// | `header.alg` vs `proof.alg` | must be equal | not compared |
+///
+/// Reconstructing the binding bytes by hand and feeding them to the generic
+/// verifier — which is what this call site used to do — therefore relaxed two
+/// header checks on every DID-rooted Event proof. Every branch below routes
+/// through an SDK Event-profile verifier instead, so the transcript, the digest
+/// comparison and the header hygiene all come from one implementation.
+///
+/// `envelope_bytes` are the Event's canonical bytes with `proofs` / `unsigned`
+/// stripped (`arkret_signatures::EventProofBuilder::envelope_bytes`); the SDK
+/// re-derives `event_digest` from them and constant-time compares it to
+/// `proof.event_digest`. `actor_id` is the Event envelope's `actor_id` — the
+/// record subject folded into the signed transcript — which for delegated
+/// execution differs from `principal_id`, the DID that owns the signing key.
+pub async fn verify_principal_authorized_event_proof_async(
+    proof: &arkret_wire::Proof,
+    envelope_bytes: &[u8],
+    actor_id: &Did,
+    verification_method: &str,
+    principal_id: &str,
+    state: &AppState,
+) -> Result<(), PrincipalAuthorizedJwsError> {
+    let (method_did, source) =
+        principal_verification_source(verification_method, principal_id, state).await?;
+    let (scheme, outcome) = match source {
+        PrincipalVerificationSource::DeviceDirectory(material) => (
+            crate::metrics::SIGNATURE_SCHEME_DEVICE_DIRECTORY,
+            arkret_signatures::verify_eddsa_detached_jws_proof(
+                proof,
+                envelope_bytes,
+                actor_id,
+                &material,
+            )
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string())),
+        ),
+        PrincipalVerificationSource::AcceptedBinding(accepted) => (
+            crate::metrics::SIGNATURE_SCHEME_ACCEPTED_BINDING,
+            arkret_identity::verify_event_proof_with_binding(
+                proof,
+                envelope_bytes,
+                actor_id,
+                &accepted,
+            )
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string())),
+        ),
+        PrincipalVerificationSource::Development(material) => (
+            crate::metrics::SIGNATURE_SCHEME_DEVELOPMENT,
+            arkret_signatures::verify_eddsa_detached_jws_proof(
+                proof,
+                envelope_bytes,
+                actor_id,
+                &material,
+            )
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string())),
+        ),
+        PrincipalVerificationSource::AuthorityDocument(document) => {
+            // Pair the freshly resolved document with the acceptance this
+            // verification would record, so the Event proof is checked by the
+            // same SDK entry point the binding-store branch uses. Building the
+            // pairing is itself a check: `AcceptedDidBinding::new` refuses a
+            // document whose `id` is not the bound DID.
+            let accepted =
+                principal_binding_acceptance(state, &method_did, verification_method, &document)
+                    .ok_or_else(|| {
+                        PrincipalAuthorizedJwsError::Verification(
+                            "resolved DID document does not form an acceptable binding".to_owned(),
+                        )
+                    })?;
+            let outcome = arkret_identity::verify_event_proof_with_binding(
+                proof,
+                envelope_bytes,
+                actor_id,
+                &accepted,
+            )
+            .map_err(|error| PrincipalAuthorizedJwsError::Verification(error.to_string()));
+            if outcome.is_ok() {
+                store_principal_binding(state, &method_did, verification_method, accepted);
+            }
+            (crate::metrics::SIGNATURE_SCHEME_PINNED_DOCUMENT, outcome)
+        }
+    };
+    crate::metrics::record_signature_verify(scheme, outcome.is_ok());
+    outcome
+}
+
+/// Build the §5 binding key this deployment uses for principal-control
+/// verification methods.
+fn principal_binding_key(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+) -> Option<arkret_identity::VerifiedDidBindingKey> {
+    Some(arkret_identity::VerifiedDidBindingKey {
+        did: did.clone(),
+        trust_domain: state.did_binding_trust_domain().ok()?,
+        purpose: arkret_identity::DidBindingPurpose::Principal,
+        policy_digest: state.did_binding_policy_digest().ok()?,
+        verification_method: Some(arkret_wire::DidUrl::new(verification_method.to_owned()).ok()?),
+        // soland's resolver boundary does not surface a per-document version id
+        // on this path; the acceptance records that as limited trust instead of
+        // inventing a pin.
+        version_id: None,
+    })
+}
+
+/// Look up an accepted binding for this exact `(did, trust domain, purpose,
+/// policy digest, verification method)`.
+///
+/// `get` already hides hard-expired entries and downgrades `Active` to `Stale`
+/// past `refresh_after`; `verify_jws_with_binding` then refuses `Deactivated` /
+/// `Quarantined` bindings. Ordinary Event verification may consume a `Stale`
+/// binding (§5: "缓存 TTL 到期本身不得把普通业务请求变成在线 DID resolution").
+fn accepted_principal_binding(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+) -> Option<arkret_identity::AcceptedDidBinding> {
+    let key = principal_binding_key(state, did, verification_method)?;
+    state.did_bindings().get(&key, chrono::Utc::now())
+}
+
+/// Build the acceptance a successful authority verification represents, without
+/// deciding whether it may be cached.
+///
+/// The pairing is itself a check: `AcceptedDidBinding::new` refuses a document
+/// whose `id` is not the bound DID or whose canonical digest is not the one the
+/// binding pins, so a caller can verify an Event proof against the result and
+/// get the document-issuer check for free.
+fn principal_binding_acceptance(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+    document: &DidDocument,
+) -> Option<arkret_identity::AcceptedDidBinding> {
+    let key = principal_binding_key(state, did, verification_method)?;
+    let document_digest = arkret_identity::document_canonical_digest(document).ok()?;
+    let verified_at = chrono::Utc::now();
+    // The acceptance inherits the high-risk freshness window that gated it, so
+    // a binding can never outlive the evidence it rests on.
+    let expires_at = verified_at + chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
+    // soland's resolver boundary does not surface a per-document history head
+    // or version id here, so the acceptance MUST record that it is
+    // limited-trust rather than silently claiming a pin it does not have.
+    let limited_trust = arkret_identity::LimitedTrustReason::for_pins(None, None);
+    // §5 — the evidence digest commits to the canonical evidence *envelope*,
+    // never to the bare document digest. soland's resolver boundary surfaces no
+    // method proof set, history head or version id on this path, so the
+    // envelope carries only its two core members; that is still strictly
+    // stronger than the old `evidence_digest = document_digest`, because a
+    // policy change now moves the evidence digest too. Nothing is invented here
+    // to pad it out.
+    let evidence_digest =
+        arkret_identity::EvidenceEnvelope::new(document_digest.clone(), key.policy_digest.clone())
+            .digest()
+            .ok()?;
+    let input = arkret_identity::VerifiedDidBindingInput {
+        did: did.clone(),
+        trust_domain: key.trust_domain.clone(),
+        purpose: key.purpose,
+        method: did.method().to_owned(),
+        verification_method: key.verification_method.clone(),
+        document_digest,
+        history_head: None,
+        version_id: None,
+        limited_trust,
+        evidence_digest,
+        policy_digest: key.policy_digest.clone(),
+        verified_at,
+        refresh_after: None,
+        expires_at: Some(expires_at),
+        status: arkret_identity::DidBindingStatus::Active,
+    };
+    let binding = arkret_identity::VerifiedDidBinding::new(input).ok()?;
+    arkret_identity::AcceptedDidBinding::new(binding, document.clone()).ok()
+}
+
+/// Whether an acceptance for this verification method may be cached at all.
+///
+/// `did:key` carries its key in the identifier, so there is nothing to cache and
+/// no network to save. The two locally synthesised documents (this service's
+/// live notary key and an accepted federation peer key) are rebuilt from process
+/// state on every call at zero cost, and both can be rotated at runtime; caching
+/// them would only create a window in which a rotated-away key still verifies.
+fn principal_binding_is_cacheable(state: &AppState, did: &Did, verification_method: &str) -> bool {
+    did.method() != "key"
+        && !is_local_service_notary_method(state, did, verification_method)
+        && state
+            .federation_peer_verification_method_key(verification_method)
+            .is_none()
+}
+
+/// Record an already-built acceptance, when this method is cacheable at all.
+///
+/// Failure to record is never fatal: the next Event simply repeats the
+/// authority path.
+fn store_principal_binding(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+    accepted: arkret_identity::AcceptedDidBinding,
+) {
+    if !principal_binding_is_cacheable(state, did, verification_method) {
+        return;
+    }
+    if let Err(error) = state.did_bindings().accept(accepted) {
+        tracing::debug!(%error, "accepted DID binding was not stored");
+    }
+}
+
+/// Record a successful authority verification as a reusable binding.
+fn accept_principal_binding(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+    document: &DidDocument,
+) {
+    if !principal_binding_is_cacheable(state, did, verification_method) {
+        return;
+    }
+    let Some(accepted) = principal_binding_acceptance(state, did, verification_method, document)
+    else {
+        return;
+    };
+    if let Err(error) = state.did_bindings().accept(accepted) {
+        tracing::debug!(%error, "accepted DID binding was not stored");
+    }
 }
 
 /// Resolve the active local device-directory evidence needed to verify an
@@ -431,7 +848,9 @@ pub async fn federated_device_signing_key_evidence(
         arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence {
             actor_id: actor_id.clone(),
             device_id: device_id.clone(),
-            verification_method: verification_method.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(
+                |error| format!("device signing verification method is not a DID URL: {error}"),
+            )?,
             device_signing_key: arkret_wire::DidKey::new(device_signing_key)
                 .map_err(|error| format!("device signer key is invalid: {error}"))?,
             authorization_accepted_at: device_authorize_record.received_at,
@@ -606,8 +1025,7 @@ pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Res
     match evaluate_did_document_freshness(&record, chrono::Utc::now(), max_age) {
         DidDocumentFreshness::Fresh => {
             state
-                .dids()
-                .cache_resolved_document_state(record)
+                .cache_resolved_did_document(record)
                 .map_err(|error| format!("DID freshness cache failed: {error}"))?;
             Ok(())
         }
@@ -684,8 +1102,7 @@ async fn refresh_embedded_webvh_document_for_high_risk(
         .await
         .map_err(|error| format!("DID document refresh write failed: {error}"))?;
     state
-        .dids()
-        .cache_resolved_document_state(record.clone())
+        .cache_resolved_did_document(record.clone())
         .map_err(|error| format!("DID document refresh cache failed: {error}"))?;
     Ok(())
 }
@@ -741,4 +1158,415 @@ async fn did_document_key_log_head(
     let digest = arkret_canonical::canonical_sha256(&value)
         .map_err(|error| format!("DID document canonical digest failed: {error}"))?;
     Hash::new(digest).map_err(|error| format!("DID document digest invalid: {error}"))
+}
+
+#[cfg(test)]
+mod did_binding_tests {
+    use ed25519_dalek::SigningKey;
+    use soland_storage_postgres::Db;
+
+    use super::*;
+
+    const PRINCIPAL: &str = "did:web:principal.example";
+
+    /// A state whose resolver chain can reach **nothing**: an empty
+    /// `did_resolver_allow_methods` makes every resolution fail. Any
+    /// verification that still succeeds therefore provably did not resolve.
+    fn state_without_any_resolver() -> AppState {
+        AppState::new(
+            crate::config::AppConfig {
+                object_storage: crate::config::ObjectStorageConfig::local(
+                    std::env::temp_dir().join("soland-did-binding-test"),
+                ),
+                did_resolver_allow_methods: Vec::new(),
+                jws_replay_window_seconds: 0,
+                ..crate::config::AppConfig::test_default()
+            },
+            Db { pool: None },
+        )
+    }
+
+    fn document_for(did: &Did, verification_method: &str, key: &SigningKey) -> DidDocument {
+        DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.to_owned(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    key.verifying_key().as_bytes(),
+                ),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        }
+    }
+
+    /// Seed the store the way the authority path would after one successful
+    /// acceptance.
+    fn seed_binding(
+        state: &AppState,
+        did: &Did,
+        verification_method: &str,
+        document: &DidDocument,
+    ) {
+        accept_principal_binding(state, did, verification_method, document);
+    }
+
+    fn signed(key: &SigningKey, payload: &[u8]) -> String {
+        arkret_signatures::sign_eddsa_detached_jws(key, payload).expect("detached JWS")
+    }
+
+    // DID-P1-A03 — two ordinary Events under the same accepted key: both
+    // signatures are verified, resolver network increment is zero (structurally:
+    // no resolver in this state can succeed).
+    #[tokio::test]
+    async fn two_ordinary_events_under_one_accepted_binding_never_resolve() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let document = document_for(&did, &verification_method, &key);
+        seed_binding(&state, &did, &verification_method, &document);
+
+        for payload in [b"first-ordinary-event".as_slice(), b"second-ordinary-event"] {
+            let jws = signed(&key, payload);
+            verify_principal_authorized_jws_ed25519_async(
+                payload,
+                &jws,
+                &verification_method,
+                did.as_str(),
+                &state,
+            )
+            .await
+            .expect("an accepted binding verifies without any resolution");
+        }
+    }
+
+    // A tampered payload still fails under the binding path: reuse of an
+    // accepted binding must not weaken the signature check itself.
+    #[tokio::test]
+    async fn an_accepted_binding_still_rejects_a_bad_signature() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let document = document_for(&did, &verification_method, &key);
+        seed_binding(&state, &did, &verification_method, &document);
+
+        let jws = signed(&key, b"authentic");
+        verify_principal_authorized_jws_ed25519_async(
+            b"tampered",
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect_err("binding reuse must not skip the signature check");
+    }
+
+    // §4 row 3 — "已接受旧 key 不能自动授权新 key": a new verification method
+    // (new device generation / agent signer epoch) is a different binding key,
+    // so it misses the store and has to go to the authority path.
+    #[tokio::test]
+    async fn a_new_verification_method_is_not_authorized_by_the_old_binding() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let accepted_method = format!("{did}#control-1");
+        let rotated_method = format!("{did}#control-2");
+        let old_key = SigningKey::from_bytes(&[9u8; 32]);
+        let new_key = SigningKey::from_bytes(&[10u8; 32]);
+        seed_binding(
+            &state,
+            &did,
+            &accepted_method,
+            &document_for(&did, &accepted_method, &old_key),
+        );
+
+        let payload = b"event-under-the-new-epoch";
+        let jws = signed(&new_key, payload);
+        verify_principal_authorized_jws_ed25519_async(
+            payload,
+            &jws,
+            &rotated_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect_err("a new verification method must not ride the previous acceptance");
+    }
+
+    // §5 — a moved DID document invalidates the bindings pinned to the old one,
+    // so a rotated-away key stops verifying immediately instead of at TTL.
+    #[tokio::test]
+    async fn rotating_the_document_invalidates_the_accepted_binding() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let old_key = SigningKey::from_bytes(&[9u8; 32]);
+        let new_key = SigningKey::from_bytes(&[10u8; 32]);
+        let old_document = document_for(&did, &verification_method, &old_key);
+        seed_binding(&state, &did, &verification_method, &old_document);
+
+        let payload = b"ordinary-event";
+        let jws = signed(&old_key, payload);
+        verify_principal_authorized_jws_ed25519_async(
+            payload,
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect("the acceptance is live before rotation");
+
+        let rotated = document_for(&did, &verification_method, &new_key);
+        let now = chrono::Utc::now();
+        state
+            .cache_resolved_did_document(soland_services::identity::DidDocumentState {
+                did: did.as_str().to_owned(),
+                did_document: serde_json::to_value(&rotated).unwrap(),
+                key_log_head: None,
+                seq: 2,
+                method_evidence: serde_json::json!({"mode": "test"}),
+                fetched_at: now,
+                expires_at: now,
+                updated_at: now,
+            })
+            .expect("rotated document caches");
+
+        verify_principal_authorized_jws_ed25519_async(
+            payload,
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect_err("a rotated-away key must not keep verifying from a stale binding");
+    }
+
+    // §3 / §4 row 4 — historical replay: an Event accepted under the old
+    // version still verifies against the document pinned at that time, while the
+    // current document refuses the same signature.
+    #[test]
+    fn historical_replay_uses_the_pinned_document_not_the_current_one() {
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let old_key = SigningKey::from_bytes(&[9u8; 32]);
+        let new_key = SigningKey::from_bytes(&[10u8; 32]);
+        let pinned = document_for(&did, &verification_method, &old_key);
+        let current = document_for(&did, &verification_method, &new_key);
+
+        let payload = b"historical-event";
+        let jws = signed(&old_key, payload);
+        verify_jws_with_pinned_document(payload, &jws, &verification_method, did.as_str(), &pinned)
+            .expect("the pinned historical document still authenticates the old Event");
+        verify_jws_with_pinned_document(
+            payload,
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &current,
+        )
+        .expect_err("the rotated current document must not accept the old key");
+    }
+
+    // ========================================================================
+    // Event proof protected-header hygiene (`encoding.md` §6)
+    //
+    // These are the regression tests for routing Event proofs through the
+    // generic detached-JWS verifier. Each one pairs the Event-profile rejection
+    // with a control showing the **generic** profile accepts the very same JWS,
+    // so a failure can only mean the Event path degraded back to the generic
+    // one — not that the fixture signature happens to be broken.
+    // ========================================================================
+
+    /// Sign `payload` as a detached JWS whose protected header is exactly
+    /// `header`, including members the Event profile forbids.
+    fn detached_jws_with_header(
+        key: &SigningKey,
+        header: &serde_json::Value,
+        payload: &[u8],
+    ) -> String {
+        use base64::Engine as _;
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use ed25519_dalek::Signer as _;
+
+        let header_b64 = URL_SAFE_NO_PAD
+            .encode(arkret_canonical::canonical_json_bytes(header).expect("canonical header"));
+        let signing_input = format!("{header_b64}.{}", URL_SAFE_NO_PAD.encode(payload));
+        let signature = key.sign(signing_input.as_bytes());
+        format!(
+            "{header_b64}..{}",
+            URL_SAFE_NO_PAD.encode(signature.to_bytes())
+        )
+    }
+
+    /// A minimal but genuine Event proof: real envelope bytes, an
+    /// `event_digest` actually derived from them, and the canonical
+    /// proof-binding transcript the JWS has to sign.
+    fn event_proof_fixture(verification_method: &str) -> (Vec<u8>, arkret_wire::Proof) {
+        let envelope_bytes =
+            br#"{"actor_id":"did:web:principal.example","kind":"ak.test.event"}"#.to_vec();
+        let event_digest =
+            Hash::new(arkret_canonical::sha256_digest(&envelope_bytes)).expect("event digest");
+        let proof = build_proof_envelope(
+            "detached_jws",
+            "EdDSA",
+            arkret_wire::DidUrl::new(verification_method.to_owned()).expect("DID URL"),
+            event_digest,
+            None,
+            None,
+            "",
+        );
+        (envelope_bytes, proof)
+    }
+
+    /// The Event protected header is `deny_unknown_fields` and knows no `kid`.
+    /// The generic header type accepts `kid` and merely reports it, so a proof
+    /// carrying one used to sail through this call site.
+    #[tokio::test]
+    async fn an_event_proof_with_a_kid_protected_header_is_rejected() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let document = document_for(&did, &verification_method, &key);
+        seed_binding(&state, &did, &verification_method, &document);
+
+        let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
+        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        let jws = detached_jws_with_header(
+            &key,
+            &serde_json::json!({"alg": "EdDSA", "kid": verification_method}),
+            &binding_bytes,
+        );
+        proof.jws = jws.clone();
+
+        // Control: the signature is valid and the generic profile takes it.
+        verify_principal_authorized_jws_ed25519_async(
+            &binding_bytes,
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect("the generic detached-JWS profile accepts a `kid` protected header");
+
+        // The Event profile must not.
+        verify_principal_authorized_event_proof_async(
+            &proof,
+            &envelope_bytes,
+            &did,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect_err("an Event proof protected header may not carry `kid`");
+    }
+
+    /// The Event profile compares `header.alg` with `proof.alg`. The generic
+    /// profile never sees `proof.alg` at all, so a proof could declare one
+    /// algorithm while its header declared another.
+    #[tokio::test]
+    async fn an_event_proof_whose_protected_alg_disagrees_with_proof_alg_is_rejected() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let document = document_for(&did, &verification_method, &key);
+        seed_binding(&state, &did, &verification_method, &document);
+
+        let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
+        // `alg` is not part of the signed binding object, so a mismatch is
+        // representable on the wire: only the Event profile catches it.
+        proof.alg = "ES256".to_owned();
+        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        let jws =
+            detached_jws_with_header(&key, &serde_json::json!({"alg": "EdDSA"}), &binding_bytes);
+        proof.jws = jws.clone();
+
+        // Control: the generic profile validates the header in isolation.
+        verify_principal_authorized_jws_ed25519_async(
+            &binding_bytes,
+            &jws,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect("the generic profile never compares the protected header to a proof alg");
+
+        verify_principal_authorized_event_proof_async(
+            &proof,
+            &envelope_bytes,
+            &did,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect_err("Event proof `alg` and the protected header alg must agree");
+    }
+
+    /// Positive control for the two rejections above: with a clean
+    /// `{"alg":"EdDSA"}` header the same fixture verifies, so the rejections
+    /// are about header hygiene and nothing else.
+    #[tokio::test]
+    async fn a_well_formed_event_proof_verifies_against_the_accepted_binding() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let document = document_for(&did, &verification_method, &key);
+        seed_binding(&state, &did, &verification_method, &document);
+
+        let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
+        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        proof.jws =
+            detached_jws_with_header(&key, &serde_json::json!({"alg": "EdDSA"}), &binding_bytes);
+
+        verify_principal_authorized_event_proof_async(
+            &proof,
+            &envelope_bytes,
+            &did,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect("a well-formed Event proof verifies through the accepted binding");
+    }
+
+    /// The Event verifier re-derives `event_digest` from the envelope bytes it
+    /// is handed, so a proof whose transcript names a different Event cannot be
+    /// replayed onto this one even with a valid signature.
+    #[tokio::test]
+    async fn an_event_proof_bound_to_other_envelope_bytes_is_rejected() {
+        let state = state_without_any_resolver();
+        let did = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let verification_method = format!("{did}#control-1");
+        let key = SigningKey::from_bytes(&[9u8; 32]);
+        let document = document_for(&did, &verification_method, &key);
+        seed_binding(&state, &did, &verification_method, &document);
+
+        let (_, mut proof) = event_proof_fixture(&verification_method);
+        let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
+        proof.jws =
+            detached_jws_with_header(&key, &serde_json::json!({"alg": "EdDSA"}), &binding_bytes);
+
+        verify_principal_authorized_event_proof_async(
+            &proof,
+            br#"{"actor_id":"did:web:principal.example","kind":"ak.other.event"}"#,
+            &did,
+            &verification_method,
+            did.as_str(),
+            &state,
+        )
+        .await
+        .expect_err("the proof transcript is bound to the Event it was signed over");
+    }
 }

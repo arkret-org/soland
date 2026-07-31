@@ -260,7 +260,13 @@ fn build_contact_envelope(
         kind: proof_kind::DETACHED_JWS.to_owned(),
         alg: "EdDSA".to_owned(),
         proof_purpose: None,
-        verification_method: format!("{issuer}#device"),
+        verification_method: arkret_wire::DidUrl::new(format!("{issuer}#device")).map_err(
+            |error| {
+                AppError::internal(format!(
+                    "contact federation verification method is invalid: {error}"
+                ))
+            },
+        )?,
         event_digest,
         created_at: event.created_at,
         domain: None,

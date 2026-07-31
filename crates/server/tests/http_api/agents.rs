@@ -134,7 +134,9 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         &genesis_projector,
     )
     .unwrap();
-    let verification_method = format!("{controller}#{CONTROLLER_DEVICE_ID}");
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
+            .expect("fixture verification method is a DID URL");
     let bootstrap_signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
         actor.clone(),
@@ -143,7 +145,10 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     arkret_signatures::sign_event(
         &mut bootstrap,
         &bootstrap_signer,
-        "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
+        &arkret_wire::DidUrl::new(
+            "did:key:z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ#z6MkvMW3tjuvW6PqYiX8dLRNwZWyGhxe3biRDjA4ZPiBaFaJ",
+        )
+        .unwrap(),
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .unwrap();
@@ -463,7 +468,9 @@ async fn provision_agent_sdk_commit_attempt(
     let now =
         chrono::DateTime::<chrono::Utc>::from_timestamp(chrono::Utc::now().timestamp(), 0).unwrap();
     let timestamp_hex = format!("{:012x}", now.timestamp_millis());
-    let verification_method = format!("{controller}#{CONTROLLER_DEVICE_ID}");
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{controller}#{CONTROLLER_DEVICE_ID}"))
+            .expect("fixture verification method is a DID URL");
     let signer = arkret_signatures::Ed25519PayloadSigner::new(
         SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED),
         controller_id,

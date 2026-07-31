@@ -316,7 +316,11 @@ fn aggregate_and_publish(state: &AppState, record: &MultisigPendingRecord) -> Re
             .map_err(|e| format!("partial signature decode failed: {e}"))?;
         let did = Did::new(signer_did.clone())
             .map_err(|e| format!("invalid signer_did {signer_did}: {e}"))?;
-        let p = PartialSignature::new(did, sig_bytes, kid.to_owned());
+        // §2.2 — the partial `kid` is a concrete verification method; a bare
+        // DID or malformed value fails closed instead of being aggregated.
+        let kid = arkret_wire::DidUrl::new(kid.to_owned())
+            .map_err(|e| format!("partial from {signer_did} has a non-DID-URL kid: {e}"))?;
+        let p = PartialSignature::new(did, sig_bytes, kid);
         aggregator
             .add_partial(p)
             .map_err(|e| format!("aggregator add_partial: {e}"))?;

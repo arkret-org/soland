@@ -228,10 +228,12 @@ fn key_backup_verification_method_matches_device_key(
     device_public_key: &str,
     verification_method: &str,
 ) -> bool {
+    // `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`; a bare DID never names a concrete
+    // verification method.
     verification_method == format!("{principal_id}#{device_id}")
         || verification_method == format!("did:key:{device_public_key}#{device_public_key}")
         || verification_method == format!("did:key:{device_public_key}#device")
-        || verification_method == format!("did:key:{device_public_key}")
 }
 
 pub(super) fn key_backup_canonical_digest_without_signature(
@@ -553,7 +555,38 @@ pub(super) async fn verify_key_backup_unlock_proof(
 
 #[cfg(test)]
 mod tests {
-    use super::proof_kind_requires_recovery_session;
+    use super::{
+        key_backup_verification_method_matches_device_key, proof_kind_requires_recovery_session,
+    };
+
+    // did-usage-and-verification.md §2.2 — a proof `verification_method` MUST
+    // be a DID URL with a `#fragment`. A bare `did:key:<mb>` names no concrete
+    // verification method and must not satisfy the key-backup device binding.
+    #[test]
+    fn key_backup_verification_method_rejects_bare_did_key() {
+        let principal = "did:webvh:z6mkfixture:alice.example";
+        let device = "ak:device:primary";
+        let key = "z6MkBackup";
+
+        for accepted in [
+            format!("{principal}#{device}"),
+            format!("did:key:{key}#{key}"),
+            format!("did:key:{key}#device"),
+        ] {
+            assert!(key_backup_verification_method_matches_device_key(
+                principal, device, key, &accepted
+            ));
+        }
+        assert!(!key_backup_verification_method_matches_device_key(
+            principal,
+            device,
+            key,
+            &format!("did:key:{key}"),
+        ));
+        assert!(!key_backup_verification_method_matches_device_key(
+            principal, device, key, principal
+        ));
+    }
 
     // key-management.md §7.7.1 / §7.8 — recovery-ceremony proof kinds fail
     // closed when the claimed recovery session record is absent; only the

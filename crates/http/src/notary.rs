@@ -540,7 +540,7 @@ impl NotaryWorker {
         // canonical bytes, keeping the signature byte-stable.
         let zero_seal_id = SealId::new(format!("ak:seal:sha256:{}", "00".repeat(32)))
             .expect("zero SealId is well-formed");
-        let zero_sig = zero_notary_sig_placeholder()?;
+        let zero_sig = zero_notary_sig_placeholder(&self.service_id)?;
         let mut seal = Seal {
             id: zero_seal_id,
             realm_id: realm_id.clone(),
@@ -686,7 +686,7 @@ impl NotaryWorker {
             covered_event_digests: view.covered_event_digests.clone(),
             previous_state_root: None,
             previous_digest_algorithm: None,
-            notary_signature: NotarySig::Single(zero_notary_sig_placeholder()?),
+            notary_signature: NotarySig::Single(zero_notary_sig_placeholder(&self.service_id)?),
             sealed_at,
             hlc: Hlc::new(state.hlc().now())
                 .map_err(|error| NotaryError::Construction(format!("invalid HLC: {error}")))?,
@@ -1174,8 +1174,15 @@ impl NotaryWorker {
             .map_err(|e| NotaryError::Construction(format!("sign_jws_ed25519: {e}")))?;
 
         Ok(PayloadSignature {
+            extra: Default::default(),
             alg: "EdDSA".to_owned(),
-            verification_method: format!("{}#notary-key", self.service_id),
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#notary-key",
+                self.service_id
+            ))
+            .map_err(|e| {
+                NotaryError::Construction(format!("service notary verification method: {e}"))
+            })?,
             payload_digest,
             created_at: chrono::Utc::now(),
             jws,
@@ -1224,9 +1231,17 @@ fn notary_cell_ref(_realm_id: &RealmId) -> Result<CellRef, arkret_identifiers::I
     CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
 }
 
-fn zero_notary_sig_placeholder() -> Result<PayloadSignature, NotaryError> {
+fn zero_notary_sig_placeholder(service_id: &str) -> Result<PayloadSignature, NotaryError> {
     let payload_digest = Hash::new(format!("sha256:{}", "00".repeat(32)))
         .map_err(|e| NotaryError::Construction(format!("zero payload hash: {e}")))?;
+    // `verification_method` is a typed DID URL, so the placeholder cannot be
+    // the empty string any more. It carries the same method the real
+    // signature will use; the whole value is still excluded from
+    // `canonical_bytes_for_id` and overwritten before the Seal reaches the wire.
+    let verification_method = arkret_wire::DidUrl::new(format!("{service_id}#notary-key"))
+        .map_err(|e| {
+            NotaryError::Construction(format!("service notary verification method: {e}"))
+        })?;
     // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
     // JWS shape is `header..signature`, with the SDK-canonical EdDSA
     // header so the placeholder is at least well-typed for the
@@ -1236,8 +1251,9 @@ fn zero_notary_sig_placeholder() -> Result<PayloadSignature, NotaryError> {
     let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
     let zero_sig_b64 = URL_SAFE_NO_PAD.encode([0u8; 64]);
     Ok(PayloadSignature {
+        extra: Default::default(),
         alg: "EdDSA".to_owned(),
-        verification_method: String::new(),
+        verification_method,
         payload_digest,
         created_at: chrono::Utc::now(),
         jws: format!("{header_b64}..{zero_sig_b64}"),

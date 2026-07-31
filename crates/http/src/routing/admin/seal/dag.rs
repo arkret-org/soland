@@ -54,11 +54,13 @@ pub(crate) async fn admin_get_seal_dag(
             continue;
         };
         let signers: Vec<String> = match &seal.notary_signature {
-            arkret_wire::seal::NotarySig::Single(sig) => vec![sig.verification_method.clone()],
+            arkret_wire::seal::NotarySig::Single(sig) => {
+                vec![sig.verification_method.as_str().to_owned()]
+            }
             arkret_wire::seal::NotarySig::Multi(multi) => multi
                 .signatures
                 .iter()
-                .map(|s| s.verification_method.clone())
+                .map(|s| s.verification_method.as_str().to_owned())
                 .collect(),
             arkret_wire::seal::NotarySig::Threshold(threshold) => threshold
                 .signers

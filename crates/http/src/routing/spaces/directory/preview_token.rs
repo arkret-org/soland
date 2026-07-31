@@ -159,9 +159,9 @@ pub(super) fn preview_token_signature_valid(state: &AppState, claim: &Value) -> 
     let Some(verification_method) = proof.get("verification_method").and_then(Value::as_str) else {
         return false;
     };
-    if verification_method != state.service_id()
-        && !verification_method.starts_with(&format!("{}#", state.service_id()))
-    {
+    // `did-usage-and-verification.md` §2.2: the method MUST be a DID URL under
+    // the issuing service, never the bare service DID.
+    if !verification_method.starts_with(&format!("{}#", state.service_id())) {
         return false;
     }
     let mut unsigned = claim.clone();
@@ -234,3 +234,92 @@ pub(super) fn policy_array_contains(policy: &Value, field: &str, expected: &str)
 // to SDK `canonical_sha256`); re-exported so directory call sites keep
 // referencing `canonical_value_digest`.
 pub(super) use crate::canonical_value_digest;
+
+#[cfg(test)]
+mod tests {
+    use ed25519_dalek::Signer as _;
+
+    use super::*;
+
+    fn state() -> AppState {
+        AppState::new(
+            crate::config::AppConfig::test_default(),
+            soland_storage_postgres::Db { pool: None },
+        )
+    }
+
+    /// A preview-token claim signed by the service notary key, with the proof
+    /// `verification_method` supplied by the caller so a test can vary only
+    /// that field.
+    fn signed_claim(state: &AppState, verification_method: &str) -> Value {
+        let unsigned = json!({
+            "iss": state.service_id(),
+            "address_link_kind": "preview",
+            "nonce": "preview-token-test-nonce",
+            "aud": "link_token_holder",
+        });
+        let canonical_bytes = canonical::canonical_json_bytes(&unsigned).unwrap();
+        let payload_digest = canonical::sha256_digest(&canonical_bytes);
+        let protected_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+        let signing_input = format!(
+            "{protected_b64}.{}",
+            URL_SAFE_NO_PAD.encode(&canonical_bytes)
+        );
+        let signature = state.notary_signing_key().sign(signing_input.as_bytes());
+        let mut claim = unsigned;
+        claim.as_object_mut().unwrap().insert(
+            "proof".to_owned(),
+            json!({
+                "kind": "detached_jws",
+                "alg": "EdDSA",
+                "verification_method": verification_method,
+                "payload_digest": payload_digest,
+                "jws": format!(
+                    "{protected_b64}..{}",
+                    URL_SAFE_NO_PAD.encode(signature.to_bytes())
+                ),
+            }),
+        );
+        claim
+    }
+
+    // did-usage-and-verification.md §2.2 — `proof.verification_method` MUST be
+    // a `#fragment` DID URL rooted in the issuing service. The bare service DID
+    // names no concrete verification method.
+    #[test]
+    fn preview_token_signature_requires_a_service_did_url() {
+        let state = state();
+        let service_id = state.service_id().clone();
+
+        assert!(preview_token_signature_valid(
+            &state,
+            &signed_claim(&state, &format!("{service_id}#notary-1")),
+        ));
+        assert!(!preview_token_signature_valid(
+            &state,
+            &signed_claim(&state, &service_id),
+        ));
+        assert!(!preview_token_signature_valid(
+            &state,
+            &signed_claim(&state, &format!("{service_id}.evil#notary-1")),
+        ));
+    }
+
+    // A missing or non-string `verification_method` must fail closed.
+    #[test]
+    fn preview_token_signature_fails_closed_without_a_verification_method() {
+        let state = state();
+        let service_id = state.service_id().clone();
+
+        let mut claim = signed_claim(&state, &format!("{service_id}#notary-1"));
+        claim["proof"]
+            .as_object_mut()
+            .unwrap()
+            .remove("verification_method");
+        assert!(!preview_token_signature_valid(&state, &claim));
+
+        let mut claim = signed_claim(&state, &format!("{service_id}#notary-1"));
+        claim["proof"]["verification_method"] = json!(42);
+        assert!(!preview_token_signature_valid(&state, &claim));
+    }
+}

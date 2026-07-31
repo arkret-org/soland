@@ -1754,7 +1754,16 @@ fn sign_event_batch_receipt(
             format!("Event Batch Receipt digest failed: {error}"),
         )
     })?;
-    let verification_method = format!("{}#notary-key", state.service_id());
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("service notary verification method is invalid: {error}"),
+                )
+            },
+        )?;
     let binding = json!({
         "context": "ak.receipt-proof-v1",
         "payload_digest": receipt_digest.as_str(),
@@ -1825,7 +1834,8 @@ mod tests {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
             alg: "EdDSA".to_owned(),
             proof_purpose: None,
-            verification_method: verification_method.to_owned(),
+            verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
+                .expect("fixture verification method is a DID URL"),
             event_digest: digest,
             created_at: event.created_at,
             domain: None,
@@ -2015,7 +2025,7 @@ mod tests {
                 kind: "detached_jws".to_owned(),
                 alg: "EdDSA".to_owned(),
                 proof_purpose: None,
-                verification_method: format!("{actor}#key-1"),
+                verification_method: arkret_wire::DidUrl::new(format!("{actor}#key-1")).unwrap(),
                 event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64)))
                     .unwrap(),
                 created_at: event.created_at,
