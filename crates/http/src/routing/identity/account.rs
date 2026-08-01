@@ -1421,7 +1421,7 @@ async fn direct_conversation_resolve(
         });
     }
     if let Some((binding, materialization_draft)) =
-        pending_direct_materialization_renewed(state, &pair_key, &session.actor, &peer).await?
+        pending_direct_materialization_reusable(state, &pair_key).await?
     {
         return json_ok(direct_resolve_response(
             binding,

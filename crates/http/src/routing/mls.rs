@@ -1353,8 +1353,19 @@ async fn claim_keypackages_for_request_inner(
     let trust_selector =
         current_keypackage_claim_trust_selector(state, &target_principal_did, &target_device_ids)
             .await?;
-    let available_before = available_keypackage_count(
-        state,
+    // The durable KeyPackage store is the single CAS authority.  Projection
+    // hydration can lag a previously committed claim (notably after a process
+    // restart), so selecting from projection state may choose an already
+    // claimed row and turn every Direct Conversation retry into a permanent
+    // `mls_keypackage_already_claimed` conflict.  Snapshot the authority once
+    // and use that same view for both selection and the self-visible count.
+    let durable_keypackages = state
+        .mls_key_packages()
+        .key_packages()
+        .await
+        .map_err(|error| AppError::internal(format!("KeyPackage authority snapshot: {error}")))?;
+    let available_before = available_keypackage_count_from_records(
+        &durable_keypackages,
         &target_principal_id,
         if target_device_ids.len() == 1 {
             target_device_ids.iter().next().map(String::as_str)
@@ -1374,7 +1385,7 @@ async fn claim_keypackages_for_request_inner(
         .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
         .unwrap_or_else(|| body.intended_realm_id.to_string());
     let selected_keypackage = {
-        let keypackages = state.projections().mls_key_package_records();
+        let keypackages = &durable_keypackages;
         let matching_claim = allow_same_group_recovery
             .then(|| {
                 keypackages
@@ -2782,10 +2793,25 @@ fn available_keypackage_count(
     trust_selector: Option<&KeyPackageTrustSelector>,
     intended_realm_id: Option<&str>,
 ) -> u64 {
+    let keypackages = state.projections().mls_key_package_records();
+    available_keypackage_count_from_records(
+        &keypackages,
+        actor_id,
+        device_id,
+        trust_selector,
+        intended_realm_id,
+    )
+}
+
+fn available_keypackage_count_from_records(
+    keypackages: &[MlsKeyPackageRow],
+    actor_id: &str,
+    device_id: Option<&str>,
+    trust_selector: Option<&KeyPackageTrustSelector>,
+    intended_realm_id: Option<&str>,
+) -> u64 {
     let now_secs = now().timestamp();
-    state
-        .projections()
-        .mls_key_package_records()
+    keypackages
         .iter()
         .filter(|kp| kp.actor_id == actor_id)
         .filter(|kp| device_id.is_none_or(|device_id| kp.device_id == device_id))

@@ -308,3 +308,49 @@ Reproduced on a clean tree at `f3dca339` with all local work stashed, so it is n
 from the federation-outbox change: `cargo test -p soland --test consent_cells` — 2 of 9 fail with
 `frontier_unavailable: accepted Control Events are still awaiting the durable control-seal
 coordinator`. Same two cases the fixture-Realm entry above also leaves open.
+
+## 2026-08-01 — authorization-lease pre-admission discarded the staged Realm root
+
+- Surface: `ak.self.authorization_leases.command.issue` for an ordinary Realm genesis unit,
+  including the two-member Direct Conversation bootstrap.
+- Regression: `anchor_context` validated the complete ordered genesis unit and derived its
+  authority-root value, but then stored `authority_root: None` in the validation context. A
+  follow-up such as the Direct Conversation peer `ak.member.state{join}` therefore failed lease
+  pre-admission with `realm_authority_controller_mismatch` and the misleading message that its
+  staged root proof was outside its own genesis unit. The client never reached the DM route.
+- Correction: ordinary anchor lease contexts now retain the exact root derived by the shared
+  bootstrap validator. PCR anchor forms continue to carry no ordinary-Realm staged root.
+- Prevention dimension: every read-only pre-admission path must pass the same complete bootstrap
+  context as durable admission. A regression test now asserts that an authorized follow-up keeps
+  the genesis controller and registry basis in the lease context.
+
+## 2026-08-01 — unfinished legacy DM drafts reused a poisoned MLS Realm
+
+- Surface: retrying `resolve(create=true)` after an older client had accepted a Direct
+  Conversation MLS Commit without its epoch CAS predecessor precondition.
+- Regression: durable draft renewal intentionally reused the same immutable Realm/group, but a
+  legacy Commit without `mls_epoch.head_eq(base_epoch)` had already joined epoch 0 and epoch 1 as
+  siblings. The epoch cell was permanently Bottom, so every click replayed the same draft and
+  returned `state_mismatch` instead of opening chat.
+- Correction: pending Direct Conversation recovery now recognizes only an accepted Commit for the
+  reserved group that lacks the exact epoch `head_eq(base_epoch)` guard, removes that unfinished
+  reservation, and lets the resolver allocate fresh Realm/group identifiers. Valid interrupted
+  drafts keep their existing idempotent renewal behavior.
+- Prevention dimension: producer fixes need a migration path for durable partially-authored state.
+  A focused regression test distinguishes the missing and wrong epoch guard from the canonical
+  exact precondition so recovery cannot silently discard healthy drafts.
+
+## 2026-08-01 — expired DM drafts attempted to renew a single-use KeyPackage claim
+
+- Surface: retrying `resolve(create=true)` after a healthy Direct Conversation materialization
+  draft's five-minute claim window expired.
+- Regression: recovery changed `expires_at` and called the claim path again with the same
+  deterministic `(requester, claim_nonce)` and reserved Realm/group. That is neither an exact
+  idempotent replay nor a legal KeyPackage transition, so the store returned
+  `mls_keypackage_already_claimed` and every subsequent click stayed stuck at 409.
+- Correction: unexpired drafts are returned byte-identically without another claim. Expired drafts
+  now remove only their pending reservation and let the resolver allocate a new candidate with new
+  Realm/group identifiers and claim nonce; the expired single-use package remains unusable.
+- Prevention dimension: self-claim idempotency and KeyPackage lifecycle are one invariant: the same
+  claim identity may only replay the original byte-exact outcome, and `claimed` may advance only to
+  `consumed` or terminal `revoked`, never to a locally invented renewal state.

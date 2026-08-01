@@ -40,6 +40,68 @@ fn install_active_direct_binding_fixture(
     assert!(active_direct_binding(state, pair_key).is_some());
 }
 
+#[test]
+fn legacy_direct_commit_detection_requires_exact_epoch_cas_precondition() {
+    let group_id = "ak:mls_group:019fbba2-0000-7000-8000-000000000001";
+    let epoch_cell = arkret_state::mls_move::mls_epoch_cell_id(group_id).unwrap();
+    let envelope = |preconditions: Value| {
+        json!({
+            "kind": arkret_wire::EventKind::MLS_COMMIT,
+            "payload": {
+                "mls_group_id": group_id,
+                "base_epoch": 0,
+                "next_epoch": 1
+            },
+            "preconditions": preconditions
+        })
+    };
+
+    assert!(legacy_direct_commit_missing_epoch_precondition(
+        &envelope(json!([])),
+        group_id
+    ));
+    assert!(legacy_direct_commit_missing_epoch_precondition(
+        &envelope(json!([{
+            "cell": epoch_cell.as_str(),
+            "predicate": { "op": "head_eq", "value": 7 }
+        }])),
+        group_id
+    ));
+    assert!(!legacy_direct_commit_missing_epoch_precondition(
+        &envelope(json!([{
+            "cell": epoch_cell.as_str(),
+            "predicate": { "op": "head_eq", "value": 0 }
+        }])),
+        group_id
+    ));
+}
+
+#[test]
+fn expired_direct_materialization_allocates_a_fresh_candidate() {
+    let observed_at = chrono::Utc::now();
+    assert_eq!(
+        pending_direct_materialization_disposition(
+            observed_at + chrono::Duration::seconds(1),
+            observed_at,
+        ),
+        PendingDirectMaterializationDisposition::ReuseByteIdentical,
+        "an unexpired draft must be returned byte-identically without another claim",
+    );
+    assert_eq!(
+        pending_direct_materialization_disposition(observed_at, observed_at),
+        PendingDirectMaterializationDisposition::AllocateFreshCandidate,
+        "the claim is no longer reusable at its expiry boundary",
+    );
+    assert_eq!(
+        pending_direct_materialization_disposition(
+            observed_at - chrono::Duration::seconds(1),
+            observed_at,
+        ),
+        PendingDirectMaterializationDisposition::AllocateFreshCandidate,
+        "an expired single-use claim must not be renewed for the same Realm/group",
+    );
+}
+
 #[tokio::test]
 async fn remote_direct_claim_draft_is_durable_and_transport_bound() {
     let peer_service_id = "did:web:beta.example";

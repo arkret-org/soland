@@ -238,13 +238,14 @@ fn direct_binding_payload_from_operation(
     arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
     &'static str,
 > {
-    let mut payload = operation.payload.clone();
-    let object = payload
-        .as_object_mut()
-        .ok_or("direct_conversation_binding_invalid")?;
-    for projection_field in ["event_id", "sender", "hlc"] {
-        object.remove(projection_field);
-    }
+    // The Event-to-Operation adapter deliberately exposes receiver-owned
+    // envelope context (Seal/CAS fields as well as identity/HLC fields) to
+    // reducers.  The canonical DirectConversationBoundPayload is closed, so
+    // parse the same stripped wire payload used by the schema validator.  A
+    // hand-maintained subset here regressed as soon as direct authoring began
+    // attaching `seal_ref`, `seal_basis` and `preconditions`.
+    let payload =
+        crate::routing::events::operations::projection_context_stripped_payload(&operation.payload);
     serde_json::from_value(payload).map_err(|_| "direct_conversation_binding_invalid")
 }
 
@@ -1034,23 +1035,102 @@ pub(crate) fn pending_direct_materialization(
     Some((binding, draft))
 }
 
-/// [`pending_direct_materialization`], renewing the stored draft's KeyPackage
-/// claim when its window has lapsed.
+pub(super) fn legacy_direct_commit_missing_epoch_precondition(
+    envelope: &Value,
+    mls_group_id: &str,
+) -> bool {
+    if envelope.get("kind").and_then(Value::as_str) != Some(arkret_wire::EventKind::MLS_COMMIT)
+        || envelope
+            .get("payload")
+            .and_then(|payload| {
+                payload
+                    .get("mls_group_id")
+                    .or_else(|| payload.get("group_id"))
+            })
+            .and_then(Value::as_str)
+            != Some(mls_group_id)
+    {
+        return false;
+    }
+    let Some(base_epoch) = envelope
+        .pointer("/payload/base_epoch")
+        .and_then(Value::as_u64)
+    else {
+        return false;
+    };
+    let Ok(epoch_cell) = arkret_state::mls_move::mls_epoch_cell_id(mls_group_id) else {
+        return false;
+    };
+    !envelope
+        .get("preconditions")
+        .and_then(Value::as_array)
+        .is_some_and(|preconditions| {
+            preconditions.iter().any(|precondition| {
+                precondition.get("cell").and_then(Value::as_str) == Some(epoch_cell.as_str())
+                    && precondition
+                        .pointer("/predicate/op")
+                        .and_then(Value::as_str)
+                        == Some("head_eq")
+                    && precondition
+                        .pointer("/predicate/value")
+                        .and_then(Value::as_u64)
+                        == Some(base_epoch)
+            })
+        })
+}
+
+async fn pending_direct_materialization_is_legacy_poisoned(
+    state: &AppState,
+    draft: &arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
+) -> Result<bool, AppError> {
+    let realm_id = draft.realm_event.realm_id.as_str();
+    let mls_group_id = draft.mls_group_id.as_str();
+    let records = state
+        .event_queries()
+        .realm_events_newest_first(realm_id)
+        .await
+        .map_err(|error| {
+            AppError::internal(format!(
+                "load pending direct materialization events failed: {error}"
+            ))
+        })?;
+    Ok(records.iter().any(|record| {
+        record.kind == arkret_wire::EventKind::MLS_COMMIT
+            && legacy_direct_commit_missing_epoch_precondition(&record.envelope, mls_group_id)
+    }))
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum PendingDirectMaterializationDisposition {
+    ReuseByteIdentical,
+    AllocateFreshCandidate,
+}
+
+pub(super) fn pending_direct_materialization_disposition(
+    expires_at: chrono::DateTime<chrono::Utc>,
+    observed_at: chrono::DateTime<chrono::Utc>,
+) -> PendingDirectMaterializationDisposition {
+    if expires_at > observed_at {
+        PendingDirectMaterializationDisposition::ReuseByteIdentical
+    } else {
+        PendingDirectMaterializationDisposition::AllocateFreshCandidate
+    }
+}
+
+/// Return a still-usable [`pending_direct_materialization`] without mutating
+/// its immutable authoring draft.
 ///
 /// An authoring client interrupted mid-materialization leaves the binding in
-/// `authoring_required` with a durable draft whose claim expires after five
-/// minutes. Returning the stale draft verbatim dead-locks the pair forever
-/// (the client fails closed on `draft expired` on every retry). Renew the
-/// claim for the SAME reserved realm/group — the reducer treats a same-group
-/// re-claim as idempotent renewal, so no cross-group init-key reuse is
-/// possible — persist the refreshed draft, and hand it back so the client
-/// resumes where it stopped. Every resolve entry point that surfaces a stored
-/// draft MUST go through this helper.
-pub(crate) async fn pending_direct_materialization_renewed(
+/// `authoring_required` with a durable draft. While its claim is unexpired,
+/// resolver retries MUST return that draft byte-identically and MUST NOT claim
+/// again. Once the claim expires, the single-use KeyPackage is revoked and
+/// cannot be renewed or returned to `published`; discard the pending
+/// reservation so the resolver can allocate a fresh Realm/group/claim nonce.
+/// Every resolve entry point that surfaces a stored draft MUST go through this
+/// helper.
+pub(crate) async fn pending_direct_materialization_reusable(
     state: &AppState,
     pair_key: &str,
-    actor: &str,
-    peer: &str,
 ) -> Result<
     Option<(
         DirectConversationBindingRecord,
@@ -1061,39 +1141,35 @@ pub(crate) async fn pending_direct_materialization_renewed(
     let Some((binding, draft)) = pending_direct_materialization(state, pair_key) else {
         return Ok(None);
     };
-    if draft.expires_at > now() {
-        return Ok(Some((binding, draft)));
+    // Clients released before the MLS CAS-precondition fix could get as far as
+    // accepting genesis and a sibling Commit without `head_eq(base_epoch)`.
+    // That permanently puts the reserved Realm's epoch cell in Bottom, so
+    // replaying or renewing the same draft can never finish. Discard only this
+    // recognizable unfinished legacy reservation; the next resolve allocates
+    // fresh immutable Realm/group identifiers and materializes with the fixed
+    // producer.
+    if pending_direct_materialization_is_legacy_poisoned(state, &draft).await? {
+        tracing::warn!(
+            %pair_key,
+            realm_id = %binding.realm_id,
+            "discarding legacy direct materialization whose MLS Commit omitted the epoch CAS precondition"
+        );
+        rollback_reserved_direct_binding(state, pair_key, &binding).await;
+        return Ok(None);
     }
-    let mut draft = draft;
-    let realm_id = draft.realm_event.realm_id.to_string();
-    let mls_group_id = draft.mls_group_id.as_str().to_owned();
-    let claim = claim_direct_keypackage(
-        state,
-        actor,
-        peer,
-        &realm_id,
-        &binding.main_strand_id,
-        &mls_group_id,
-    )
-    .await?;
-    draft.expires_at = claim.expires_at;
-    draft.claimed_keypackage = claim;
-    let mut refreshed = binding;
-    refreshed.authoring_context = Some(serde_json::to_value(&draft).map_err(|error| {
-        AppError::internal(format!(
-            "renewed direct materialization draft encode failed: {error}"
-        ))
-    })?);
-    refreshed.updated_at = now();
-    state
-        .contacts()
-        .save_direct_binding(pair_key, refreshed.clone())
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("save renewed direct materialization: {error}"))
-        })?;
-    publish_reserved_direct_binding(state, pair_key, &refreshed)?;
-    Ok(Some((refreshed, draft)))
+    match pending_direct_materialization_disposition(draft.expires_at, now()) {
+        PendingDirectMaterializationDisposition::ReuseByteIdentical => {
+            return Ok(Some((binding, draft)));
+        }
+        PendingDirectMaterializationDisposition::AllocateFreshCandidate => {}
+    }
+    tracing::warn!(
+        %pair_key,
+        realm_id = %binding.realm_id,
+        "discarding expired direct materialization instead of re-claiming its single-use KeyPackage"
+    );
+    rollback_reserved_direct_binding(state, pair_key, &binding).await;
+    Ok(None)
 }
 
 async fn execute_remote_peer_claim(
@@ -1516,8 +1592,7 @@ pub(crate) async fn create_direct_binding_with_realm(
     ),
     AppError,
 > {
-    if let Some((binding, draft)) =
-        pending_direct_materialization_renewed(state, pair_key, actor, peer).await?
+    if let Some((binding, draft)) = pending_direct_materialization_reusable(state, pair_key).await?
     {
         return Ok((binding, false, Some(draft)));
     }
@@ -2471,7 +2546,9 @@ pub(super) fn direct_strand_create_operation(
 
 #[cfg(test)]
 mod tests {
-    use super::accepted_contact_authorization_refs_match;
+    use serde_json::json;
+
+    use super::{accepted_contact_authorization_refs_match, direct_binding_payload_from_operation};
 
     #[test]
     fn accepted_contact_authorization_requires_exact_request_and_response_refs() {
@@ -2498,5 +2575,59 @@ mod tests {
             &verified,
             &[request.clone(), request],
         ));
+    }
+
+    #[test]
+    fn direct_binding_parser_ignores_receiver_projection_context() {
+        let payload = json!({
+            "pair_key": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+            "participants_unordered": ["did:web:alice.example", "did:web:agent.example"],
+            "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000101",
+            "main_strand_id": "ak:strand:0196419b-0000-7000-8000-000000000201",
+            "authorization_basis": {
+                "kind": "managed_agent_controller",
+                "event_refs": [
+                    "ak:event:0196419b-0000-7000-8000-000000000311",
+                    "ak:event:0196419b-0000-7000-8000-000000000312",
+                    "ak:event:0196419b-0000-7000-8000-000000000313"
+                ]
+            },
+            "member_event_refs": [
+                "ak:event:0196419b-0000-7000-8000-000000000302",
+                "ak:event:0196419b-0000-7000-8000-000000000303"
+            ],
+            "main_strand_create_ref": "ak:event:0196419b-0000-7000-8000-000000000304",
+            "mls_group_id": "ak:mls_group:direct-fixture",
+            "mls_genesis_event_ref": "ak:event:0196419b-0000-7000-8000-000000000305",
+            "mls_commit_event_ref": "ak:event:0196419b-0000-7000-8000-000000000306",
+            "mls_welcome_event_ref": "ak:event:0196419b-0000-7000-8000-000000000307",
+            "created_at": "2026-07-21T00:00:00.000Z",
+            "binding_state": "active",
+            "event_id": "ak:event:0196419b-0000-7000-8000-000000000308",
+            "sender": "did:web:alice.example",
+            "hlc": "0196419b0000-0000-00000001",
+            "seal_ref": "ak:seal:0196419b-0000-7000-8000-000000000309",
+            "seal_basis": {"kind": "realm"},
+            "preconditions": [{"cell": "ak.cell.direct.binding", "head_eq": null}],
+            "effects": [{"cell": "ak.cell.direct.binding", "set": "active"}]
+        });
+        let operation = arkret_event_draft::Operation::create(
+            arkret_identifiers::OperationId::new(
+                "ak:operation:0196419b-0000-7000-8000-000000000308",
+            )
+            .unwrap(),
+            arkret_identifiers::RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000001")
+                .unwrap(),
+            arkret_wire::EventKind::DIRECT_CONVERSATION_BOUND,
+            payload,
+        );
+
+        let parsed = direct_binding_payload_from_operation(&operation)
+            .expect("receiver projection context must not contaminate the closed wire payload");
+        assert!(matches!(
+            parsed.binding_state,
+            arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Active
+        ));
+        assert_eq!(parsed.participants_unordered.len(), 2);
     }
 }

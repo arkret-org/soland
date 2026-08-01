@@ -299,7 +299,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
     {
         return Ok(None);
     }
-    let (realm_id, actor_id, self_principal_pcr_bootstrap) = if events.len() == 2
+    let (realm_id, actor_id, self_principal_pcr_bootstrap, authority_root) = if events.len() == 2
         && events
             .get(1)
             .is_some_and(|event| event.kind.as_str() == arkret_wire::EventKind::DEVICE_AUTHORIZE)
@@ -320,6 +320,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             events[0].realm_id.as_str().to_owned(),
             events[0].actor_id.as_str().to_owned(),
             true,
+            None,
         )
     } else if events.len() == 1
         && events[0].executed_by.as_ref() != Some(&events[0].actor_id)
@@ -333,6 +334,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
             events[0].realm_id.as_str().to_owned(),
             events[0].actor_id.as_str().to_owned(),
             false,
+            None,
         )
     } else {
         let unit = arkret_policy::realm_bootstrap::validate_realm_bootstrap_unit(events).map_err(
@@ -344,7 +346,12 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
                 .with_status(StatusCode::BAD_REQUEST)
             },
         )?;
-        (unit.realm_id, unit.actor_id, false)
+        (
+            unit.realm_id,
+            unit.actor_id,
+            false,
+            Some(unit.authority_root),
+        )
     };
     let event_digests = events
         .iter()
@@ -394,7 +401,7 @@ fn anchor_context(events: &[Event]) -> Result<Option<AnchorIssueContext>, AppErr
                 None
             },
             self_principal_pcr_bootstrap,
-            authority_root: None,
+            authority_root,
         },
         basis,
     }))
@@ -637,4 +644,65 @@ fn lease_internal_error(error: impl std::fmt::Display) -> AppError {
         ErrorCode::InternalError,
         format!("minted authorization lease is invalid: {error}"),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use arkret_wire::{Did, Event, EventKind, Hlc, RealmId, ScopeRef};
+    use serde_json::json;
+
+    use super::*;
+
+    const REALM: &str = "ak:realm:019fbb72-ef34-76b2-bdc4-d9e31e134e89";
+    const ACTOR: &str = "did:web:alice.local.host";
+    const REGISTRY_DIGEST: &str =
+        "sha256:9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a9a";
+
+    fn event(kind: &str, actor_seq: u64, payload: Value) -> Event {
+        Event::new_at(
+            kind,
+            ScopeRef::Realm {
+                realm_id: RealmId::new(REALM).expect("fixture Realm id"),
+            },
+            Did::new(ACTOR).expect("fixture actor DID"),
+            actor_seq,
+            Hlc::new(format!("019fbb72ef34-{actor_seq:04x}-a13f9c2e")).expect("fixture HLC"),
+            payload,
+            chrono::Utc::now(),
+        )
+        .expect("fixture Event")
+    }
+
+    #[test]
+    fn ordinary_anchor_lease_context_preserves_staged_authority_root_for_followups() {
+        let create = event(
+            EventKind::REALM_CREATE,
+            0,
+            json!({"object": {
+                "created_by": ACTOR,
+                "capability_action_registry_digest": REGISTRY_DIGEST
+            }}),
+        );
+        let mut followup = event(
+            EventKind::REALM_HISTORY_SHARING_POLICY,
+            1,
+            json!({"value": {"version": 1}}),
+        );
+        followup.prev_refs = vec![create.event_id.clone()];
+        followup.authorization_ref = Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned());
+
+        let context = anchor_context(&[create, followup])
+            .expect("ordinary Realm anchor unit is valid")
+            .expect("ordinary Realm anchor unit has a lease context");
+        let root = context
+            .bootstrap_context
+            .authority_root
+            .expect("staged authority root must survive lease pre-admission");
+
+        assert!(root.is_genesis_for(ACTOR));
+        assert_eq!(
+            root.capability_action_registry_digest.as_str(),
+            REGISTRY_DIGEST
+        );
+    }
 }
