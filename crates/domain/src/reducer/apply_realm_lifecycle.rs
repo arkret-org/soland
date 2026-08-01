@@ -68,6 +68,162 @@ impl ProjectionState {
         self.realm_authority_root(realm_id)
             .map(|root| root.capability_action_registry_digest)
     }
+
+    /// Apply one of the three root-cell CAS transitions. The registry-derived
+    /// CBA write remains the canonical state transition; this method enforces
+    /// the semantic guards and keeps the structured projection mirror in sync.
+    pub(crate) fn apply_realm_authority_transition(
+        &mut self,
+        operation: &Operation,
+        kind: &'static str,
+    ) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        let Some(mut root) = self.realm_authority_root(&realm_id) else {
+            return ProjectionEffect::Rejected {
+                reason: "realm_authority_root_missing".to_owned(),
+            };
+        };
+        if operation
+            .actor()
+            .as_ref()
+            .is_none_or(|actor| actor != &root.controller_id)
+        {
+            return ProjectionEffect::Rejected {
+                reason: "realm_authority_controller_mismatch".to_owned(),
+            };
+        }
+        if operation.payload.get("realm_id").and_then(Value::as_str) != Some(realm_id.as_str()) {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
+        let expected_digest = match arkret_canonical::canonical_sha256(&root) {
+            Ok(digest) => digest,
+            Err(_) => {
+                return ProjectionEffect::Rejected {
+                    reason: "realm_authority_root_conflict".to_owned(),
+                };
+            }
+        };
+        if operation
+            .payload
+            .get("expected_state_digest")
+            .and_then(Value::as_str)
+            != Some(expected_digest.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: "realm_authority_root_conflict".to_owned(),
+            };
+        }
+
+        match kind {
+            arkret_wire::EventKind::REALM_OWNER_TRANSFER => {
+                let typed = serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::RealmOwnerTransferPayload,
+                >(serde_json::json!({
+                    "realm_id": operation.payload.get("realm_id"),
+                    "expected_state_digest": operation.payload.get("expected_state_digest"),
+                    "patch": operation.payload.get("patch"),
+                    "successor_acceptance": operation.payload.get("successor_acceptance"),
+                }));
+                let Ok(payload) = typed else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                if payload.patch.controller_epoch != root.controller_epoch.saturating_add(1)
+                    || self
+                        .member(&realm_id, payload.patch.controller_id.as_str())
+                        .is_none_or(|member| member.state != "join")
+                    || serde_json::to_value(&payload.successor_acceptance)
+                        .ok()
+                        .is_none_or(|proof| match proof {
+                            Value::String(value) => value.is_empty(),
+                            Value::Object(value) => value.is_empty(),
+                            _ => true,
+                        })
+                {
+                    return ProjectionEffect::Rejected {
+                        reason: "realm_authority_controller_mismatch".to_owned(),
+                    };
+                }
+                root.controller_id = payload.patch.controller_id;
+                root.controller_epoch = payload.patch.controller_epoch;
+            }
+            arkret_wire::EventKind::REALM_AUTHORITY_RESET => {
+                let typed = serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::RealmAuthorityResetPayload,
+                >(serde_json::json!({
+                    "realm_id": operation.payload.get("realm_id"),
+                    "expected_state_digest": operation.payload.get("expected_state_digest"),
+                    "patch": operation.payload.get("patch"),
+                    "destructive_confirmation": operation.payload.get("destructive_confirmation"),
+                }));
+                let Ok(payload) = typed else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                if payload.destructive_confirmation != kind
+                    || payload.patch.authority_generation
+                        != root.authority_generation.saturating_add(1)
+                {
+                    return ProjectionEffect::Rejected {
+                        reason: "realm_authority_root_conflict".to_owned(),
+                    };
+                }
+                root.authority_generation = payload.patch.authority_generation;
+            }
+            arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE => {
+                let typed = serde_json::from_value::<
+                    arkret_models_collaboration::events_payloads::RealmAuthorityBasisUpdatePayload,
+                >(serde_json::json!({
+                    "realm_id": operation.payload.get("realm_id"),
+                    "expected_state_digest": operation.payload.get("expected_state_digest"),
+                    "patch": operation.payload.get("patch"),
+                }));
+                let Ok(payload) = typed else {
+                    return ProjectionEffect::Rejected {
+                        reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                    };
+                };
+                if arkret_policy::require_registry_basis(Some(
+                    &payload.patch.capability_action_registry_digest,
+                ))
+                .is_err()
+                {
+                    return ProjectionEffect::Rejected {
+                        reason: "capability_registry_basis_unavailable".to_owned(),
+                    };
+                }
+                root.capability_action_registry_digest =
+                    payload.patch.capability_action_registry_digest;
+            }
+            _ => {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            }
+        }
+
+        let Ok(value) = serde_json::to_value(root) else {
+            return ProjectionEffect::Rejected {
+                reason: "realm_authority_root_conflict".to_owned(),
+            };
+        };
+        self.realm_null_subject_cells.insert(
+            (
+                realm_id.clone(),
+                arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
+            ),
+            CellState::Value(value),
+        );
+        ProjectionEffect::RealmLifecycle {
+            realm_id,
+            action: kind.strip_prefix("ak.realm.").unwrap_or(kind).to_owned(),
+        }
+    }
+
     pub(crate) fn apply_membership(
         &mut self,
         operation: &Operation,

@@ -251,6 +251,27 @@ fn apply_realm_destroy_dispatch(
 ) -> ProjectionEffect {
     s.apply_realm_lifecycle(op, op.created_at, arkret_wire::EventKind::REALM_DESTROY)
 }
+fn apply_realm_owner_transfer_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::REALM_OWNER_TRANSFER)
+}
+fn apply_realm_authority_reset_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::REALM_AUTHORITY_RESET)
+}
+fn apply_realm_authority_basis_update_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_realm_authority_transition(op, arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE)
+}
 fn apply_realm_set_default_strand_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -769,6 +790,14 @@ fn apply_capability_revoke_dispatch(
     s.apply_capability_revoke(op, op.created_at)
 }
 
+fn apply_capability_relinquish_dispatch(
+    s: &mut ProjectionState,
+    op: &Operation,
+    _hlc: &ServerHlc,
+) -> ProjectionEffect {
+    s.apply_capability_relinquish(op, op.created_at)
+}
+
 /// P2 — dispatch for `ak.moderation.decision`. Projects the decision snapshot
 /// as an or_set add into the `ak.component.moderation_state.v1` cell keyed by
 /// `payload.target_ref`.
@@ -1013,6 +1042,18 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_wire::EventKind::REALM_DESTROY,
         apply_realm_destroy_dispatch,
     );
+    m.insert(
+        arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+        apply_realm_owner_transfer_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::REALM_AUTHORITY_RESET,
+        apply_realm_authority_reset_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE,
+        apply_realm_authority_basis_update_dispatch,
+    );
     // COT-06-004 — Realm default-Strand pointer.
     m.insert(
         arkret_wire::EventKind::REALM_SET_DEFAULT_STRAND,
@@ -1256,10 +1297,8 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_wire::EventKind::CAPABILITY_DERIVED,
         apply_capability_derived_dispatch,
     );
-    // P1 — capability control-plane projection (grant / revoke / delegate).
-    // grant + revoke share the `ak.component.capability.grant.v1` or_set
-    // cell; delegate writes `ak.component.capability.delegate.v1` + parent
-    // chain. Acceptance fail-closed lives in `apply_capability.rs`.
+    // Capability control-plane projection. Grant adds to the canonical grant
+    // cell; revoke and subject-only relinquish perform observed-remove.
     m.insert(
         arkret_wire::EventKind::CAPABILITY_GRANT,
         apply_capability_grant_dispatch,
@@ -1267,6 +1306,10 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     m.insert(
         arkret_wire::EventKind::CAPABILITY_REVOKE,
         apply_capability_revoke_dispatch,
+    );
+    m.insert(
+        arkret_wire::EventKind::CAPABILITY_RELINQUISH,
+        apply_capability_relinquish_dispatch,
     );
     // Agent runtime key authorization + revocation. Authorize records the
     // key; revoke removes it. Neither operation changes Realm grants.

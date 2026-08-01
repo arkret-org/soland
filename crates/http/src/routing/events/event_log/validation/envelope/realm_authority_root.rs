@@ -27,9 +27,21 @@ pub(super) fn validate_realm_authority_root_authorization(
     bootstrap_unit_member: bool,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
 ) -> Result<(), EventValidationError> {
-    if event_string_field(object, &["authorization_ref"]).as_deref()
-        != Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL)
+    let authorization_ref = event_string_field(object, &["authorization_ref"]);
+    let root_control_only = arkret_schema::embedded_capability_action(kind)
+        .ok()
+        .flatten()
+        .is_some_and(|descriptor| descriptor.root_control_only);
+    if root_control_only
+        && authorization_ref.as_deref() != Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL)
     {
+        return Err(event_validation_error(
+            StatusCode::FORBIDDEN,
+            "realm_authority_controller_mismatch",
+            "root-control Event requires the current Realm authority-root proof",
+        ));
+    }
+    if authorization_ref.as_deref() != Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL) {
         return Ok(());
     }
     // The authorizing principal is whoever actually signed for the Realm:
@@ -74,6 +86,7 @@ pub(super) fn validate_realm_authority_root_authorization(
     // speaks for the Realm during genesis; the unit whitelist fixes *what* may
     // be said.
     if !bootstrap_unit_member
+        && !root_control_only
         && !arkret_policy::owner_may_author_event_kind(kind, Some(basis)).unwrap_or(false)
     {
         return Err(event_validation_error(

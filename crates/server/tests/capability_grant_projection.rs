@@ -29,7 +29,12 @@ const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
 const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
 const CIRCLE_B: &str = "ak:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
 
-fn op(kind: &str, realm_id: &str, payload: Value) -> Operation {
+fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
+    payload
+        .as_object_mut()
+        .expect("test payload object")
+        .entry("sender".to_owned())
+        .or_insert_with(|| Value::String(ISSUER.to_owned()));
     Operation::create(
         OperationId::new(format!("ak:operation:{}", uuid::Uuid::now_v7())).unwrap(),
         RealmId::new(realm_id).unwrap(),

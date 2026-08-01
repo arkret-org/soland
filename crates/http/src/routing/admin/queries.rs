@@ -460,12 +460,12 @@ fn capability_summary(grant: &crate::authz::Grant) -> CapabilitySummary {
             .issuer_authority_refs
             .iter()
             .filter_map(|entry| match entry {
-                arkret_policy::authz::delegation::IssuerAuthorityRef::Grant { grant_id } => {
+                arkret_policy::authz::authority::IssuerAuthorityRef::Grant { grant_id } => {
                     arkret_identifiers::GrantId::new(grant_id.clone()).ok().map(|grant_id| {
                         arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
                     })
                 }
-                arkret_policy::authz::delegation::IssuerAuthorityRef::RealmRoot {
+                arkret_policy::authz::authority::IssuerAuthorityRef::RealmRoot {
                     realm_id,
                     cell_ref,
                     controller_epoch_at_issuance,

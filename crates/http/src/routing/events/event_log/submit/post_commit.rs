@@ -892,7 +892,7 @@ async fn dynamic_peer_event_targets(
         // non-capability events are gated.
         let is_capability_control_event = matches!(
             parsed.kind.as_str(),
-            "ak.capability.revoke" | "ak.capability.grant" | "ak.capability.delegate"
+            "ak.capability.revoke" | "ak.capability.grant"
         );
         let revoked_peers = if is_capability_control_event {
             std::collections::BTreeSet::new()

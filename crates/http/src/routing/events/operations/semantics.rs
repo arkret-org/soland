@@ -678,12 +678,12 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
             requirements: REALM_LINK_REQUIREMENTS,
             validate: None,
         },
-        arkret_wire::EventKind::CAPABILITY_GRANT | arkret_wire::EventKind::CAPABILITY_REVOKE => {
-            OperationPayloadSchema {
-                requirements: CAPABILITY_GRANT_REQUIREMENTS,
-                validate: None,
-            }
-        }
+        arkret_wire::EventKind::CAPABILITY_GRANT
+        | arkret_wire::EventKind::CAPABILITY_REVOKE
+        | arkret_wire::EventKind::CAPABILITY_RELINQUISH => OperationPayloadSchema {
+            requirements: CAPABILITY_GRANT_REQUIREMENTS,
+            validate: None,
+        },
         arkret_wire::EventKind::MLS_COMMIT => OperationPayloadSchema {
             requirements: MLS_COMMIT_REQUIREMENTS,
             validate: None,

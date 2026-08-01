@@ -370,3 +370,29 @@ coordinator`. Same two cases the fixture-Realm entry above also leaves open.
 - Prevention dimension: every claim surface must bind its protocol idempotency key to a canonical
   request digest and immutable terminal outcome in the same transaction as inventory mutation;
   last-resort eligibility must be explicit, never an implicit empty-pool fallback.
+
+## 2026-08-01 — authority root audit sorting used object serialization order
+
+- Surface: reducer materialization of `authority_root_refs[]` on capability grant cells.
+- Regression: roots were sorted and deduplicated by the serialized JSON object. Object key order
+  is not the normative identity order `(realm_id, cell_ref, authority_generation)`, so two
+  implementations could seal different root arrays for the same multi-root grant.
+- Correction: the reducer now validates every root identity member, constructs the explicit
+  tuple key, and sorts/deduplicates by that key. Cotest independently materializes the same
+  fixture and compares its result with the Soland reducer output.
+- Prevention dimension: derived protocol arrays need an explicit spec-named comparison key;
+  whole-object serialization is not a substitute unless the spec explicitly defines it so.
+
+## 2026-08-01 — effective-grant projection dropped authority-control evidence
+
+- Surface: the Soland runtime-constraint to SDK wire-constraint projection used by effective-grant
+  HTTP responses.
+- Regression: after the SDK runtime authority-control shape gained the normative
+  `authority_regrant_allowed` member, the projection did not carry that member into the wire DTO;
+  the same boundary had previously omitted reducer-derived `authority_depth` and
+  `authority_root_refs`. Audit clients could therefore observe an incomplete authority basis.
+- Correction: the projection now maps the boolean explicitly and preserves both reducer-derived
+  audit fields; a focused HTTP test pins the full effective-grant authority projection.
+- Prevention dimension: exhaustive protocol projections need field-completeness tests whenever a
+  closed source type changes; successful source deserialization alone does not prove the response
+  preserves authorization evidence.

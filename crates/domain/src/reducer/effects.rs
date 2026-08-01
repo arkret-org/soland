@@ -230,6 +230,11 @@ pub enum ProjectionEffect {
         grant_id: String,
         realm_id: String,
     },
+    /// `ak.capability.relinquish` removed the target subject's own grant.
+    CapabilityRelinquishProjected {
+        grant_id: String,
+        realm_id: String,
+    },
     /// REDU-1 (R3 spec-sync 2026-05-27, arkret-spec b47ff6ec) — agent
     /// lifecycle FSM transition projected. `agent_id` is the DID
     /// from the payload; `new_state` is the post-transition

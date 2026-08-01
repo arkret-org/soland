@@ -63,6 +63,7 @@ mod projections;
 // the original file-scope `use`s before the 2026-06-18 structural split.
 use std::collections::{BTreeMap, BTreeSet};
 
+pub use apply_capability::derive_authority_audit;
 use arkret_event_draft::Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;

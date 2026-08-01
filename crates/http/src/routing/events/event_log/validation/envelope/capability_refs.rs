@@ -821,7 +821,7 @@ pub(super) fn effective_historical_grants_for_subject(
                 && !grant.revoked
                 && crate::authz::grant_scope_valid(grant).is_ok()
                 && !crate::authz::is_grant_expired(grant, auth_time)
-                && crate::authz::delegation_chain_intact(&snapshot, &grant.grant_id, auth_time)
+                && crate::authz::authority_chain_intact(&snapshot, &grant.grant_id, auth_time)
         })
         .map(|grant| (grant.grant_id.clone(), grant.clone()))
         .collect()

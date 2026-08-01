@@ -162,7 +162,7 @@ pub(super) async fn validate_applet_registration_epoch_binding(
     applet_id: &str,
     executed_by: &str,
 ) -> Result<(), EventValidationError> {
-    crate::authz::validate_applet_delegation_binding(
+    crate::authz::validate_applet_authority_binding(
         grant,
         applet_id,
         executed_by,
@@ -221,19 +221,19 @@ pub(super) async fn validate_applet_registration_epoch_binding(
 }
 
 pub(super) fn applet_delegation_binding_reason(
-    error: crate::authz::AppletDelegationBindingError,
+    error: crate::authz::AppletAuthorityBindingError,
 ) -> &'static str {
     match error {
-        crate::authz::AppletDelegationBindingError::Missing => {
+        crate::authz::AppletAuthorityBindingError::Missing => {
             "applet_registration_epoch_binding_missing"
         }
-        crate::authz::AppletDelegationBindingError::AppletIdMismatch => {
+        crate::authz::AppletAuthorityBindingError::AppletIdMismatch => {
             "applet_registration_epoch_binding_mismatch"
         }
-        crate::authz::AppletDelegationBindingError::ExecutedByMismatch => {
+        crate::authz::AppletAuthorityBindingError::ExecutedByMismatch => {
             "applet_registration_epoch_binding_mismatch"
         }
-        crate::authz::AppletDelegationBindingError::RegistrationEpochMismatch => {
+        crate::authz::AppletAuthorityBindingError::RegistrationEpochMismatch => {
             "applet_registration_epoch_mismatch"
         }
     }

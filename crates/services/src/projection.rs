@@ -68,7 +68,7 @@ pub fn morph_document_body(fields: &BTreeMap<String, Value>) -> Option<Value> {
 pub fn engine_grant_from_capability_cell_state(
     grant_id: &str,
     cell_state: &CellState,
-) -> Option<arkret_policy::authz::delegation::Grant> {
+) -> Option<arkret_policy::authz::authority::Grant> {
     soland_domain::reducer::engine_grant_from_capability_cell_state(grant_id, cell_state)
 }
 
@@ -356,7 +356,8 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                 relationship,
             },
             ProjectionEffect::CapabilityGrantProjected { grant_id, .. }
-            | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. } => {
+            | ProjectionEffect::CapabilityRevokeProjected { grant_id, .. }
+            | ProjectionEffect::CapabilityRelinquishProjected { grant_id, .. } => {
                 Self::CapabilityProjected { grant_id }
             }
             ProjectionEffect::CallStateProjected { .. } => Self::CallStateProjected,
@@ -1233,7 +1234,7 @@ impl ProjectionService {
     pub fn effective_engine_grant(
         &self,
         grant_id: &str,
-    ) -> Option<arkret_policy::authz::delegation::Grant> {
+    ) -> Option<arkret_policy::authz::authority::Grant> {
         self.state.lock().effective_engine_grant(grant_id)
     }
 
@@ -1569,6 +1570,7 @@ impl ProjectionService {
             &[
                 arkret_wire::EventKind::CAPABILITY_GRANT,
                 arkret_wire::EventKind::CAPABILITY_REVOKE,
+                arkret_wire::EventKind::CAPABILITY_RELINQUISH,
             ],
         )
     }
@@ -1631,7 +1633,12 @@ impl ProjectionService {
         self.preflight_apply_rejection(
             operation,
             cell_writes,
-            &[arkret_wire::EventKind::REALM_POLICY_BUNDLE],
+            &[
+                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+                arkret_wire::EventKind::REALM_OWNER_TRANSFER,
+                arkret_wire::EventKind::REALM_AUTHORITY_RESET,
+                arkret_wire::EventKind::REALM_AUTHORITY_BASIS_UPDATE,
+            ],
         )
     }
 

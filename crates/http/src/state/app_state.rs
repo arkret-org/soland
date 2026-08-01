@@ -1525,7 +1525,7 @@ impl AppState {
     /// never runs the accept path, so without this the authz surface denies
     /// actions the sealed basis grants.
     #[doc(hidden)]
-    pub fn upsert_projected_grant_for_test(&self, grant: arkret_policy::authz::delegation::Grant) {
+    pub fn upsert_projected_grant_for_test(&self, grant: arkret_policy::authz::authority::Grant) {
         self.authorization().upsert_projected_grant(grant);
     }
 
@@ -1724,7 +1724,7 @@ impl AuthorizationPort for SolandAuthzEngine {
         }
     }
 
-    fn upsert_projected_grant(&self, grant: arkret_policy::authz::delegation::Grant) {
+    fn upsert_projected_grant(&self, grant: arkret_policy::authz::authority::Grant) {
         self.upsert_projected_grant(grant);
     }
 
@@ -1736,7 +1736,7 @@ impl AuthorizationPort for SolandAuthzEngine {
         self.mark_projected_grants_revoked_for_subject(subject)
     }
 
-    fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::delegation::Grant> {
+    fn get_grant(&self, grant_id: &str) -> Option<arkret_policy::authz::authority::Grant> {
         self.get_grant(grant_id)
     }
 
@@ -1744,18 +1744,18 @@ impl AuthorizationPort for SolandAuthzEngine {
         &self,
         subject: &str,
         realm_id: &str,
-    ) -> Vec<arkret_policy::authz::delegation::Grant> {
+    ) -> Vec<arkret_policy::authz::authority::Grant> {
         self.grants_for_subject(subject, realm_id)
     }
 
     fn grants_for_subject_all_realms(
         &self,
         subject: &str,
-    ) -> Vec<arkret_policy::authz::delegation::Grant> {
+    ) -> Vec<arkret_policy::authz::authority::Grant> {
         self.grants_for_subject_all_realms(subject)
     }
 
-    fn grants_snapshot(&self) -> Vec<arkret_policy::authz::delegation::Grant> {
+    fn grants_snapshot(&self) -> Vec<arkret_policy::authz::authority::Grant> {
         self.grants_snapshot()
     }
 }

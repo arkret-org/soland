@@ -1728,6 +1728,8 @@ async fn signed_install_events(
             revoked_by: None,
             revoked_at: None,
             proofs: Vec::new(),
+            authority_depth: None,
+            authority_root_refs: Vec::new(),
         };
         let mut proof = PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),

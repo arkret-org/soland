@@ -298,7 +298,6 @@ pub struct AppConfig {
     /// - `ak.component.mls.epoch.v1` → 60s (E2EE fork risk)
     /// - `ak.component.consent.grant.v1` → 120s (capability-equivalent)
     /// - `ak.component.capability.grant.v1` → 120s
-    /// - `ak.component.capability.delegate.v1` → 120s
     /// - `ak.component.capability.derived.v1` → 120s
     pub jws_replay_window_per_family: std::collections::BTreeMap<&'static str, u64>,
     /// Base64-encoded 32-byte ed25519 seed for the NotaryWorker
@@ -684,7 +683,6 @@ impl AppConfig {
         m.insert("ak.component.mls.epoch.v1", 60);
         m.insert("ak.component.consent.grant.v1", 120);
         m.insert("ak.component.capability.grant.v1", 120);
-        m.insert("ak.component.capability.delegate.v1", 120);
         m.insert("ak.component.capability.derived.v1", 120);
         m
     }

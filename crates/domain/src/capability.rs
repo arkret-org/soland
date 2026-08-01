@@ -1,4 +1,4 @@
-pub use arkret_policy::authz::delegation::{
+pub use arkret_policy::authz::authority::{
     Grant, GrantConstraint as Constraint, IssuerAuthorityRef, grant_effective_expiry,
     is_grant_expired, max_authority_depth,
 };

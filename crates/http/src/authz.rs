@@ -23,15 +23,15 @@ use std::sync::Arc;
 // Delegation primitives — `Grant`, `Constraint` (alias of `GrantConstraint`),
 // and the chain-integrity / expiry helpers — live in the SDK so inkson and
 // sodmin admin can call them client-side. See
-// `arkret_policy::authz::delegation`.
+// `arkret_policy::authz::authority`.
 //
 // Grant *authoring* (issuance, re-delegation, revoke cascade) is NOT mirrored
 // here: the accepted `ak.component.capability.grant.v1` cell projection in
 // `soland_domain::reducer::apply_capability` is the only place a grant comes
 // into existence, and this engine is strictly the read-side index over it.
-pub use arkret_policy::authz::delegation::{
-    AppletDelegationBindingError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict,
-    delegation_chain_intact, is_grant_expired, validate_applet_delegation_binding,
+pub use arkret_policy::authz::authority::{
+    AppletAuthorityBindingError, Grant, GrantConstraint as Constraint, GrantDecisionVerdict,
+    authority_chain_intact, is_grant_expired, validate_applet_authority_binding,
 };
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -135,7 +135,7 @@ impl SolandAuthzEngine {
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
-                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
+                    && authority_chain_intact(&snapshot, &g.grant_id, now)
             })
             .cloned()
             .collect()
@@ -155,7 +155,7 @@ impl SolandAuthzEngine {
                     && grant_scope_valid(g).is_ok()
                     && !g.revoked
                     && !is_grant_expired(g, now)
-                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
+                    && authority_chain_intact(&snapshot, &g.grant_id, now)
             })
             .cloned()
             .collect()
@@ -203,7 +203,7 @@ impl SolandAuthzEngine {
                     && g.actions.iter().any(|a| a == action)
                     && resource_matches(&g.resource, resource)
                     && !is_grant_expired(g, now)
-                    && delegation_chain_intact(&snapshot, &g.grant_id, now)
+                    && authority_chain_intact(&snapshot, &g.grant_id, now)
             })
             .cloned()
             .collect();
@@ -328,6 +328,8 @@ pub fn projected_grant_fixture(
         revoked: false,
         created_at: chrono::Utc::now(),
         issuer_authority_refs: Vec::new(),
+        authority_depth: None,
+        authority_root_refs: Vec::new(),
         expires_at: None,
     }
 }
@@ -376,7 +378,7 @@ pub(crate) fn grant_revoked_upstream(
     let mut pending: Vec<&str> = grant
         .issuer_authority_refs
         .iter()
-        .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id)
+        .filter_map(arkret_policy::authz::authority::IssuerAuthorityRef::grant_id)
         .collect();
     let mut visited: std::collections::BTreeSet<&str> = std::collections::BTreeSet::new();
     while let Some(current) = pending.pop() {
@@ -396,7 +398,7 @@ pub(crate) fn grant_revoked_upstream(
             parent
                 .issuer_authority_refs
                 .iter()
-                .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id),
+                .filter_map(arkret_policy::authz::authority::IssuerAuthorityRef::grant_id),
         );
     }
     false
@@ -1332,7 +1334,7 @@ mod tests {
     }
 
     #[test]
-    fn delegated_child_denied_with_upstream_revocation_reason() {
+    fn authority_child_denied_with_upstream_revocation_reason() {
         let engine = SolandAuthzEngine::new();
         let parent = project(
             &engine,
@@ -1351,11 +1353,10 @@ mod tests {
             vec!["ak.message.create".to_owned()],
             vec![],
         );
-        child.issuer_authority_refs = vec![
-            arkret_policy::authz::delegation::IssuerAuthorityRef::Grant {
+        child.issuer_authority_refs =
+            vec![arkret_policy::authz::authority::IssuerAuthorityRef::Grant {
                 grant_id: parent.grant_id.clone(),
-            },
-        ];
+            }];
         engine.upsert_projected_grant(child.clone());
         engine.mark_projected_grant_revoked(&parent.grant_id);
         let result = engine.check(

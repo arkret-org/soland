@@ -376,6 +376,9 @@ impl ProjectionState {
     }
 
     pub(crate) fn projected_ref_exists(&self, target_ref: &str) -> bool {
+        if target_ref.starts_with("ak:grant:") {
+            return self.effective_engine_grant(target_ref).is_some();
+        }
         if target_ref.starts_with("ak:space:") {
             return self.space_containers.contains_key(target_ref);
         }

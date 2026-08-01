@@ -1593,8 +1593,8 @@ pub(crate) struct TestRealmBasis {
 ///    — the only authority genesis establishes, whose controller holds effective `ak.realm.owner`;
 /// 2. the owner's own first governance grant
 ///    ([`soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS`]) — `issuer ==
-///    subject`, one Realm-wide resource selector, no `parent_grant_id`, and the embedded
-///    `capability-action-registry.json` digest;
+///    subject`, one Realm-wide resource selector, a typed `realm_root` authority ref, and the
+///    embedded `capability-action-registry.json` digest;
 /// 3. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`];
 /// 4. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
 ///    MLS-backed DataEvent clears the governance-binding gate.

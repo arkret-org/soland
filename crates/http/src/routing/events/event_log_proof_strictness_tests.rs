@@ -774,7 +774,7 @@ async fn applet_registration_requires_realm_admin() {
 
     state
         .authorization()
-        .upsert_projected_grant(arkret_policy::authz::delegation::Grant {
+        .upsert_projected_grant(arkret_policy::authz::authority::Grant {
             grant_id: "ak:grant:01904100-0000-7000-8000-000000000a02".to_owned(),
             realm_id: realm_id.to_owned(),
             issuer: owner.to_owned(),
@@ -788,6 +788,8 @@ async fn applet_registration_requires_realm_admin() {
             revoked: false,
             created_at: now,
             issuer_authority_refs: Vec::new(),
+            authority_depth: None,
+            authority_root_refs: Vec::new(),
             expires_at: None,
         });
     validate_operation_policy(&state, std::slice::from_ref(&registration(owner)))
@@ -1654,6 +1656,8 @@ fn data_event_grant(grant_id: &str, action: &str, revoked: bool) -> crate::authz
         revoked,
         created_at: chrono::Utc::now(),
         issuer_authority_refs: Vec::new(),
+        authority_depth: None,
+        authority_root_refs: Vec::new(),
         expires_at: None,
     }
 }
@@ -1664,7 +1668,7 @@ fn historical_data_event_grant_value(
     subject: &str,
     issuer: &str,
     revoked: bool,
-    parent_grant_id: Option<&str>,
+    authority_grant_id: Option<&str>,
 ) -> Value {
     let mut value = json!({
         "grant_id": grant_id,
@@ -1683,10 +1687,11 @@ fn historical_data_event_grant_value(
         "resources": [DATA_EVENT_STRAND],
         "issued_at": "2026-05-08T00:00:00.000Z"
     });
-    if let Some(parent_grant_id) = parent_grant_id {
+    if let Some(authority_grant_id) = authority_grant_id {
         // A re-grant names the grant it was issued under; the realm_root ref
         // above belongs to a root issue, so it is replaced rather than kept.
-        value["issuer_authority_refs"] = json!([{ "kind": "grant", "grant_id": parent_grant_id }]);
+        value["issuer_authority_refs"] =
+            json!([{ "kind": "grant", "grant_id": authority_grant_id }]);
     }
     if revoked {
         value["revoked"] = Value::Bool(true);
@@ -1825,9 +1830,9 @@ fn insert_data_event_revocation_successor(
         .unwrap();
 }
 
-fn insert_historical_data_event_delegated_grant_with_revoked_parent(
+fn insert_historical_data_event_child_grant_with_revoked_authority(
     state: &AppState,
-    parent_grant_id: &str,
+    authority_grant_id: &str,
     child_grant_id: &str,
     action: &str,
 ) -> String {
@@ -1836,7 +1841,7 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     let parent_move_id = data_event_move_id(0xac);
     let child_move_id = data_event_move_id(0xad);
     let parent_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{parent_grant_id}"
+        "ak:cell:ak.component.capability.grant.v1:{authority_grant_id}"
     ))
     .unwrap();
     let child_cell = arkret_identifiers::CellRef::new(format!(
@@ -1844,9 +1849,9 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     ))
     .unwrap();
     let parent_value = historical_data_event_grant_value(
-        parent_grant_id,
+        authority_grant_id,
         action,
-        "did:web:delegate.example",
+        "did:web:authority.example",
         "did:web:owner.example",
         true,
         None,
@@ -1855,9 +1860,9 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
         child_grant_id,
         action,
         DATA_EVENT_ACTOR,
-        "did:web:delegate.example",
+        "did:web:authority.example",
         false,
-        Some(parent_grant_id),
+        Some(authority_grant_id),
     );
     let parent_op = arkret_wire::LatticeOp {
         op_type: arkret_wire::LatticeOpType::Add,
@@ -2438,13 +2443,13 @@ fn data_event_capability_ref_must_not_be_revoked() {
 }
 
 #[test]
-fn data_event_capability_ref_reports_upstream_revoked_parent() {
+fn data_event_capability_ref_reports_upstream_revoked_authority() {
     let state = make_state(true);
-    let parent_grant_id = "ak:grant:01904100-0000-7000-8000-000000000116";
+    let authority_grant_id = "ak:grant:01904100-0000-7000-8000-000000000116";
     let child_grant_id = "ak:grant:01904100-0000-7000-8000-000000000117";
-    let seal_ref = insert_historical_data_event_delegated_grant_with_revoked_parent(
+    let seal_ref = insert_historical_data_event_child_grant_with_revoked_authority(
         &state,
-        parent_grant_id,
+        authority_grant_id,
         child_grant_id,
         "ak.message.create",
     );

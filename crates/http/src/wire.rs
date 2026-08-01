@@ -29,7 +29,7 @@ pub use arkret_models_identity::identity::IdentityResolveRequestBody;
 use arkret_models_identity::session_credential::SessionGrantProofKind;
 pub use arkret_models_integration::{OkOutcome, PushNotifyOutcome, PushNotifyRequestBody};
 use arkret_wire::{
-    MAX_AUTHORIZED_BY_REFS, MAX_DELEGATION_CHAIN_DEPTH, MAX_EVENT_ENVELOPE_BYTES,
+    MAX_AUTHORITY_CHAIN_DEPTH, MAX_AUTHORIZED_BY_REFS, MAX_EVENT_ENVELOPE_BYTES,
     MAX_EVENT_PREV_REFS, MAX_EVENT_REFS, MAX_EVENT_SUBMIT_BATCH, ProfileId,
 };
 use chrono::{DateTime, Utc};
@@ -1222,7 +1222,7 @@ pub fn describe(
                 "max_refs": MAX_EVENT_REFS,
                 "max_auth_refs": MAX_AUTHORIZED_BY_REFS,
                 "max_relation_expansion_depth": 32,
-                "max_authority_depth": MAX_DELEGATION_CHAIN_DEPTH,
+                "max_authority_depth": MAX_AUTHORITY_CHAIN_DEPTH,
                 "max_grants_per_decision": 1024,
                 "max_grant_constraints": 64,
                 "max_resource_selector_depth": 16,
