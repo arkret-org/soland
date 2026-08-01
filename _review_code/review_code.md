@@ -354,3 +354,19 @@ coordinator`. Same two cases the fixture-Realm entry above also leaves open.
 - Prevention dimension: self-claim idempotency and KeyPackage lifecycle are one invariant: the same
   claim identity may only replay the original byte-exact outcome, and `claimed` may advance only to
   `consumed` or terminal `revoked`, never to a locally invented renewal state.
+
+## 2026-08-01 — local KeyPackage claims lacked the normative terminal ledger
+
+- Surface: `ak.self.keys.keypackages.command.claim`, including local Direct Conversation
+  materialization recovery.
+- Regression: ordinary local claims transitioned the package first and did not persist the
+  `(requester, claim_nonce)` terminal result. A retry could select another package, recompute
+  `available_count`, or reuse the nonce with a different body. The same path also fell back to a
+  last-resort package even though Direct negotiation explicitly forbids it.
+- Correction: ordinary selection now uses the durable authority snapshot and atomically commits
+  the single-use transition with the exact serialized terminal response. Exact retries replay that
+  response, digest changes return `duplicate_conflict` before inventory mutation, concurrent CAS
+  loss advances to the next ordinary candidate, and no local Direct path selects last-resort.
+- Prevention dimension: every claim surface must bind its protocol idempotency key to a canonical
+  request digest and immutable terminal outcome in the same transaction as inventory mutation;
+  last-resort eligibility must be explicit, never an implicit empty-pool fallback.

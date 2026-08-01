@@ -1288,14 +1288,6 @@ async fn claim_keypackage(
             "requester must match the calling session",
         ));
     }
-    if body.expires_at <= Utc::now() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "KeyPackage claim request expired",
-        )
-        .with_wire_code("mls_keypackage_claim_request_expired"));
-    }
-
     json_ok(claim_keypackages_for_request(state, &body).await?)
 }
 
@@ -1318,27 +1310,29 @@ async fn claim_keypackages_for_request_inner(
     body: &KeyPackagesClaimRequestBody,
     allow_same_group_recovery: bool,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
+    let body_value = serde_json::to_value(body)
+        .map_err(|error| AppError::internal(format!("local claim serialize: {error}")))?;
+    let request_digest = arkret_canonical::canonical_sha256(&body_value)
+        .map_err(|error| AppError::internal(format!("local claim digest: {error}")))?;
+    let local_claim_request_id = local_claim_request_id(body)?;
+    if let Some(existing) = state
+        .mls_key_packages()
+        .peer_claim(state.service_id(), &local_claim_request_id)
+        .await
+        .map_err(|error| AppError::internal(format!("local claim ledger lookup failed: {error}")))?
+    {
+        return replay_local_claim(existing, &request_digest);
+    }
+    // Idempotency lookup precedes time validation: an exact retry must replay
+    // its immutable terminal result even after the original claim deadline.
+    // A different digest under the same nonce was rejected above before any
+    // inventory read or CAS.
     if body.expires_at <= Utc::now() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "KeyPackage claim request expired",
         )
         .with_wire_code("mls_keypackage_claim_request_expired"));
-    }
-    let body_value = serde_json::to_value(body)
-        .map_err(|error| AppError::internal(format!("local claim serialize: {error}")))?;
-    let request_digest = arkret_canonical::canonical_sha256(&body_value)
-        .map_err(|error| AppError::internal(format!("local claim digest: {error}")))?;
-    let local_claim_request_id = local_last_resort_claim_request_id(body)?;
-    if let Some(existing) = state
-        .mls_key_packages()
-        .peer_claim(state.service_id(), &local_claim_request_id)
-        .await
-        .map_err(|error| {
-            AppError::internal(format!("last-resort claim ledger lookup failed: {error}"))
-        })?
-    {
-        return replay_local_last_resort_claim(existing, &request_digest);
     }
     let required_capabilities = required_capability_set(&body.required_capabilities)?;
 
@@ -1384,7 +1378,7 @@ async fn claim_keypackages_for_request_inner(
         .clone()
         .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
         .unwrap_or_else(|| body.intended_realm_id.to_string());
-    let selected_keypackage = {
+    let candidate_keypackages = {
         let keypackages = &durable_keypackages;
         let matching_claim = allow_same_group_recovery
             .then(|| {
@@ -1407,11 +1401,11 @@ async fn claim_keypackages_for_request_inner(
                     .and_then(|kp| {
                         KeyPackageTrustBinding::from_keypackage(kp)
                             .ok()
-                            .map(|binding| (kp.id.clone(), binding))
+                            .map(|binding| (true, kp.id.clone(), binding))
                     })
             })
             .flatten();
-        let ordinary = keypackages
+        let mut ordinary = keypackages
             .iter()
             .filter(|kp| ordinary_keypackage_is_available(kp))
             .filter(|kp| {
@@ -1424,42 +1418,29 @@ async fn claim_keypackages_for_request_inner(
                     &required_capabilities,
                 )
             })
-            .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-            .and_then(|kp| {
+            .filter_map(|kp| {
                 KeyPackageTrustBinding::from_keypackage(kp)
                     .ok()
-                    .map(|binding| (kp.id.clone(), binding))
-            });
-        matching_claim.or(ordinary).or_else(|| {
-            keypackages
-                .iter()
-                .filter(|kp| kp.last_resort)
-                .filter(|kp| last_resort_matches_realm(kp, &intended_realm_id))
-                .filter(|kp| {
-                    keypackage_matches_claim(
-                        kp,
-                        &target_principal_id,
-                        &target_device_ids,
-                        &trust_selector,
-                        now_secs,
-                        &required_capabilities,
-                    )
-                })
-                .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-                .and_then(|kp| {
-                    KeyPackageTrustBinding::from_keypackage(kp)
-                        .ok()
-                        .map(|binding| (kp.id.clone(), binding))
-                })
-        })
+                    .map(|binding| (kp.created_at, kp.id.clone(), binding))
+            })
+            .collect::<Vec<_>>();
+        ordinary.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
+        matching_claim
+            .into_iter()
+            .chain(
+                ordinary
+                    .into_iter()
+                    .map(|(_, keypackage_id, binding)| (false, keypackage_id, binding)),
+            )
+            .collect::<Vec<_>>()
     };
-    let Some((keypackage_id, claim_binding)) = selected_keypackage else {
+    if candidate_keypackages.is_empty() {
         let reason_code = if available_before > 0 {
             "claim_failed"
         } else {
             soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
         };
-        return Ok(KeyPackagesClaimOutcome {
+        let outcome = KeyPackagesClaimOutcome {
             claims: Vec::new(),
             failures: vec![KeypackageFailure {
                 keypackage_ref: None,
@@ -1468,225 +1449,232 @@ async fn claim_keypackages_for_request_inner(
                 retry_after_ms: None,
             }],
             available_count: Some(available_before),
-        });
-    };
-    // Build the canonical op so the reducer sees the same shape as a
-    // federated `ak.mls.keypackage` envelope would. Canonical event
-    // kind is `ak.mls.keypackage`; publish-vs-claim is conveyed via
-    // `payload.action`. The HTTP operation_id
-    // (`ak.self.keys.keypackages.command.claim`) lives at the wire layer only.
-    let mut payload = json!({
-        "action": "claim",
-        "keypackage_id": keypackage_id,
-        "group_id": mls_group_ref,
-        "intended_realm_id": intended_realm_id.clone(),
-        "claim_expires_at_unix_ms": body.expires_at.timestamp_millis()
-    });
-    claim_binding.insert_into(&mut payload);
-    let op = build_op(arkret_wire::EventKind::MLS_KEYPACKAGE, payload);
-    let effect = state.projections().apply_mls_keypackage_claim(&op);
-    let (claimed_at, claimed_keypackage_id, claimed_group_id, claimed_realm_id) = match effect {
-        ProjectionEffectView::Mls(MlsProjectionEffect::KeyPackageClaimed {
-            keypackage_id,
-            group_id,
-            intended_realm_id: claimed_realm_id,
-            claimed_at,
-        }) => (claimed_at, keypackage_id, group_id, claimed_realm_id),
-        ProjectionEffectView::Rejected { reason } => {
-            // Two reject paths land here:
-            //   - mls_keypackage_already_claimed  → 409 cas_conflict
-            //   - mls_keypackage_not_found        → 404 not_found
-            //   - mls_keypackage_expired          → 412 failed_precondition
-            let err = match reason.as_str() {
-                soland_services::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED => {
-                    AppError::new(
-                        ErrorCode::CasConflict,
-                        "KeyPackage already claimed by another Welcome",
-                    )
-                    .with_wire_code(reason)
-                }
-                soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND => {
-                    AppError::not_found("KeyPackage not found").with_wire_code(reason)
-                }
-                arkret_wire::ReasonCode::KEYPACKAGE_EXPIRED => {
-                    AppError::new(ErrorCode::FailedPrecondition, "KeyPackage lifetime expired")
-                        .with_wire_code(reason)
-                }
-                arkret_wire::ReasonCode::CLAIM_GENERATION_MISMATCH => AppError::new(
-                    ErrorCode::FailedPrecondition,
-                    "KeyPackage cross-signing generation mismatch",
-                )
-                .with_wire_code(reason),
-                soland_services::operation_semantics::REASON_KEYPACKAGE_REALM_MISMATCH => {
-                    AppError::new(
-                        ErrorCode::FailedPrecondition,
-                        "KeyPackage Realm affinity mismatch",
-                    )
-                    .with_wire_code(reason)
-                }
-                _ => AppError::new(ErrorCode::SchemaViolation, reason),
-            };
-            return Err(err);
-        }
-        other => {
-            return Err(AppError::internal(format!(
-                "unexpected reducer effect: {other:?}"
-            )));
-        }
-    };
-
-    // Mirror into the durable store. The store's CAS path is what would
-    // catch a race between two coordinator workers in a production
-    // Pg-backed deployment; for the in-memory backend the reducer's
-    // lock above already serialised them.
-    let updated = state
-        .mls_key_packages()
-        .claim_key_package(soland_services::events::ClaimMlsKeyPackageCommand {
-            id: &claimed_keypackage_id,
-            target: soland_services::events::ClaimMlsKeyPackageTarget::Group(&claimed_group_id),
-            intended_realm_id: claimed_realm_id.as_deref(),
-            ssk_generation: claim_binding.ssk_generation,
-            device_authorize_event_id: claim_binding.device_authorize_event_id.as_deref(),
-            agent_key_authorize_event_id: claim_binding.agent_key_authorize_event_id.as_deref(),
-            claimed_at,
-            claim_expires_at_unix_ms: Some(body.expires_at.timestamp_millis()),
-        })
-        .await
-        .map_err(|err| AppError::internal(format!("mls_key_packages.try_claim: {err}")))?;
-    if updated.is_none() {
-        // Persistence said "already claimed" but the reducer didn't —
-        // means the store was pre-populated outside the reducer. Surface
-        // the conflict.
-        return Err(AppError::new(
-            ErrorCode::CasConflict,
-            "KeyPackage already claimed in store",
-        )
-        .with_wire_code(soland_services::operation_semantics::REASON_KEYPACKAGE_ALREADY_CLAIMED));
-    }
-    let Some(claimed_record) = updated else {
-        return Err(AppError::internal("claimed KeyPackage row missing"));
-    };
-
-    let outcome = KeyPackagesClaimOutcome {
-        claims: vec![keypackage_claim_record(&claimed_record, &body.claim_nonce)?],
-        failures: Vec::new(),
-        available_count: Some(available_keypackage_count(
+        };
+        return record_local_claim_terminal(
             state,
-            &target_principal_id,
-            None,
-            Some(&trust_selector),
-            Some(&intended_realm_id),
-        )),
-    };
-    if claimed_record.last_resort {
-        return record_local_last_resort_claim(
-            state,
-            body,
-            &claimed_record,
-            &mls_group_ref,
             &local_claim_request_id,
             &request_digest,
+            "failed",
+            None,
+            body,
             outcome,
             now_secs,
         )
         .await;
     }
-    Ok(outcome)
+
+    for (same_group_recovery, keypackage_id, claim_binding) in candidate_keypackages {
+        let Some(mut predicted) = durable_keypackages
+            .iter()
+            .find(|keypackage| keypackage.id == keypackage_id)
+            .cloned()
+        else {
+            continue;
+        };
+        if !same_group_recovery {
+            predicted.claimed_by_mls_group_id = Some(mls_group_ref.clone());
+            predicted.claimed_at = Some(now_secs);
+            predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
+            predicted.consumed_at = None;
+        }
+        let outcome = KeyPackagesClaimOutcome {
+            claims: vec![keypackage_claim_record(&predicted, &body.claim_nonce)?],
+            failures: Vec::new(),
+            // The immutable terminal response must retain the count observed
+            // at the successful transition; replay must not recompute it.
+            available_count: Some(if same_group_recovery {
+                available_before
+            } else {
+                available_before.saturating_sub(1)
+            }),
+        };
+        let ledger = local_claim_ledger_record(
+            state,
+            &local_claim_request_id,
+            &request_digest,
+            "claimed",
+            Some(&predicted),
+            body,
+            &outcome,
+            now_secs,
+        )?;
+
+        if same_group_recovery {
+            return match state
+                .mls_key_packages()
+                .store_peer_claim_terminal(&ledger)
+                .await
+                .map_err(|error| {
+                    AppError::internal(format!("local claim ledger append: {error}"))
+                })? {
+                PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(outcome),
+                PeerKeyPackageClaimLedgerWriteResult::Existing(existing) => {
+                    replay_local_claim(existing, &request_digest)
+                }
+            };
+        }
+
+        match state
+            .mls_key_packages()
+            .claim_peer_key_package(PeerKeyPackageClaimAttempt {
+                keypackage_id: &keypackage_id,
+                mls_group_id: &mls_group_ref,
+                ssk_generation: claim_binding.ssk_generation,
+                device_authorize_event_id: claim_binding.device_authorize_event_id.as_deref(),
+                agent_key_authorize_event_id: claim_binding.agent_key_authorize_event_id.as_deref(),
+                claimed_at: now_secs,
+                claim_expires_at_unix_ms: body.expires_at.timestamp_millis(),
+                ledger: &ledger,
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("local KeyPackage CAS: {error}")))?
+        {
+            PeerKeyPackageClaimAttemptResult::Claimed(claimed) => {
+                state.projections().mark_key_package_claimed(
+                    &keypackage_id,
+                    mls_group_ref.clone(),
+                    now_secs,
+                    Some(body.expires_at.timestamp_millis()),
+                );
+                debug_assert_eq!(claimed.id, keypackage_id);
+                return Ok(outcome);
+            }
+            PeerKeyPackageClaimAttemptResult::Existing(existing) => {
+                return replay_local_claim(existing, &request_digest);
+            }
+            PeerKeyPackageClaimAttemptResult::KeyPackageUnavailable => continue,
+        }
+    }
+
+    let outcome = KeyPackagesClaimOutcome {
+        claims: Vec::new(),
+        failures: vec![KeypackageFailure {
+            keypackage_ref: None,
+            device_id: target_device_ids.iter().next().cloned(),
+            reason_code: soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
+                .to_owned(),
+            retry_after_ms: None,
+        }],
+        available_count: Some(available_before),
+    };
+    record_local_claim_terminal(
+        state,
+        &local_claim_request_id,
+        &request_digest,
+        "failed",
+        None,
+        body,
+        outcome,
+        now_secs,
+    )
+    .await
 }
 
-fn local_last_resort_claim_request_id(
-    body: &KeyPackagesClaimRequestBody,
-) -> Result<String, AppError> {
+fn local_claim_request_id(body: &KeyPackagesClaimRequestBody) -> Result<String, AppError> {
     let identity = json!({
         "requester": body.requester,
         "claim_nonce": body.claim_nonce,
     });
     let digest = arkret_canonical::canonical_sha256(&identity)
-        .map_err(|error| AppError::internal(format!("last-resort claim identity: {error}")))?;
+        .map_err(|error| AppError::internal(format!("local claim identity: {error}")))?;
+    // Keep the original namespace so already-persisted last-resort terminal
+    // rows remain reachable after ordinary claims join the same ledger.
     Ok(format!("local-last-resort:{digest}"))
 }
 
-async fn record_local_last_resort_claim(
+fn local_claim_ledger_record(
     state: &AppState,
-    body: &KeyPackagesClaimRequestBody,
-    keypackage: &MlsKeyPackageRow,
-    mls_group_ref: &str,
     claim_request_id: &str,
     request_digest: &str,
-    outcome: KeyPackagesClaimOutcome,
+    terminal_state: &str,
+    keypackage: Option<&MlsKeyPackageRow>,
+    body: &KeyPackagesClaimRequestBody,
+    outcome: &KeyPackagesClaimOutcome,
     claimed_at: i64,
-) -> Result<KeyPackagesClaimOutcome, AppError> {
-    let response = serde_json::to_value(&outcome).map_err(|error| {
-        AppError::internal(format!("last-resort claim response serialize: {error}"))
-    })?;
-    let record = PeerKeyPackageClaimLedgerRecord {
+) -> Result<PeerKeyPackageClaimLedgerRecord, AppError> {
+    let response = serde_json::to_value(&outcome)
+        .map_err(|error| AppError::internal(format!("local claim response serialize: {error}")))?;
+    Ok(PeerKeyPackageClaimLedgerRecord {
         source_service_id: state.service_id().clone(),
         claim_request_id: claim_request_id.to_owned(),
         request_digest: request_digest.to_owned(),
-        state: "last_resort_claimed".to_owned(),
-        outcome: Some(json!({
-            "schema": "soland.last_resort_keypackage_claim.v1",
-            "claim_id": format!("{}:{}", keypackage.id, body.claim_nonce),
-            "keypackage_id": keypackage.id,
-            "keypackage_ref": keypackage.keypackage_ref,
-            "keypackage_digest": keypackage.keypackage_digest,
-            "claimant_id": body.requester,
-            "recipient_principal_id": body.target_principal_id,
-            "recipient_device_id": keypackage.device_id,
-            "intended_realm_id": body.intended_realm_id,
-            "mls_group_ref": mls_group_ref,
-            "strand_id": body.strand_id,
-            "claim_nonce": body.claim_nonce,
-            "claimed_at_unix_seconds": claimed_at,
-            "transaction_expires_at": body.expires_at,
-            "response": response,
-        })),
-        keypackage_id: Some(keypackage.id.clone()),
-        // A reusable last-resort package has no single-use claim deadline and
-        // MUST remain published. The transaction deadline is retained inside
-        // the immutable audit payload instead.
-        claim_expires_at_unix_ms: None,
+        state: terminal_state.to_owned(),
+        outcome: Some(response),
+        keypackage_id: keypackage.map(|keypackage| keypackage.id.clone()),
+        claim_expires_at_unix_ms: Some(body.expires_at.timestamp_millis()),
+        // Protocol terminal outcomes remain replayable for the lifetime of
+        // this authority; expiry of the KeyPackage claim is a separate field.
         expires_at: i64::MAX,
         updated_at: claimed_at,
-    };
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_local_claim_terminal(
+    state: &AppState,
+    claim_request_id: &str,
+    request_digest: &str,
+    terminal_state: &str,
+    keypackage: Option<&MlsKeyPackageRow>,
+    body: &KeyPackagesClaimRequestBody,
+    outcome: KeyPackagesClaimOutcome,
+    updated_at: i64,
+) -> Result<KeyPackagesClaimOutcome, AppError> {
+    let record = local_claim_ledger_record(
+        state,
+        claim_request_id,
+        request_digest,
+        terminal_state,
+        keypackage,
+        body,
+        &outcome,
+        updated_at,
+    )?;
     match state
         .mls_key_packages()
         .store_peer_claim_terminal(&record)
         .await
-        .map_err(|error| {
-            AppError::internal(format!("last-resort claim ledger append failed: {error}"))
-        })? {
+        .map_err(|error| AppError::internal(format!("local claim ledger append: {error}")))?
+    {
         PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(outcome),
-        PeerKeyPackageClaimLedgerWriteResult::Existing(existing)
-            if existing.request_digest == request_digest =>
-        {
-            replay_local_last_resort_claim(existing, request_digest)
+        PeerKeyPackageClaimLedgerWriteResult::Existing(existing) => {
+            replay_local_claim(existing, request_digest)
         }
-        PeerKeyPackageClaimLedgerWriteResult::Existing(_) => Err(AppError::new(
-            ErrorCode::CasConflict,
-            "last-resort claim nonce was already used for a different request",
-        )
-        .with_wire_code("duplicate_conflict")),
     }
 }
 
-fn replay_local_last_resort_claim(
+fn replay_local_claim(
     record: PeerKeyPackageClaimLedgerRecord,
     request_digest: &str,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    if record.state != "last_resort_claimed" || record.request_digest != request_digest {
+    if record.request_digest != request_digest {
         return Err(AppError::new(
             ErrorCode::CasConflict,
-            "last-resort claim idempotency record conflicts with the request",
+            "local claim idempotency record conflicts with the request",
         )
         .with_wire_code("duplicate_conflict"));
     }
-    let response = record
+    let outcome = record
         .outcome
-        .and_then(|value| value.get("response").cloned())
-        .ok_or_else(|| AppError::internal("last-resort claim ledger response is missing"))?;
+        .ok_or_else(|| AppError::internal("local claim ledger response is missing"))?;
+    // Preserve replay compatibility with terminal rows emitted before the
+    // ordinary-claim ledger covered every local claim.
+    let response = if record.state == "last_resort_claimed" {
+        outcome
+            .get("response")
+            .cloned()
+            .ok_or_else(|| AppError::internal("legacy local claim response is missing"))?
+    } else if matches!(record.state.as_str(), "claimed" | "failed") {
+        outcome
+    } else {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "local claim idempotency record has a non-success terminal state",
+        )
+        .with_wire_code("duplicate_conflict"));
+    };
     serde_json::from_value(response)
-        .map_err(|error| AppError::internal(format!("last-resort claim replay failed: {error}")))
+        .map_err(|error| AppError::internal(format!("local claim replay failed: {error}")))
 }
 
 #[salvo::oapi::endpoint(
@@ -3081,10 +3069,43 @@ mod trust_binding_tests {
             "mls-group-a"
         ));
         ordinary.last_resort = true;
+        assert!(!ordinary_keypackage_is_available(&ordinary));
         assert!(!ordinary_keypackage_is_same_group_claim(
             &ordinary,
             "mls-group-a"
         ));
+    }
+
+    #[test]
+    fn local_claim_terminal_replays_exact_response_and_rejects_nonce_rebinding() {
+        let response_value = json!({
+            "claims": [],
+            "failures": [],
+            "available_count": 7
+        });
+        let response: KeyPackagesClaimOutcome =
+            serde_json::from_value(response_value).expect("fixture response");
+        let response = serde_json::to_value(response).expect("canonical fixture response");
+        let record = PeerKeyPackageClaimLedgerRecord {
+            source_service_id: "did:web:local.example".to_owned(),
+            claim_request_id: "local-last-resort:fixture".to_owned(),
+            request_digest: "sha256:first".to_owned(),
+            state: "claimed".to_owned(),
+            outcome: Some(response.clone()),
+            keypackage_id: Some("kp-1".to_owned()),
+            claim_expires_at_unix_ms: Some(2_000),
+            expires_at: i64::MAX,
+            updated_at: 1,
+        };
+
+        let replayed = replay_local_claim(record.clone(), "sha256:first").unwrap();
+        assert_eq!(serde_json::to_value(replayed).unwrap(), response);
+
+        let conflict = replay_local_claim(record, "sha256:second").unwrap_err();
+        assert_eq!(
+            conflict.wire_code_override.as_deref(),
+            Some("duplicate_conflict")
+        );
     }
 
     #[tokio::test]
