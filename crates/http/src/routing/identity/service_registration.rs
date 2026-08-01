@@ -5,7 +5,7 @@ use arkret_models_identity::service_identity::{
     CanonicalServiceUrl, ServiceRegistrationEnsureRequestBody, ServiceRegistrationKey,
     ServiceRegistrationOutcome, ServiceRegistrationReceipt, ServiceWebvhDataIntegrityProof,
 };
-use arkret_wire::ServiceKind;
+use arkret_wire::{ServiceKind, ServiceRegistrationReceiptId};
 use ed25519_dalek::Signer;
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
@@ -181,12 +181,13 @@ fn sign_registration_receipt(
     });
     let receipt_digest = arkret_canonical::canonical_sha256(&receipt_claims)
         .map_err(|error| AppError::internal(error.to_string()))?;
-    let receipt_id = format!(
+    let registration_receipt_id = ServiceRegistrationReceiptId::new(format!(
         "ak:service_registration_receipt:{}",
         receipt_digest
             .strip_prefix("sha256:")
             .unwrap_or(&receipt_digest)
-    );
+    ))
+    .map_err(|error| AppError::internal(error.to_string()))?;
     let verification_method = provider_verification_method(&provider_service_id)?;
     let proof_config = json!({
         "type": "DataIntegrityProof",
@@ -195,7 +196,7 @@ fn sign_registration_receipt(
         "proofPurpose": "assertionMethod",
     });
     let signed_receipt = json!({
-        "receipt_id": receipt_id,
+        "registration_receipt_id": registration_receipt_id,
         "registration_key": key,
         "service_id": request.inception_operation.state.id,
         "version_id": request.inception_operation.version_id,
@@ -220,7 +221,7 @@ fn sign_registration_receipt(
         proof_value: format!("z{}", bs58::encode(signature.to_bytes()).into_string()),
     };
     let receipt = ServiceRegistrationReceipt {
-        receipt_id,
+        registration_receipt_id,
         registration_key: key.clone(),
         service_id: request.inception_operation.state.id.clone(),
         version_id: request.inception_operation.version_id.clone(),

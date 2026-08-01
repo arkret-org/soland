@@ -187,7 +187,9 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
             .map(|operation| (*operation).to_owned())
             .collect(),
         supported_bindings: vec![
-            arkret_models_discovery::service_description::SupportedBinding::new("http_json")
+            arkret_models_discovery::service_description::SupportedBinding::new(
+                arkret_wire::BindingKind::HttpJson,
+            )
                 .with_base_url(state.config().public_base_url.trim_end_matches('/')),
         ],
         supported_features: supported_features.clone(),

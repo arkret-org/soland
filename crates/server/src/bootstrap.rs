@@ -813,7 +813,7 @@ fn validate_registration_receipt_signature(
         anyhow::bail!("identity bundle receipt uses an unexpected verification method");
     }
     let signing_input = registration_receipt_signing_input(
-        &receipt.receipt_id,
+        receipt.registration_receipt_id.as_str(),
         &receipt.registration_key,
         &receipt.service_id,
         &receipt.version_id,
@@ -1163,18 +1163,18 @@ fn sign_registration_receipt(
         "provider_service_id": provider_service_id,
     });
     let receipt_digest = arkret_canonical::canonical_sha256(&receipt_claims)?;
-    let receipt_id = format!(
+    let registration_receipt_id = arkret_wire::ServiceRegistrationReceiptId::new(format!(
         "ak:service_registration_receipt:{}",
         receipt_digest
             .strip_prefix("sha256:")
             .unwrap_or(&receipt_digest)
-    );
+    ))?;
     let verification_method = arkret_wire::DidUrl::new(format!("{provider_service_id}#notary-key"))
         .map_err(|error| {
             anyhow::anyhow!("provider notary verification method is invalid: {error}")
         })?;
     let signing_input = registration_receipt_signing_input(
-        &receipt_id,
+        registration_receipt_id.as_str(),
         key,
         &request.inception_operation.state.id,
         &request.inception_operation.version_id,
@@ -1186,7 +1186,7 @@ fn sign_registration_receipt(
     )?;
     let signature = SigningKey::from_bytes(signing_seed).sign(&signing_input);
     let receipt = ServiceRegistrationReceipt {
-        receipt_id,
+        registration_receipt_id,
         registration_key: key.clone(),
         service_id: request.inception_operation.state.id.clone(),
         version_id: request.inception_operation.version_id.clone(),
@@ -1208,7 +1208,7 @@ fn sign_registration_receipt(
 
 #[allow(clippy::too_many_arguments)]
 fn registration_receipt_signing_input(
-    receipt_id: &str,
+    registration_receipt_id: &str,
     registration_key: &ServiceRegistrationKey,
     service_id: &Did,
     version_id: &str,
@@ -1225,7 +1225,7 @@ fn registration_receipt_signing_input(
         "proofPurpose": "assertionMethod",
     });
     let signed_receipt = json!({
-        "receipt_id": receipt_id,
+        "registration_receipt_id": registration_receipt_id,
         "registration_key": registration_key,
         "service_id": service_id,
         "version_id": version_id,

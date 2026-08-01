@@ -1028,14 +1028,18 @@ pub fn describe(
         // Emit the same public base URL used by the HTTP describe handler so
         // clients can build `base_url + operation_path` directly.
         supported_bindings: vec![
-            arkret_models_discovery::service_description::SupportedBinding::new("http_json")
+            arkret_models_discovery::service_description::SupportedBinding::new(
+                arkret_wire::BindingKind::HttpJson,
+            )
                 .with_base_url(public_base_url.trim_end_matches('/')),
             // Per-operation HTTP companion binding (transport-bindings.md
             // §6.1): tus 1.0.0 resumable upload for ak.self.blob.upload.
             // Versions/extensions mirror the OPTIONS probe answers of
             // routing::interop::blob_resumable — describe and wire MUST
             // agree.
-            arkret_models_discovery::service_description::SupportedBinding::new("tus")
+            arkret_models_discovery::service_description::SupportedBinding::new(
+                arkret_wire::BindingKind::Tus,
+            )
                 .with_base_url(format!(
                     "{}/_arkret/self/blob/resumable",
                     public_base_url.trim_end_matches('/')

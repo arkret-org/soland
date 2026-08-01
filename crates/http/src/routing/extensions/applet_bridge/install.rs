@@ -1248,9 +1248,10 @@ pub(super) fn widget_effect_for_package(package: &AppletPackage) -> WidgetEffect
     }
 }
 
-pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<String, AppError> {
+pub(super) fn deterministic_plan_id(plan_seed: &Value) -> Result<arkret_wire::PlanId, AppError> {
     let digest = canonical_digest(plan_seed)?;
-    Ok(format!("ak:plan:{}", digest.trim_start_matches("sha256:")))
+    arkret_wire::PlanId::new(format!("ak:plan:{}", digest.trim_start_matches("sha256:")))
+        .map_err(|error| AppError::internal(error.to_string()))
 }
 
 pub(super) fn canonical_digest(value: &Value) -> Result<String, AppError> {

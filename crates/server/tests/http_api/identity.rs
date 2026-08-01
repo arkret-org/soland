@@ -252,8 +252,8 @@ async fn standard_service_registration_is_idempotent_and_rejects_forks() {
     assert!(!existing.created);
     assert_eq!(existing.service_id, created.service_id);
     assert_eq!(
-        existing.registration_receipt.receipt_id,
-        created.registration_receipt.receipt_id
+        existing.registration_receipt.registration_receipt_id,
+        created.registration_receipt.registration_receipt_id
     );
 
     let fetched: arkret_models_identity::service_identity::ServiceRegistrationOutcome = TestClient::get(
