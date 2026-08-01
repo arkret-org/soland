@@ -2606,9 +2606,8 @@ async fn mls_prejoin_history_rejects_non_history_capable_content_scheme() {
         "00000000c102",
         arkret_wire::EventKind::REALM_POLICY_BUNDLE,
         json!({
-            "value": {
-                "content_scheme": "mls_rfc9420"
-            }
+            "policy_revision": 1,
+            "content_scheme": "mls_rfc9420"
         }),
     );
 
@@ -2653,9 +2652,8 @@ async fn mls_prejoin_history_accepts_exporter_aead_content_scheme() {
         "00000000c202",
         arkret_wire::EventKind::REALM_POLICY_BUNDLE,
         json!({
-            "value": {
-                "content_scheme": "mls_exporter_aead_v1"
-            }
+            "policy_revision": 1,
+            "content_scheme": "mls_exporter_aead_v1"
         }),
     );
 

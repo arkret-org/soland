@@ -38,7 +38,6 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 // `ak.realm.freeze` is reversible read-only hold. `ak.realm.tombstone` is a
 // terminal migration to a successor Realm. `ak.realm.destroy` is terminal
 // no-successor retirement ("dissolve/close Realm" at product level).
-pub const CONFLICT_REPAIR: &str = "ak.conflict.repair";
 // Round 14e+ (2026-05-16) — Agent protocol family. Spec
 // `extensions/agent-integration.md`. Mirror of applet but with a
 // terminal `*.result` event that carries the signed audit binding.
@@ -248,9 +247,7 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     let object_kind = operation.object_kind.as_str();
-    if artifacts::active_local_operation_event_kinds().contains(object_kind)
-        || object_kind == CONFLICT_REPAIR
-    {
+    if artifacts::active_local_operation_event_kinds().contains(object_kind) {
         Some(object_kind)
     } else {
         None

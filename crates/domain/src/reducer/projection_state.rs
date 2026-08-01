@@ -739,20 +739,40 @@ impl ProjectionState {
         }
     }
 
+    /// Look up a cell's resolved state inside one Realm namespace.
+    ///
+    /// Null-subject singleton cells reuse the same wire [`CellRef`] across
+    /// Realms, so they must be resolved through the Realm-partitioned caches
+    /// rather than the process-wide `cells` map. Keeping the state-level
+    /// lookup here also lets administrative readers expose `Bottom` instead
+    /// of accidentally treating it as absent.
+    pub fn realm_cell(&self, realm_id: &str, cell_id: &CellRef) -> Option<&CellState> {
+        match cell_id.as_str() {
+            arkret_wire::REALM_METADATA_CELL => self.realm_metadata_cells.get(realm_id),
+            arkret_wire::REALM_CREATE_CELL => self.realm_create_cells.get(realm_id),
+            arkret_wire::REALM_NOTARY_CELL => self.realm_notary_cells.get(realm_id),
+            "ak:cell:ak.component.realm.policy_bundle.v1:null" => {
+                self.realm_policy_bundle_cells.get(realm_id)
+            }
+            _ => {
+                let realm_key = (realm_id.to_owned(), cell_id.as_str().to_owned());
+                let realm_state = self.realm_null_subject_cells.get(&realm_key);
+                let is_null_subject = arkret_wire::CellId::from_ref(cell_id)
+                    .is_ok_and(|parsed| parsed.subject() == "null");
+                if is_null_subject {
+                    realm_state
+                } else {
+                    realm_state.or_else(|| self.cells.get(cell_id))
+                }
+            }
+        }
+    }
+
     /// Resolve a cell inside one Realm namespace. Canonical null-subject
     /// singleton cells share the same wire CellRef across Realms, so their
     /// process cache keeps the Realm id as a separate key dimension.
     pub fn realm_cell_value(&self, realm_id: &str, cell_id: &CellRef) -> Option<&Value> {
-        let realm_key = (realm_id.to_owned(), cell_id.as_str().to_owned());
-        let realm_state = self.realm_null_subject_cells.get(&realm_key);
-        let is_null_subject =
-            arkret_wire::CellId::from_ref(cell_id).is_ok_and(|parsed| parsed.subject() == "null");
-        let state = if is_null_subject {
-            realm_state
-        } else {
-            realm_state.or_else(|| self.cells.get(cell_id))
-        }?;
-        match state {
+        match self.realm_cell(realm_id, cell_id)? {
             CellState::Value(value) => Some(value),
             CellState::Bottom(_) => None,
         }

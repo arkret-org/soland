@@ -17,6 +17,15 @@ pub(super) async fn private_contact_discovery(
     require_demo_directory_provider(state)?;
     let _ = authenticated_session(state, req).await.ok();
     let _ = body.into_inner();
+    // When this grows a real implementation it MUST arrive with the
+    // `identity/consent-model.md` §6.2.1 / §6.2.2 anti-probe controls, not
+    // after them: per-`(requester, holder)` rate limiting, a coarse time bucket
+    // on the hit bitmap so a flipped bit does not date the holder's decision,
+    // a holder-auditable record of who probed them, and a per-requester-salted
+    // HMAC or audience-bound opaque token in place of any bare consent state
+    // hash. They are properties of the response shape and of the request
+    // budget, so retrofitting them means changing the wire contract — which is
+    // why they belong in the first version, not a follow-up.
     Err(AppError::unsupported_feature(
         "private contact discovery requires ak.private_contact_discovery.v1 two-round VOPRF set-membership PSI; plaintext identifier matching is disabled",
     ))

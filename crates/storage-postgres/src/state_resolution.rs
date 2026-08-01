@@ -340,9 +340,17 @@ fn sealed_op_from_value(value: Value) -> StoreResult<IssuedOp> {
         .cloned()
         .ok_or_else(|| StoreError::Backend("sealed op missing op".to_owned()))
         .and_then(|op| serde_json::from_value::<LatticeOp>(op).map_err(serde_to_store))?;
+    let recovery_reset = value
+        .get("recovery_reset")
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
     Ok(IssuedOp {
         issuer,
-        op: SealedOp::new(move_id, op),
+        op: SealedOp {
+            move_id,
+            op,
+            recovery_reset,
+        },
     })
 }
 
@@ -375,6 +383,7 @@ fn sealed_op_to_value(issued: &IssuedOp) -> StoreResult<Value> {
         "issuer": issued.issuer.as_str(),
         "move_id": issued.op.move_id.as_str(),
         "op": serde_json::to_value(&issued.op.op).map_err(serde_to_store)?,
+        "recovery_reset": issued.op.recovery_reset,
     }))
 }
 
@@ -1832,8 +1841,31 @@ mod event_seal_commit_tests {
     use super::{
         BTreeSet, CellRef, CellRegistry, CellStore, EventSealCommitStore, Hash, LatticeOp,
         MemoryEventSealCommitStore, RealmId, Seal, SealId, SealedOp, build_state_resolution_stores,
-        compute_state_root, effective_state_with_new_ops,
+        compute_state_root, effective_state_with_new_ops, sealed_op_from_value, sealed_op_to_value,
     };
+
+    #[test]
+    fn recovery_reset_marker_survives_postgres_json_round_trip() {
+        let mut sealed = SealedOp::new(
+            Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap(),
+            LatticeOp {
+                op_type: LatticeOpType::Set,
+                tag: None,
+                value: Some(json!({"status": "recovered"})),
+                from: None,
+                to: None,
+                reason: None,
+                issuer_seq: None,
+            },
+        );
+        sealed.recovery_reset = true;
+        let issued = test_issued(sealed);
+        let encoded = sealed_op_to_value(&issued).expect("encode stored op");
+        assert_eq!(encoded["recovery_reset"], true);
+        let decoded = sealed_op_from_value(encoded).expect("decode stored op");
+        assert!(decoded.op.recovery_reset);
+        assert_eq!(decoded, issued);
+    }
 
     #[test]
     fn in_memory_state_resolution_reuses_the_validated_registry_instance() {

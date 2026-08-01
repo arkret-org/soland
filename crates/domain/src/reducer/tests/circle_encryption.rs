@@ -1,5 +1,30 @@
 use super::*;
 
+fn apply_policy_bundle(
+    state: &mut ProjectionState,
+    hlc: &ServerHlc,
+    realm: &str,
+    mut payload: serde_json::Value,
+) -> ProjectionEffect {
+    let next_revision = state
+        .realm_policy_bundle_cell_value(realm)
+        .and_then(|value| value.get("policy_revision"))
+        .and_then(serde_json::Value::as_u64)
+        .unwrap_or(0)
+        + 1;
+    payload
+        .as_object_mut()
+        .expect("policy bundle fixture is an object")
+        .insert(
+            "policy_revision".to_owned(),
+            serde_json::json!(next_revision),
+        );
+    state.apply(
+        &make_operation(arkret_wire::EventKind::REALM_POLICY_BUNDLE, realm, payload),
+        hlc,
+    )
+}
+
 // ── AKP-0007 §8 — Circle member one-way add authorization ───────────
 //
 // Seed a Realm with `alice` (manage holder) + `bob` joined, plus a
@@ -213,10 +238,7 @@ fn content_floor_ratchet_allows_upgrade_then_rejects_downgrade() {
             Some(f) => serde_json::json!({ "content_encryption_floor": f }),
             None => serde_json::json!({}),
         };
-        state.apply(
-            &make_operation(arkret_wire::EventKind::REALM_POLICY_BUNDLE, realm, payload),
-            &hlc,
-        )
+        apply_policy_bundle(state, &hlc, realm, payload)
     };
     // baseline allow_plaintext -> projected
     assert!(matches!(
@@ -246,13 +268,11 @@ fn metadata_floor_ratchet_rejects_downgrade() {
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892062";
     let apply_meta = |state: &mut ProjectionState, level: &str| {
-        state.apply(
-            &make_operation(
-                arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-                realm,
-                serde_json::json!({ "metadata_encryption_floor": level }),
-            ),
+        apply_policy_bundle(
+            state,
             &hlc,
+            realm,
+            serde_json::json!({ "metadata_encryption_floor": level }),
         )
     };
     assert!(matches!(
@@ -279,10 +299,7 @@ fn content_scheme_ratchet_allows_upgrade_then_rejects_downgrade() {
             Some(s) => serde_json::json!({ "content_scheme": s }),
             None => serde_json::json!({}),
         };
-        state.apply(
-            &make_operation(arkret_wire::EventKind::REALM_POLICY_BUNDLE, realm, payload),
-            &hlc,
-        )
+        apply_policy_bundle(state, &hlc, realm, payload)
     };
     // baseline mls_rfc9420 -> projected
     assert!(matches!(
@@ -318,13 +335,11 @@ fn content_scheme_rejects_unknown_value() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892064";
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({ "content_scheme": "aes-gcm-siv-handrolled" }),
     );
     assert!(matches!(
         effect,
@@ -355,13 +370,11 @@ fn prejoin_history_rejects_strict_content_scheme_on_mls_realm() {
         Some("shared")
     );
 
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({ "content_scheme": "mls_rfc9420" }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({ "content_scheme": "mls_rfc9420" }),
     );
     assert!(
         matches!(
@@ -389,13 +402,11 @@ fn prejoin_history_accepts_exporter_aead_scheme_on_mls_realm() {
         }])),
     );
 
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({ "content_scheme": "mls_exporter_aead_v1" }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({ "content_scheme": "mls_exporter_aead_v1" }),
     );
     assert!(matches!(
         effect,
@@ -423,13 +434,11 @@ fn content_scheme_falls_back_to_realm_create_log() {
         state.realm_content_scheme(realm).as_deref(),
         Some("mls_exporter_aead_v1")
     );
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({ "content_scheme": "mls_rfc9420" }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({ "content_scheme": "mls_rfc9420" }),
     );
     assert!(matches!(
         effect,
@@ -452,18 +461,16 @@ fn durability_policy_requires_exporter_aead_scheme() {
         "verification_method": "did:web:hr.example#rrk-1"
     });
     // No scheme committed yet (defaults to mls_rfc9420) → incompatible.
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({
-                "durability_policy": {
-                    "mode": "org_recovery_key",
-                    "recovery_recipients": [recipient]
-                }
-            }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({
+            "durability_policy": {
+                "mode": "org_recovery_key",
+                "recovery_recipients": [recipient]
+            }
+        }),
     );
     assert!(matches!(
         effect,
@@ -484,19 +491,17 @@ fn durability_policy_accepted_on_exporter_aead_scheme() {
         "verification_method": "did:web:hr.example#rrk-1"
     });
     // Same-update set of scheme + durability policy is accepted.
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({
-                "content_scheme": "mls_exporter_aead_v1",
-                "durability_policy": {
-                    "mode": "org_recovery_key",
-                    "recovery_recipients": [recipient]
-                }
-            }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({
+            "content_scheme": "mls_exporter_aead_v1",
+            "durability_policy": {
+                "mode": "org_recovery_key",
+                "recovery_recipients": [recipient]
+            }
+        }),
     );
     assert!(matches!(
         effect,
@@ -519,19 +524,17 @@ fn durability_policy_rejects_empty_recipients() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("durability-empty");
     let realm = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d003";
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({
-                "content_scheme": "mls_exporter_aead_v1",
-                "durability_policy": {
-                    "mode": "org_recovery_key",
-                    "recovery_recipients": []
-                }
-            }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({
+            "content_scheme": "mls_exporter_aead_v1",
+            "durability_policy": {
+                "mode": "org_recovery_key",
+                "recovery_recipients": []
+            }
+        }),
     );
     assert!(matches!(
         effect,
@@ -550,20 +553,18 @@ fn durability_policy_threshold_validates_k_of_n() {
         {"recipient_id": "rrk-2", "principal_id": "did:web:b.example", "verification_method": "did:web:b.example#rrk"}
     ]);
     // n=3 but only 2 recipients → invalid.
-    let effect = state.apply(
-        &make_operation(
-            arkret_wire::EventKind::REALM_POLICY_BUNDLE,
-            realm,
-            serde_json::json!({
-                "content_scheme": "mls_exporter_aead_v1",
-                "durability_policy": {
-                    "mode": "threshold",
-                    "recovery_recipients": recipients,
-                    "threshold": {"k": 2, "n": 3}
-                }
-            }),
-        ),
+    let effect = apply_policy_bundle(
+        &mut state,
         &hlc,
+        realm,
+        serde_json::json!({
+            "content_scheme": "mls_exporter_aead_v1",
+            "durability_policy": {
+                "mode": "threshold",
+                "recovery_recipients": recipients,
+                "threshold": {"k": 2, "n": 3}
+            }
+        }),
     );
     assert!(matches!(
         effect,

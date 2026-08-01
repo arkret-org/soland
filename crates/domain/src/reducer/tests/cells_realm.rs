@@ -350,11 +350,9 @@ fn realm_update_writes_metadata_cell_with_cas_register_semantics() {
 }
 
 #[test]
-fn authoritative_realm_metadata_bottom_blocks_update_and_repair_clears() {
+fn authoritative_realm_metadata_bottom_blocks_update() {
     let mut state = ProjectionState::new();
-    let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let basis = "ak:seal:sha256:0000000000000000000000000000000000000000000000000000000000000000";
     let first_id =
         "ak:move:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let second_id =
@@ -384,32 +382,6 @@ fn authoritative_realm_metadata_bottom_blocks_update_and_repair_clears() {
             }),
         )),
         Err("cell_bottom_state")
-    );
-
-    let repair = make_operation(
-        crate::kinds::CONFLICT_REPAIR,
-        realm,
-        serde_json::json!({
-            "cell_id": cell.as_str(),
-            "conflict_heads": [first_id, second_id],
-            "recovery_capability_ref": "cap.recovery-01",
-            "winner_value": {"title": "renamed by alice"},
-            "state_witness_ref": basis,
-        }),
-    );
-    state.apply(&repair, &hlc);
-    let repaired = state
-        .realm_metadata_cell_value(realm)
-        .expect("repair should restore cell value");
-    assert_eq!(
-        repaired.get("title").and_then(Value::as_str),
-        Some("renamed by alice")
-    );
-    assert!(
-        repaired
-            .get("repair_of")
-            .and_then(Value::as_array)
-            .is_some()
     );
 }
 
@@ -1026,6 +998,45 @@ fn realm_cell_value_keeps_null_subject_singletons_realm_scoped() {
     );
 }
 
+#[test]
+fn realm_cell_exposes_policy_bundle_without_cross_realm_leakage() {
+    use arkret_state::lattice::CellState;
+
+    let mut state = ProjectionState::new();
+    let cell_id = arkret_identifiers::CellRef::new(
+        "ak:cell:ak.component.realm.policy_bundle.v1:null".to_owned(),
+    )
+    .unwrap();
+    state.realm_policy_bundle_cells.insert(
+        "ak:realm:first".to_owned(),
+        CellState::Value(serde_json::json!({
+            "policy_revision": 1,
+            "join_policy": {"join_rule": "knock"},
+        })),
+    );
+    state.realm_policy_bundle_cells.insert(
+        "ak:realm:second".to_owned(),
+        CellState::Value(serde_json::json!({
+            "policy_revision": 4,
+            "join_policy": {"join_rule": "invite"},
+        })),
+    );
+
+    assert!(matches!(
+        state.realm_cell("ak:realm:first", &cell_id),
+        Some(CellState::Value(value))
+            if value.get("policy_revision").and_then(Value::as_u64) == Some(1)
+    ));
+    assert_eq!(
+        state
+            .realm_cell_value("ak:realm:second", &cell_id)
+            .and_then(|value| value.get("policy_revision"))
+            .and_then(Value::as_u64),
+        Some(4)
+    );
+    assert!(state.realm_cell("ak:realm:missing", &cell_id).is_none());
+}
+
 fn base_search_policy() -> Value {
     serde_json::json!({
         "enabled_profile_refs": ["ak.profile.search.blind_index.v1"],
@@ -1154,6 +1165,56 @@ fn apply_bundle(state: &mut ProjectionState, realm_id: &str, payload: Value) -> 
         payload,
     );
     state.apply_realm_policy_bundle(&operation)
+}
+
+#[test]
+fn policy_bundle_revision_starts_at_one_and_advances_without_gaps() {
+    let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d100";
+    let mut state = ProjectionState::new();
+
+    assert!(matches!(
+        apply_bundle(
+            &mut state,
+            realm_id,
+            serde_json::json!({"policy_revision": 2, "media_service_decrypts": true}),
+        ),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::POLICY_REVISION_GAP
+    ));
+    assert!(matches!(
+        apply_bundle(
+            &mut state,
+            realm_id,
+            serde_json::json!({"policy_revision": 1, "media_service_decrypts": true}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+    assert!(matches!(
+        apply_bundle(
+            &mut state,
+            realm_id,
+            serde_json::json!({"policy_revision": 1, "media_service_decrypts": false}),
+        ),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ErrorCode::POLICY_REVISION_ROLLBACK
+    ));
+    assert!(matches!(
+        apply_bundle(
+            &mut state,
+            realm_id,
+            serde_json::json!({"policy_revision": 3, "media_service_decrypts": false}),
+        ),
+        ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::POLICY_REVISION_GAP
+    ));
+    assert!(matches!(
+        apply_bundle(
+            &mut state,
+            realm_id,
+            serde_json::json!({"policy_revision": 2, "media_service_decrypts": false}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
 }
 
 #[test]

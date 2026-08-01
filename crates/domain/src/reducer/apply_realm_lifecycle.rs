@@ -874,7 +874,7 @@ impl ProjectionState {
     }
 
     /// The registered cell family that backs `ak.realm.update` mutable Realm
-    /// metadata and its CAS-register / bottom / conflict-repair mechanics. Its
+    /// metadata and its CAS-register / bottom mechanics. Its
     /// wire subject is the literal `null`; `realm_id` is the enclosing
     /// CellStore namespace and remains a side-band map key.
     ///
@@ -902,126 +902,8 @@ impl ProjectionState {
                 }
                 Ok(())
             }
-            Some(crate::kinds::CONFLICT_REPAIR) => {
-                self.validate_conflict_repair_operation(operation)
-            }
             _ => Ok(()),
         }
-    }
-
-    pub(crate) fn validate_conflict_repair_operation(
-        &self,
-        operation: &Operation,
-    ) -> Result<(), &'static str> {
-        let cell_id = operation
-            .payload
-            .get("cell_id")
-            .and_then(Value::as_str)
-            .ok_or("conflict_repair_missing_cell")?;
-        let cell = CellRef::new(cell_id.to_owned()).map_err(|_| "conflict_repair_invalid_cell")?;
-        let state = if cell.as_str() == arkret_wire::REALM_METADATA_CELL {
-            self.realm_metadata_cells.get(operation.realm_id.as_str())
-        } else {
-            self.cells.get(&cell)
-        };
-        let Some(CellState::Bottom(bottom)) = state else {
-            return Err("cell_not_bottom");
-        };
-        let declared = conflict_heads_from_payload(&operation.payload);
-        if declared.len() < 2 {
-            return Err("repair_head_in_missing");
-        }
-        let actual = bottom_head_ids(bottom);
-        if actual.len() < 2 || declared.iter().any(|head| !actual.contains(head)) {
-            return Err("repair_head_in_drift");
-        }
-        let recovery_capability = operation
-            .payload
-            .get("recovery_capability")
-            .or_else(|| operation.payload.get("recovery_capability_ref"))
-            .and_then(Value::as_str)
-            .ok_or("recovery_capability_missing")?;
-        if recovery_capability.trim().is_empty() {
-            return Err("recovery_capability_missing");
-        }
-        let witness = operation
-            .payload
-            .get("state_witness")
-            .or_else(|| operation.payload.get("state_witness_ref"))
-            .and_then(Value::as_str)
-            .ok_or("recovery_witness_missing")?;
-        if !witness.starts_with("ak:seal:sha256:") {
-            return Err("repair_state_witness_invalid");
-        }
-        if declared.iter().any(|head| head == witness) {
-            return Err("recovery_witness_post_conflict");
-        }
-        Ok(())
-    }
-
-    pub(crate) fn apply_conflict_repair(
-        &mut self,
-        operation: &Operation,
-        now: chrono::DateTime<chrono::Utc>,
-    ) -> ProjectionEffect {
-        if let Err(reason) = self.validate_conflict_repair_operation(operation) {
-            return ProjectionEffect::Rejected {
-                reason: reason.to_owned(),
-            };
-        }
-        let cell_id = operation
-            .payload
-            .get("cell_id")
-            .and_then(Value::as_str)
-            .unwrap_or_default()
-            .to_owned();
-        let Ok(cell) = CellRef::new(cell_id.clone()) else {
-            return ProjectionEffect::Rejected {
-                reason: "conflict_repair_invalid_cell".to_owned(),
-            };
-        };
-        let heads = conflict_heads_from_payload(&operation.payload);
-        let winner = operation
-            .payload
-            .get("winner_value")
-            .cloned()
-            .unwrap_or(Value::Null);
-        let value =
-            augment_repair_winner_value(winner, &heads, operation.operation_id.as_str(), now);
-        if cell.as_str() == arkret_wire::REALM_METADATA_CELL {
-            let realm_id = operation.realm_id.to_string();
-            self.realm_metadata_cells
-                .insert(realm_id.clone(), CellState::Value(value.clone()));
-            if let Some(title) = value.get("title").and_then(Value::as_str) {
-                let entry = self
-                    .realm_states
-                    .entry(realm_id.clone())
-                    .or_insert_with(|| SolandRealmState {
-                        realm_id: realm_id.clone(),
-                        owner: None,
-                        title: Some(title.to_owned()),
-                        deleted: false,
-                        archived: false,
-                        frozen: false,
-                        freeze_expires_at: None,
-                        created_at: now,
-                        updated_at: now,
-                        trust_domain: None,
-                        terminal_state: None,
-                        successor_realm_id: None,
-                        default_strand_id: None,
-                        active_profiles: Vec::new(),
-                    });
-                entry.title = Some(title.to_owned());
-                entry.updated_at = now;
-            }
-            return ProjectionEffect::RealmLifecycle {
-                realm_id,
-                action: "conflict_repair".to_owned(),
-            };
-        }
-        self.cells.insert(cell, CellState::Value(value));
-        ProjectionEffect::Ignored
     }
 
     /// Apply a `ak.realm.*` lifecycle event. Stream-F (Wave 1B) rewrite

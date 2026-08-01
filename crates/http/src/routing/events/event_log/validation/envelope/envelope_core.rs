@@ -81,9 +81,7 @@ async fn validate_event_envelope_with_ingress(
             reason,
         ));
     }
-    if !artifacts::active_local_operation_event_kinds().contains(&kind)
-        && kind != kinds::CONFLICT_REPAIR
-    {
+    if !artifacts::active_local_operation_event_kinds().contains(&kind) {
         return Err(event_validation_error(
             StatusCode::BAD_REQUEST,
             "unknown_event_kind",

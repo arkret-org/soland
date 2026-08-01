@@ -370,7 +370,6 @@ coordinator`. Same two cases the fixture-Realm entry above also leaves open.
 - Prevention dimension: every claim surface must bind its protocol idempotency key to a canonical
   request digest and immutable terminal outcome in the same transaction as inventory mutation;
   last-resort eligibility must be explicit, never an implicit empty-pool fallback.
-
 ## 2026-08-01 — authority root audit sorting used object serialization order
 
 - Surface: reducer materialization of `authority_root_refs[]` on capability grant cells.
@@ -396,3 +395,25 @@ coordinator`. Same two cases the fixture-Realm entry above also leaves open.
 - Prevention dimension: exhaustive protocol projections need field-completeness tests whenever a
   closed source type changes; successful source deserialization alone does not prove the response
   preserves authorization evidence.
+## Known failing on main: `jws_verify::did_binding_tests` (2026-08-01)
+
+Reproduced on a clean tree at `79b529ab` with all local work stashed, so it is not a regression
+from the 2026-08-01 review-code work (L1 drift gate, `ak.conflict.repair` removal, sovereign
+outbound `trust_domain` allow-list, holder-private consent cell):
+
+```powershell
+cd D:\Works\arkret-org\soland; cargo test -p soland-http --lib jws_verify::did_binding_tests
+```
+
+5 of 9 fail with
+`HighRiskDidFreshness("DID document freshness unavailable for high-risk verification: no ingested
+record for did:web:principal.example")`. Deterministic — it also fails when the module is run
+alone, so this is not cross-test interference: the fixtures accept a DID binding without seeding
+the ingested freshness record the high-risk verification path now requires.
+
+- Prevention dimension: when a verification path gains a new *external* precondition (here, an
+  ingested freshness record), the fixtures that construct the accepted state have to gain it in
+  the same change. A test that builds "an accepted binding" through a constructor rather than
+  through the real acceptance path stops tracking what acceptance actually requires, and the
+  divergence surfaces later as a failure that reads like a broken assertion rather than an
+  incomplete fixture.

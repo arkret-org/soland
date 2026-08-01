@@ -14,6 +14,88 @@ const SOLAND_FEDERATION_PEER_DENYLIST: &str = "SOLAND_FEDERATION_PEER_DENYLIST";
 const SOLAND_SOVEREIGN_ENCLAVE: &str = "SOLAND_SOVEREIGN_ENCLAVE";
 const SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS: &str =
     "SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS";
+const SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST: &str = "SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST";
+
+/// The hosts outbound HTTP may reach when the sovereign enclave profile is on.
+///
+/// The single parse of `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
+/// `AppConfig` surfaces this rather than parsing the variable a second time:
+/// the config field used to be an independent copy that only reached a startup
+/// log, so what an operator read back was not, by construction, what the
+/// egress gate enforced.
+pub fn sovereign_enclave_allowed_outbound_hosts() -> Vec<String> {
+    host_policy_entries(SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS)
+}
+
+/// Whether the sovereign enclave profile is enabled for this process.
+pub fn sovereign_enclave_enabled() -> bool {
+    env_bool(SOLAND_SOVEREIGN_ENCLAVE).unwrap_or(false)
+}
+
+/// `sync/sovereign-deployment.md` §8 (normative) — before a federation request
+/// to any external service, the target `service_id`'s verified `trust_domain`
+/// MUST be in
+/// the local `federation_allowlist`; otherwise the outbound MUST fail closed.
+///
+/// Returns the denial reason, or `None` when the request may proceed.
+///
+/// Fail closed in both directions of the unset case: with the sovereign
+/// profile on and no allowlist configured, *every* outbound federation request
+/// is denied. That is the profile's stated posture ("outbound federation is
+/// disabled"), and it is the only reading that does not turn a forgotten
+/// setting into an open boundary. The spec scopes this MUST to sovereign
+/// deployments, so a non-sovereign deployment is unaffected and keeps using
+/// the peer denylist.
+///
+/// This is an allowlist and deliberately not expressible through
+/// [`federation_target_denied`]: a denylist cannot fail closed, and §8 says
+/// explicitly that the sender MUST NOT rely on the receiver to refuse.
+pub fn federation_outbound_trust_domain_denial(
+    peer_service_id: &str,
+    peer_trust_domain: Option<&str>,
+) -> Option<String> {
+    federation_outbound_trust_domain_denial_with_policy(
+        sovereign_enclave_enabled(),
+        &host_policy_entries(SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST),
+        peer_service_id,
+        peer_trust_domain,
+    )
+}
+
+fn federation_outbound_trust_domain_denial_with_policy(
+    sovereign_enabled: bool,
+    allowlist: &[String],
+    peer_service_id: &str,
+    peer_trust_domain: Option<&str>,
+) -> Option<String> {
+    if !sovereign_enabled {
+        return None;
+    }
+    let Some(trust_domain) = peer_trust_domain.filter(|value| !value.trim().is_empty()) else {
+        return Some(format!(
+            "federation_trust_domain_missing: {peer_service_id} has no verified trust_domain binding"
+        ));
+    };
+    let allowed = allowlist
+        .iter()
+        .any(|entry| entry_matches(entry, trust_domain));
+    tracing::info!(
+        target = "sovereign_boundary_audit",
+        target_class = "federation outbound",
+        peer_service_id,
+        trust_domain,
+        posture = if allowed { "allowed" } else { "denied" },
+        "sovereign federation outbound trust_domain check"
+    );
+    if allowed {
+        None
+    } else {
+        Some(format!(
+            "federation_trust_domain_not_allowed: {peer_service_id} is bound to trust_domain \
+             {trust_domain}, which is not in the local federation_allowlist"
+        ))
+    }
+}
 
 /// Whether outbound egress to private/loopback networks is permitted.
 ///
@@ -72,16 +154,23 @@ pub fn egress_policy_version(development_mode: bool) -> String {
     canonical.push_str("\nfederation_denylist=");
     canonical.push_str(&federation.join(","));
     canonical.push_str("\nsovereign_enclave=");
-    canonical.push_str(if env_bool(SOLAND_SOVEREIGN_ENCLAVE).unwrap_or(false) {
+    canonical.push_str(if sovereign_enclave_enabled() {
         "1"
     } else {
         "0"
     });
-    let mut enclave_hosts = host_policy_entries(SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS);
+    let mut enclave_hosts = sovereign_enclave_allowed_outbound_hosts();
     enclave_hosts.sort();
     enclave_hosts.dedup();
     canonical.push_str("\nsovereign_enclave_allowed_hosts=");
     canonical.push_str(&enclave_hosts.join(","));
+    // §8's outbound allowlist changes an egress verdict, so a `policy_suppressed`
+    // federation row must revalidate when it changes.
+    let mut federation_allowlist = host_policy_entries(SOLAND_FEDERATION_TRUST_DOMAIN_ALLOWLIST);
+    federation_allowlist.sort();
+    federation_allowlist.dedup();
+    canonical.push_str("\nfederation_trust_domain_allowlist=");
+    canonical.push_str(&federation_allowlist.join(","));
     arkret_canonical::sha256_digest(canonical.as_bytes())
 }
 
@@ -269,11 +358,24 @@ fn record_egress_denial(url: &Url, purpose: &str, error: &str) {
 }
 
 fn validate_sovereign_enclave_host_policy(host: &str, purpose: &str) -> Result<(), String> {
-    if !env_bool(SOLAND_SOVEREIGN_ENCLAVE).unwrap_or(false) {
+    validate_sovereign_enclave_host_policy_with_entries(
+        host,
+        purpose,
+        sovereign_enclave_enabled(),
+        &sovereign_enclave_allowed_outbound_hosts(),
+    )
+}
+
+fn validate_sovereign_enclave_host_policy_with_entries(
+    host: &str,
+    purpose: &str,
+    sovereign_enabled: bool,
+    allowed_hosts: &[String],
+) -> Result<(), String> {
+    if !sovereign_enabled {
         return Ok(());
     }
     let host = host.trim_end_matches('.').to_ascii_lowercase();
-    let allowed_hosts = host_policy_entries(SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS);
     let allowed = allowed_hosts
         .iter()
         .any(|entry| host_policy_entry_matches(entry, &host));
@@ -654,6 +756,64 @@ mod tests {
     }
 
     #[test]
+    fn sovereign_egress_host_allowlist_is_enforced_by_the_url_gate() {
+        let allowed_hosts = vec!["relay.allowed.example".to_owned()];
+        assert!(
+            validate_sovereign_enclave_host_policy_with_entries(
+                "relay.allowed.example",
+                "test",
+                true,
+                &allowed_hosts,
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_sovereign_enclave_host_policy_with_entries(
+                "relay.other.example",
+                "test",
+                true,
+                &allowed_hosts,
+            )
+            .unwrap_err()
+            .contains("sovereign_enclave_outbound_not_allowed")
+        );
+    }
+
+    #[test]
+    fn sovereign_federation_trust_domain_is_verified_and_fail_closed() {
+        let allowlist = vec!["ak:trust_domain:partner.example".to_owned()];
+        let service_id = "did:web:relay.partner.example";
+
+        assert!(
+            federation_outbound_trust_domain_denial_with_policy(
+                true,
+                &allowlist,
+                service_id,
+                None,
+            )
+            .is_some()
+        );
+        assert!(
+            federation_outbound_trust_domain_denial_with_policy(
+                true,
+                &allowlist,
+                service_id,
+                Some("ak:trust_domain:untrusted.example")
+            )
+            .is_some()
+        );
+        assert!(
+            federation_outbound_trust_domain_denial_with_policy(
+                true,
+                &allowlist,
+                service_id,
+                Some("ak:trust_domain:partner.example")
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn federation_denylist_matches_did_domain_and_url_domain() {
         let entries = vec![
             "did:web:blocked.example".to_owned(),
@@ -708,5 +868,30 @@ mod tests {
             ),
             None,
         ));
+    }
+
+    #[test]
+    fn trust_domain_policy_is_closed_when_empty_and_scoped_to_sovereign_mode() {
+        let empty = Vec::new();
+        let service_id = "did:web:partner.example";
+        let trust_domain = Some("ak:trust_domain:partner.example");
+        assert!(
+            federation_outbound_trust_domain_denial_with_policy(
+                true,
+                &empty,
+                service_id,
+                trust_domain,
+            )
+            .is_some()
+        );
+        assert!(
+            federation_outbound_trust_domain_denial_with_policy(
+                false,
+                &empty,
+                service_id,
+                trust_domain,
+            )
+            .is_none()
+        );
     }
 }

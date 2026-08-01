@@ -995,12 +995,12 @@ fn validate_holder_update(session_actor: &str, holder: &str, peer: &str) -> Resu
     Ok(())
 }
 
-fn authorize_reader(session_actor: &str, holder: &str, peer: &str) -> Result<(), AppError> {
-    if session_actor == holder || session_actor == peer {
+fn authorize_reader(session_actor: &str, holder: &str, _peer: &str) -> Result<(), AppError> {
+    if session_actor == holder {
         Ok(())
     } else {
         Err(AppError::capability_denied(
-            "consent cell is visible only to holder or peer",
+            "consent cell is visible only to its holder or an explicitly authorized controller",
         ))
     }
 }
@@ -1597,6 +1597,15 @@ mod tests {
 
     use super::*;
     use crate::config::{AppConfig, ObjectStorageConfig};
+
+    #[test]
+    fn complete_consent_cell_is_holder_private() {
+        let holder = "did:web:holder.example";
+        let peer = "did:web:peer.example";
+        assert!(authorize_reader(holder, holder, peer).is_ok());
+        assert!(authorize_reader(peer, holder, peer).is_err());
+        assert!(authorize_reader("did:web:other.example", holder, peer).is_err());
+    }
 
     #[test]
     fn consent_revoke_cascade_table_stable() {

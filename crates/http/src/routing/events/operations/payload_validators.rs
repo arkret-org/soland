@@ -28,27 +28,33 @@ fn invite_create_wire_payload(payload: &Value) -> Value {
     projection_context_stripped_payload(payload)
 }
 
+/// Envelope metadata `projection_operation_from_event` adds on top of the
+/// signed wire payload. These names are legal on a projection DTO and illegal
+/// on the wire, which is why a hand-written `PayloadRequirement` may name one
+/// of them without contradicting a closed spec def.
+pub(crate) const PROJECTION_CONTEXT_FIELDS: &[&str] = &[
+    "event_id",
+    "sender",
+    "hlc",
+    "executed_by",
+    "authorization_ref",
+    "seal_ref",
+    "seal_basis",
+    "preconditions",
+    "effects",
+    "accepted_event_id",
+    "accepted_scope_ref",
+    "envelope_causal_refs",
+    "canonical_event_digest",
+    "query_grade",
+    crate::routing::events::READ_CURSOR_CAUSAL_RELATION_CONTEXT,
+];
+
 pub(crate) fn projection_context_stripped_payload(payload: &Value) -> Value {
     let mut wire_payload = payload.clone();
     if let Some(object) = wire_payload.as_object_mut() {
-        for field in [
-            "event_id",
-            "sender",
-            "hlc",
-            "executed_by",
-            "authorization_ref",
-            "seal_ref",
-            "seal_basis",
-            "preconditions",
-            "effects",
-            "accepted_event_id",
-            "accepted_scope_ref",
-            "envelope_causal_refs",
-            "canonical_event_digest",
-            "query_grade",
-            crate::routing::events::READ_CURSOR_CAUSAL_RELATION_CONTEXT,
-        ] {
-            object.remove(field);
+        for field in PROJECTION_CONTEXT_FIELDS {
+            object.remove(*field);
         }
     }
     wire_payload
@@ -536,54 +542,6 @@ pub(crate) fn validate_observed_dots_payload(operation: &Operation) -> Result<()
     } else {
         Err("consent revoke observed_dots must be a non-empty array")
     }
-}
-
-pub(crate) fn validate_conflict_repair_payload(operation: &Operation) -> Result<(), &'static str> {
-    let cell_id = operation
-        .payload
-        .get("cell_id")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("conflict repair requires cell_id")?;
-    if arkret_identifiers::CellRef::new(cell_id.to_owned()).is_err() {
-        return Err(
-            "conflict repair cell_id must use canonical ak:cell:ak.component.*.v<n>:<subject> form",
-        );
-    }
-    let heads = operation
-        .payload
-        .get("conflict_heads")
-        .and_then(serde_json::Value::as_array)
-        .ok_or("conflict repair requires conflict_heads")?;
-    if heads.len() < 2 {
-        return Err("conflict repair requires at least two conflict_heads");
-    }
-    if heads
-        .iter()
-        .any(|head| head.as_str().is_none_or(|value| value.trim().is_empty()))
-    {
-        return Err("conflict repair heads must be non-empty strings");
-    }
-    let recovery = operation
-        .payload
-        .get("recovery_capability_ref")
-        .and_then(serde_json::Value::as_str)
-        .ok_or("conflict repair requires recovery_capability_ref")?;
-    if recovery.trim().is_empty() {
-        return Err("conflict repair recovery_capability_ref must be non-empty");
-    }
-    let witness = operation
-        .payload
-        .get("state_witness_ref")
-        .or_else(|| operation.payload.get("state_witness"))
-        .and_then(serde_json::Value::as_str)
-        .ok_or("conflict repair requires state_witness_ref")?;
-    if witness.trim().is_empty() {
-        return Err("conflict repair state_witness_ref must be non-empty");
-    }
-    if operation.payload.get("winner_value").is_none() {
-        return Err("conflict repair requires winner_value");
-    }
-    Ok(())
 }
 
 pub(crate) fn validate_read_scope_track(track: &str) -> Result<(), &'static str> {

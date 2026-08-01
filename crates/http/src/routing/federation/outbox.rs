@@ -680,17 +680,33 @@ impl FederationDispatcher {
         };
         for row in rows {
             let url = format!("{}{}", row.delivery.peer_url, row.delivery.endpoint);
-            let resolution = match crate::security::validate_http_url_for_egress(
-                &url,
-                "federation outbox",
-                self.state.config().development_mode,
-            ) {
-                Ok(_) => FederationPolicyResolution::Release {
+            // §8 is re-checked here for the same reason the URL gate is: a
+            // released row goes straight back to the wire, so a policy that
+            // still denies the peer must still deny it after a version bump.
+            let peer_trust_domain = super::federation::peer_trust_domain_for_service_id(
+                &self.state,
+                &row.delivery.peer_did,
+            );
+            let trust_domain_denied = crate::security::federation_outbound_trust_domain_denial(
+                &row.delivery.peer_did,
+                peer_trust_domain.as_deref(),
+            )
+            .is_some();
+            let egress_ok = !trust_domain_denied
+                && crate::security::validate_http_url_for_egress(
+                    &url,
+                    "federation outbox",
+                    self.state.config().development_mode,
+                )
+                .is_ok();
+            let resolution = if egress_ok {
+                FederationPolicyResolution::Release {
                     next_attempt_at: now_unix_secs(),
-                },
-                Err(_) => FederationPolicyResolution::Repin {
+                }
+            } else {
+                FederationPolicyResolution::Repin {
                     policy_version: policy_version.clone(),
-                },
+                }
             };
             let released = matches!(resolution, FederationPolicyResolution::Release { .. });
             match self
@@ -733,6 +749,50 @@ impl FederationDispatcher {
             return;
         };
         let url = format!("{}{}", row.delivery.peer_url, row.delivery.endpoint);
+        // `sovereign-deployment.md` §8 — the target service_id's trust_domain
+        // MUST be checked against the local federation_allowlist BEFORE the
+        // request leaves, and the sender MUST NOT rely on the receiver to
+        // refuse. The URL egress gate below cannot stand in for this: it
+        // decides on the host, and §8 binds the decision to the peer's
+        // service_id.
+        let peer_trust_domain = super::federation::peer_trust_domain_for_service_id(
+            &self.state,
+            &row.delivery.peer_did,
+        );
+        if let Some(reason) = crate::security::federation_outbound_trust_domain_denial(
+            &row.delivery.peer_did,
+            peer_trust_domain.as_deref(),
+        ) {
+            tracing::warn!(
+                target = "federation_outbox",
+                worker = "federation_outbox",
+                outbox_id = %row.delivery.id,
+                peer_did = %row.delivery.peer_did,
+                endpoint = %row.delivery.endpoint,
+                %reason,
+                "federation outbox delivery suppressed by sovereign outbound trust_domain policy"
+            );
+            crate::metrics::record_federation_retry_state("policy_suppressed");
+            // Same discipline as the egress denial below: no socket was
+            // opened, so this MUST NOT consume the transport retry budget.
+            self.commit(RecordFederationAttemptCommand {
+                id: row.delivery.id.clone(),
+                lease_token,
+                attempts: row.attempts,
+                semantic_attempts: row.semantic_attempts,
+                last_http_status: None,
+                last_error_code: Some(error_code::EGRESS_POLICY_DENIED.to_owned()),
+                last_response_excerpt: Some(excerpt(&reason)),
+                observed_at: now_unix_secs(),
+                outcome: FederationDeliveryOutcome::PolicySuppressed {
+                    policy_version: crate::security::egress_policy_version(
+                        self.state.config().development_mode,
+                    ),
+                },
+            })
+            .await;
+            return;
+        }
         let body_bytes = row.delivery.payload_json.as_bytes().to_vec();
         // SOL-03-002: build a per-delivery client that pins the validated IPs
         // (egress check and connection resolve to the same addresses), closing

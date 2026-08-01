@@ -1563,7 +1563,10 @@ fn canonical_event_sealed_ops(
                 )
             })?;
         for effect in effects {
-            resolved.push((effect.cell, SealedOp::new(move_id.clone(), effect.op)));
+            resolved.push((
+                effect.cell.clone(),
+                SealedOp::from_projection(move_id.clone(), &effect),
+            ));
         }
     }
 

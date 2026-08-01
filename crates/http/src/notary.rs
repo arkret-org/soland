@@ -154,7 +154,7 @@ impl NotaryWorker {
                         if resolved.cell == notary_cell {
                             event_ops.push(IssuedOp {
                                 issuer: event.actor_id.clone(),
-                                op: SealedOp::new(digest.clone(), resolved.op),
+                                op: SealedOp::from_projection(digest.clone(), &resolved),
                             });
                         }
                     }
@@ -265,7 +265,7 @@ impl NotaryWorker {
                         if resolved.cell == notary_cell {
                             projected.push(IssuedOp {
                                 issuer: event.actor_id.clone(),
-                                op: SealedOp::new(digest.clone(), resolved.op),
+                                op: SealedOp::from_projection(digest.clone(), &resolved),
                             });
                         }
                     }
@@ -344,10 +344,10 @@ impl NotaryWorker {
                         .map_err(|error| NotaryError::Construction(error.to_string()))?
                     {
                         event_ops.push((
-                            resolved.cell,
+                            resolved.cell.clone(),
                             IssuedOp {
                                 issuer: event.actor_id.clone(),
-                                op: SealedOp::new(digest.clone(), resolved.op),
+                                op: SealedOp::from_projection(digest.clone(), &resolved),
                             },
                         ));
                     }
@@ -385,6 +385,10 @@ impl NotaryWorker {
         let replay_default = state.config().jws_replay_window_seconds;
         let replay_overrides = &state.config().jws_replay_window_per_family;
         let ordered = arkret_state::state::deterministic_order(pending);
+        let predecessor_closure = state
+            .projections()
+            .seal_closure(&leaves)
+            .map_err(|reject| NotaryError::ApplySeal(reject.to_string()))?;
         if leaves.is_empty() {
             let anchor_events = ordered
                 .iter()
@@ -459,13 +463,23 @@ impl NotaryWorker {
                 context,
             ) {
                 Ok(effects) => {
+                    if let Err(reject) = state.projections().verify_recovery_witness(
+                        &event,
+                        &effects,
+                        realm_id,
+                        &pre_state,
+                        &predecessor_closure,
+                    ) {
+                        rejected.push((digest, reject.to_string()));
+                        continue;
+                    }
                     if leaves.is_empty() {
                         for effect in &effects {
                             let cell_ops =
                                 staged_anchor_ops.entry(effect.cell.clone()).or_default();
                             cell_ops.push(IssuedOp {
                                 issuer: event.actor_id.clone(),
-                                op: SealedOp::new(digest.clone(), effect.op.clone()),
+                                op: SealedOp::from_projection(digest.clone(), effect),
                             });
                             let binding = state
                                 .projections()
@@ -749,10 +763,10 @@ impl NotaryWorker {
                         .map_err(|error| NotaryError::Construction(error.to_string()))?
                     {
                         event_ops.push((
-                            resolved.cell,
+                            resolved.cell.clone(),
                             IssuedOp {
                                 issuer: event.actor_id.clone(),
-                                op: SealedOp::new(digest.clone(), resolved.op),
+                                op: SealedOp::from_projection(digest.clone(), &resolved),
                             },
                         ));
                     }
@@ -1093,7 +1107,7 @@ impl NotaryWorker {
             for effect in &entry.effects {
                 let aop = IssuedOp {
                     issuer: entry.actor_id.clone(),
-                    op: SealedOp::new(entry.event_digest.clone(), effect.op.clone()),
+                    op: SealedOp::from_projection(entry.event_digest.clone(), effect),
                 };
                 candidate_ops
                     .entry(effect.cell.clone())

@@ -1,5 +1,4 @@
-//! Strand / Morph patch + object-field helpers, push-route cell helpers,
-//! and conflict-repair helpers.
+//! Strand / Morph patch + object-field helpers and push-route cell helpers.
 //!
 //! Split out of the `reducer` mod file; re-exported there so sibling
 //! `apply_*` modules' `super::*` access and the
@@ -95,53 +94,6 @@ pub(crate) fn apply_morph_transformation_rules(
         }
     }
     Ok(next)
-}
-
-pub(crate) fn conflict_heads_from_payload(payload: &Value) -> Vec<String> {
-    payload
-        .get("conflict_heads")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(|head| head.as_str().map(ToOwned::to_owned))
-        .filter(|head| !head.trim().is_empty())
-        .collect()
-}
-
-pub(crate) fn bottom_head_ids(bottom: &arkret_wire::Bottom) -> std::collections::BTreeSet<String> {
-    bottom
-        .heads
-        .iter()
-        .filter_map(|head| head.get("move_id").and_then(Value::as_str))
-        .map(ToOwned::to_owned)
-        .collect()
-}
-
-pub(crate) fn augment_repair_winner_value(
-    winner: Value,
-    heads: &[String],
-    operation_id: &str,
-    now: chrono::DateTime<chrono::Utc>,
-) -> Value {
-    let repair_of = Value::Array(heads.iter().cloned().map(Value::String).collect());
-    let updated_at = utc_timestamp_z(now);
-    match winner {
-        Value::Object(mut object) => {
-            object.insert("repair_of".to_owned(), repair_of);
-            object.insert(
-                "operation_id".to_owned(),
-                Value::String(operation_id.to_owned()),
-            );
-            object.insert("updated_at".to_owned(), Value::String(updated_at));
-            Value::Object(object)
-        }
-        other => serde_json::json!({
-            "value": other,
-            "repair_of": repair_of,
-            "operation_id": operation_id,
-            "updated_at": updated_at,
-        }),
-    }
 }
 
 pub(crate) fn utc_timestamp_z(now: chrono::DateTime<chrono::Utc>) -> String {

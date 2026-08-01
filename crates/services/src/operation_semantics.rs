@@ -9,7 +9,6 @@ pub const REASON_KEYPACKAGE_ALREADY_CLAIMED: &str =
 pub const REASON_KEYPACKAGE_REALM_MISMATCH: &str =
     soland_domain::reducer::mls::REASON_KEYPACKAGE_REALM_MISMATCH;
 pub const CHILD_ORDER_CELL_FAMILY: &str = soland_domain::reducer::CHILD_ORDER_CELL_FAMILY;
-pub const CONFLICT_REPAIR: &str = soland_domain::kinds::CONFLICT_REPAIR;
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
     soland_domain::kinds::canonical_kind_for_operation(operation)

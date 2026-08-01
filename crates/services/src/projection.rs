@@ -954,6 +954,26 @@ impl ProjectionService {
         )
     }
 
+    pub fn verify_recovery_witness(
+        &self,
+        event: &Event,
+        effects: &[arkret_wire::cba::ProjectionEffect],
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        predecessor_closure: &BTreeSet<SealId>,
+    ) -> Result<(), ControlMoveReject> {
+        arkret_state::verify_recovery_witness(
+            event,
+            effects,
+            realm_id,
+            pre_state,
+            predecessor_closure,
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+        )
+    }
+
     pub fn apply_seal<F>(&self, seal: &Seal, verify_proofs: F) -> Result<SealEffect, SealReject>
     where
         F: Fn(&Event) -> Result<(), String> + Copy,

@@ -374,19 +374,6 @@ pub(crate) const MODERATION_APPEAL_CLOSE_REQUIREMENTS: &[PayloadRequirement] = &
     PayloadRequirement::Required("closer", "ak.moderation.appeal.close requires closer"),
     PayloadRequirement::Required("closed_at", "ak.moderation.appeal.close requires closed_at"),
 ];
-pub(crate) const CONFLICT_REPAIR_REQUIREMENTS: &[PayloadRequirement] = &[
-    PayloadRequirement::Required("cell_id", "conflict repair requires cell_id"),
-    PayloadRequirement::Required("conflict_heads", "conflict repair requires conflict_heads"),
-    PayloadRequirement::Required("winner_value", "conflict repair requires winner_value"),
-    PayloadRequirement::Required(
-        "recovery_capability_ref",
-        "conflict repair requires recovery_capability_ref",
-    ),
-    PayloadRequirement::Required(
-        "state_witness_ref",
-        "conflict repair requires state_witness_ref",
-    ),
-];
 // `ak.space.archive` / `ak.space.restore` / `ak.space.tombstone` share the
 // spec-canonical `space_id` target field.
 pub(crate) const SPACE_CONTAINER_LIFECYCLE_ID_FIELDS: &[&str] = &["space_id"];

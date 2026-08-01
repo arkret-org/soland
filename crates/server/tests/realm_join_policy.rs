@@ -32,10 +32,8 @@ fn apply_policy(state: &mut ProjectionState, hlc: &ServerHlc, join_policy: Value
             arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
-                "value": {
-                    "policy_revision": 1,
-                    "join_policy": join_policy
-                }
+                "policy_revision": 1,
+                "join_policy": join_policy
             }),
         ),
         hlc,
@@ -242,16 +240,14 @@ fn principal_admission_requires_selector_on_policy_write() {
             arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
-                "value": {
-                    "policy_revision": 1,
-                    "join_policy": {
-                        "gates": [{
-                            "gate_id": "principal-empty",
-                            "kind": "principal_admission",
-                            "auto_resolve": true
-                        }],
-                        "combinator": "all"
-                    }
+                "policy_revision": 1,
+                "join_policy": {
+                    "gates": [{
+                        "gate_id": "principal-empty",
+                        "kind": "principal_admission",
+                        "auto_resolve": true
+                    }],
+                    "combinator": "all"
                 }
             }),
         ),
@@ -276,16 +272,14 @@ fn join_policy_requires_explicit_combinator_on_policy_write() {
             arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
             json!({
-                "value": {
-                    "policy_revision": 1,
-                    "join_policy": {
-                        "gates": [{
-                            "gate_id": "principal-web",
-                            "kind": "principal_admission",
-                            "auto_resolve": true,
-                            "allowed_did_methods": ["did:web"]
-                        }]
-                    }
+                "policy_revision": 1,
+                "join_policy": {
+                    "gates": [{
+                        "gate_id": "principal-web",
+                        "kind": "principal_admission",
+                        "auto_resolve": true,
+                        "allowed_did_methods": ["did:web"]
+                    }]
                 }
             }),
         ),

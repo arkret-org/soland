@@ -300,13 +300,6 @@ fn apply_erasure_receipt_dispatch(
 ) -> ProjectionEffect {
     s.apply_audit_erasure_receipt(op, op.created_at)
 }
-fn apply_conflict_repair_dispatch(
-    s: &mut ProjectionState,
-    op: &Operation,
-    _hlc: &ServerHlc,
-) -> ProjectionEffect {
-    s.apply_conflict_repair(op, op.created_at)
-}
 fn apply_space_container_create_dispatch(
     s: &mut ProjectionState,
     op: &Operation,
@@ -933,7 +926,6 @@ fn apply_device_push_route_dispatch(
 /// [`super::ProjectionState::apply`]. Public so out-of-crate tests can assert
 /// the registry covers every canonical kind they care about.
 pub fn default_apply_registry() -> std::collections::HashMap<&'static str, ApplyFn> {
-    use crate::kinds::*;
     let mut m: std::collections::HashMap<&'static str, ApplyFn> =
         std::collections::HashMap::with_capacity(40);
     m.insert(
@@ -1067,7 +1059,6 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
         arkret_wire::EventKind::REALM_DIGEST_SUITE_TRANSITION,
         apply_realm_digest_suite_transition_dispatch,
     );
-    m.insert(CONFLICT_REPAIR, apply_conflict_repair_dispatch);
     m.insert(
         arkret_wire::EventKind::AUDIT_ERASURE_RECEIPT,
         apply_erasure_receipt_dispatch,

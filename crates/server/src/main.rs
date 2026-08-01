@@ -795,9 +795,10 @@ fn spawn_federation_peer_discovery(state: AppState) {
                                 }
                             };
                         let discovered = format!(
-                            "{}|{}",
+                            "{}|{}|{}",
                             endpoint.trim_end_matches('/'),
-                            description.service_id
+                            description.service_id,
+                            description.trust_domain,
                         );
                         let previous_service_id = federation_peer_service_id(&configured);
                         let key_changed = state

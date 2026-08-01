@@ -7,9 +7,8 @@ use super::mls_governance::{
     projected_mls_governance_binding_metadata_digest,
 };
 use super::payload_shape::{
-    validate_conflict_repair_event_payload, validate_event_audience_fields,
-    validate_pre_schema_wire_shape, validate_realm_create_policy_constraints,
-    validate_space_container_lifecycle_payload,
+    validate_event_audience_fields, validate_pre_schema_wire_shape,
+    validate_realm_create_policy_constraints, validate_space_container_lifecycle_payload,
 };
 
 const LOCAL_EVENT_CRITICAL_FEATURES: [&str; 4] = [

@@ -98,6 +98,7 @@ fn seed_realm_policy_allowlist(state: &mut ProjectionState, hlc: &ServerHlc, ser
             arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM,
             json!({
+                "policy_revision": 1,
                 "third_party_invite_verification_services": services
             }),
         ),

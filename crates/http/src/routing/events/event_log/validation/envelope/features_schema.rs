@@ -252,9 +252,6 @@ pub(crate) fn validate_event_schema_and_payload(
     // Wire-shape validators that must run before the registered payload
     // schema validator to surface their precise reason codes.
     validate_pre_schema_wire_shape(kind, payload)?;
-    if kind == kinds::CONFLICT_REPAIR {
-        return validate_conflict_repair_event_payload(payload);
-    }
     if matches!(
         kind,
         arkret_wire::EventKind::SPACE_ARCHIVE

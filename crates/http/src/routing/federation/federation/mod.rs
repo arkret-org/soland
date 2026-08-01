@@ -33,7 +33,9 @@ pub(super) use endpoints::{
     federation_verify_actor,
 };
 pub(crate) use inbound_policy::federation_actor_origin_acceptable;
-pub(crate) use outbound::{configured_peer_targets, peer_url_for_service_id};
+pub(crate) use outbound::{
+    configured_peer_targets, peer_trust_domain_for_service_id, peer_url_for_service_id,
+};
 pub(crate) use profile_intersection::federation_profile_intersection_for_peer;
 #[cfg(test)]
 use salvo::http::StatusCode;

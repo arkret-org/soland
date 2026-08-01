@@ -183,7 +183,7 @@ async fn admin_get_cell(
 
     let cell_state_opt = {
         let proj = state.projections().snapshot();
-        proj.cell(&cell_ref).cloned()
+        proj.realm_cell(realm.as_str(), &cell_ref).cloned()
     };
 
     if cell_state_opt.is_none() {
@@ -275,7 +275,7 @@ async fn admin_list_cells(
         let proj = state.projections().snapshot();
         page.into_iter()
             .map(|cell| {
-                let st = proj.cell(&cell).cloned();
+                let st = proj.realm_cell(realm.as_str(), &cell).cloned();
                 (cell, st)
             })
             .collect()

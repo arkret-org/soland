@@ -332,10 +332,12 @@ pub struct AppConfig {
     ///   on the hub for outbound dissemination.
     pub federation_fanout_topology: FederationFanoutTopology,
     /// Federation peer endpoints the outbound layer considers as broadcast
-    /// targets (mesh) or hub upstream (hub). Endpoint-only entries are
-    /// resolved through `/_arkret/describe`; the discovered service DID is
-    /// kept in runtime state rather than copied into deployment config. Empty
-    /// disables federation outbound.
+    /// targets (mesh) or hub upstream (hub). The resolved form is
+    /// `url|service_did|trust_domain`. Endpoint-only entries are resolved
+    /// through `/_arkret/describe`; the discovered service DID and trust
+    /// domain are kept in runtime state rather than copied into deployment
+    /// config. Sovereign outbound fails closed until that binding is present.
+    /// Empty disables federation outbound.
     pub federation_peers: Vec<String>,
     /// G3.S0 — when true (default), `main.rs` spawns the
     /// `FederationDispatcher` background worker that drains the
@@ -452,6 +454,11 @@ pub struct AppConfig {
     /// profile is enabled. Hosts are matched case-insensitively.
     /// Comma-separated env var
     /// `SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS`.
+    ///
+    /// This is a read-back of the list
+    /// [`crate::security::validate_url_for_egress`] enforces, not a parallel
+    /// copy of it — see
+    /// [`crate::security::sovereign_enclave_allowed_outbound_hosts`].
     pub sovereign_enclave_allowed_outbound_hosts: Vec<String>,
     /// When true, soland claims the `ak.profile.candidate.join_policy.v1`
     /// candidate profile and exposes its complete profile-private signed
@@ -969,16 +976,12 @@ impl AppConfig {
         let seed_demo_data = env_bool("SOLAND_SEED_DEMO_DATA")?.unwrap_or(false);
         // G3.S9 — sovereign enclave toggle + outbound host allow-list.
         let sovereign_enclave_enabled = env_bool("SOLAND_SOVEREIGN_ENCLAVE")?.unwrap_or(false);
+        // Read back from the egress gate rather than re-parsed here. A second
+        // parse of the same variable is a second answer: this field used to be
+        // an independent copy whose only consumer was a startup log, so an
+        // operator could read a list the boundary never enforced.
         let sovereign_enclave_allowed_outbound_hosts =
-            std::env::var("SOLAND_SOVEREIGN_ENCLAVE_ALLOWED_OUTBOUND_HOSTS")
-                .ok()
-                .map(|v| {
-                    v.split(',')
-                        .map(|h| h.trim().to_owned())
-                        .filter(|h| !h.is_empty())
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
+            crate::security::sovereign_enclave_allowed_outbound_hosts();
         let candidate_join_policy_enabled =
             env_bool("SOLAND_CANDIDATE_JOIN_POLICY")?.unwrap_or(false);
         // When the operator does not pin a trust domain, service bootstrap

@@ -23,6 +23,27 @@ pub enum PayloadRequirement {
     AnyKey(&'static [&'static str], &'static str),
 }
 
+impl OperationPayloadSchema {
+    /// Every payload field name this hand-written table can demand.
+    ///
+    /// Exposed so a gate can hold the table against the registry's payload
+    /// schema: a name this table requires but the closed spec def forbids makes
+    /// the two admission gates contradict each other, and a compliant payload
+    /// then satisfies neither.
+    #[cfg(test)]
+    pub(crate) fn demanded_field_names(&self) -> Vec<&'static str> {
+        self.requirements
+            .iter()
+            .flat_map(|requirement| match requirement {
+                PayloadRequirement::Required(field, _) => vec![*field],
+                PayloadRequirement::AnyOf(fields, _) | PayloadRequirement::AnyKey(fields, _) => {
+                    fields.to_vec()
+                }
+            })
+            .collect()
+    }
+}
+
 pub fn validate_operation_semantics(
     state: &AppState,
     operations: &[Operation],
@@ -625,7 +646,6 @@ fn operation_extra_validator_for_kind(kind: &str) -> Option<OperationValidator> 
         arkret_wire::EventKind::REALM_INHERITANCE_POLICY => {
             Some(validate_realm_inheritance_policy_payload)
         }
-        kinds::CONFLICT_REPAIR => Some(validate_conflict_repair_payload),
         arkret_wire::EventKind::MORPH_CREATE => Some(validate_morph_create_payload),
         arkret_wire::EventKind::MORPH_UPDATE => Some(validate_morph_update_payload),
         arkret_wire::EventKind::MORPH_SCHEMA_MIGRATE => Some(validate_morph_schema_migrate_payload),
@@ -917,10 +937,6 @@ pub fn operation_schema_for_kind(kind: &str) -> Option<OperationPayloadSchema> {
         arkret_wire::EventKind::REALM_KEY_SHARE => OperationPayloadSchema {
             requirements: REALM_KEY_SHARE_REQUIREMENTS,
             validate: Some(validate_operation_payload_against_sdk_artifact),
-        },
-        kinds::CONFLICT_REPAIR => OperationPayloadSchema {
-            requirements: CONFLICT_REPAIR_REQUIREMENTS,
-            validate: Some(validate_conflict_repair_payload),
         },
         kind if arkret_wire::events::kinds::is_space_lifecycle_kind(kind) => {
             OperationPayloadSchema {

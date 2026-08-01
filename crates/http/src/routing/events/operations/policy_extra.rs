@@ -301,7 +301,6 @@ async fn intended_encryption_profile_for_realm(
 
 fn policy_bundle_content_scheme(payload: &Value) -> Option<String> {
     let value = projection_context_stripped_payload(payload);
-    let value = value.get("value").unwrap_or(&value);
     value
         .get("content_scheme")
         .and_then(Value::as_str)

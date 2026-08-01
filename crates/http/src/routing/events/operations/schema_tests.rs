@@ -295,6 +295,117 @@ mod event_projection_dto_boundary_tests {
     }
 }
 
+/// Holds the hand-written `PayloadRequirement` tables against the event-kind
+/// registry's payload schema.
+///
+/// The 2026-08-01 `ak.realm.policy_bundle` outage is the shape this gate
+/// exists for: envelope admission validated the wire payload against the
+/// closed `realm_policy_bundle_payload` def, while this server's second
+/// admission gate — the hand-written table — demanded a `value` key that the
+/// same def forbids. Both gates ran on every event, so a spec-compliant bundle
+/// satisfied one and was rejected by the other, and no drift check noticed:
+/// the tables are plain Rust consts that nothing ever compared to the spec.
+///
+/// A positive test per kind cannot close that gap, because the failure is a
+/// table demanding a field the schema does not declare — something only a
+/// table-versus-schema comparison sees.
+mod requirement_table_matches_registry_schema_tests {
+    use std::collections::BTreeSet;
+
+    use serde_json::Value;
+
+    use super::super::*;
+
+    /// Resolve a descriptor `payload_schema_ref`
+    /// (`schemas/<artifact>#/$defs/<def>`) to the def object it names.
+    fn resolve_payload_schema(schema_ref: &str) -> Option<Value> {
+        let (artifact, pointer) = schema_ref.split_once('#')?;
+        let mut node = arkret_schema::embedded_json_artifact(artifact).ok()?;
+        for segment in pointer.split('/').skip(1) {
+            let segment = segment.replace("~1", "/").replace("~0", "~");
+            node = node.get(&segment)?.clone();
+        }
+        Some(node)
+    }
+
+    /// Property names of a def that closes its object, or `None` when the def
+    /// is open, composed (`allOf` / `oneOf` / `$ref`), or not an object at all.
+    ///
+    /// Only a closed def can prove a contradiction: an open one may legally
+    /// carry a field it does not declare, so demanding that field is not drift.
+    fn closed_object_property_names(schema: &Value) -> Option<BTreeSet<String>> {
+        if schema.get("additionalProperties") != Some(&Value::Bool(false)) {
+            return None;
+        }
+        Some(
+            schema
+                .get("properties")?
+                .as_object()?
+                .keys()
+                .cloned()
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn no_hand_written_requirement_demands_a_field_its_closed_spec_def_forbids() {
+        let mut contradictions = Vec::new();
+
+        for descriptor in arkret_wire::generated::EVENT_KIND_DESCRIPTORS {
+            let Some(schema) = operation_schema_for_kind(descriptor.kind) else {
+                continue;
+            };
+            let Some(schema_ref) = descriptor.payload_schema_ref else {
+                continue;
+            };
+            let Some(def) = resolve_payload_schema(schema_ref) else {
+                panic!("{} declares unresolvable {schema_ref}", descriptor.kind);
+            };
+            let Some(declared) = closed_object_property_names(&def) else {
+                continue;
+            };
+
+            for field in schema.demanded_field_names() {
+                if declared.contains(field) || PROJECTION_CONTEXT_FIELDS.contains(&field) {
+                    continue;
+                }
+                contradictions.push(format!(
+                    "{kind}: the operation requirement table demands `{field}`, which \
+                     {schema_ref} forbids (closed def declares: {declared:?})",
+                    kind = descriptor.kind,
+                ));
+            }
+        }
+
+        assert!(
+            contradictions.is_empty(),
+            "hand-written operation payload requirements contradict the registered spec \
+             schemas; a compliant payload cannot pass both admission gates:\n{}",
+            contradictions.join("\n")
+        );
+    }
+
+    /// The gate has to be able to see the original defect. Without this, a
+    /// later refactor that made `closed_object_property_names` always return
+    /// `None` would leave a permanently green, permanently blind gate.
+    #[test]
+    fn the_gate_rejects_the_policy_bundle_shape_it_was_written_for() {
+        let def = resolve_payload_schema(
+            "schemas/event-payload.schema.json#/$defs/realm_policy_bundle_payload",
+        )
+        .expect("the policy bundle def resolves");
+        let declared =
+            closed_object_property_names(&def).expect("the policy bundle def is a closed object");
+
+        assert!(declared.contains("policy_revision"));
+        assert!(
+            !declared.contains("value"),
+            "the def is closed and declares no `value`; a requirement table demanding one \
+             is exactly the contradiction this gate reports"
+        );
+    }
+}
+
 mod key_backup_active_series_schema_tests {
     use arkret_event_draft::Operation;
     use serde_json::json;

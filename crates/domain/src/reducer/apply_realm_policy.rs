@@ -212,11 +212,31 @@ impl ProjectionState {
     /// components cell. The Event Envelope wire shape is the flat closed
     /// `realm_policy_bundle_payload` object, NOT a `{"value": ...}` state
     /// payload wrapper — `additionalProperties:false` on that def makes the
-    /// wrapper unrepresentable on the wire. `state_payload_value` stays only to
-    /// normalize legacy reducer-test fixtures that still pass the wrapper.
+    /// wrapper unrepresentable on the wire.
     pub(crate) fn apply_realm_policy_bundle(&mut self, operation: &Operation) -> ProjectionEffect {
         let realm_id = operation.realm_id.to_string();
-        let value = state_payload_value(&operation.payload).clone();
+        let value = operation.payload.clone();
+        let Some(incoming_revision) = value.get("policy_revision").and_then(Value::as_u64) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        let previous_revision = self
+            .realm_policy_bundle_cell_value(&realm_id)
+            .and_then(|current| current.get("policy_revision"))
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let expected_revision = previous_revision.saturating_add(1);
+        if incoming_revision < expected_revision {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::POLICY_REVISION_ROLLBACK.to_owned(),
+            };
+        }
+        if incoming_revision > expected_revision {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ReasonCode::POLICY_REVISION_GAP.to_owned(),
+            };
+        }
         if let Some(join_policy) = value.get("join_policy")
             && let Err(reason) = validate_join_policy_payload(join_policy)
         {
