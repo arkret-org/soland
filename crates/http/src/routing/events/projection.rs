@@ -199,22 +199,6 @@ mod tests {
     }
 
     #[test]
-    fn retention_policy_ttl_reads_canonical_object_fields() {
-        let operation = op(
-            arkret_wire::EventKind::REALM_CREATE,
-            json!({
-                "object": {
-                    "id": REALM_ID,
-                    "title": "Short-lived Room",
-                    "retention_policy": { "ttl": "30d" }
-                }
-            }),
-        );
-
-        assert_eq!(operation_retention_ttl_seconds(&operation), Some(2_592_000));
-    }
-
-    #[test]
     fn member_state_without_title_does_not_project_realm_title() {
         let operation = op(
             arkret_wire::EventKind::MEMBER_STATE,

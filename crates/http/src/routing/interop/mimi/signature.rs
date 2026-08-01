@@ -4,7 +4,7 @@ pub(super) async fn verify_mimi_write_service_proof(
     state: &AppState,
     req: &mut Request,
     room_uri: Option<&str>,
-) -> Result<(), AppError> {
+) -> Result<String, AppError> {
     let signature_present =
         req.headers().get("signature").is_some() && req.headers().get("signature-input").is_some();
     if !signature_present {
@@ -89,7 +89,8 @@ pub(super) async fn verify_mimi_write_service_proof(
         signed_room_uri.as_deref(),
         &signature_params,
     );
-    mimi_verify_signature_header(state, req, &verification_method, &signature_base)
+    mimi_verify_signature_header(state, req, &verification_method, &signature_base)?;
+    Ok(source_service_id)
 }
 
 pub(super) fn mimi_required_header(req: &Request, name: &str) -> Result<String, AppError> {

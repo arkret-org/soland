@@ -4,16 +4,20 @@ use super::*;
 
 #[endpoint(operation_id = "mimi_protocol_directory")]
 #[tracing::instrument(skip_all, fields(op = "mimi_protocol_directory"))]
-pub(super) async fn mimi_protocol_directory(depot: &mut Depot, res: &mut Response) {
+pub(super) async fn mimi_protocol_directory(
+    depot: &mut Depot,
+) -> JsonResult<arkret_models_collaboration::objects::interop::ProviderDirectory> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    res.render(Json(mimi_provider_directory_value(state)));
+    json_ok(mimi_provider_directory_value(state)?)
 }
 
 #[endpoint(operation_id = "mimi_provider_directory")]
 #[tracing::instrument(skip_all, fields(op = "mimi_provider_directory"))]
-pub(super) async fn mimi_provider_directory(depot: &mut Depot, res: &mut Response) {
+pub(super) async fn mimi_provider_directory(
+    depot: &mut Depot,
+) -> JsonResult<arkret_models_collaboration::objects::interop::ProviderDirectory> {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    res.render(Json(mimi_provider_directory_value(state)));
+    json_ok(mimi_provider_directory_value(state)?)
 }
 
 #[endpoint(
@@ -542,7 +546,9 @@ pub(super) async fn verify_mimi_consent_write_authority(
         }
         return Ok(());
     }
-    verify_mimi_write_service_proof(state, req, None).await
+    verify_mimi_write_service_proof(state, req, None)
+        .await
+        .map(|_| ())
 }
 
 const MIMI_OPERATION_PROOF_WINDOW_SECONDS: i64 = 300;
@@ -772,7 +778,7 @@ pub(super) async fn mimi_report_abuse(
 ) -> JsonResult<MimiReportAbuseOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = typed_body_value(body.into_inner(), "mimi report abuse")?;
-    verify_mimi_write_service_proof(state, req, None).await?;
+    let source_provider = verify_mimi_write_service_proof(state, req, None).await?;
     if let Some(message) = unsupported_mimi_draft(&body) {
         return Err(AppError::invalid_param(message).with_wire_code("mimi_draft_unsupported"));
     }
@@ -851,6 +857,8 @@ pub(super) async fn mimi_report_abuse(
     event_fields.insert("target_ref".to_owned(), json!(target_ref));
     event_fields.insert("report_reason_code".to_owned(), json!(canonical_reason));
     event_fields.insert("reporter".to_owned(), json!(reporter));
+    event_fields.insert("provenance".to_owned(), json!("mimi_facade"));
+    event_fields.insert("source_provider".to_owned(), json!(source_provider));
     if let Some(description) = body.get("description").cloned() {
         event_fields.insert("description".to_owned(), description);
     }

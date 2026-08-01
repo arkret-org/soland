@@ -1310,10 +1310,39 @@ async fn claim_keypackages_for_request_inner(
     body: &KeyPackagesClaimRequestBody,
     allow_same_group_recovery: bool,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    let body_value = serde_json::to_value(body)
-        .map_err(|error| AppError::internal(format!("local claim serialize: {error}")))?;
-    let request_digest = arkret_canonical::canonical_sha256(&body_value)
-        .map_err(|error| AppError::internal(format!("local claim digest: {error}")))?;
+    if !allow_same_group_recovery {
+        let authority = Did::new(state.service_id().clone()).map_err(|error| {
+            AppError::internal(format!("configured service DID invalid: {error}"))
+        })?;
+        let proof = &body.proofs[0];
+        if proof.alg != arkret_models_crypto::http_bodies::KeyPackageClaimProofAlgorithm::EdDsa {
+            return Err(AppError::invalid_param(
+                "KeyPackage self-claim proof algorithm is not supported by this authority",
+            ));
+        }
+        let binding = body
+            .validate_proof_shape(&authority, Utc::now())
+            .map_err(|error| {
+                AppError::invalid_param(format!("KeyPackage self-claim proof invalid: {error}"))
+            })?;
+        crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+            &binding,
+            &proof.jws,
+            proof.verification_method.as_str(),
+            body.requester.as_str(),
+            state,
+        )
+        .await
+        .map_err(|error| {
+            AppError::capability_denied(format!(
+                "KeyPackage self-claim proof verification failed: {error}"
+            ))
+        })?;
+    }
+    let request_digest = body
+        .payload_digest()
+        .map_err(|error| AppError::internal(format!("local claim payload digest: {error}")))?
+        .to_string();
     let local_claim_request_id = local_claim_request_id(body)?;
     if let Some(existing) = state
         .mls_key_packages()

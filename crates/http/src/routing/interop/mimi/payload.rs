@@ -241,87 +241,124 @@ pub(super) fn decode_mimi_opaque_bytes(
 
 pub(super) fn mimi_provider_directory_value(
     state: &AppState,
-) -> arkret_models_collaboration::objects::interop::ProviderDirectory {
+) -> Result<arkret_models_collaboration::objects::interop::ProviderDirectory, AppError> {
     use arkret_models_collaboration::objects::interop::{
-        ProviderDirectory, ProviderDirectoryMimi, ProviderDirectoryProof,
+        ProviderDirectory, ProviderDirectoryEndpoint, ProviderDirectoryMimi, ProviderDirectoryProof,
     };
+    use arkret_wire::PayloadSigner as _;
 
-    let signature =
-        sha256_hex(format!("{}:ak.profile.mimi_interop.v1", state.service_id()).as_bytes());
-    ProviderDirectory {
-        schema: Some("ak.schema.mimi_interop.v1".to_owned()),
-        service_id: Some(
-            arkret_identifiers::Did::new(state.service_id().clone())
-                .expect("validated service_id must be a DID"),
-        ),
+    let service_id = arkret_identifiers::Did::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
+    let verification_method =
+        arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id())).map_err(
+            |error| AppError::internal(format!("service notary key id invalid: {error}")),
+        )?;
+    let placeholder = arkret_wire::PayloadProof {
+        kind: "detached_jws".to_owned(),
+        verification_method: verification_method.clone(),
+        alg: "EdDSA".to_owned(),
+        payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
+            .map_err(|error| AppError::internal(format!("placeholder digest invalid: {error}")))?,
+        created_at: chrono::Utc::now(),
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
+    };
+    let mut directory = ProviderDirectory {
+        schema: "ak.schema.mimi_interop.v1".to_owned(),
+        service_id: service_id.clone(),
         service_kind: "mimi_provider_facade".to_owned(),
         supported_profiles: vec!["ak.profile.mimi_interop.v1".to_owned()],
         mimi: ProviderDirectoryMimi {
             protocol_draft: "draft-ietf-mimi-protocol-06".to_owned(),
             content_draft: "draft-ietf-mimi-content-08".to_owned(),
-            room_policy_draft: Some("draft-ietf-mimi-room-policy-03".to_owned()),
-            identifier_draft: Some("draft-kohbrok-mimi-identifiers-01".to_owned()),
+            room_policy_draft: "draft-ietf-mimi-room-policy-03".to_owned(),
+            identifier_draft: "draft-kohbrok-mimi-identifiers-01".to_owned(),
             base_url: mimi_base_url(state),
             provider_id: mimi_provider_id(state),
+            endpoints: [
+                ("consent", "/consent/request"),
+                ("group_info", "/strands/{strand_id}/group-info"),
+                ("identifier_query", "/identifiers/query"),
+                ("key_material", "/key-material"),
+                ("notify", "/strands/{strand_id}/notify"),
+                ("proxy_download", "/proxy-download"),
+                ("report_abuse", "/report-abuse"),
+                ("room_update", "/strands/{strand_id}/update"),
+                ("submit_message", "/strands/{strand_id}/messages"),
+            ]
+            .into_iter()
+            .map(|(endpoint_id, relative_path)| ProviderDirectoryEndpoint {
+                endpoint_id: endpoint_id.to_owned(),
+                relative_path: relative_path.to_owned(),
+            })
+            .collect(),
             features: [
-                "key_material",
-                "room_update",
-                "notify",
-                "submit_message",
-                "group_info",
                 "consent",
+                "group_info",
                 "identifier_query",
-                "report_abuse",
+                "key_material",
+                "notify",
                 "proxy_download",
+                "report_abuse",
+                "room_update",
+                "submit_message",
             ]
             .into_iter()
             .map(ToOwned::to_owned)
             .collect(),
-            mls_cipher_suites: Some(vec![
-                "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
-            ]),
-            content_profiles: Some(
-                [
-                    "application/mimi-content",
-                    "text/plain;charset=utf-8",
-                    "text/markdown;variant=GFM-MIMI",
-                    "application/vnd.arkret.content+json",
-                ]
-                .into_iter()
-                .map(ToOwned::to_owned)
-                .collect(),
-            ),
-            room_policy_components: Some(
-                [
-                    "roles",
-                    "membership",
-                    "history_visibility",
-                    "join_rule",
-                    "message_expiration",
-                    "asset_privacy",
-                ]
-                .into_iter()
-                .map(ToOwned::to_owned)
-                .collect(),
-            ),
-            extra: Default::default(),
-        },
-        proof: Some(ProviderDirectoryProof {
-            verification_method: arkret_wire::DidUrl::new(format!(
-                "{}#mimi-provider",
-                state.service_id()
-            ))
-            .expect("service DID plus #mimi-provider is a DID URL"),
-            signature,
-            extra: [
-                ("type".to_owned(), json!("dev_service_digest")),
-                ("alg".to_owned(), json!("sha256-dev")),
+            mls_cipher_suites: vec!["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned()],
+            content_profiles: [
+                "application/mimi-content",
+                "application/vnd.arkret.content+json",
+                "text/markdown;variant=GFM-MIMI",
+                "text/plain;charset=utf-8",
             ]
             .into_iter()
+            .map(ToOwned::to_owned)
             .collect(),
-        }),
+            room_policy_components: [
+                "asset_privacy",
+                "history_visibility",
+                "join_rule",
+                "membership",
+                "message_expiration",
+                "roles",
+            ]
+            .into_iter()
+            .map(ToOwned::to_owned)
+            .collect(),
+            extra: Default::default(),
+        },
+        proof: ProviderDirectoryProof(placeholder),
         extra: Default::default(),
-    }
+    };
+    let projection = directory.unsigned_projection_bytes().map_err(|error| {
+        AppError::internal(format!(
+            "MIMI provider directory canonicalization failed: {error}"
+        ))
+    })?;
+    let signer = arkret_signatures::Ed25519PayloadSigner::new(
+        state.notary_signing_key().as_ref().clone(),
+        service_id,
+        verification_method,
+    );
+    let signature = signer.sign_payload(&projection).map_err(|error| {
+        AppError::internal(format!("MIMI provider directory signing failed: {error}"))
+    })?;
+    directory.proof = ProviderDirectoryProof(arkret_wire::PayloadProof {
+        kind: "detached_jws".to_owned(),
+        verification_method: signature.verification_method,
+        alg: signature.alg,
+        payload_digest: signature.payload_digest,
+        created_at: signature.created_at,
+        domain: None,
+        audience: None,
+        proof_purpose: None,
+        jws: signature.jws,
+    });
+    Ok(directory)
 }
 
 pub(super) fn mimi_base_url(state: &AppState) -> String {

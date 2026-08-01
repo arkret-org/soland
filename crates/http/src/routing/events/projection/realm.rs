@@ -62,8 +62,6 @@ pub async fn ensure_projected_realm(state: &AppState, origin: &str, operation: &
             entry_public
         }
     };
-    project_retention_policy_from_operation(state, origin, operation).await;
-
     let now = now();
     let service = state.realms();
     match service.realm_metadata(realm_id.as_str()).await {

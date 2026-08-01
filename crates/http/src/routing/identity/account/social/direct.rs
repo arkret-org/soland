@@ -2251,14 +2251,20 @@ pub(super) async fn claim_direct_keypackage(
             "direct conversation requester DID is invalid",
         )
     })?;
-    let body = arkret_models_crypto::http_bodies::KeyPackagesClaimRequestBody {
+    let claim_nonce = arkret_wire::Base64UrlString::new(
+        URL_SAFE_NO_PAD.encode(format!("direct:{realm_id}:{mls_group_id}").as_bytes()),
+    )
+    .map_err(|error| AppError::internal(format!("generated claim nonce invalid: {error}")))?;
+    let created_at = now();
+    let expires_at = created_at + chrono::Duration::minutes(5);
+    let mut body = arkret_models_crypto::http_bodies::KeyPackagesClaimRequestBody {
         target_principal_id,
         intended_realm_id: RealmId::new(realm_id.to_owned())
             .map_err(|error| AppError::internal(format!("generated realm_id invalid: {error}")))?,
         requester,
         required_capabilities: vec![DIRECT_CONVERSATION_REQUIRED_CAPABILITY.to_owned()],
-        claim_nonce: URL_SAFE_NO_PAD.encode(format!("direct:{realm_id}:{mls_group_id}").as_bytes()),
-        expires_at: now() + chrono::Duration::minutes(5),
+        claim_nonce,
+        expires_at,
         target_device_ids: Vec::new(),
         minimal_metadata_allowed: Some(true),
         timeout_ms: Some(5_000),
@@ -2266,8 +2272,35 @@ pub(super) async fn claim_direct_keypackage(
             AppError::internal(format!("generated main_strand_id invalid: {error}"))
         })?),
         mls_group_id: Some(mls_group_id.to_owned()),
-        proofs: Vec::new(),
+        proofs: [arkret_models_crypto::http_bodies::KeyPackageClaimProof {
+            kind: arkret_models_crypto::http_bodies::KeyPackageClaimProofKind::DetachedJws,
+            verification_method: arkret_wire::DidUrl::new(format!(
+                "{}#internal-materialization-recovery",
+                actor
+            ))
+            .map_err(|error| {
+                AppError::internal(format!("internal claim key id invalid: {error}"))
+            })?,
+            alg: arkret_models_crypto::http_bodies::KeyPackageClaimProofAlgorithm::EdDsa,
+            payload_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).map_err(
+                |error| AppError::internal(format!("internal claim digest invalid: {error}")),
+            )?,
+            created_at,
+            audience: Did::new(state.service_id().clone()).map_err(|error| {
+                AppError::internal(format!("configured service DID invalid: {error}"))
+            })?,
+            proof_purpose:
+                arkret_models_crypto::http_bodies::KeyPackageClaimProofPurpose::HolderAcceptance,
+            // This object never crosses a trust boundary: the dedicated
+            // materialization-recovery path is authorized by the already
+            // accepted direct-conversation operation and skips self-claim
+            // proof verification.
+            jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
+        }],
     };
+    body.proofs[0].payload_digest = body.payload_digest().map_err(|error| {
+        AppError::internal(format!("internal claim payload digest failed: {error}"))
+    })?;
     let outcome = crate::routing::mls::claim_keypackages_for_materialization_recovery(state, &body)
         .await
         .map_err(|error| match error.wire_code_override.as_deref() {

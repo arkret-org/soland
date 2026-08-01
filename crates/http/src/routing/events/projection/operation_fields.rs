@@ -1,9 +1,6 @@
 use arkret_event_draft::Operation;
 use serde_json::Value;
-use soland_services::governance::RetentionPolicyRecord;
 use soland_services::operation_semantics as kinds;
-
-use crate::state::AppState;
 
 pub(super) fn first_string_field<'a>(value: &'a Value, keys: &[&str]) -> Option<&'a str> {
     keys.iter()
@@ -195,56 +192,4 @@ fn parse_retention_ttl_string(value: &str) -> Option<i64> {
     };
     let amount = digits.trim().parse::<i64>().ok()?;
     (amount > 0).then_some(amount.saturating_mul(multiplier))
-}
-
-pub(super) fn operation_retention_ttl_seconds(operation: &Operation) -> Option<i64> {
-    operation
-        .payload
-        .get("retention_policy")
-        .and_then(retention_ttl_seconds_from_value)
-        .or_else(|| {
-            operation
-                .payload
-                .get("object")
-                .and_then(|object| object.get("retention_policy"))
-                .and_then(retention_ttl_seconds_from_value)
-        })
-        .or_else(|| {
-            operation
-                .payload
-                .get("patch")
-                .and_then(|patch| patch.get("retention_policy"))
-                .and_then(|patch_value| {
-                    if patch_value.get("$op").and_then(Value::as_str) == Some("set") {
-                        patch_value
-                            .get("value")
-                            .and_then(retention_ttl_seconds_from_value)
-                    } else {
-                        retention_ttl_seconds_from_value(patch_value)
-                    }
-                })
-        })
-}
-
-pub async fn project_retention_policy_from_operation(
-    state: &AppState,
-    origin: &str,
-    operation: &Operation,
-) {
-    let Some(ttl_seconds) = operation_retention_ttl_seconds(operation) else {
-        return;
-    };
-    let record = RetentionPolicyRecord {
-        realm_id: operation.realm_id.to_string(),
-        ttl_seconds,
-        updated_by: origin.to_owned(),
-        updated_at: operation.created_at,
-    };
-    if let Err(error) = state.governance().store_retention_policy(&record).await {
-        tracing::warn!(
-            %error,
-            realm_id = %record.realm_id,
-            "failed to persist retention policy projection"
-        );
-    }
 }

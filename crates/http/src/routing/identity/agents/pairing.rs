@@ -104,7 +104,12 @@ pub(super) async fn submit_agent_runtime_key_request(
     .await?;
     ensure_pairing_request_open(&agent_record)?;
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
-    verify_runtime_approval_proof_of_possession(&body, agent_id, state.service_id())?;
+    verify_runtime_approval_proof_of_possession(
+        &body,
+        &agent_record,
+        agent_id,
+        state.service_id(),
+    )?;
     let agent_did = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
     let public_key_digest =
@@ -677,7 +682,12 @@ pub(super) async fn agent_key_pair(
     ensure_pairing_request_id_matches(&agent_record, &body.pairing_request_id)?;
     let runtime_public_key_digest =
         runtime_public_key_digest(&body.public_key, &body.verification_method)?;
-    verify_runtime_key_pair_proof_of_possession(&body, agent_id, state.service_id())?;
+    verify_runtime_key_pair_proof_of_possession(
+        &body,
+        &agent_record,
+        agent_id,
+        state.service_id(),
+    )?;
     validate_agent_signing_key_binding(
         &body,
         &agent_record.controller_id,
@@ -1558,15 +1568,6 @@ fn runtime_attestation_value(
         .map_err(|error| AppError::invalid_param(format!("runtime_attestation invalid: {error}")))
 }
 
-#[derive(serde::Deserialize)]
-struct AgentKeyPairProofOfPossession {
-    challenge: String,
-    audience: String,
-    request_canonical_digest: String,
-    expires_at: chrono::DateTime<chrono::Utc>,
-    signature: String,
-}
-
 pub(super) fn runtime_ed25519_public_key(
     public_key: &PublicKey,
     verification_method: &str,
@@ -1574,10 +1575,8 @@ pub(super) fn runtime_ed25519_public_key(
     if public_key.kty.as_str() != "OKP" {
         return Err(AppError::invalid_param("public_key.kty must be OKP"));
     }
-    if public_key.alg.as_str() != "Ed25519" && public_key.alg.as_str() != "EdDSA" {
-        return Err(AppError::invalid_param(
-            "public_key.alg must be Ed25519 or EdDSA",
-        ));
+    if public_key.alg.as_str() != "EdDSA" {
+        return Err(AppError::invalid_param("public_key.alg must be EdDSA"));
     }
     if public_key.kid.as_str() != verification_method {
         return Err(AppError::invalid_param(
@@ -1594,6 +1593,7 @@ pub(super) fn runtime_ed25519_public_key(
 
 pub(super) fn verify_runtime_key_pair_proof_of_possession(
     body: &AgentKeyPairRequestBody,
+    agent_record: &AgentPrincipalRecord,
     agent_id: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
@@ -1603,6 +1603,8 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
         &body.public_key,
         &body.proof_of_possession,
         body.runtime_attestation.as_ref(),
+        required_pairing_code(agent_record)?,
+        required_pairing_expires_at(agent_record)?,
         agent_id,
         service_id,
     )
@@ -1610,6 +1612,7 @@ pub(super) fn verify_runtime_key_pair_proof_of_possession(
 
 fn verify_runtime_approval_proof_of_possession(
     body: &AgentRuntimeApprovalRequestBody,
+    agent_record: &AgentPrincipalRecord,
     agent_id: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
@@ -1619,78 +1622,63 @@ fn verify_runtime_approval_proof_of_possession(
         &body.public_key,
         &body.proof_of_possession,
         body.runtime_attestation.as_ref(),
+        required_pairing_code(agent_record)?,
+        required_pairing_expires_at(agent_record)?,
         agent_id,
         service_id,
     )
 }
 
 fn verify_runtime_key_proof_of_possession(
-    pairing_request_id: &str,
-    verification_method: &str,
+    pairing_request_id: &arkret_wire::OpaqueLocalId,
+    verification_method: &arkret_wire::DidUrl,
     public_key: &PublicKey,
-    proof_of_possession: &arkret_wire::wire_strings::NonEmptyJsonObject,
+    proof_of_possession: &arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProof,
     runtime_attestation: Option<&arkret_models_collaboration::events_payloads::agent::AgentKeyAuthorizePayloadRuntimeAttestation>,
+    pairing_code: &str,
+    pairing_expires_at: chrono::DateTime<chrono::Utc>,
     agent_id: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
+    let service_id = Did::new(service_id.to_owned())
+        .map_err(|error| AppError::internal(format!("configured service_id invalid: {error}")))?;
     let public_key_bytes = runtime_ed25519_public_key(public_key, verification_method)?;
-    let proof: AgentKeyPairProofOfPossession =
-        serde_json::from_value(serde_json::to_value(proof_of_possession).map_err(|error| {
-            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
-        })?)
-        .map_err(|error| {
-            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
-        })?;
-    if proof.audience != service_id {
+    if proof_of_possession.audience != service_id {
         return Err(AppError::invalid_param(
             "proof_of_possession.audience must match this principal server",
         ));
     }
-    if proof.expires_at <= chrono::Utc::now() {
-        return Err(pairing_failed_precondition(
-            "proof_of_possession has expired",
-        ));
-    }
-    let expected_digest = arkret_signatures::agent::agent_key_pair_proof_request_binding_digest(
-        pairing_request_id,
-        &agent_id,
-        verification_method,
-        &serde_json::to_value(public_key)
-            .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?,
-        runtime_attestation_value(runtime_attestation)?.as_ref(),
-    )
-    .map_err(|error| {
-        AppError::invalid_param(format!(
-            "proof_of_possession request binding failed: {error}"
-        ))
-    })?;
-    if proof.request_canonical_digest != expected_digest.as_str() {
-        return Err(AppError::invalid_param(
-            "proof_of_possession.request_canonical_digest must bind the runtime key request",
-        ));
-    }
-    let request_digest = Hash::new(proof.request_canonical_digest.clone())
-        .map_err(|_| AppError::invalid_param("proof_of_possession digest is invalid"))?;
-    let signing_input = arkret_signatures::agent::agent_key_pair_proof_signing_input(
-        arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(|error| {
-            AppError::invalid_param(format!(
-                "runtime verification_method is not a DID URL: {error}"
-            ))
-        })?,
-        proof.challenge,
-        proof.audience,
-        proof.expires_at,
-        request_digest,
-    );
-    let signing_bytes = signing_input.canonical_bytes().map_err(|error| {
-        AppError::invalid_param(format!("proof_of_possession signing input failed: {error}"))
-    })?;
+    let expected_binding =
+        arkret_models_collaboration::agent_operations::agent_runtime_key_binding_digest(
+            &agent_id,
+            pairing_request_id,
+            verification_method,
+            public_key,
+            runtime_attestation,
+        )
+        .map_err(|error| {
+            AppError::invalid_param(format!("runtime key binding invalid: {error}"))
+        })?;
+    let signing_bytes = proof_of_possession
+        .validate_shape(
+            &agent_id,
+            pairing_request_id,
+            verification_method,
+            public_key,
+            &expected_binding,
+            pairing_code,
+            pairing_expires_at,
+            chrono::Utc::now(),
+        )
+        .map_err(|error| {
+            AppError::invalid_param(format!("proof_of_possession invalid: {error}"))
+        })?;
     let verifying_key = ed25519_dalek::VerifyingKey::from_bytes(&public_key_bytes)
         .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
     let signature_bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(proof.signature.as_bytes())
+        .decode(proof_of_possession.signature.as_bytes())
         .map_err(|_| AppError::invalid_param("proof_of_possession.signature is not base64url"))?;
     let signature = ed25519_dalek::Signature::from_slice(&signature_bytes).map_err(|_| {
         AppError::invalid_param("proof_of_possession.signature must be a 64-byte Ed25519 signature")
@@ -1780,29 +1768,46 @@ pub(super) fn pairing_request_binding_digest(
     agent_record: &AgentPrincipalRecord,
     controller: &str,
     agent_id: &str,
-    verification_method: &str,
+    _verification_method: &str,
     runtime_public_key_digest: &str,
     service_id: &str,
 ) -> Result<String, AppError> {
-    let pairing_request_id = required_pairing_request_id(agent_record)?;
+    let pairing_request_id =
+        arkret_wire::OpaqueLocalId::new(required_pairing_request_id(agent_record)?.to_owned())
+            .map_err(|error| {
+                AppError::internal(format!("stored pairing request id invalid: {error}"))
+            })?;
     let pairing_code = required_pairing_code(agent_record)?;
-    let expires_at =
-        arkret_canonical::format_timestamp_canonical(required_pairing_expires_at(agent_record)?);
+    let expires_at = required_pairing_expires_at(agent_record)?;
     let controller = Did::new(controller.to_owned())
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
-    let runtime_public_key_digest = Hash::new(runtime_public_key_digest.to_owned())
-        .map_err(|_| AppError::invalid_param("runtime_public_key_digest is invalid"))?;
-    arkret_signatures::agent::agent_key_pairing_request_binding_digest(
+    let _ = runtime_public_key_digest;
+    let audience = Did::new(service_id.to_owned())
+        .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
+    let runtime_key_binding_digest = Hash::new(
+        agent_record
+            .runtime_key_binding_digest
+            .clone()
+            .ok_or_else(|| incomplete_pairing_metadata("runtime_key_binding_digest"))?,
+    )
+    .map_err(|_| AppError::internal("stored runtime key binding digest is invalid"))?;
+    let proof = &agent_record
+        .runtime_key_request
+        .as_ref()
+        .ok_or_else(|| incomplete_pairing_metadata("runtime_key_request"))?
+        .proof_of_possession;
+    arkret_models_collaboration::agent_operations::agent_key_pairing_request_binding_digest(
+        arkret_wire::ServiceOperationId::GATE_ACCOUNT_COMMAND_PAIR_AGENT_KEY,
         &controller,
         &agent_id,
-        verification_method,
-        &runtime_public_key_digest,
-        pairing_request_id,
+        &pairing_request_id,
         pairing_code,
-        &expires_at,
-        service_id,
+        expires_at,
+        &audience,
+        &runtime_key_binding_digest,
+        proof,
     )
     .map(|digest| digest.as_str().to_owned())
     .map_err(|error| {

@@ -300,7 +300,7 @@ mod tests {
     }
 
     fn key_authorize_envelope(
-        record: &AgentPrincipalRecord,
+        record: &mut AgentPrincipalRecord,
         controller: &str,
         agent_id: &str,
         verification_method: &str,
@@ -308,6 +308,36 @@ mod tests {
         service_id: &str,
         scope: Value,
     ) -> Value {
+        let runtime_request = key_pair_request_body(agent_id, verification_method, service_id);
+        record.runtime_key_binding_digest = Some(
+            runtime_request
+                .proof_of_possession
+                .runtime_key_binding_digest
+                .as_str()
+                .to_owned(),
+        );
+        record.runtime_public_key_digest = Some(
+            arkret_signatures::agent::agent_runtime_public_key_digest(&runtime_request.public_key)
+                .expect("runtime public key digest")
+                .as_str()
+                .to_owned(),
+        );
+        record.runtime_attestation_digest = Some(
+            arkret_signatures::agent::agent_runtime_attestation_digest(None)
+                .expect("runtime attestation digest")
+                .as_str()
+                .to_owned(),
+        );
+        record.runtime_key_request = Some(
+            arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
+                pairing_request_id: runtime_request.pairing_request_id,
+                agent_id: runtime_request.agent_id,
+                verification_method: runtime_request.verification_method,
+                public_key: runtime_request.public_key,
+                proof_of_possession: runtime_request.proof_of_possession,
+                runtime_attestation: runtime_request.runtime_attestation,
+            },
+        );
         let request_canonical_digest = pairing_request_binding_digest(
             record,
             controller,
@@ -358,41 +388,56 @@ mod tests {
         let public_key_value = json!({
             "kty": "OKP",
             "kid": verification_method,
-            "alg": "Ed25519",
+            "alg": "EdDSA",
             "key": encoded_public_key.clone(),
         });
         let public_key = PublicKey {
             kty: arkret_wire::NonEmptyString::new("OKP").unwrap(),
             kid: arkret_wire::NonEmptyString::new(verification_method).unwrap(),
-            alg: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
+            alg: arkret_wire::NonEmptyString::new("EdDSA").unwrap(),
             key: arkret_wire::Base64UrlString::new(encoded_public_key).unwrap(),
             key_digest: None,
         };
         let agent_id = Did::new(agent.to_owned()).expect("agent did");
-        let pairing_request_id = "agent_pairing_request:01999999-0000-7000-8000-00000000feed";
-        let request_digest = arkret_signatures::agent::agent_key_pair_proof_request_binding_digest(
-            pairing_request_id,
-            &agent_id,
-            verification_method,
-            &public_key_value,
-            None,
+        let pairing_request_id = arkret_wire::OpaqueLocalId::new(
+            "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
         )
-        .expect("pop digest");
-        let expires_at = chrono::DateTime::parse_from_rfc3339("2999-01-01T00:00:00.000Z")
-            .expect("fixed future expiry")
-            .with_timezone(&chrono::Utc);
-        let signing_input = arkret_signatures::agent::agent_key_pair_proof_signing_input(
-            arkret_wire::DidUrl::new(verification_method).expect("fixture DID URL"),
-            pairing_request_id,
-            service_id.to_owned(),
-            expires_at,
-            request_digest.clone(),
-        );
-        let signature = signing_key.sign(
-            &signing_input
-                .canonical_bytes()
-                .expect("pop signing canonical bytes"),
-        );
+        .unwrap();
+        let verification_method = arkret_wire::DidUrl::new(verification_method).unwrap();
+        let runtime_key_binding_digest =
+            arkret_models_collaboration::agent_operations::agent_runtime_key_binding_digest(
+                &agent_id,
+                &pairing_request_id,
+                &verification_method,
+                &public_key,
+                None,
+            )
+            .expect("runtime key binding digest");
+        let created_at = chrono::Utc::now();
+        let expires_at = created_at + chrono::Duration::minutes(5);
+        let mut proof_of_possession =
+            arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProof {
+                kind: arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProofKind::AgentRuntimeKeyPossession,
+                verification_method: verification_method.clone(),
+                alg: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::EdDsa,
+                challenge: pairing_request_id.clone(),
+                audience: Did::new(service_id).unwrap(),
+                created_at,
+                expires_at,
+                runtime_key_binding_digest,
+                transcript_digest: arkret_wire::Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
+                signature: arkret_wire::Base64UrlString::new("AA").unwrap(),
+            };
+        let transcript = proof_of_possession
+            .canonical_transcript_bytes("12345678")
+            .unwrap();
+        proof_of_possession.transcript_digest =
+            arkret_wire::Hash::new(arkret_canonical::sha256_digest(&transcript)).unwrap();
+        proof_of_possession.signature = arkret_wire::Base64UrlString::new(
+            base64::engine::general_purpose::URL_SAFE_NO_PAD
+                .encode(signing_key.sign(&transcript).to_bytes()),
+        )
+        .unwrap();
         let controller_id = Did::new("did:web:controller.example".to_owned()).unwrap();
         let requested_scope: AgentKeyScope =
             serde_json::from_value(requested_agent_scope()).unwrap();
@@ -464,32 +509,11 @@ mod tests {
         }))
         .unwrap();
         AgentKeyPairRequestBody {
-            pairing_request_id: arkret_wire::OpaqueLocalId::new(pairing_request_id).unwrap(),
+            pairing_request_id,
             agent_id,
-            verification_method: arkret_wire::DidUrl::new(verification_method).unwrap(),
+            verification_method,
             public_key,
-            proof_of_possession: arkret_wire::wire_strings::NonEmptyJsonObject::new(
-                std::collections::BTreeMap::from([
-                    ("challenge".to_owned(), json!(pairing_request_id)),
-                    ("audience".to_owned(), json!(service_id)),
-                    (
-                        "request_canonical_digest".to_owned(),
-                        json!(request_digest.as_str()),
-                    ),
-                    (
-                        "expires_at".to_owned(),
-                        json!(arkret_canonical::format_timestamp_canonical(expires_at)),
-                    ),
-                    (
-                        "signature".to_owned(),
-                        json!(
-                            base64::engine::general_purpose::URL_SAFE_NO_PAD
-                                .encode(signature.to_bytes())
-                        ),
-                    ),
-                ]),
-            )
-            .unwrap(),
+            proof_of_possession,
             requested_scope_disclosure,
             runtime_attestation: None,
             authorize_event,
@@ -736,7 +760,7 @@ mod tests {
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             agent,
             controller,
             scope.clone(),
@@ -744,7 +768,7 @@ mod tests {
             "2999-01-01T00:00:00.000Z",
         );
         let envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             controller,
             agent,
             verification_method,
@@ -773,8 +797,15 @@ mod tests {
         let service_id =
             "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service";
         let body = key_pair_request_body(agent, verification_method, service_id);
+        let record = pending_pairing_record(
+            agent,
+            "did:web:controller.example",
+            requested_agent_scope(),
+            "12345678",
+            "2999-01-01T00:00:00.000Z",
+        );
 
-        verify_runtime_key_pair_proof_of_possession(&body, agent, service_id)
+        verify_runtime_key_pair_proof_of_possession(&body, &record, agent, service_id)
             .expect("runtime PoP must verify");
     }
 
@@ -823,19 +854,21 @@ mod tests {
                 .unwrap()
                 .with_timezone(&chrono::Utc),
         );
-        record.runtime_key_request = Some(serde_json::from_value(json!({
-            "pairing_request_id": "agent_pairing_request:01999999-0000-7000-8000-00000000feed",
-            "agent_id": "did:web:agent.example",
-            "verification_method": "did:web:agent.example#runtime-key-1",
-            "public_key": {
-                "kty": "OKP",
-                "kid": "did:web:agent.example#runtime-key-1",
-                "alg": "Ed25519",
-                "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        let runtime_request = key_pair_request_body(
+            "did:web:agent.example",
+            "did:web:agent.example#runtime-key-1",
+            "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
+        );
+        record.runtime_key_request = Some(
+            arkret_models_collaboration::agent_operations::AgentRuntimeApprovalControllerProjection {
+                pairing_request_id: runtime_request.pairing_request_id,
+                agent_id: runtime_request.agent_id,
+                verification_method: runtime_request.verification_method,
+                public_key: runtime_request.public_key,
+                proof_of_possession: runtime_request.proof_of_possession,
+                runtime_attestation: runtime_request.runtime_attestation,
             },
-            "proof_of_possession": { "challenge": "agent_pairing_request:01999999-0000-7000-8000-00000000feed" }
-        }))
-        .expect("valid controller runtime request"));
+        );
 
         let key_state = agent_key_state_from_record(
             &record,
@@ -1067,7 +1100,7 @@ mod tests {
 
     #[test]
     fn key_pair_rejects_wrong_pairing_request_id() {
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             "did:web:agent.example",
             "did:web:controller.example",
             requested_agent_scope(),
@@ -1076,7 +1109,7 @@ mod tests {
         );
 
         let err = ensure_pairing_request_id_matches(
-            &record,
+            &mut record,
             "agent_pairing_request:01999999-0000-7000-8000-00000000bad1",
         )
         .expect_err("wrong pairing request must fail closed");
@@ -1094,17 +1127,15 @@ mod tests {
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             agent,
             controller,
             scope.clone(),
             "12345678",
             "2999-01-01T00:00:00.000Z",
         );
-        let mut mismatched_record = record.clone();
-        mismatched_record.pairing_code = Some("87654321".to_owned());
         let envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             controller,
             agent,
             verification_method,
@@ -1112,6 +1143,8 @@ mod tests {
             service_id,
             scope,
         );
+        let mut mismatched_record = record.clone();
+        mismatched_record.pairing_code = Some("87654321".to_owned());
 
         let err = ensure_key_authorize_event_matches_request(
             &envelope,
@@ -1138,7 +1171,7 @@ mod tests {
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             agent,
             controller,
             scope.clone(),
@@ -1146,7 +1179,7 @@ mod tests {
             "2999-01-01T00:00:00.000Z",
         );
         let envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             "did:web:mallory.example",
             agent,
             verification_method,
@@ -1180,7 +1213,7 @@ mod tests {
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             agent,
             controller,
             scope.clone(),
@@ -1188,7 +1221,7 @@ mod tests {
             "2999-01-01T00:00:00.000Z",
         );
         let mut envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             controller,
             agent,
             verification_method,
@@ -1243,7 +1276,7 @@ mod tests {
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let expected_scope = requested_agent_scope();
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             agent,
             controller,
             expected_scope,
@@ -1255,7 +1288,7 @@ mod tests {
             "resources": [{ "kind": "service", "service_id": service_id }]
         });
         let envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             controller,
             agent,
             verification_method,
@@ -1280,7 +1313,7 @@ mod tests {
             "resources": [{ "kind": "service", "service_id": service_id }]
         });
         let widened_envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             controller,
             agent,
             verification_method,
@@ -1312,7 +1345,7 @@ mod tests {
         let public_key_digest =
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
         let scope = requested_agent_scope();
-        let record = pending_pairing_record(
+        let mut record = pending_pairing_record(
             agent,
             controller,
             scope.clone(),
@@ -1320,7 +1353,7 @@ mod tests {
             "2999-01-01T00:00:00.000Z",
         );
         let envelope = key_authorize_envelope(
-            &record,
+            &mut record,
             controller,
             agent,
             verification_method,

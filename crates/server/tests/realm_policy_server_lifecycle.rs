@@ -13,16 +13,6 @@
 //!      stream.
 //!
 //! Spec: `arkret-spec/spec/v1/zh/authz/policy-server.md` §2.2.
-//!
-//! The value-tombstone legs of §2.2 (`DELETE` on a settled declaration, the
-//! idempotent repeat, and the fallback restored by the tombstone) are NOT
-//! asserted here: they are blocked by
-//! `arkret-work/review/spec-open/2026-07-30-cas-register-join-lacks-reachability.md`
-//! — `cas_register.join` receives no reachability information, so the second
-//! accepted write to the cell joins to `⊥` and every dependent read fails
-//! closed. That finding carries the reproduction; once the protocol decides
-//! how the join learns reachability, those legs belong in this file.
-
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -476,7 +466,48 @@ async fn policy_server_declaration_is_sealed_and_resolves_org_fallback() {
         "a refused DELETE must not advance the accepted Seal frontier"
     );
 
-    // 4. A Realm that never declared anything, and has no governed_by chain, answers not_found as
+    // 4. A direct child declaration can be tombstoned. The settled tombstone restores the inherited
+    //    organization value, and repeating DELETE is an idempotent empty success.
+    let (status, direct) = put_policy_server(
+        &state,
+        &token,
+        CHILD_REALM,
+        &declaration_body("child-policy.example"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "child PUT: {direct}");
+    assert_eq!(direct["from_org_fallback"], false);
+    let (status, deleted) = delete_policy_server(&state, &token, CHILD_REALM).await;
+    assert_eq!(status, StatusCode::OK, "settled child DELETE: {deleted}");
+    let child_events = policy_server_events(&state, &token, CHILD_REALM).await;
+    assert_eq!(child_events.len(), 2, "declaration plus tombstone");
+    assert_eq!(child_events[1]["payload"]["tombstone"], true);
+    let (status, inherited_again) = get_policy_server(&state, &token, CHILD_REALM).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "fallback after tombstone: {inherited_again}"
+    );
+    assert_eq!(
+        inherited_again["policy_server_did"],
+        "did:web:org-policy.example"
+    );
+    assert_eq!(inherited_again["from_org_fallback"], true);
+    let (status, repeated) = delete_policy_server(&state, &token, CHILD_REALM).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "repeated tombstone DELETE: {repeated}"
+    );
+    assert_eq!(
+        policy_server_events(&state, &token, CHILD_REALM)
+            .await
+            .len(),
+        2,
+        "repeat must not append another tombstone"
+    );
+
+    // 5. A Realm that never declared anything, and has no governed_by chain, answers not_found as
     //    well.
     let never_declared = "ak:realm:01904100-0000-7000-8000-00000000c003";
     bootstrap_realm(&state, &token, never_declared, 3, 0).await;
@@ -533,6 +564,45 @@ async fn policy_server_declaration_survives_restart() {
             }),
         Some("did:web:org-policy.example"),
         "the declaration cell must survive restart"
+    );
+    drop(projection);
+
+    // A later settled tombstone is equally durable: after a second restart it
+    // remains a direct absence and does not resurrect the declaration.
+    // The lightweight hydration harness restores the durable projection but
+    // deliberately does not reconstruct the accepted-Seal coordinator state
+    // needed to author a new Control Move. Author the tombstone on the original
+    // still-live node, then verify that a fresh node rehydrates that durable
+    // tombstone instead of resurrecting the declaration.
+    grant_policy_manage(&state, ORG_REALM);
+    let (status, deleted) = delete_policy_server(&state, &token, ORG_REALM).await;
+    assert_eq!(status, StatusCode::OK, "settled DELETE: {deleted}");
+    let restarted_again =
+        soland_test_support::app_state_with_persistence(test_config(), persistence);
+    restarted_again
+        .hydrate()
+        .await
+        .expect("tombstoned state hydrates");
+    let token = dev_token(restarted_again.clone(), ALICE, ALICE_DEVICE, "Alice").await;
+    let (status, view) = get_policy_server(&restarted_again, &token, ORG_REALM).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "tombstone after restart: {view}"
+    );
+    let projection = restarted_again.test_projection().lock();
+    assert_eq!(
+        projection
+            .realm_null_subject_cells
+            .get(&(ORG_REALM.to_owned(), POLICY_CELL.to_owned()))
+            .and_then(|cell| match cell {
+                arkret_state::lattice::CellState::Value(value) => {
+                    value.get("tombstone").and_then(Value::as_bool)
+                }
+                arkret_state::lattice::CellState::Bottom(_) => None,
+            }),
+        Some(true),
+        "the tombstone cell must survive restart"
     );
 }
 
