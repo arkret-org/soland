@@ -423,6 +423,7 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,
     )?;
+    validate_mls_covered_seal_refs_visibility(state, object)?;
     if kind == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;

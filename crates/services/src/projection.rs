@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use arkret_event_draft::Operation;
@@ -824,6 +824,31 @@ impl ProjectionService {
     ) -> Result<BTreeMap<CellRef, CellState>, SealReject> {
         arkret_state::effective_state_at(
             leaves,
+            realm_id,
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+        )
+    }
+
+    /// The Seals visible from `leaves`: the leaves themselves plus their whole
+    /// predecessor closure.
+    ///
+    /// `encryption-and-audit.md` §2.5.1 bounds a commit's `covered_seal_refs`
+    /// to exactly this set.
+    pub fn seal_closure(&self, leaves: &[SealId]) -> Result<BTreeSet<SealId>, SealReject> {
+        arkret_state::predecessor_seal_closure(leaves, self.seal_store())
+    }
+
+    /// `encryption-and-audit.md` §2.5.2 — `M`, the governance Seal set an E2EE
+    /// application DataEvent resolving at `seal_id` depends on.
+    pub fn required_governance_seals_at(
+        &self,
+        seal_id: &SealId,
+        realm_id: &RealmId,
+    ) -> Result<BTreeSet<SealId>, SealReject> {
+        arkret_state::mls_move::required_governance_seals_at(
+            std::slice::from_ref(seal_id),
             realm_id,
             self.seal_store(),
             self.cell_store(),

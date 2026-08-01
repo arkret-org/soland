@@ -1573,6 +1573,10 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
 const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-7000-8000-000000000001";
+/// The MLS group the E2EE fixture ciphertexts name. `covered_seals_cell` is
+/// keyed by the group id (the registered `payload.mls_group_id` subject), so
+/// the fixture basis MUST seed coverage under this exact id.
+const DATA_EVENT_MLS_GROUP: &str = "group.01js0mls0000000000000000";
 
 fn data_event_seal_id() -> arkret_identifiers::SealId {
     arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap()
@@ -1600,14 +1604,22 @@ fn data_event_dummy_signature() -> arkret_wire::PayloadSignature {
 }
 
 fn insert_data_event_seal(state: &AppState, covered: Vec<arkret_identifiers::Hash>) -> String {
+    insert_data_event_seal_with(state, data_event_seal_id(), Vec::new(), covered)
+}
+
+fn insert_data_event_seal_with(
+    state: &AppState,
+    seal_id: arkret_identifiers::SealId,
+    predecessor_refs: Vec<arkret_identifiers::SealId>,
+    covered: Vec<arkret_identifiers::Hash>,
+) -> String {
     use chrono::TimeZone;
 
-    let seal_id = data_event_seal_id();
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
     let seal = arkret_wire::Seal {
         id: seal_id.clone(),
         realm_id: realm,
-        predecessor_refs: Vec::new(),
+        predecessor_refs,
         delta: Vec::new(),
         control_event_set_root: data_event_hash(0x22),
         state_root: data_event_hash(0x77),
@@ -1891,10 +1903,29 @@ fn insert_historical_data_event_delegated_grant_with_revoked_parent(
     insert_data_event_seal(state, vec![parent_move_id, child_move_id])
 }
 
+/// A single-Seal E2EE fixture with NO `covered_seals_cell` write.
+///
+/// Coverage always has to come from a second Seal — a Move can only attest a
+/// Seal that already existed when it was authored — so a fixture that needs the
+/// gate satisfied uses [`insert_reducer_reachable_e2ee_state`] instead. This one
+/// exists only for the refusal cases.
 fn insert_historical_data_event_grant_with_e2ee_state(
     state: &AppState,
     grant_id: &str,
-    include_covered_seal: bool,
+    include_relaxed_policy: bool,
+) -> String {
+    insert_historical_data_event_grant_with_e2ee_state_covered_under(
+        state,
+        grant_id,
+        None,
+        include_relaxed_policy,
+    )
+}
+
+fn insert_historical_data_event_grant_with_e2ee_state_covered_under(
+    state: &AppState,
+    grant_id: &str,
+    covered_cell_subject: Option<&str>,
     include_relaxed_policy: bool,
 ) -> String {
     let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
@@ -1932,9 +1963,10 @@ fn insert_historical_data_event_grant_with_e2ee_state(
         )),
     ));
 
-    if include_covered_seal {
+    if let Some(covered_cell_subject) = covered_cell_subject {
         let covered_move_id = data_event_move_id(0xb1);
-        let covered_cell = arkret_state::mls_move::covered_seals_cell_id(realm.as_str()).unwrap();
+        let covered_cell =
+            arkret_state::mls_move::covered_seals_cell_id(covered_cell_subject).unwrap();
         let covered_op = arkret_wire::LatticeOp {
             op_type: arkret_wire::LatticeOpType::Add,
             tag: Some(seal_id.as_str().to_owned()),
@@ -1992,6 +2024,152 @@ fn insert_historical_data_event_grant_with_e2ee_state(
     insert_data_event_seal(state, move_ids)
 }
 
+/// A reducer-reachable E2EE governance state: a governance Seal, then a
+/// separate Seal carrying the `ak.mls.commit` that attests it.
+///
+/// This is the shape a live Realm actually produces and the one the previous
+/// `required_governance_seals = [seal_ref]` rule could never satisfy. A Control
+/// Move only attests Seals that already existed when it was authored, so the
+/// Seal admitting the commit is always newer than the Seals the commit names —
+/// `covered_seals_cell@J(S)` can never contain `S`. The single-Seal fixtures
+/// below hide that by seeding a Seal's own id into its own sealed effects,
+/// which no reducer can produce.
+///
+/// `later_grant_id` seeds an additional capability grant in a THIRD Seal
+/// sealed after the commit — the ban / revoke / grant case §2.5.2 wants to
+/// block until a new commit attests it. Returns the Seal id the DataEvent
+/// should resolve under.
+fn insert_reducer_reachable_e2ee_state(
+    state: &AppState,
+    grant_id: &str,
+    later_grant_id: Option<&str>,
+) -> String {
+    let realm = arkret_identifiers::RealmId::new(DATA_EVENT_REALM.to_owned()).unwrap();
+    let governance_seal_id =
+        arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "b".repeat(64))).unwrap();
+    let commit_seal_id =
+        arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "c".repeat(64))).unwrap();
+    let later_seal_id =
+        arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "d".repeat(64))).unwrap();
+
+    let grant_move_id = data_event_move_id(0xc0);
+    state
+        .projections()
+        .test_append_sealed_effects(
+            &realm,
+            &governance_seal_id,
+            &[(
+                arkret_identifiers::CellRef::new(format!(
+                    "ak:cell:ak.component.capability.grant.v1:{grant_id}"
+                ))
+                .unwrap(),
+                strictness_issued(arkret_state::lattice::SealedOp::new(
+                    grant_move_id.clone(),
+                    arkret_wire::LatticeOp {
+                        op_type: arkret_wire::LatticeOpType::Add,
+                        tag: Some("ak:operation:01904100-0000-7000-8000-0000000009c0".to_owned()),
+                        value: Some(historical_data_event_grant_value(
+                            grant_id,
+                            "ak.message.create",
+                            DATA_EVENT_ACTOR,
+                            "did:web:owner.example",
+                            false,
+                            None,
+                        )),
+                        from: None,
+                        to: None,
+                        reason: None,
+                        issuer_seq: None,
+                    },
+                )),
+            )],
+        )
+        .unwrap();
+    insert_data_event_seal_with(
+        state,
+        governance_seal_id.clone(),
+        Vec::new(),
+        vec![grant_move_id.clone()],
+    );
+
+    // The commit attests the governance Seal that existed when it was authored
+    // — never the Seal that ends up admitting it.
+    let commit_move_id = data_event_move_id(0xc1);
+    state
+        .projections()
+        .test_append_sealed_effects(
+            &realm,
+            &commit_seal_id,
+            &[(
+                arkret_state::mls_move::covered_seals_cell_id(DATA_EVENT_MLS_GROUP).unwrap(),
+                strictness_issued(arkret_state::lattice::SealedOp::new(
+                    commit_move_id.clone(),
+                    arkret_wire::LatticeOp {
+                        op_type: arkret_wire::LatticeOpType::Add,
+                        tag: Some("ak:operation:01904100-0000-7000-8000-0000000009c1".to_owned()),
+                        value: Some(Value::String(governance_seal_id.as_str().to_owned())),
+                        from: None,
+                        to: None,
+                        reason: None,
+                        issuer_seq: None,
+                    },
+                )),
+            )],
+        )
+        .unwrap();
+    insert_data_event_seal_with(
+        state,
+        commit_seal_id.clone(),
+        vec![governance_seal_id.clone()],
+        vec![grant_move_id.clone(), commit_move_id.clone()],
+    );
+
+    let Some(later_grant_id) = later_grant_id else {
+        return commit_seal_id.as_str().to_owned();
+    };
+
+    let later_move_id = data_event_move_id(0xc2);
+    state
+        .projections()
+        .test_append_sealed_effects(
+            &realm,
+            &later_seal_id,
+            &[(
+                arkret_identifiers::CellRef::new(format!(
+                    "ak:cell:ak.component.capability.grant.v1:{later_grant_id}"
+                ))
+                .unwrap(),
+                strictness_issued(arkret_state::lattice::SealedOp::new(
+                    later_move_id.clone(),
+                    arkret_wire::LatticeOp {
+                        op_type: arkret_wire::LatticeOpType::Add,
+                        tag: Some("ak:operation:01904100-0000-7000-8000-0000000009c2".to_owned()),
+                        value: Some(historical_data_event_grant_value(
+                            later_grant_id,
+                            "ak.message.create",
+                            DATA_EVENT_ACTOR,
+                            "did:web:owner.example",
+                            false,
+                            None,
+                        )),
+                        from: None,
+                        to: None,
+                        reason: None,
+                        issuer_seq: None,
+                    },
+                )),
+            )],
+        )
+        .unwrap();
+    insert_data_event_seal_with(
+        state,
+        later_seal_id.clone(),
+        vec![commit_seal_id],
+        vec![grant_move_id, commit_move_id, later_move_id],
+    );
+    later_seal_id.as_str().to_owned()
+}
+
 /// The cell an `ak.message.create` in this Realm projects.
 ///
 /// v1 carries no producer `effects[]`; the receiver derives the write set from
@@ -2041,7 +2219,7 @@ fn data_event_e2ee_object_with_refs(
             "encrypted_content": {
                 "scheme": "mls_rfc9420",
                 "version": "1.0",
-                "group_id": "group.01js0mls0000000000000000",
+                "group_id": DATA_EVENT_MLS_GROUP,
                 "epoch": 7,
                 "content_type": "application/json",
                 "ciphertext": "base64url",
@@ -2376,11 +2554,10 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
 }
 
 #[test]
-fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
+fn e2ee_data_event_requires_covered_seals_cell_coverage() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-000000000118";
-    let seal_ref =
-        insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false, false);
+    let seal_ref = insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     let err = validate_data_event_capability_refs(
@@ -2399,12 +2576,52 @@ fn e2ee_data_event_requires_covered_seals_cell_contains_seal_ref() {
     assert!(err.message.contains("covered_seals_cell"));
 }
 
+/// Regression lock (2026-08-01): `covered_seals_cell` is keyed by the MLS
+/// group id (the registered `payload.mls_group_id` subject). The gate used to
+/// derive the cell from the Realm id — a cell no reducer ever writes — which
+/// rejected every well-formed E2EE DataEvent as `mls_governance_binding_stale`
+/// on live realms, while realm-keyed fixtures kept the suite green. Coverage
+/// seeded under the Realm id MUST NOT satisfy the gate.
 #[test]
-fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
+fn e2ee_data_event_rejects_coverage_seeded_under_the_realm_id() {
     let state = make_state(true);
-    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000119";
-    let seal_ref =
-        insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true, false);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011b";
+    let seal_ref = insert_historical_data_event_grant_with_e2ee_state_covered_under(
+        &state,
+        grant_id,
+        Some(DATA_EVENT_REALM),
+        false,
+    );
+    let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+        false,
+    )
+    .expect_err("realm-keyed coverage must not satisfy the group-keyed gate");
+
+    assert_eq!(err.code, "failed_precondition");
+    assert!(err.message.contains("covered_seals_cell is missing"));
+}
+
+/// Regression lock (2026-08-01), `encryption-and-audit.md` §2.5.2: the gate
+/// required `seal_ref ∈ covered_seals_cell@J(seal_ref)`, which no reducer can
+/// ever satisfy — the Seal admitting a commit is always newer than the Seals
+/// that commit attests, so `max(covered_seals_cell@J(S)) < S` for every `S`.
+/// Live Realms therefore rejected every compliant E2EE DataEvent forever, and
+/// no amount of self-update Commits could repair it (each Commit's own Seal
+/// advanced `S` by one). A DataEvent resolving under a Seal that carries no
+/// governance change MUST pass on the coverage the previous commit wrote.
+#[test]
+fn e2ee_data_event_accepts_coverage_naming_only_the_attested_governance_seal() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011c";
+    let seal_ref = insert_reducer_reachable_e2ee_state(&state, grant_id, None);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(
@@ -2416,15 +2633,108 @@ fn e2ee_data_event_accepts_when_covered_seals_contains_seal_ref() {
         &data_event_derived_cells(),
         false,
     )
-    .expect("covered E2EE DataEvent should pass the covered_seals gate");
+    .expect("a reducer-reachable covered_seals state must clear the governance-binding gate");
+}
+
+/// The other half of the same rule: a capability grant sealed AFTER the last
+/// commit enters `M` and MUST block the send until a new commit attests it.
+/// Without this the correction above would degrade into "coverage is whatever
+/// the last commit happened to say".
+#[test]
+fn e2ee_data_event_blocks_on_a_governance_seal_sealed_after_the_last_commit() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011d";
+    let later_grant_id = "ak:grant:01904100-0000-7000-8000-00000000011e";
+    let seal_ref = insert_reducer_reachable_e2ee_state(&state, grant_id, Some(later_grant_id));
+    let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
+
+    let err = validate_data_event_capability_refs(
+        &state,
+        DATA_EVENT_ACTOR,
+        DATA_EVENT_REALM,
+        "ak.message.create",
+        &object,
+        &data_event_derived_cells(),
+        false,
+    )
+    .expect_err("an uncovered governance Seal must pause sending");
+
+    assert_eq!(err.code, "failed_precondition");
+    assert!(err.message.contains("mls_governance_binding_stale"));
+    assert!(
+        err.message
+            .contains(&format!("ak:seal:sha256:{}", "d".repeat(64)))
+    );
+}
+
+/// An `ak.mls.commit` whose `governance_binding` is bound to the two-Seal state
+/// above: it attests the governance Seal, which its own `seal_basis` sees.
+fn mls_commit_object(
+    seal_basis_leaf: &str,
+    covered_seal_refs: Vec<&str>,
+) -> serde_json::Map<String, Value> {
+    json!({
+        "kind": arkret_wire::EventKind::MLS_COMMIT,
+        "realm_id": DATA_EVENT_REALM,
+        "actor_id": DATA_EVENT_ACTOR,
+        "seal_basis": { "leaves": [seal_basis_leaf] },
+        "payload": {
+            "mls_group_id": DATA_EVENT_MLS_GROUP,
+            "governance_binding": { "covered_seal_refs": covered_seal_refs },
+        },
+    })
+    .as_object()
+    .unwrap()
+    .clone()
+}
+
+/// `encryption-and-audit.md` §2.5.1 `covered_seal_refs` visibility, accept side:
+/// attesting a Seal the Move's own `seal_basis` reaches is the whole point.
+#[test]
+fn mls_commit_may_attest_a_seal_inside_its_seal_basis_closure() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011f";
+    let head = insert_reducer_reachable_e2ee_state(&state, grant_id, None);
+    let governance_seal = format!("ak:seal:sha256:{}", "b".repeat(64));
+
+    // The head Seal's predecessor is the governance Seal, so both are visible.
+    validate_mls_covered_seal_refs_visibility(
+        &state,
+        &mls_commit_object(&head, vec![&governance_seal, &head]),
+    )
+    .expect("a commit may attest any Seal its own basis closure reaches");
+}
+
+/// Reject side, and the reason §2.5.2's `S ∉ covered_seals_cell@J(S)` is a
+/// structural fact rather than an authoring convention: a Seal outside the
+/// basis closure — which is exactly where the Seal that will admit this commit
+/// lives — MUST NOT be attestable.
+#[test]
+fn mls_commit_may_not_attest_a_seal_outside_its_seal_basis_closure() {
+    let state = make_state(true);
+    let grant_id = "ak:grant:01904100-0000-7000-8000-000000000120";
+    insert_reducer_reachable_e2ee_state(&state, grant_id, None);
+    let governance_seal = format!("ak:seal:sha256:{}", "b".repeat(64));
+    let unreachable = format!("ak:seal:sha256:{}", "e".repeat(64));
+
+    // Basis is the governance Seal alone, so the head Seal built on it — and
+    // any other Seal — is out of range.
+    let err = validate_mls_covered_seal_refs_visibility(
+        &state,
+        &mls_commit_object(&governance_seal, vec![&governance_seal, &unreachable]),
+    )
+    .expect_err("a commit must not attest a Seal outside its basis closure");
+
+    assert_eq!(err.code, "failed_precondition");
+    assert!(err.message.contains("governance_binding_mismatch"));
+    assert!(err.message.contains(&unreachable));
 }
 
 #[test]
 fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011a";
-    let seal_ref =
-        insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, false, true);
+    let seal_ref = insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true);
     let object = data_event_e2ee_object_with_refs(&seal_ref, vec![grant_id.to_owned()]);
 
     validate_data_event_capability_refs(

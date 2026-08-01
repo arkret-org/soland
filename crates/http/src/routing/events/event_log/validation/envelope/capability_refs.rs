@@ -100,7 +100,7 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     }
 
     let state_at_ref = data_event_state_at_seal_ref(state, &realm, &seal_id)?;
-    validate_data_event_covered_seals(&realm, &seal_id, object, &state_at_ref)?;
+    validate_data_event_covered_seals(state, &realm, &seal_id, object, &state_at_ref)?;
     let historical_grants = data_event_grants_from_state_at_ref(&state_at_ref);
     let auth_time = state
         .projections()
@@ -613,7 +613,24 @@ pub(super) fn data_event_grants_from_state_at_ref(
     grants
 }
 
+/// `encryption-and-audit.md` §2.5.2 — gate an E2EE application DataEvent on the
+/// `covered_seals_cell` resolved at its `seal_ref`.
+///
+/// The required set is `M`, rebuilt from the governance cells materialized at
+/// `seal_ref` ([`arkret_state::mls_move::required_governance_seals_at`]).
+/// `seal_ref` itself is deliberately NOT in `M`: a Control Move can only attest
+/// Seals that already existed when it was authored, so the Seal that admits it
+/// is always newer than everything it attests and
+/// `max(covered_seals_cell@J(S)) < S` holds for every `S`. Requiring `S ∈
+/// covered_seals_cell@J(S)` — which this check used to do — is unsatisfiable by
+/// construction and rejected every well-formed E2EE DataEvent forever; sending
+/// a self-update Commit could not repair it either, because the Commit's own
+/// Seal advances `S` by one and reproduces the same inequality. When `S` really
+/// does carry a governance change, that change's last-changing Move is admitted
+/// by `S`, so `S` enters `M` through the enumeration — which is how a ban or
+/// revoke pauses sending.
 pub(super) fn validate_data_event_covered_seals(
+    state: &AppState,
     realm: &RealmId,
     seal_id: &arkret_identifiers::SealId,
     object: &serde_json::Map<String, Value>,
@@ -629,8 +646,24 @@ pub(super) fn validate_data_event_covered_seals(
         return Ok(());
     }
 
+    // The `covered_seals_cell` subject is the MLS group id (the registered
+    // `ak.mls.genesis` / `ak.mls.commit` contracts key every
+    // `ak.component.covered_seals.v1` write by `payload.mls_group_id`, a
+    // base64url string per `encryption-and-audit.md`). The ciphertext names
+    // its group in `encrypted_content.group_id`; deriving the cell from the
+    // Realm id instead looked up a cell no reducer ever writes and rejected
+    // every well-formed E2EE DataEvent as `mls_governance_binding_stale`.
+    // Realm binding stays fail-closed for free: `state_at_ref` is the
+    // Realm-scoped control view, so a foreign group id resolves to no cell.
+    let group_id = data_event_mls_group_id(object).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "MLS E2EE DataEvent requires encrypted_content.group_id",
+        )
+    })?;
     let covered_cell =
-        arkret_state::mls_move::covered_seals_cell_id(realm.as_str()).map_err(|error| {
+        arkret_state::mls_move::covered_seals_cell_id(&group_id).map_err(|error| {
             event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "schema_violation",
@@ -643,16 +676,28 @@ pub(super) fn validate_data_event_covered_seals(
             "covered_seals_cell is missing at seal_ref",
         ));
     };
-    let required_governance_seals = std::slice::from_ref(seal_id);
-    if required_governance_seals
+    let required_governance_seals = state
+        .projections()
+        .required_governance_seals_at(seal_id, realm)
+        .map_err(|error| {
+            event_validation_error(
+                StatusCode::FORBIDDEN,
+                "capability_denied",
+                format!("DataEvent governance Seal dependency set could not be rebuilt: {error}"),
+            )
+        })?;
+    let uncovered = required_governance_seals
         .iter()
-        .all(|required| arkret_state::mls_move::covered_seals_contains(cell_value, required))
-    {
+        .filter(|required| !arkret_state::mls_move::covered_seals_contains(cell_value, required))
+        .map(|required| required.as_str().to_owned())
+        .collect::<Vec<_>>();
+    if uncovered.is_empty() {
         return Ok(());
     }
     Err(data_event_covered_seals_failed_precondition(format!(
-        "covered_seals_cell does not contain DataEvent seal_ref {}",
-        seal_id.as_str()
+        "covered_seals_cell at seal_ref {} does not cover governance Seal(s) {}",
+        seal_id.as_str(),
+        uncovered.join(", ")
     )))
 }
 
@@ -679,6 +724,31 @@ pub(super) fn data_event_payload_is_mls_e2ee(object: &serde_json::Map<String, Va
         || payload
             .get("object")
             .is_some_and(|object| encrypted_content_is_mls_e2ee(object.get("encrypted_content")))
+}
+
+/// The MLS group id (`encrypted_content.group_id`, base64url per
+/// `encryption-and-audit.md`) named by an E2EE DataEvent's ciphertext, from
+/// either registered carrier position (`payload.encrypted_content` or
+/// `payload.object.encrypted_content`) — the same two positions
+/// [`data_event_payload_is_mls_e2ee`] recognizes.
+pub(super) fn data_event_mls_group_id(object: &serde_json::Map<String, Value>) -> Option<String> {
+    let payload = object.get("payload")?;
+    [
+        payload.get("encrypted_content"),
+        payload
+            .get("object")
+            .and_then(|object| object.get("encrypted_content")),
+    ]
+    .into_iter()
+    .flatten()
+    .find_map(|encrypted_content| {
+        encrypted_content
+            .get("group_id")
+            .and_then(Value::as_str)
+            .map(str::trim)
+            .filter(|group_id| !group_id.is_empty())
+            .map(ToOwned::to_owned)
+    })
 }
 
 /// Both MLS-backed content schemes are gated by `covered_seals_cell`.

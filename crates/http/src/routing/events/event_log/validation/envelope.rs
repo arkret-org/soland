@@ -102,6 +102,7 @@ mod realm_authority_root;
 use applet::*;
 pub(in crate::routing::events::event_log) use capability_refs::validate_data_event_capability_refs;
 use capability_refs::*;
+pub(in crate::routing::events::event_log) use control_move::validate_mls_covered_seal_refs_visibility;
 use control_move::*;
 #[cfg(test)]
 pub(crate) use envelope_core::validate_event_envelope;

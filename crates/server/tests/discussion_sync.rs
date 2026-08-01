@@ -449,7 +449,7 @@ async fn send_circle_scoped_encrypted_message(
         "encrypted_content": {
             "scheme": "mls_rfc9420",
             "version": "1.0",
-            "group_id": "circleGroup123",
+            "group_id": soland_test_support::cba_basis::FIXTURE_MLS_GROUP_ID,
             "epoch": 1,
             "content_type": "application/json",
             "ciphertext": "Q2lyY2xlQ2lwaGVydGV4dA",

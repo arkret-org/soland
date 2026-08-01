@@ -824,11 +824,17 @@ pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value
     })
 }
 
+/// The MLS group every E2EE fixture ciphertext in this test suite names.
+/// `covered_seals_cell` is keyed by the group id (the registered
+/// `payload.mls_group_id` subject), so the fixture Realm basis MUST seed
+/// coverage under this exact id.
+pub(crate) const FIXTURE_MLS_GROUP_ID: &str = "ak:mls:test";
+
 pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
     serde_json::json!({
         "scheme": "mls_rfc9420",
         "version": 1,
-        "group_id": "ak:mls:test",
+        "group_id": FIXTURE_MLS_GROUP_ID,
         "epoch": 1,
         "content_type": content_type,
         "ciphertext": ciphertext,
@@ -1555,6 +1561,13 @@ const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
 /// One fixture Realm's accepted governance basis for one subject.
 #[derive(Clone)]
 pub(crate) struct TestRealmBasis {
+    /// `S0` — the governance unit (1)-(3).
+    governance_seal: arkret_wire::Seal,
+    governance_ops: Vec<(
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::ordered_log::IssuedOp,
+    )>,
+    /// `S1` — the head, built on `S0`, carrying (4). Fixture Events cite it.
     seal: arkret_wire::Seal,
     ops: Vec<(
         arkret_identifiers::CellRef,
@@ -1586,14 +1599,23 @@ pub(crate) struct TestRealmBasis {
 /// 4. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
 ///    MLS-backed DataEvent clears the governance-binding gate.
 ///
-/// Keying by subject rather than by Realm is what makes the Seal
-/// self-consistent: `predecessor_refs` is empty, so `control_event_set_root` is
-/// exactly `delta`'s root, and `state_root` is the genuine
-/// [`arkret_state::compute_state_root`] of the grant cells the unit writes. A
-/// single per-Realm Seal would have to grow its covered set every time a new
+/// (1)-(3) and (4) land in **two** Seals, `S0` then `S1`: (4)'s or-set element
+/// value is the Seal ref that (1)-(3) were admitted under, and no Move can name
+/// the Seal that admits it (`encryption-and-audit.md` §2.5.1 `covered_seal_refs`
+/// visibility, and content addressing — `S.id` transitively commits every Move
+/// in `covered_set(S)`). Both in one Seal, with (4) naming that Seal's own id,
+/// is a state no reducer can produce.
+///
+/// Keying by subject rather than by Realm is what keeps both Seals
+/// self-consistent: `S0.predecessor_refs` is empty so its
+/// `control_event_set_root` is exactly its `delta`'s root, `S1` declares the
+/// cumulative root over `covered_set(S0) ∪ {(4)}`, and both `state_root`s are
+/// the genuine [`arkret_state::compute_state_root`] of every op the Seal covers.
+/// A single per-Realm Seal would have to grow its covered set every time a new
 /// actor appeared, and every such growth invalidates both roots.
 ///
-/// The one member that cannot be inside `state_root` is (4): its or-set element
+/// Historical note — the member that used to be excluded from `state_root` is
+/// (4): its or-set element
 /// value is the enclosing Seal's own id, which does not exist until the body —
 /// `state_root` included — has been hashed. See the report note on
 /// `capability_refs.rs::validate_data_event_covered_seals`.
@@ -1871,38 +1893,77 @@ fn build_test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRe
     // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`
     // hashes it as a set, so the order is part of the wire contract rather
     // than a formatting choice.
-    let mut delta = vec![
+    let mut governance_delta = vec![
         authority_root_move.clone(),
         notary_move.clone(),
         owner_move.clone(),
         content_move.clone(),
-        covered_move.clone(),
     ];
-    delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let seal = arkret_wire::Seal::sign_single(
+    governance_delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
+    let governance_seal = arkret_wire::Seal::sign_single(
         realm.clone(),
         Vec::new(),
-        delta,
+        governance_delta.clone(),
         fixture_sealed_state_root(&realm, &ops),
         arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
         &signer,
     )
-    .expect("fixture basis Seal signs");
+    .expect("fixture governance basis Seal signs");
+    let governance_ops = std::mem::take(&mut ops);
 
     // `encryption-and-audit.md` §2.5.2 — the accumulator element value is the
     // governance Seal ref itself; the tag is the commit batch digest and is
     // never compared against a Seal id (`arkret_state::mls_move`).
-    ops.push((
-        arkret_state::mls_move::covered_seals_cell_id(realm_id)
+    let covered_ops = vec![(
+        arkret_state::mls_move::covered_seals_cell_id(FIXTURE_MLS_GROUP_ID)
             .expect("fixture covered_seals cell id"),
         fixture_issued_op(
             &issuer,
             &covered_move,
-            fixture_or_set_add(covered_move.as_str(), Value::String(seal.id.to_string())),
+            fixture_or_set_add(
+                covered_move.as_str(),
+                Value::String(governance_seal.id.to_string()),
+            ),
         ),
-    ));
+    )];
 
-    TestRealmBasis { seal, ops }
+    // §2.5.1 `covered_seal_refs` visibility: the accumulator write names the
+    // Seal the governance unit was admitted under, so it belongs in a Seal built
+    // ON that one. Both in one Seal, with the write naming that Seal's own id,
+    // is a state no reducer can reach — and it is what used to let every E2EE
+    // fixture clear the §2.5.2 gate.
+    let covered_set = governance_delta
+        .iter()
+        .cloned()
+        .chain(std::iter::once(covered_move.clone()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let all_ops = governance_ops
+        .iter()
+        .cloned()
+        .chain(covered_ops.iter().cloned())
+        .collect::<Vec<_>>();
+    let seal = arkret_wire::Seal::sign_single_kind_with_control_root(
+        realm.clone(),
+        vec![governance_seal.id.clone()],
+        vec![covered_move],
+        // Cumulative over predecessor coverage ∪ delta — the delta-only
+        // shorthand produces a root a verifier rejects once predecessors carry
+        // coverage of their own.
+        arkret_state::state::control_event_set_root(&covered_set)
+            .expect("fixture basis control event set root"),
+        fixture_sealed_state_root(&realm, &all_ops),
+        arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
+        arkret_wire::SealKind::Normal,
+        &signer,
+    )
+    .expect("fixture basis head Seal signs");
+
+    TestRealmBasis {
+        governance_seal,
+        governance_ops,
+        seal,
+        ops: covered_ops,
+    }
 }
 
 /// The `state_root` a notary would commit for these sealed effects: join every
@@ -2052,6 +2113,12 @@ pub(crate) async fn seed_test_realm_basis_seal(
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let basis = test_realm_basis(realm_id, subject, state.service_id().as_str());
+    // Governance unit first: the head Seal's `covered_seals_cell` write names
+    // it, so it has to be in the store before the head is.
+    state.test_put_seal(&basis.governance_seal).unwrap();
+    state
+        .test_append_sealed_effects(&realm, &basis.governance_seal.id, &basis.governance_ops)
+        .unwrap();
     state.test_put_seal(&basis.seal).unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)

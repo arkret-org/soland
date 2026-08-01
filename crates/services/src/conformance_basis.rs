@@ -19,10 +19,25 @@ const FIXTURE_NOTARY_SEED: [u8; 32] = [0x53; 32];
 const FIXTURE_NOTARY_DID: &str = "did:web:alice.example";
 pub const FIXTURE_NOTARY_VERIFICATION_METHOD: &str = "did:web:alice.example#fixture-notary";
 const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
+/// The MLS group id the conformance basis seeds `covered_seals_cell` under.
+/// The cell is keyed by the group id (the registered `payload.mls_group_id`
+/// subject) — never by the Realm id.
+pub const CONFORMANCE_MLS_GROUP_ID: &str = "conformanceMlsGroup01";
 
 /// A synthetic but cryptographically valid accepted governance basis.
+///
+/// Two Seals: a Move can only name a Seal that already existed when it was
+/// authored, so the `covered_seals_cell` write that attests the governance unit
+/// has to live in a Seal built on it.
 #[derive(Clone)]
 pub struct ConformanceRealmBasis {
+    /// The governance unit — authority root, owner bootstrap grant, optional
+    /// content grant and notary. `encryption-and-audit.md` §2.5.2 puts this
+    /// Seal in `M` for any DataEvent resolving above it.
+    pub governance_seal: Seal,
+    pub governance_ops: Vec<(CellRef, IssuedOp)>,
+    /// The head, built on [`Self::governance_seal`], carrying the
+    /// `covered_seals_cell` write that attests it. Events cite this one.
     pub seal: Seal,
     pub ops: Vec<(CellRef, IssuedOp)>,
 }
@@ -164,11 +179,7 @@ pub fn build_conformance_realm_basis(
         arkret_wire::DidUrl::new(FIXTURE_NOTARY_VERIFICATION_METHOD)
             .map_err(|error| error.to_string())?,
     );
-    let mut delta = vec![
-        authority_root_move.clone(),
-        owner_move.clone(),
-        covered_move.clone(),
-    ];
+    let mut delta = vec![authority_root_move.clone(), owner_move.clone()];
     if !explicit_content_actions.is_empty() {
         delta.push(content_move.clone());
     }
@@ -176,27 +187,71 @@ pub fn build_conformance_realm_basis(
         delta.push(notary_move);
     }
     delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let seal = Seal::sign_single(
+    let governance_seal = Seal::sign_single(
         realm.clone(),
         Vec::new(),
-        delta,
+        delta.clone(),
         sealed_state_root(&realm, &ops)?,
         Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
         &signer,
     )
     .map_err(|error| error.to_string())?;
+    let governance_ops = std::mem::take(&mut ops);
 
-    ops.push((
-        arkret_state::mls_move::covered_seals_cell_id(realm_id)
+    // `covered_seals_cell` is keyed by the MLS group id (the registered
+    // `payload.mls_group_id` subject) — never by the Realm id. Conformance
+    // E2EE fixtures consuming this basis must name the same group in
+    // `encrypted_content.group_id`.
+    let covered_ops = vec![(
+        arkret_state::mls_move::covered_seals_cell_id(CONFORMANCE_MLS_GROUP_ID)
             .map_err(|error| error.to_string())?,
         issued_op(
             &issuer,
             &covered_move,
-            or_set_add(covered_move.as_str(), Value::String(seal.id.to_string())),
+            or_set_add(
+                covered_move.as_str(),
+                Value::String(governance_seal.id.to_string()),
+            ),
         ),
-    ));
+    )];
 
-    Ok(ConformanceRealmBasis { seal, ops })
+    // `encryption-and-audit.md` §2.5.1 `covered_seal_refs` visibility: the
+    // accumulator write names the Seal the governance unit was admitted under,
+    // so it can only live in a Seal built ON that one. Emitting both from a
+    // single Seal that named its own id injected a state no reducer can reach,
+    // and let every conformance E2EE fixture clear the §2.5.2 gate on evidence
+    // a live Realm cannot present.
+    let covered_set = delta
+        .iter()
+        .cloned()
+        .chain(std::iter::once(covered_move.clone()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let all_ops = governance_ops
+        .iter()
+        .cloned()
+        .chain(covered_ops.iter().cloned())
+        .collect::<Vec<_>>();
+    let seal = Seal::sign_single_kind_with_control_root(
+        realm.clone(),
+        vec![governance_seal.id.clone()],
+        vec![covered_move],
+        // Cumulative over predecessor coverage ∪ delta, which is what a
+        // verifier recomputes; the delta-only shorthand would be rejected.
+        arkret_state::state::control_event_set_root(&covered_set)
+            .map_err(|error| error.to_string())?,
+        sealed_state_root(&realm, &all_ops)?,
+        Hlc::new(FIXTURE_BASIS_HLC).map_err(|error| error.to_string())?,
+        arkret_wire::SealKind::Normal,
+        &signer,
+    )
+    .map_err(|error| error.to_string())?;
+
+    Ok(ConformanceRealmBasis {
+        governance_seal,
+        governance_ops,
+        seal,
+        ops: covered_ops,
+    })
 }
 
 fn sealed_state_root(realm: &RealmId, ops: &[(CellRef, IssuedOp)]) -> Result<Hash, String> {
