@@ -1451,6 +1451,25 @@ CREATE TABLE public.sync_cursor_revocations (
     CONSTRAINT sync_cursor_revocations_scope_check CHECK ((scope = ANY (ARRAY['this_cursor'::text, 'same_device'::text, 'same_session'::text])))
 );
 
+CREATE TABLE public.websocket_auth_challenges (
+    connection_id text NOT NULL,
+    nonce text NOT NULL,
+    canonical_origin text NOT NULL,
+    canonical_base_url text NOT NULL,
+    issued_at timestamp with time zone NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    consumed boolean NOT NULL DEFAULT false,
+    retain_until timestamp with time zone NOT NULL
+);
+
+CREATE TABLE public.websocket_auth_replay_ledger (
+    cnf_jkt text NOT NULL,
+    jti text NOT NULL,
+    proof_context text NOT NULL,
+    consumed_at timestamp with time zone NOT NULL,
+    retain_until timestamp with time zone NOT NULL
+);
+
 CREATE TABLE public.idempotency_keys (
     principal_id text NOT NULL,
     idempotency_key text NOT NULL,
@@ -1801,6 +1820,12 @@ ALTER TABLE ONLY public.sync_cursor_handles
 ALTER TABLE ONLY public.sync_cursor_revocations
     ADD CONSTRAINT sync_cursor_revocations_pkey PRIMARY KEY (id);
 
+ALTER TABLE ONLY public.websocket_auth_challenges
+    ADD CONSTRAINT websocket_auth_challenges_pkey PRIMARY KEY (connection_id, nonce);
+
+ALTER TABLE ONLY public.websocket_auth_replay_ledger
+    ADD CONSTRAINT websocket_auth_replay_ledger_pkey PRIMARY KEY (cnf_jkt, jti, proof_context);
+
 ALTER TABLE ONLY public.idempotency_keys
     ADD CONSTRAINT idempotency_keys_pkey PRIMARY KEY (principal_id, idempotency_key);
 
@@ -2116,3 +2141,6 @@ ALTER TABLE ONLY public.projection_circle_members
 
 ALTER TABLE ONLY public.recovery_policies
     ADD CONSTRAINT recovery_policies_supersedes_fkey FOREIGN KEY (supersedes) REFERENCES public.recovery_policies(id);
+
+CREATE INDEX websocket_auth_challenges_retain_until_idx ON public.websocket_auth_challenges (retain_until);
+CREATE INDEX websocket_auth_replay_ledger_retain_until_idx ON public.websocket_auth_replay_ledger (retain_until);

@@ -53,22 +53,81 @@ pub trait CursorStorePort: Send + Sync {
     ) -> ServiceResult<Vec<CursorRevocationState>>;
 }
 
+/// One single-use `challenge_dpop_session_v1` challenge, as the sync layer
+/// sees it (`zh/sync/websocket-binding.md` §3.1).
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebsocketChallengeState {
+    pub connection_id: String,
+    pub nonce: String,
+    pub canonical_origin: String,
+    pub canonical_base_url: String,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub consumed: bool,
+    pub retain_until: DateTime<Utc>,
+}
+
+/// The `(cnf.jkt, jti, context)` replay-ledger key plus its retention.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WebsocketReplayState {
+    pub cnf_jkt: String,
+    pub jti: String,
+    pub proof_context: String,
+    pub consumed_at: DateTime<Utc>,
+    pub retain_until: DateTime<Utc>,
+}
+
+/// Durable, cross-instance challenge + replay state for the WebSocket binding.
+#[async_trait]
+pub trait WebsocketAuthPort: Send + Sync {
+    async fn prepare_challenge(&self, record: &WebsocketChallengeState) -> ServiceResult<()>;
+    async fn challenge(
+        &self,
+        connection_id: &str,
+        nonce: &str,
+    ) -> ServiceResult<Option<WebsocketChallengeState>>;
+    async fn replay_ledger_contains(
+        &self,
+        cnf_jkt: &str,
+        jti: &str,
+        proof_context: &str,
+    ) -> ServiceResult<bool>;
+    async fn consume_challenge(
+        &self,
+        connection_id: &str,
+        nonce: &str,
+        replay: &WebsocketReplayState,
+    ) -> ServiceResult<bool>;
+    async fn prune_expired(&self, now: DateTime<Utc>) -> ServiceResult<usize>;
+}
+
 #[derive(Clone)]
 pub struct SyncService {
     cursors: Arc<dyn CursorStorePort>,
+    websocket_auth: Arc<dyn WebsocketAuthPort>,
     cursor_hmac_key: [u8; 32],
     reconnect_deadlines: Arc<Mutex<BTreeMap<String, DateTime<Utc>>>>,
     cursor_revocations: Arc<Mutex<Vec<CursorRevocationState>>>,
 }
 
 impl SyncService {
-    pub fn new(cursors: Arc<dyn CursorStorePort>, cursor_hmac_key: [u8; 32]) -> Self {
+    pub fn new(
+        cursors: Arc<dyn CursorStorePort>,
+        websocket_auth: Arc<dyn WebsocketAuthPort>,
+        cursor_hmac_key: [u8; 32],
+    ) -> Self {
         Self {
             cursors,
+            websocket_auth,
             cursor_hmac_key,
             reconnect_deadlines: Arc::new(Mutex::new(BTreeMap::new())),
             cursor_revocations: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// The durable WebSocket challenge / replay ledger (§3.1).
+    pub fn websocket_auth(&self) -> &dyn WebsocketAuthPort {
+        self.websocket_auth.as_ref()
     }
 
     pub fn cursor_hmac_key(&self) -> &[u8; 32] {
@@ -233,10 +292,52 @@ mod tests {
         }
     }
 
+    /// Challenge / replay stub: the cursor tests never touch the WebSocket
+    /// binding, and a `SyncService` needs both ports.
+    #[derive(Default)]
+    struct UnusedWebsocketAuth;
+
+    #[async_trait]
+    impl WebsocketAuthPort for UnusedWebsocketAuth {
+        async fn prepare_challenge(&self, _record: &WebsocketChallengeState) -> ServiceResult<()> {
+            unreachable!("the cursor tests never mint a WebSocket challenge")
+        }
+
+        async fn challenge(
+            &self,
+            _connection_id: &str,
+            _nonce: &str,
+        ) -> ServiceResult<Option<WebsocketChallengeState>> {
+            unreachable!("the cursor tests never read a WebSocket challenge")
+        }
+
+        async fn replay_ledger_contains(
+            &self,
+            _cnf_jkt: &str,
+            _jti: &str,
+            _proof_context: &str,
+        ) -> ServiceResult<bool> {
+            unreachable!("the cursor tests never read the replay ledger")
+        }
+
+        async fn consume_challenge(
+            &self,
+            _connection_id: &str,
+            _nonce: &str,
+            _replay: &WebsocketReplayState,
+        ) -> ServiceResult<bool> {
+            unreachable!("the cursor tests never consume a WebSocket challenge")
+        }
+
+        async fn prune_expired(&self, _now: DateTime<Utc>) -> ServiceResult<usize> {
+            unreachable!("the cursor tests never sweep the WebSocket challenge store")
+        }
+    }
+
     #[tokio::test]
     async fn cursor_lifecycle_uses_only_the_cursor_port() {
         let port = Arc::new(RecordingCursors::default());
-        let service = SyncService::new(port, [0; 32]);
+        let service = SyncService::new(port, Arc::new(UnusedWebsocketAuth), [0; 32]);
         let record = CursorState {
             handle: "cursor-handle".to_owned(),
             principal_id: None,
@@ -255,7 +356,11 @@ mod tests {
 
     #[test]
     fn subscribe_reconnect_window_expires() {
-        let service = SyncService::new(Arc::new(RecordingCursors::default()), [0; 32]);
+        let service = SyncService::new(
+            Arc::new(RecordingCursors::default()),
+            Arc::new(UnusedWebsocketAuth),
+            [0; 32],
+        );
         let now = Utc::now();
         let key = "ak.self.events.stream.subscribe|alice|realm-a";
         service.arm_subscribe_reconnect(key.to_owned(), now, 10_000);

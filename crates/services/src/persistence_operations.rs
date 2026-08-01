@@ -13,6 +13,7 @@ struct PersistenceAuditLog(Arc<dyn PersistenceStore>);
 struct PersistenceModeration(Arc<dyn PersistenceStore>);
 struct PersistenceGovernanceRecords(Arc<dyn PersistenceStore>);
 struct PersistenceCursorStore(Arc<dyn PersistenceStore>);
+struct PersistenceWebsocketAuth(Arc<dyn PersistenceStore>);
 struct PersistenceMaintenance(Arc<dyn PersistenceStore>);
 
 fn federation_delivery_record(
@@ -1242,6 +1243,106 @@ pub struct PersistenceOperationalServices {
     pub jobs: JobsService,
 }
 
+#[async_trait::async_trait]
+impl crate::sync::WebsocketAuthPort for PersistenceWebsocketAuth {
+    async fn prepare_challenge(
+        &self,
+        record: &crate::sync::WebsocketChallengeState,
+    ) -> crate::ServiceResult<()> {
+        Ok(self
+            .0
+            .websocket_auth()
+            .prepare_challenge(&persistence_websocket_challenge(record))
+            .await?)
+    }
+
+    async fn challenge(
+        &self,
+        connection_id: &str,
+        nonce: &str,
+    ) -> crate::ServiceResult<Option<crate::sync::WebsocketChallengeState>> {
+        Ok(self
+            .0
+            .websocket_auth()
+            .get_challenge(connection_id, nonce)
+            .await?
+            .map(application_websocket_challenge))
+    }
+
+    async fn replay_ledger_contains(
+        &self,
+        cnf_jkt: &str,
+        jti: &str,
+        proof_context: &str,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .websocket_auth()
+            .replay_ledger_contains(cnf_jkt, jti, proof_context)
+            .await?)
+    }
+
+    async fn consume_challenge(
+        &self,
+        connection_id: &str,
+        nonce: &str,
+        replay: &crate::sync::WebsocketReplayState,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .websocket_auth()
+            .consume_challenge(
+                connection_id,
+                nonce,
+                &soland_storage::WebsocketAuthReplayRecord {
+                    cnf_jkt: replay.cnf_jkt.clone(),
+                    jti: replay.jti.clone(),
+                    proof_context: replay.proof_context.clone(),
+                    consumed_at: replay.consumed_at,
+                    retain_until: replay.retain_until,
+                },
+            )
+            .await?)
+    }
+
+    async fn prune_expired(
+        &self,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> crate::ServiceResult<usize> {
+        Ok(self.0.websocket_auth().prune_expired(now).await?)
+    }
+}
+
+fn persistence_websocket_challenge(
+    record: &crate::sync::WebsocketChallengeState,
+) -> soland_storage::WebsocketAuthChallengeRecord {
+    soland_storage::WebsocketAuthChallengeRecord {
+        connection_id: record.connection_id.clone(),
+        nonce: record.nonce.clone(),
+        canonical_origin: record.canonical_origin.clone(),
+        canonical_base_url: record.canonical_base_url.clone(),
+        issued_at: record.issued_at,
+        expires_at: record.expires_at,
+        consumed: record.consumed,
+        retain_until: record.retain_until,
+    }
+}
+
+fn application_websocket_challenge(
+    record: soland_storage::WebsocketAuthChallengeRecord,
+) -> crate::sync::WebsocketChallengeState {
+    crate::sync::WebsocketChallengeState {
+        connection_id: record.connection_id,
+        nonce: record.nonce,
+        canonical_origin: record.canonical_origin,
+        canonical_base_url: record.canonical_base_url,
+        issued_at: record.issued_at,
+        expires_at: record.expires_at,
+        consumed: record.consumed,
+        retain_until: record.retain_until,
+    }
+}
+
 pub fn build_persistence_operational_services(
     persistence: Arc<dyn PersistenceStore>,
     admin_signing_keys: Arc<dyn AdminSigningKeyPort>,
@@ -1263,6 +1364,7 @@ pub fn build_persistence_operational_services(
         ),
         sync: SyncService::new(
             Arc::new(PersistenceCursorStore(persistence.clone())),
+            Arc::new(PersistenceWebsocketAuth(persistence.clone())),
             sync_cursor_hmac_key,
         ),
         jobs: JobsService::new(

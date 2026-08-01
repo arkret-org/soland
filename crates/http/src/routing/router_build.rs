@@ -210,6 +210,10 @@ fn api_v1_router(conformance_harness_enabled: bool) -> Router {
         )
         // `find` — directory discovery surface.
         .push(Router::with_path("find").push(spaces::find_router()))
+        // `ws` — the optional `ak.profile.binding.websocket.v1` endpoint. It
+        // multiplexes the three covered stream operations and is served, but
+        // NOT advertised, until the binding conformance suite is green (§10).
+        .push(events::websocket_router())
         // edge/push/*, edge/applet, self/rtc/*, self/webrtc/*, self/blob/*,
         // self/moderation/*, open/mimi/* — `interop::router()` declares its
         // own trust segments.

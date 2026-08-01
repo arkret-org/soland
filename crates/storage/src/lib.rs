@@ -59,6 +59,7 @@ mod sidecars;
 mod signal;
 mod sync_cursor;
 mod unit_of_work;
+mod websocket_auth;
 mod webvh;
 mod webvh_freshness;
 pub use accounts::*;
@@ -94,6 +95,7 @@ pub use sidecars::*;
 pub use signal::*;
 pub use sync_cursor::*;
 pub use unit_of_work::*;
+pub use websocket_auth::*;
 pub use webvh::*;
 pub use webvh_freshness::{webvh_freshness_on_put, *};
 
@@ -215,6 +217,8 @@ pub trait SyncStoreRegistry: Send + Sync {
     fn sync_cursors(&self) -> &dyn SyncCursorStore;
     fn idempotency_keys(&self) -> &dyn IdempotencyStore;
     fn proposal_member_receipts(&self) -> &dyn ProposalMemberReceiptStore;
+    /// `ak.profile.binding.websocket.v1` challenge + replay ledger.
+    fn websocket_auth(&self) -> &dyn WebsocketAuthStore;
 }
 
 /// Complete persistence capability assembled by an infrastructure adapter.

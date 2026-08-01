@@ -542,6 +542,29 @@ diesel::table! {
 }
 
 diesel::table! {
+    websocket_auth_challenges (connection_id, nonce) {
+        connection_id -> Text,
+        nonce -> Text,
+        canonical_origin -> Text,
+        canonical_base_url -> Text,
+        issued_at -> Timestamptz,
+        expires_at -> Timestamptz,
+        consumed -> Bool,
+        retain_until -> Timestamptz,
+    }
+}
+
+diesel::table! {
+    websocket_auth_replay_ledger (cnf_jkt, jti, proof_context) {
+        cnf_jkt -> Text,
+        jti -> Text,
+        proof_context -> Text,
+        consumed_at -> Timestamptz,
+        retain_until -> Timestamptz,
+    }
+}
+
+diesel::table! {
     idempotency_keys (principal_id, idempotency_key) {
         principal_id -> Text,
         idempotency_key -> Text,
@@ -1464,6 +1487,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     sync_cursor_handles,
     sync_cursor_revocations,
     webrtc_sessions,
+    websocket_auth_challenges,
+    websocket_auth_replay_ledger,
     webvh_documents,
     webvh_log_events,
 );

@@ -94,6 +94,8 @@ DROP TABLE IF EXISTS space_state_events CASCADE;
 DROP TABLE IF EXISTS spaces CASCADE;
 DROP TABLE IF EXISTS sync_cursor_handles CASCADE;
 DROP TABLE IF EXISTS sync_cursor_revocations CASCADE;
+DROP TABLE IF EXISTS websocket_auth_challenges CASCADE;
+DROP TABLE IF EXISTS websocket_auth_replay_ledger CASCADE;
 DROP TABLE IF EXISTS idempotency_keys CASCADE;
 DROP TABLE IF EXISTS proposal_member_receipts CASCADE;
 DROP TABLE IF EXISTS webrtc_sessions CASCADE;

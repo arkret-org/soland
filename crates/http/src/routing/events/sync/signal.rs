@@ -660,7 +660,7 @@ pub(super) async fn signal_subscribe(depot: &mut Depot, req: &mut Request, res: 
 /// handed, ascending by relay position. The watermark is advanced as the batch
 /// is taken, so the same envelope is not re-emitted on the next poll or on a
 /// reconnect inside the TTL window.
-async fn pending_signals_for_subscriber(
+pub(crate) async fn pending_signals_for_subscriber(
     state: &AppState,
     session: &SessionRecord,
 ) -> Vec<SignalEnvelope> {

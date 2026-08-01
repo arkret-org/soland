@@ -28,16 +28,17 @@ use super::{
     MemoryRecoverySessionStore, MemoryRetentionPolicyStore, MemoryRetentionTombstoneStore,
     MemorySecurityTransactionStore, MemoryServiceIdentityStore, MemorySessionStore,
     MemorySidecarStore, MemorySignalRelayStore, MemorySpaceContainerProjectionStore,
-    MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryWebvhStore, MessageStore,
-    MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore, MorphProjectionStore,
-    MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore, OrganizationPolicyStore,
-    OrganizationRegistrationStore, OrganizationStore, PersistenceStore, PolicyDocumentStore,
-    ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore, PushDeviceStore,
-    RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
+    MemoryStrandProjectionStore, MemorySyncCursorStore, MemoryWebsocketAuthStore, MemoryWebvhStore,
+    MessageStore, MlsCommitStore, MlsKeyPackageStore, MlsWelcomeStore, ModerationStore,
+    MorphProjectionStore, MultisigPendingStore, Mutex, NotificationStore, OneTimeKeyStore,
+    OrganizationPolicyStore, OrganizationRegistrationStore, OrganizationStore, PersistenceStore,
+    PolicyDocumentStore, ProjectionEventStore, PublicationEvidenceStore, PushBridgeCacheStore,
+    PushDeviceStore, RealmInviteStore, RealmMetaRecord, RealmMetaStore, RealmModerationPolicyStore,
     RealmOrganizationStatementStore, RealmOrganizationStore, RecoveryPolicyStore,
     RecoverySessionStore, RetentionPolicyStore, RetentionTombstoneStore, SecurityTransactionStore,
     ServiceIdentityStore, SessionStore, SidecarStore, SignalRelayStore,
-    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebvhStore,
+    SpaceContainerProjectionStore, StrandProjectionStore, SyncCursorStore, WebsocketAuthStore,
+    WebvhStore,
 };
 #[cfg(feature = "fault-injection")]
 use crate::FaultInjector;
@@ -110,6 +111,7 @@ pub struct SolandMemoryPersistenceStore {
     sync_cursors: MemorySyncCursorStore,
     pub(crate) idempotency_keys: MemoryIdempotencyStore,
     proposal_member_receipts: MemoryProposalMemberReceiptStore,
+    websocket_auth: MemoryWebsocketAuthStore,
 }
 
 impl SolandMemoryPersistenceStore {
@@ -224,6 +226,7 @@ impl SolandMemoryPersistenceStore {
                 }
             },
             proposal_member_receipts: MemoryProposalMemberReceiptStore::new(),
+            websocket_auth: MemoryWebsocketAuthStore::new(),
         }
     }
 
@@ -566,6 +569,10 @@ impl soland_storage::SyncStoreRegistry for SolandMemoryPersistenceStore {
 
     fn proposal_member_receipts(&self) -> &dyn ProposalMemberReceiptStore {
         &self.proposal_member_receipts
+    }
+
+    fn websocket_auth(&self) -> &dyn WebsocketAuthStore {
+        &self.websocket_auth
     }
 }
 

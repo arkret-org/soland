@@ -349,7 +349,7 @@ pub(super) async fn account_subscribe(depot: &mut Depot, req: &mut Request, res:
     res.stream(body_stream.boxed());
 }
 
-fn account_frontier_frame(
+pub(crate) fn account_frontier_frame(
     cursor: Option<String>,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
@@ -367,7 +367,7 @@ fn account_frontier_frame(
     }
 }
 
-fn account_catchup_complete_frame(
+pub(crate) fn account_catchup_complete_frame(
     cursor: Option<String>,
 ) -> arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
     arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame {
@@ -390,7 +390,7 @@ fn account_catchup_complete_frame(
 /// and no queued notifications. `account_data` is intentionally excluded — it
 /// is always emitted in full for authenticated sessions today, so it
 /// would defeat long-poll entirely.
-fn delta_is_empty(
+pub(crate) fn delta_is_empty(
     response: &arkret_models_collaboration::sync_frames::account_subscribe::AccountSubscribeFrame,
 ) -> bool {
     response
@@ -407,7 +407,7 @@ fn delta_is_empty(
             .is_none_or(|notifications| notifications.items.is_empty())
 }
 
-async fn account_subscribe_notification_should_wake(
+pub(crate) async fn account_subscribe_notification_should_wake(
     state: &AppState,
     notification: &crate::state::EventNotification,
     session: Option<&SessionRecord>,

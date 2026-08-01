@@ -716,14 +716,33 @@ pub(crate) async fn grant_dpop_session(
     // 2. DPoP signature valid against the grant's cnf.jkt.
     verify_grant_dpop_request(state, req, grant_jwt, grant.cnf_jkt.as_deref())?;
 
-    // Synthesize the request-scoped session. `token_hash` carries a stable,
-    // grant-derived value so downstream code that keys on it (e.g. self-path
-    // session-revoke of the calling session) resolves to this grant; it is NOT
-    // a persisted local bearer.
-    let token_hash =
-        crate::routing::identity::auth::session_credential_hash(grant_jwt, state.service_id());
-    Ok(SessionRecord {
-        token_hash,
+    Ok(session_from_verified_grant(
+        state,
+        grant_jwt,
+        grant,
+        device_id,
+        agent_session,
+    ))
+}
+
+/// Synthesize the request- or connection-scoped `SessionRecord` from an
+/// already-verified grant. Not persisted as a local bearer.
+///
+/// `token_hash` carries a stable, grant-derived value so downstream code that
+/// keys on it (e.g. self-path session-revoke of the calling session) resolves
+/// to this grant.
+pub(crate) fn session_from_verified_grant(
+    state: &AppState,
+    grant_jwt: &str,
+    grant: SessionGrantIntrospectGrant,
+    device_id: String,
+    agent_session: Option<AgentSessionRecord>,
+) -> SessionRecord {
+    SessionRecord {
+        token_hash: crate::routing::identity::auth::session_credential_hash(
+            grant_jwt,
+            state.service_id(),
+        ),
         actor: grant.subject,
         device_id,
         audience: state.service_id().clone(),
@@ -732,7 +751,15 @@ pub(crate) async fn grant_dpop_session(
         expires_at: grant.expires_at,
         created_at: crate::wire::now(),
         revoked_at: None,
-    })
+    }
+}
+
+/// The §6a/§6b session binding of an introspected grant, exposed for the
+/// WebSocket binding which validates its holder proof out of band.
+pub(crate) fn grant_session_binding(
+    grant: &SessionGrantIntrospectGrant,
+) -> Result<(String, Option<AgentSessionRecord>), AuthError> {
+    session_binding_from_introspection(grant)
 }
 
 #[cfg(test)]

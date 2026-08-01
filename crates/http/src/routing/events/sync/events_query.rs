@@ -450,7 +450,7 @@ pub(crate) fn subscribe_subject(req: &Request, session: Option<&SessionRecord>) 
 /// replayed against another (`cursor_integrity_invalid`). Distinct from the
 /// account stream's filter (different `operation_id`), keeping the two streams'
 /// cursors non-interchangeable per `encoding.md` §8.3.1.
-fn events_subscribe_filter_digest(accessible_realms: &[String]) -> String {
+pub(crate) fn events_subscribe_filter_digest(accessible_realms: &[String]) -> String {
     let realms = accessible_realms
         .iter()
         .cloned()
@@ -1345,7 +1345,7 @@ async fn full_events_from_projection_json(
 /// prev_refs, proofs, ...). Reuse the query path's canonical lookup and its
 /// explicit projection-only tombstone fallback so stream and scan expose the
 /// same typed payload contract.
-async fn full_event_from_projection_json(
+pub(crate) async fn full_event_from_projection_json(
     state: &AppState,
     row: &Value,
 ) -> Option<arkret_wire::Event> {

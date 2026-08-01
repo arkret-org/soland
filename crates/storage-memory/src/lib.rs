@@ -52,7 +52,7 @@ pub(crate) use soland_storage::{
     ServiceRegistrationCommitOutcome, SessionRecord, SessionStore, SidecarStore, SignalRelayRecord,
     SignalRelayStore, SpaceContainerProjectionRecord, SpaceContainerProjectionStore,
     StrandProjectionRecord, StrandProjectionStore, SyncCursorRecord, SyncCursorStore,
-    WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
+    WebsocketAuthStore, WebvhDocumentRecord, WebvhLogCommitOutcome, WebvhLogRecord, WebvhStore,
     agent_participation_record_key, cross_signing_reset_blocks_queued_message,
     device_message_expires_at, document_declares_registration_key, ensure_device_message_id,
     evaluate_drift, event_position_cmp, fresh_device_message_ack_token,
@@ -103,6 +103,7 @@ mod signal;
 mod store;
 mod sync_cursor;
 mod unit_of_work;
+mod websocket_auth;
 mod webvh;
 
 pub(crate) use accounts::{
@@ -161,6 +162,7 @@ pub(crate) use sidecars::MemorySidecarStore;
 pub(crate) use signal::MemorySignalRelayStore;
 pub use store::SolandMemoryPersistenceStore;
 pub(crate) use sync_cursor::MemorySyncCursorStore;
+pub(crate) use websocket_auth::MemoryWebsocketAuthStore;
 pub(crate) use webvh::MemoryWebvhStore;
 
 mod ids {

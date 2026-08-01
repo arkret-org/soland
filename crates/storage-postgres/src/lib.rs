@@ -118,6 +118,7 @@ mod signal;
 mod state_resolution;
 mod sync_cursor;
 mod unit_of_work;
+mod websocket_auth;
 mod webvh;
 
 pub use accounts::*;
@@ -159,6 +160,7 @@ pub use signal::*;
 pub use state_resolution::*;
 pub use sync_cursor::*;
 pub use unit_of_work::*;
+pub use websocket_auth::*;
 pub use webvh::*;
 
 #[derive(QueryableByName)]

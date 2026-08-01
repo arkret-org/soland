@@ -69,6 +69,7 @@ pub struct PgPersistenceStore {
     notifications: PgNotificationStore,
     sync_cursors: PgSyncCursorStore,
     idempotency_keys: PgIdempotencyStore,
+    websocket_auth: PgWebsocketAuthStore,
     proposal_member_receipts: PgProposalMemberReceiptStore,
     fallback: Arc<dyn PersistenceStore>,
 }
@@ -133,6 +134,7 @@ impl PgPersistenceStore {
             sidecars: PgSidecarStore { pool: pool.clone() },
             sync_cursors: PgSyncCursorStore { pool: pool.clone() },
             idempotency_keys: PgIdempotencyStore { pool: pool.clone() },
+            websocket_auth: PgWebsocketAuthStore { pool: pool.clone() },
             proposal_member_receipts: PgProposalMemberReceiptStore { pool: pool.clone() },
             notifications: PgNotificationStore { pool },
             fallback,
@@ -462,6 +464,10 @@ impl SyncStoreRegistry for PgPersistenceStore {
 
     fn idempotency_keys(&self) -> &dyn IdempotencyStore {
         &self.idempotency_keys
+    }
+
+    fn websocket_auth(&self) -> &dyn WebsocketAuthStore {
+        &self.websocket_auth
     }
 
     fn proposal_member_receipts(&self) -> &dyn ProposalMemberReceiptStore {

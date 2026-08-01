@@ -86,6 +86,7 @@ mod subscribe;
 pub(crate) use subscribe::*;
 mod events_query;
 pub(crate) use events_query::*;
+pub(crate) mod websocket;
 
 pub(super) fn protocol_router() -> Router {
     Router::new()
