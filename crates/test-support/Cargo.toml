@@ -17,6 +17,7 @@ arkret-identifiers.workspace = true
 arkret-identity.workspace = true
 arkret-models-identity.workspace = true
 arkret-policy.workspace = true
+arkret-schema.workspace = true
 arkret-signatures.workspace = true
 arkret-state.workspace = true
 arkret-wire.workspace = true
@@ -33,4 +34,4 @@ soland-services = { version = "0.3.0", path = "../services" }
 soland-http = { version = "0.3.0", path = "../http", features = ["test-support"] }
 soland-storage = { version = "0.3.0", path = "../storage" }
 soland-storage-memory = { version = "0.3.0", path = "../storage-memory", features = ["fault-injection"] }
-
+tokio.workspace = true

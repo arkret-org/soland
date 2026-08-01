@@ -98,10 +98,14 @@ pub(super) async fn persist_mimi_canonical_message_event(
         verification_method.clone(),
     );
     let canonical_created_at = event.created_at;
-    arkret_signatures::sign_event(
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(event.realm_id.as_str());
+    arkret_signatures::sign_event_with_digest_suite(
         &mut event,
         &signer,
         &verification_method,
+        digest_suite,
         arkret_signatures::SignEventOptions::new().with_created_at(canonical_created_at),
     )
     .map_err(|error| AppError::internal(format!("MIMI Event signing failed: {error}")))?;

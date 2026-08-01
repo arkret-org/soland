@@ -216,6 +216,34 @@ pub(crate) fn seed_seal_with_direct_event_effects(
         .expect("bootstrap sealed effects");
 }
 
+fn fixture_sealed_state_root(
+    realm: &RealmId,
+    ops: &[(
+        arkret_identifiers::CellRef,
+        arkret_state::lattice::ordered_log::IssuedOp,
+    )],
+) -> arkret_identifiers::Hash {
+    let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
+    let mut grouped: std::collections::BTreeMap<
+        arkret_identifiers::CellRef,
+        Vec<arkret_state::lattice::ordered_log::IssuedOp>,
+    > = std::collections::BTreeMap::new();
+    for (cell, op) in ops {
+        grouped.entry(cell.clone()).or_default().push(op.clone());
+    }
+    let mut post_state = std::collections::BTreeMap::new();
+    for (cell, cell_ops) in grouped {
+        let binding = registry
+            .resolve(realm, &cell)
+            .expect("fixture cell family is registered");
+        post_state.insert(
+            cell.clone(),
+            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
+        );
+    }
+    arkret_state::compute_state_root(&post_state).expect("fixture state_root")
+}
+
 pub(crate) fn app_state_for_postgres(config: AppConfig, db: Db) -> AppState {
     let pool = db.pool.clone().expect("postgres test requires a pool");
     let fallback: std::sync::Arc<dyn soland_storage::PersistenceStore> = if config.seed_demo_data {
@@ -828,7 +856,7 @@ pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value
 /// `covered_seals_cell` is keyed by the group id (the registered
 /// `payload.mls_group_id` subject), so the fixture Realm basis MUST seed
 /// coverage under this exact id.
-pub(crate) const FIXTURE_MLS_GROUP_ID: &str = "ak:mls:test";
+pub(crate) const FIXTURE_MLS_GROUP_ID: &str = "httpApiFixtureMlsGroup01";
 
 pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
     serde_json::json!({
@@ -1543,11 +1571,12 @@ pub(crate) async fn seed_verified_device_with_public_key(
 /// already covers `ak.message.create`; a second, explicit grant carries only
 /// the other actions instead of masking owner-message authorization with a
 /// duplicate.
-const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
+const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 10] = [
     "ak.morph.create",
     "ak.morph.update",
     "ak.relation.create",
     "ak.rsvp.set",
+    "ak.self.moderation.report",
     "ak.space.create",
     "ak.strand.create",
     // `non_event_surface` in the capability-action registry: it authorizes a
@@ -1559,21 +1588,7 @@ const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
 ];
 
 /// One fixture Realm's accepted governance basis for one subject.
-#[derive(Clone)]
-pub(crate) struct TestRealmBasis {
-    /// `S0` — the governance unit (1)-(3).
-    governance_seal: arkret_wire::Seal,
-    governance_ops: Vec<(
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::ordered_log::IssuedOp,
-    )>,
-    /// `S1` — the head, built on `S0`, carrying (4). Fixture Events cite it.
-    seal: arkret_wire::Seal,
-    ops: Vec<(
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::ordered_log::IssuedOp,
-    )>,
-}
+pub(crate) type TestRealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
 
 /// The accepted Seal a fixture Event names, plus the sealed cell effects that
 /// Seal's coverage produces.
@@ -1631,7 +1646,23 @@ fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBas
         .lock()
         .expect("fixture basis cache")
         .entry((realm_id.to_owned(), subject.to_owned(), notary.to_owned()))
-        .or_insert_with(|| build_test_realm_basis(realm_id, subject, notary))
+        .or_insert_with(|| {
+            let actions = FIXTURE_DATA_PLANE_GRANT_ACTIONS
+                .iter()
+                .map(|action| (*action).to_owned())
+                .collect::<Vec<_>>();
+            soland_services::conformance_basis::build_realm_basis(
+                realm_id,
+                subject,
+                soland_services::conformance_basis::RealmBasisFixtureOptions {
+                    notary_authority: Some(notary),
+                    data_plane_actions: &actions,
+                    mls_group_id: FIXTURE_MLS_GROUP_ID,
+                    fixture_id_domain: "soland:http_api:realm-basis:",
+                },
+            )
+            .expect("fixture Realm basis")
+        })
         .clone()
 }
 
@@ -1659,58 +1690,18 @@ pub(crate) async fn seed_realm_genesis_event(
     realm_id: &str,
     subject: &str,
 ) -> arkret_identifiers::Hash {
-    let genesis_event_id = format!(
-        "ak:event:{}",
-        realm_id
-            .strip_prefix("ak:realm:")
-            .expect("fixture Realm id is typed")
-    );
-    // A Realm has exactly one canonical create and the store enforces that, so
-    // a fixture that seeds the same Realm twice must not write a second one.
-    let envelope = signed_canonical_event(
-        &genesis_event_id,
-        arkret_wire::EventKind::REALM_CREATE,
-        subject,
-        "01904100-0000-7000-8000-a11ce0000001",
-        realm_id,
-        0,
-        Vec::new(),
-        serde_json::json!({"object": {"id": realm_id, "created_by": subject}}),
-    );
-    let genesis_digest = arkret_identifiers::Hash::new(
-        serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-            .expect("fixture genesis Event decodes")
-            .event_digest()
-            .expect("fixture genesis Event digest"),
-    )
-    .expect("fixture genesis Event digest is a hash");
-    if state
+    soland_test_support::cba_basis::seed_realm_genesis_event(state, realm_id, subject).await;
+    let record = state
         .test_persistence()
         .events()
-        .contains(&genesis_event_id)
+        .realm_events_newest_first(realm_id)
         .await
         .expect("fixture Realm genesis lookup")
-    {
-        return genesis_digest;
-    }
-    state
-        .test_persistence()
-        .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: genesis_event_id.clone(),
-            actor_id: subject.to_owned(),
-            actor_seq: 0,
-            realm_id: Some(realm_id.to_owned()),
-            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
-            schema_id: "ak.schema.event.v1".to_owned(),
-            canonical_digest: genesis_digest.to_string(),
-            canonical_bytes: Vec::new(),
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
+        .into_iter()
+        .find(|record| record.kind == arkret_wire::EventKind::REALM_CREATE)
         .expect("fixture Realm genesis Event");
-    genesis_digest
+    arkret_identifiers::Hash::new(record.canonical_digest)
+        .expect("fixture genesis Event digest is a hash")
 }
 
 /// The Seal a fixture Event names in `seal_ref` / `seal_basis`.
@@ -1782,322 +1773,6 @@ static TEST_REALM_UNCOVERED_BASES: LazyLock<
     std::sync::Mutex<std::collections::BTreeMap<String, arkret_wire::Seal>>,
 > = LazyLock::new(|| std::sync::Mutex::new(std::collections::BTreeMap::new()));
 
-fn build_test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBasis {
-    let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
-    let issuer = Did::new(subject.to_owned()).expect("fixture grant issuer DID");
-    let notary = Did::new(notary.to_owned()).expect("fixture notary DID");
-    let authority_root_move = fixture_move_id(realm_id, subject, "authority-root");
-    let notary_move = fixture_move_id(realm_id, subject, "notary");
-    let owner_move = fixture_move_id(realm_id, subject, "owner-grant");
-    let content_move = fixture_move_id(realm_id, subject, "content-grant");
-    let covered_move = fixture_move_id(realm_id, subject, "mls-commit");
-
-    let owner_grant_id = fixture_grant_id(realm_id, subject, "owner-grant");
-    let content_grant_id = fixture_grant_id(realm_id, subject, "content-grant");
-    let mut ops = vec![
-        (
-            arkret_identifiers::CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
-                .expect("fixture authority-root cell id"),
-            fixture_issued_op(
-                &issuer,
-                &authority_root_move,
-                arkret_wire::LatticeOp {
-                    op_type: arkret_wire::LatticeOpType::Set,
-                    tag: None,
-                    value: Some(
-                        serde_json::to_value(
-                            arkret_policy::realm_bootstrap::RealmAuthorityRootValue::genesis(
-                                issuer.clone(),
-                                arkret_policy::current_capability_action_registry_digest()
-                                    .expect("embedded capability action registry digest"),
-                            ),
-                        )
-                        .expect("fixture authority-root value"),
-                    ),
-                    from: None,
-                    to: None,
-                    reason: None,
-                    issuer_seq: None,
-                },
-            ),
-        ),
-        // `event-kind-registry.json` gives `ak.realm.create` five cell writes,
-        // and `ak.component.notary.v1` is one of them — a genesis unit that
-        // omits it leaves the Realm with no proposal authority, so every
-        // Control Move against this basis answers `quorum_unreachable` before
-        // reaching the behaviour a test is actually asserting.
-        (
-            arkret_identifiers::CellRef::new(arkret_wire::REALM_NOTARY_CELL.to_owned())
-                .expect("fixture notary cell id"),
-            fixture_issued_op(
-                &issuer,
-                &notary_move,
-                arkret_wire::LatticeOp {
-                    op_type: arkret_wire::LatticeOpType::Set,
-                    tag: None,
-                    value: Some(
-                        serde_json::to_value(arkret_wire::notary::NotaryValue::single_did(
-                            notary.clone(),
-                        ))
-                        .expect("fixture notary value"),
-                    ),
-                    from: None,
-                    to: None,
-                    reason: None,
-                    issuer_seq: None,
-                },
-            ),
-        ),
-        (
-            fixture_capability_grant_cell(&owner_grant_id),
-            fixture_issued_op(
-                &issuer,
-                &owner_move,
-                fixture_or_set_add(
-                    owner_move.as_str(),
-                    fixture_grant_body(
-                        &owner_grant_id,
-                        realm_id,
-                        subject,
-                        &soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
-                        true,
-                    ),
-                ),
-            ),
-        ),
-        (
-            fixture_capability_grant_cell(&content_grant_id),
-            fixture_issued_op(
-                &issuer,
-                &content_move,
-                fixture_or_set_add(
-                    content_move.as_str(),
-                    fixture_grant_body(
-                        &content_grant_id,
-                        realm_id,
-                        subject,
-                        &FIXTURE_DATA_PLANE_GRANT_ACTIONS,
-                        false,
-                    ),
-                ),
-            ),
-        ),
-    ];
-
-    let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
-        [0x53; 32],
-        Did::new("did:web:alice.example").unwrap(),
-        arkret_wire::DidUrl::new("did:web:alice.example#fixture-notary").unwrap(),
-    );
-    // `Seal.delta` is a sorted, unique digest list
-    // (`arkret_wire::Seal::validate_structural`), and `delta_control_root`
-    // hashes it as a set, so the order is part of the wire contract rather
-    // than a formatting choice.
-    let mut governance_delta = vec![
-        authority_root_move.clone(),
-        notary_move.clone(),
-        owner_move.clone(),
-        content_move.clone(),
-    ];
-    governance_delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let governance_seal = arkret_wire::Seal::sign_single(
-        realm.clone(),
-        Vec::new(),
-        governance_delta.clone(),
-        fixture_sealed_state_root(&realm, &ops),
-        arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
-        &signer,
-    )
-    .expect("fixture governance basis Seal signs");
-    let governance_ops = std::mem::take(&mut ops);
-
-    // `encryption-and-audit.md` §2.5.2 — the accumulator element value is the
-    // governance Seal ref itself; the tag is the commit batch digest and is
-    // never compared against a Seal id (`arkret_state::mls_move`).
-    let covered_ops = vec![(
-        arkret_state::mls_move::covered_seals_cell_id(FIXTURE_MLS_GROUP_ID)
-            .expect("fixture covered_seals cell id"),
-        fixture_issued_op(
-            &issuer,
-            &covered_move,
-            fixture_or_set_add(
-                covered_move.as_str(),
-                Value::String(governance_seal.id.to_string()),
-            ),
-        ),
-    )];
-
-    // §2.5.1 `covered_seal_refs` visibility: the accumulator write names the
-    // Seal the governance unit was admitted under, so it belongs in a Seal built
-    // ON that one. Both in one Seal, with the write naming that Seal's own id,
-    // is a state no reducer can reach — and it is what used to let every E2EE
-    // fixture clear the §2.5.2 gate.
-    let covered_set = governance_delta
-        .iter()
-        .cloned()
-        .chain(std::iter::once(covered_move.clone()))
-        .collect::<std::collections::BTreeSet<_>>();
-    let all_ops = governance_ops
-        .iter()
-        .cloned()
-        .chain(covered_ops.iter().cloned())
-        .collect::<Vec<_>>();
-    let seal = arkret_wire::Seal::sign_single_kind_with_control_root(
-        realm.clone(),
-        vec![governance_seal.id.clone()],
-        vec![covered_move],
-        // Cumulative over predecessor coverage ∪ delta — the delta-only
-        // shorthand produces a root a verifier rejects once predecessors carry
-        // coverage of their own.
-        arkret_state::state::control_event_set_root(&covered_set)
-            .expect("fixture basis control event set root"),
-        fixture_sealed_state_root(&realm, &all_ops),
-        arkret_identifiers::Hlc::new("0196419b0000-0000-51c0a1ed").unwrap(),
-        arkret_wire::SealKind::Normal,
-        &signer,
-    )
-    .expect("fixture basis head Seal signs");
-
-    TestRealmBasis {
-        governance_seal,
-        governance_ops,
-        seal,
-        ops: covered_ops,
-    }
-}
-
-/// The `state_root` a notary would commit for these sealed effects: join every
-/// covered op under the Realm's registered lattice, then Merkleize the result.
-fn fixture_sealed_state_root(
-    realm: &RealmId,
-    ops: &[(
-        arkret_identifiers::CellRef,
-        arkret_state::lattice::ordered_log::IssuedOp,
-    )],
-) -> arkret_identifiers::Hash {
-    let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
-    let mut grouped: std::collections::BTreeMap<
-        arkret_identifiers::CellRef,
-        Vec<arkret_state::lattice::ordered_log::IssuedOp>,
-    > = std::collections::BTreeMap::new();
-    for (cell, op) in ops {
-        grouped.entry(cell.clone()).or_default().push(op.clone());
-    }
-    let mut post_state = std::collections::BTreeMap::new();
-    for (cell, cell_ops) in grouped {
-        let binding = registry
-            .resolve(realm, &cell)
-            .expect("fixture cell family is registered");
-        post_state.insert(
-            cell.clone(),
-            arkret_state::join_cell(binding.lattice.as_ref(), &cell, &cell_ops),
-        );
-    }
-    arkret_state::compute_state_root(&post_state).expect("fixture state_root")
-}
-
-fn fixture_capability_grant_cell(grant_id: &str) -> arkret_identifiers::CellRef {
-    arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{grant_id}"
-    ))
-    .expect("fixture capability grant cell id")
-}
-
-/// A deterministic Control-Move digest for one member of the genesis unit.
-fn fixture_move_id(realm_id: &str, subject: &str, slot: &str) -> arkret_identifiers::Hash {
-    arkret_identifiers::Hash::new(format!(
-        "sha256:{}",
-        fixture_basis_digest_hex(realm_id, subject, slot)
-    ))
-    .expect("fixture Control Move digest")
-}
-
-/// A deterministic `ak:grant:` id, so re-seeding the same Realm/subject writes
-/// the same OR-Set cell instead of piling up look-alike grants.
-fn fixture_grant_id(realm_id: &str, subject: &str, slot: &str) -> String {
-    let hex = fixture_basis_digest_hex(realm_id, subject, slot);
-    format!(
-        "ak:grant:{}-{}-{}-{}-{}",
-        &hex[0..8],
-        &hex[8..12],
-        &hex[12..16],
-        &hex[16..20],
-        &hex[20..32]
-    )
-}
-
-fn fixture_basis_digest_hex(realm_id: &str, subject: &str, slot: &str) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(b"soland:http_api:realm-basis:");
-    hasher.update(slot.as_bytes());
-    hasher.update(b"\x00");
-    hasher.update(realm_id.as_bytes());
-    hasher.update(b"\x00");
-    hasher.update(subject.as_bytes());
-    hex::encode(hasher.finalize())
-}
-
-fn fixture_or_set_add(tag: &str, value: Value) -> arkret_wire::LatticeOp {
-    arkret_wire::LatticeOp {
-        op_type: arkret_wire::LatticeOpType::Add,
-        tag: Some(tag.to_owned()),
-        value: Some(value),
-        from: None,
-        to: None,
-        reason: None,
-        issuer_seq: None,
-    }
-}
-
-fn fixture_issued_op(
-    issuer: &Did,
-    move_id: &arkret_identifiers::Hash,
-    op: arkret_wire::LatticeOp,
-) -> arkret_state::lattice::ordered_log::IssuedOp {
-    arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: issuer.clone(),
-        op: arkret_state::lattice::SealedOp::new(move_id.clone(), op),
-    }
-}
-
-/// The `ak.capability.grant` payload the OR-Set element carries.
-///
-/// `capabilities.md` §3 fixes the body; `soland_domain::reducer`'s
-/// `engine_grant_from_capability_cell_state` is the reader, and it drops any
-/// element whose actions are unregistered, whose resource selector is malformed
-/// or whose aggregate-admin registry binding does not resolve — so a fixture
-/// that gets this wrong produces a silently empty capability set, not an error.
-fn fixture_grant_body(
-    grant_id: &str,
-    realm_id: &str,
-    subject: &str,
-    actions: &[&str],
-    aggregate_admin: bool,
-) -> Value {
-    let mut body = serde_json::json!({
-        "grant_id": grant_id,
-        "schema": arkret_wire::SchemaId::CAPABILITY_V1,
-        "realm_id": realm_id,
-        "issuer": subject,
-        "subject": subject,
-        "actions": actions,
-        "resources": [{
-            "kind": "realm",
-            "realm_id": realm_id,
-            "match_scope": "realm_wide"
-        }],
-        "issued_at": "2026-01-01T00:00:00.000Z"
-    });
-    if aggregate_admin {
-        body["capability_action_registry_digest"] = Value::String(
-            arkret_policy::current_capability_action_registry_digest()
-                .expect("embedded capability action registry digest")
-                .to_string(),
-        );
-    }
-    body
-}
-
 /// Put the genesis unit of `realm_id` in place for `subject`.
 ///
 /// A DataEvent `seal_ref` MUST resolve to a verified control-plane Seal of the
@@ -2126,22 +1801,9 @@ pub(crate) async fn seed_test_realm_basis_seal(
     // Accepting a capability Event is what fills the authz index the
     // `authz/check` surface reads. Sealing the basis directly skips that, so
     // run the same refresh the accept path runs.
-    for (slug, actions, aggregate_admin) in [
-        (
-            "owner-grant",
-            soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS.as_slice(),
-            true,
-        ),
-        (
-            "content-grant",
-            FIXTURE_DATA_PLANE_GRANT_ACTIONS.as_slice(),
-            false,
-        ),
-    ] {
-        let grant_id = fixture_grant_id(realm_id, subject, slug);
-        let body = fixture_grant_body(&grant_id, realm_id, subject, actions, aggregate_admin);
+    for grant in &basis.grants {
         if let Some(grant) =
-            soland_domain::reducer::engine_grant_from_cell_body(&grant_id, &body, false)
+            soland_domain::reducer::engine_grant_from_cell_body(&grant.grant_id, &grant.body, false)
         {
             state.upsert_projected_grant_for_test(grant);
         }

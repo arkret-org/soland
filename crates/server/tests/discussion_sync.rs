@@ -715,7 +715,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
 fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
     sync["realms"][realm_id]["timeline"]["events"]
         .as_array()
-        .unwrap()
+        .unwrap_or_else(|| panic!("sync response has no timeline events for {realm_id}: {sync:?}"))
         .iter()
         .filter_map(|event| {
             event["payload"]["content"]["body"]
@@ -827,12 +827,10 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         &realm_id,
         "ak.realm.policy_bundle",
         json!({
-            "value": {
-                "content_encryption_floor": "e2ee_required",
-                "content_scheme": "mls_rfc9420",
-                "metadata_encryption_floor": "e2ee_required",
-                "policy_revision": 1
-            }
+            "content_encryption_floor": "e2ee_required",
+            "content_scheme": "mls_rfc9420",
+            "metadata_encryption_floor": "e2ee_required",
+            "policy_revision": 1
         }),
     )
     .await;
@@ -844,12 +842,10 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         &realm_id,
         "ak.realm.policy_bundle",
         json!({
-            "value": {
-                "content_encryption_floor": "e2ee_required",
-                "content_scheme": "mls_exporter_aead_v1",
-                "metadata_encryption_floor": "e2ee_required",
-                "policy_revision": 2
-            }
+            "content_encryption_floor": "e2ee_required",
+            "content_scheme": "mls_exporter_aead_v1",
+            "metadata_encryption_floor": "e2ee_required",
+            "policy_revision": 2
         }),
     )
     .await;
@@ -889,10 +885,7 @@ async fn joined_member_initial_sync_includes_current_pre_join_encryption_policy(
         .iter()
         .find(|event| event["event_id"] == policy_event_id)
         .expect("current pre-join policy-components event must be in the member baseline");
-    assert_eq!(
-        policy["payload"]["value"]["content_scheme"],
-        "mls_exporter_aead_v1"
-    );
+    assert_eq!(policy["payload"]["content_scheme"], "mls_exporter_aead_v1");
 }
 
 #[tokio::test]
@@ -967,6 +960,28 @@ async fn invite_accept_member_receives_joined_history_messages_after_accept() {
             .member(&realm_id, bob_did)
             .is_some_and(|member| member.state == "join"),
         "ak.invite.accept must project joined membership"
+    );
+    assert_eq!(
+        state
+            .test_persistence()
+            .realm_invites()
+            .get(&invite_id)
+            .await
+            .unwrap()
+            .unwrap()
+            .status,
+        "accepted",
+        "ak.invite.accept must close the invite lifecycle"
+    );
+    assert!(
+        state
+            .test_realms()
+            .lock()
+            .get(&RealmId::new(realm_id.clone()).unwrap())
+            .is_some_and(|realm| realm
+                .members
+                .contains(&Did::new(bob_did.to_owned()).unwrap())),
+        "ak.invite.accept must add the invitee to the Realm directory"
     );
 
     tokio::time::sleep(std::time::Duration::from_millis(5)).await;

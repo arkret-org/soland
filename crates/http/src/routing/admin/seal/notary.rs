@@ -355,15 +355,19 @@ pub(crate) async fn admin_reconfigure_notary(
     .map_err(|e| app_error!(InternalError, "Control Move construction failed: {e}"))?;
     event.prev_refs = frontier.frontier_event_ids.clone();
     event.seal_basis = Some(pick_admin_seal_basis(state, &realm)?);
-    arkret_signatures::sign_event(
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(event.realm_id.as_str());
+    arkret_signatures::sign_event_with_digest_suite(
         &mut event,
         &signer,
         &verification_method,
+        digest_suite,
         arkret_signatures::SignEventOptions::new(),
     )
     .map_err(|e| app_error!(InternalError, "Control Move signing failed: {e}"))?;
     let move_id = event
-        .event_digest()
+        .event_digest_with_digest_suite(digest_suite)
         .map_err(|e| app_error!(InternalError, "event digest failed: {e}"))?;
 
     let authority_set_ref = crate::notary::NotaryWorker::for_service(state.service_id().clone())

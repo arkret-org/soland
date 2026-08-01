@@ -2080,6 +2080,17 @@ impl ProjectionService {
             .is_some_and(|membership| membership.state == "invite")
     }
 
+    /// Whether an accepted invite can finish its durable lifecycle side
+    /// effects. The registered two-cell projection may already have advanced
+    /// the member FSM from `invite` to `join` before the read-side invite
+    /// record and Realm directory are updated.
+    pub fn invite_member_can_accept(&self, realm_id: &str, member: &str) -> bool {
+        self.state
+            .lock()
+            .member(realm_id, member)
+            .is_some_and(|membership| matches!(membership.state.as_str(), "invite" | "join"))
+    }
+
     pub fn project_invite_creation(&self, operation: &Operation, invitee: &str) {
         let event_ref = projection_event_ref(operation);
         let mut state = self.state.lock();

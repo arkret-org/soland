@@ -23,6 +23,22 @@ const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 /// The cell is keyed by the group id (the registered `payload.mls_group_id`
 /// subject) — never by the Realm id.
 pub const CONFORMANCE_MLS_GROUP_ID: &str = "conformanceMlsGroup01";
+const CONFORMANCE_FIXTURE_ID_DOMAIN: &str = "soland:conformance:realm-basis:";
+
+/// Explicit inputs that distinguish one synthetic Realm basis from another.
+pub struct RealmBasisFixtureOptions<'a> {
+    pub notary_authority: Option<&'a str>,
+    pub data_plane_actions: &'a [String],
+    pub mls_group_id: &'a str,
+    pub fixture_id_domain: &'a str,
+}
+
+/// A capability grant materialized by a synthetic Realm basis.
+#[derive(Clone)]
+pub struct ConformanceGrant {
+    pub grant_id: String,
+    pub body: Value,
+}
 
 /// A synthetic but cryptographically valid accepted governance basis.
 ///
@@ -40,6 +56,9 @@ pub struct ConformanceRealmBasis {
     /// `covered_seals_cell` write that attests it. Events cite this one.
     pub seal: Seal,
     pub ops: Vec<(CellRef, IssuedOp)>,
+    /// Exact grant bodies covered by the governance Seal. Test adapters use
+    /// these to update derived indexes without reconstructing protocol state.
+    pub grants: Vec<ConformanceGrant>,
 }
 
 /// Actions the fixture Realm owner appoints itself with at genesis.
@@ -69,17 +88,84 @@ pub fn build_conformance_realm_basis(
     notary_authority: Option<&str>,
     data_plane_actions: &[String],
 ) -> Result<ConformanceRealmBasis, String> {
+    build_realm_basis(
+        realm_id,
+        subject,
+        RealmBasisFixtureOptions {
+            notary_authority,
+            data_plane_actions,
+            mls_group_id: CONFORMANCE_MLS_GROUP_ID,
+            fixture_id_domain: CONFORMANCE_FIXTURE_ID_DOMAIN,
+        },
+    )
+}
+
+/// Build the shared synthetic Realm basis used by development adapters and
+/// integration tests. Protocol material is identical for equal inputs; callers
+/// choose only fixture-specific identifiers and error handling.
+pub fn build_realm_basis(
+    realm_id: &str,
+    subject: &str,
+    options: RealmBasisFixtureOptions<'_>,
+) -> Result<ConformanceRealmBasis, String> {
+    let RealmBasisFixtureOptions {
+        notary_authority,
+        data_plane_actions,
+        mls_group_id,
+        fixture_id_domain,
+    } = options;
     let realm = RealmId::new(realm_id.to_owned()).map_err(|error| error.to_string())?;
     let issuer = Did::new(subject.to_owned()).map_err(|error| error.to_string())?;
-    let authority_root_move =
-        fixture_move_id(realm_id, subject, data_plane_actions, "authority-root")?;
-    let owner_move = fixture_move_id(realm_id, subject, data_plane_actions, "owner-grant")?;
-    let content_move = fixture_move_id(realm_id, subject, data_plane_actions, "content-grant")?;
-    let covered_move = fixture_move_id(realm_id, subject, data_plane_actions, "mls-commit")?;
-    let notary_move = fixture_move_id(realm_id, subject, data_plane_actions, "notary")?;
+    let authority_root_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "authority-root",
+    )?;
+    let owner_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "owner-grant",
+    )?;
+    let content_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "content-grant",
+    )?;
+    let covered_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "mls-commit",
+    )?;
+    let notary_move = fixture_move_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "notary",
+    )?;
 
-    let owner_grant_id = fixture_grant_id(realm_id, subject, data_plane_actions, "owner-grant");
-    let content_grant_id = fixture_grant_id(realm_id, subject, data_plane_actions, "content-grant");
+    let owner_grant_id = fixture_grant_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "owner-grant",
+    );
+    let content_grant_id = fixture_grant_id(
+        fixture_id_domain,
+        realm_id,
+        subject,
+        data_plane_actions,
+        "content-grant",
+    );
     let owner_actions = OWNER_BOOTSTRAP_GRANT_ACTIONS
         .iter()
         .map(|action| (*action).to_owned())
@@ -90,6 +176,7 @@ pub fn build_conformance_realm_basis(
         .cloned()
         .collect::<Vec<_>>();
     let mut ops = Vec::new();
+    let mut grants = Vec::new();
     // The registered genesis authority root: its controller is the Realm owner.
     ops.push((
         CellRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned())
@@ -143,34 +230,38 @@ pub fn build_conformance_realm_basis(
             ),
         ));
     }
+    let owner_grant_body = grant_body(&owner_grant_id, realm_id, subject, &owner_actions)?;
     ops.push((
         capability_grant_cell(&owner_grant_id)?,
         issued_op(
             &issuer,
             &owner_move,
-            or_set_add(
-                owner_move.as_str(),
-                grant_body(&owner_grant_id, realm_id, subject, &owner_actions)?,
-            ),
+            or_set_add(owner_move.as_str(), owner_grant_body.clone()),
         ),
     ));
+    grants.push(ConformanceGrant {
+        grant_id: owner_grant_id,
+        body: owner_grant_body,
+    });
     if !explicit_content_actions.is_empty() {
+        let content_grant_body = grant_body(
+            &content_grant_id,
+            realm_id,
+            subject,
+            &explicit_content_actions,
+        )?;
         ops.push((
             capability_grant_cell(&content_grant_id)?,
             issued_op(
                 &issuer,
                 &content_move,
-                or_set_add(
-                    content_move.as_str(),
-                    grant_body(
-                        &content_grant_id,
-                        realm_id,
-                        subject,
-                        &explicit_content_actions,
-                    )?,
-                ),
+                or_set_add(content_move.as_str(), content_grant_body.clone()),
             ),
         ));
+        grants.push(ConformanceGrant {
+            grant_id: content_grant_id,
+            body: content_grant_body,
+        });
     }
 
     let signer = arkret_signatures::Ed25519PayloadSigner::from_did_key_seed(
@@ -203,7 +294,7 @@ pub fn build_conformance_realm_basis(
     // E2EE fixtures consuming this basis must name the same group in
     // `encrypted_content.group_id`.
     let covered_ops = vec![(
-        arkret_state::mls_move::covered_seals_cell_id(CONFORMANCE_MLS_GROUP_ID)
+        arkret_state::mls_move::covered_seals_cell_id(mls_group_id)
             .map_err(|error| error.to_string())?,
         issued_op(
             &issuer,
@@ -251,6 +342,7 @@ pub fn build_conformance_realm_basis(
         governance_ops,
         seal,
         ops: covered_ops,
+        grants,
     })
 }
 
@@ -281,6 +373,7 @@ fn capability_grant_cell(grant_id: &str) -> Result<CellRef, String> {
 }
 
 fn fixture_move_id(
+    fixture_id_domain: &str,
     realm_id: &str,
     subject: &str,
     actions: &[String],
@@ -288,13 +381,19 @@ fn fixture_move_id(
 ) -> Result<Hash, String> {
     Hash::new(format!(
         "sha256:{}",
-        fixture_basis_digest_hex(realm_id, subject, actions, slot)
+        fixture_basis_digest_hex(fixture_id_domain, realm_id, subject, actions, slot)
     ))
     .map_err(|error| error.to_string())
 }
 
-fn fixture_grant_id(realm_id: &str, subject: &str, actions: &[String], slot: &str) -> String {
-    let hex = fixture_basis_digest_hex(realm_id, subject, actions, slot);
+fn fixture_grant_id(
+    fixture_id_domain: &str,
+    realm_id: &str,
+    subject: &str,
+    actions: &[String],
+    slot: &str,
+) -> String {
+    let hex = fixture_basis_digest_hex(fixture_id_domain, realm_id, subject, actions, slot);
     format!(
         "ak:grant:{}-{}-{}-{}-{}",
         &hex[0..8],
@@ -306,13 +405,14 @@ fn fixture_grant_id(realm_id: &str, subject: &str, actions: &[String], slot: &st
 }
 
 fn fixture_basis_digest_hex(
+    fixture_id_domain: &str,
     realm_id: &str,
     subject: &str,
     actions: &[String],
     slot: &str,
 ) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"soland:conformance:realm-basis:");
+    hasher.update(fixture_id_domain.as_bytes());
     hasher.update(slot.as_bytes());
     hasher.update(b"\x00");
     hasher.update(realm_id.as_bytes());
@@ -376,7 +476,47 @@ mod tests {
     use serde_json::{Value, json};
     use soland_domain::reducer::engine_grant_from_capability_cell_state;
 
-    use super::grant_body;
+    use super::{RealmBasisFixtureOptions, build_realm_basis, grant_body};
+
+    #[test]
+    fn shared_builder_honors_fixture_identity_inputs_and_fails_closed() {
+        let realm_id = "ak:realm:019fa9d5-0000-7000-8000-000000000010";
+        let subject = "did:web:fixture.example";
+        let actions = vec!["ak.strand.create".to_owned()];
+        let build = |domain: &str, group_id: &str, notary: Option<&str>| {
+            build_realm_basis(
+                realm_id,
+                subject,
+                RealmBasisFixtureOptions {
+                    notary_authority: notary,
+                    data_plane_actions: &actions,
+                    mls_group_id: group_id,
+                    fixture_id_domain: domain,
+                },
+            )
+        };
+
+        let first = build(
+            "soland:test:first:",
+            "fixtureMlsGroup01",
+            Some("did:web:notary.example"),
+        )
+        .expect("shared basis");
+        let second = build(
+            "soland:test:second:",
+            "fixtureMlsGroup02",
+            Some("did:web:notary.example"),
+        )
+        .expect("shared basis with distinct identity inputs");
+
+        assert_ne!(first.governance_seal.id, second.governance_seal.id);
+        assert!(
+            first.ops[0].0.as_str().contains("fixtureMlsGroup01"),
+            "covered_seals cell must use the caller's MLS group subject"
+        );
+        assert_eq!(first.grants.len(), 2);
+        assert!(build("soland:test:first:", "fixtureMlsGroup01", Some("not a DID")).is_err());
+    }
 
     #[test]
     fn content_grant_is_visible_to_the_capability_engine() {

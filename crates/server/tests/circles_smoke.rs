@@ -195,7 +195,10 @@ fn circle_content_floor_below_realm_rejected() {
         &op(
             arkret_wire::EventKind::REALM_POLICY_BUNDLE,
             REALM_A,
-            json!({ "content_encryption_floor": "e2ee_required" }),
+            json!({
+                "policy_revision": 1,
+                "content_encryption_floor": "e2ee_required"
+            }),
         ),
         &hlc,
     );

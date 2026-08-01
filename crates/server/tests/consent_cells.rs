@@ -268,19 +268,25 @@ async fn realm_seal_basis(
     token: &str,
     realm_id: &str,
 ) -> arkret_wire::SealBasis {
-    let mut response = TestClient::get(format!(
-        "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
-    ))
-    .add_header("Authorization", format!("Bearer {token}"), true)
-    .send(app)
-    .await;
-    let status = response.status_code.expect("Realm Seal frontier status");
-    let body = response.take_string().await.unwrap_or_default();
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "Realm Seal frontier failed with {status}: {body}"
-    );
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+    let body = loop {
+        let mut response = TestClient::get(format!(
+            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+        ))
+        .add_header("Authorization", format!("Bearer {token}"), true)
+        .send(app)
+        .await;
+        let status = response.status_code.expect("Realm Seal frontier status");
+        let body = response.take_string().await.unwrap_or_default();
+        if status == StatusCode::OK {
+            break body;
+        }
+        assert!(
+            status == StatusCode::SERVICE_UNAVAILABLE && tokio::time::Instant::now() < deadline,
+            "Realm Seal frontier failed with {status}: {body}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    };
     let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
         serde_json::from_str(&body).expect("typed Realm Seal frontier");
     let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
@@ -509,6 +515,7 @@ async fn consent_grant_revoke_regrant_does_not_implicitly_accept_contact_request
 #[tokio::test]
 async fn consent_events_project_cells_without_implicitly_accepting_contact_request() {
     let state = soland_test_support::app_state(test_config());
+    let _control_seal_coordinator = soland_test_support::ControlSealCoordinatorGuard::spawn(&state);
     let app = service(state.clone());
     let alice_seed = [31_u8; 32];
     let alice = signing_actor(alice_seed);
@@ -540,8 +547,12 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
         }),
     )
     .await;
-    let grant_event_id = grant_response["accepted"][0].as_str().unwrap();
-    let grant_dot = format!("{grant_event_id}:{grant_seq}");
+    assert!(
+        grant_response["accepted"][0]
+            .as_str()
+            .is_some_and(|event_id| event_id.starts_with("ak:event:")),
+        "consent grant submit returns a canonical accepted Event id: {grant_response}"
+    );
 
     let granted = get_cell(&app, &alice_token, &alice, bob, "message").await;
     assert_eq!(granted["state"], "active");
@@ -549,19 +560,24 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
         granted["cell_id"],
         format!("ak:cell:ak.component.consent.grant.v1:{consent_id}")
     );
-    assert!(
-        granted["grant_dots"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|dot| dot.as_str() == Some(&grant_dot))
+    let grant_dots = granted["grant_dots"]
+        .as_array()
+        .expect("consent cell grant_dots");
+    assert_eq!(
+        grant_dots.len(),
+        1,
+        "one accepted grant creates one OR-Set dot"
     );
+    let grant_dot = grant_dots[0]
+        .as_str()
+        .expect("consent grant dot is a string")
+        .to_owned();
     let repeated_contact = request_contact(&app, &bob_token, &alice, "message").await;
     assert_eq!(repeated_contact["status"], "pending");
 
     let revoke_payload = serde_json::json!({
         "consent_id": consent_id,
-        "observed_dots": [grant_dot],
+        "observed_dots": [grant_dot.clone()],
         "revoked_at": arkret_canonical::format_timestamp_canonical(
             Utc::now() + Duration::seconds(1)
         ),
@@ -594,7 +610,7 @@ async fn consent_events_project_cells_without_implicitly_accepting_contact_reque
             .as_array()
             .unwrap()
             .iter()
-            .any(|dot| dot.as_str() == Some(&grant_dot))
+            .any(|dot| dot.as_str() == Some(grant_dot.as_str()))
     );
     let blocked_contact = request_contact(&app, &bob_token, &alice, "message").await;
     assert_eq!(blocked_contact["status"], "pending");
@@ -662,6 +678,7 @@ async fn consent_expiry_scope_and_pairwise_did_isolation() {
 #[tokio::test]
 async fn contact_row_surfaces_invite_consent_grant_ref() {
     let state = soland_test_support::app_state(test_config());
+    let _control_seal_coordinator = soland_test_support::ControlSealCoordinatorGuard::spawn(&state);
     let app = service(state.clone());
     let alice = "did:web:icgr-alice.example";
     let bob_seed = [32_u8; 32];

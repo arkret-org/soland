@@ -85,12 +85,12 @@ pub(super) async fn project_invite_accept_operation(
     }
     if !state
         .projections()
-        .invite_member_is_invited(record.realm_id.as_str(), &accepter)
+        .invite_member_can_accept(record.realm_id.as_str(), &accepter)
     {
         tracing::warn!(
             invite_id = %invite_id,
             invitee = %accepter,
-            "ak.invite.accept requires member state invite"
+            "ak.invite.accept requires the invited-or-atomically-joined member state"
         );
         return;
     }

@@ -50,6 +50,28 @@ pub fn app_state(config: AppConfig) -> AppState {
     app_state_with_persistence(config, persistence)
 }
 
+/// Scoped control-seal coordinator for integration tests that require Seal
+/// finality. Dropping the guard aborts the background worker so it cannot leak
+/// into another test runtime.
+pub struct ControlSealCoordinatorGuard {
+    handle: tokio::task::JoinHandle<()>,
+}
+
+impl ControlSealCoordinatorGuard {
+    #[must_use]
+    pub fn spawn(state: &AppState) -> Self {
+        Self {
+            handle: soland_http::control_seal_coordinator::spawn(state.clone()),
+        }
+    }
+}
+
+impl Drop for ControlSealCoordinatorGuard {
+    fn drop(&mut self) {
+        self.handle.abort();
+    }
+}
+
 pub fn app_state_with_persistence(
     config: AppConfig,
     persistence: Arc<dyn PersistenceStore>,

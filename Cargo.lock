@@ -5317,6 +5317,7 @@ dependencies = [
  "arkret-identity",
  "arkret-models-identity",
  "arkret-policy",
+ "arkret-schema",
  "arkret-signatures",
  "arkret-state",
  "arkret-wire",
@@ -5333,6 +5334,7 @@ dependencies = [
  "soland-services",
  "soland-storage",
  "soland-storage-memory",
+ "tokio",
 ]
 
 [[package]]

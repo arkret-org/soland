@@ -379,10 +379,14 @@ async fn persist_account_data_event(
         service_did,
         verification_method.clone(),
     );
-    arkret_signatures::sign_event(
+    let digest_suite = state
+        .projections()
+        .realm_digest_suite(event.realm_id.as_str());
+    arkret_signatures::sign_event_with_digest_suite(
         &mut event,
         &signer,
         &verification_method,
+        digest_suite,
         arkret_signatures::SignEventOptions::new().with_created_at(created_at),
     )
     .map_err(|error| AppError::internal(format!("account_data Event signing failed: {error}")))?;

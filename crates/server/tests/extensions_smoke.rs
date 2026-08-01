@@ -134,160 +134,19 @@ async fn dev_token_for(state: AppState, actor: &str, device_suffix: &str) -> Str
 /// admission, but proposal receipt admission still resolves the accepted
 /// notary cell.
 async fn seed_extension_test_seal(state: &AppState) -> arkret_wire::SealBasis {
-    const ADMIN_GRANT_ID: &str = "ak:grant:0196419b-0000-7000-8000-000000000001";
     ingest_extension_admin_document(state).await;
-    let realm = arkret_identifiers::RealmId::new(DEMO_REALM_ID).unwrap();
-    let create = arkret_wire::Event::new(
-        arkret_wire::EventKind::REALM_CREATE,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: realm.clone(),
-        },
-        Did::new("did:web:alice.example").unwrap(),
-        0,
-        arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce000").unwrap(),
-        json!({
-            "object": {
-                "id": realm,
-                "created_by": "did:web:alice.example",
-                "capability_action_registry_digest":
-                    arkret_policy::current_capability_action_registry_digest().unwrap(),
-                "notary": {
-                    "kind": "single_did",
-                    "did": state.service_id(),
-                },
-            }
-        }),
+    let seal_id = soland_test_support::cba_basis::seed_realm_basis(
+        state,
+        DEMO_REALM_ID,
+        "did:web:alice.example",
+        &[],
     )
-    .unwrap();
-    let move_id = arkret_identifiers::Hash::new(create.event_digest().unwrap()).unwrap();
-    let admin_grant_move_id =
-        arkret_identifiers::Hash::new(format!("sha256:{}", "41".repeat(32))).unwrap();
-    let notary_cell: arkret_identifiers::CellRef = arkret_wire::REALM_NOTARY_CELL.parse().unwrap();
-    let notary_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: Did::new(state.service_id().clone()).unwrap(),
-        op: arkret_state::lattice::SealedOp::new(
-            move_id.clone(),
-            arkret_wire::LatticeOp {
-                op_type: arkret_wire::LatticeOpType::Set,
-                tag: None,
-                value: Some(json!({
-                    "kind": "single_did",
-                    "did": state.service_id(),
-                })),
-                from: None,
-                to: None,
-                reason: None,
-                issuer_seq: None,
-            },
-        ),
-    };
-    let admin_grant_cell = arkret_identifiers::CellRef::new(format!(
-        "ak:cell:ak.component.capability.grant.v1:{ADMIN_GRANT_ID}"
-    ))
-    .unwrap();
-    let admin_grant_op = arkret_state::lattice::ordered_log::IssuedOp {
-        issuer: Did::new("did:web:alice.example").unwrap(),
-        op: arkret_state::lattice::SealedOp::new(
-            admin_grant_move_id.clone(),
-            arkret_wire::LatticeOp {
-                op_type: arkret_wire::LatticeOpType::Add,
-                tag: Some(admin_grant_move_id.to_string()),
-                value: Some(json!({
-                    "grant_id": ADMIN_GRANT_ID,
-                    "schema": arkret_wire::SchemaId::CAPABILITY_V1,
-                    "realm_id": DEMO_REALM_ID,
-                    "issuer": "did:web:alice.example",
-                    "issuer_authority_refs": [{
-                        "kind": "realm_root",
-                        "realm_id": DEMO_REALM_ID,
-                        "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
-                        "controller_epoch_at_issuance": 0,
-                        "authority_generation": 0
-                    }],
-                    "subject": "did:web:alice.example",
-                    "actions": soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS,
-                    "resources": [{
-                        "kind": "realm",
-                        "realm_id": DEMO_REALM_ID,
-                        "match_scope": "realm_wide"
-                    }],
-                    "capability_action_registry_digest":
-                        arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "issued_at": "2026-01-01T00:00:00.000Z"
-                })),
-                from: None,
-                to: None,
-                reason: None,
-                issuer_seq: None,
-            },
-        ),
-    };
-    let registry = soland_services::projection::ProjectionService::sdk_cell_registry();
-    let notary_binding = registry
-        .resolve(&realm, &notary_cell)
-        .expect("notary cell family is registered");
-    let notary_joined = arkret_state::join_cell(
-        notary_binding.lattice.as_ref(),
-        &notary_cell,
-        std::slice::from_ref(&notary_op),
-    );
-    let grant_binding = registry
-        .resolve(&realm, &admin_grant_cell)
-        .expect("capability grant cell family is registered");
-    let grant_joined = arkret_state::join_cell(
-        grant_binding.lattice.as_ref(),
-        &admin_grant_cell,
-        std::slice::from_ref(&admin_grant_op),
-    );
-    let state_root = arkret_state::compute_state_root(&BTreeMap::from([
-        (notary_cell.clone(), notary_joined),
-        (admin_grant_cell.clone(), grant_joined),
-    ]))
-    .unwrap();
-    let signer = Ed25519PayloadSigner::from_did_key_seed(
-        [0x21; 32],
-        Did::new("did:web:alice.example").unwrap(),
-        arkret_wire::DidUrl::new("did:web:alice.example#extension-test-notary").unwrap(),
-    );
-    let mut delta = vec![move_id, admin_grant_move_id];
-    delta.sort_by(|left, right| left.as_str().cmp(right.as_str()));
-    let seal = arkret_wire::Seal::sign_single(
-        realm.clone(),
-        Vec::new(),
-        delta,
-        state_root,
-        arkret_identifiers::Hlc::new("0196419b0000-0000-a11ce001").unwrap(),
-        &signer,
-    )
-    .unwrap();
-    state.test_put_seal(&seal).unwrap();
+    .await;
     state
-        .test_append_sealed_effects(
-            &realm,
-            &seal.id,
-            &[(notary_cell, notary_op), (admin_grant_cell, admin_grant_op)],
-        )
-        .unwrap();
-    state.test_refresh_grant_from_sealed_cells(&realm, ADMIN_GRANT_ID);
-    let envelope = serde_json::to_value(&create).unwrap();
-    state
-        .test_persistence()
-        .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: create.event_id.to_string(),
-            actor_id: create.actor_id.to_string(),
-            actor_seq: create.actor_seq,
-            realm_id: Some(DEMO_REALM_ID.to_owned()),
-            kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest: create.event_digest().unwrap(),
-            canonical_bytes: arkret_canonical::canonical_json_bytes(&envelope).unwrap(),
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
-    seal.seal_basis()
+        .test_seal(&seal_id)
+        .expect("extension test Seal lookup")
+        .expect("extension test Realm has an accepted Seal")
+        .seal_basis()
 }
 
 async fn ingest_extension_admin_document(state: &AppState) {
@@ -1722,7 +1581,10 @@ async fn signed_install_events(
             ],
             issued_at: now,
             not_before: None,
-            expires_at: None,
+            // Applet service subjects are non-human principals. These actions
+            // are high-risk in the capability registry, so capabilities.md §8
+            // requires a finite effective expiry.
+            expires_at: Some(now + chrono::Duration::hours(1)),
             updated_by: None,
             updated_at: None,
             revoked_by: None,
