@@ -360,6 +360,7 @@ pub(crate) fn build_server_description(state: &AppState) -> ServiceDescribe {
         state.config().resumable_upload_incomplete_ttl_seconds,
         state.config().to_device_queue_capacity,
     );
+    crate::routing::events::sync::websocket::advertise_websocket_binding(state, &mut description);
     description.receive_policy_constraints = state.config().receive_policy_constraints.clone();
     // Advertise the LIVE rate-limit ceilings (from the runtime overlay, which
     // the middleware also enforces) rather than the boot-config defaults, so
@@ -602,6 +603,21 @@ pub(crate) fn apply_claim_level_partition(
             )
         },
     ];
+    // Dynamic transport profiles are only self-claimed when their production
+    // descriptor was actually admitted into this response. Keeping this in
+    // the claim partition also lets a loaded cotest verification for the
+    // binding survive the claimed-profile cross-check below.
+    if description
+        .supported_profiles
+        .iter()
+        .any(|profile| profile == ProfileId::BINDING_WEBSOCKET_V1)
+    {
+        claimed_profiles.push(
+            arkret_models_discovery::service_description::ClaimedProfileEntry::self_claimed(
+                ProfileId::BINDING_WEBSOCKET_V1,
+            ),
+        );
+    }
     // G3.S9 — when the sovereign enclave profile is enabled, claim it
     // alongside the baseline profiles. The enclave invariants
     // (outbound federation off, DID method allow-list non-empty,

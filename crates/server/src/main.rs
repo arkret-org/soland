@@ -433,6 +433,11 @@ fn init_tracing(
     })
 }
 
+/// Drain window used when `SOLAND_SHUTDOWN_GRACE_SECS` is unset. The request
+/// grace stays "wait indefinitely" in that case, but a drained peer still needs
+/// a deadline it can plan its checkpoint against.
+const DEFAULT_CONNECTION_DRAIN_GRACE: std::time::Duration = std::time::Duration::from_secs(10);
+
 async fn run_server<A>(acceptor: A, state: AppState)
 where
     A: Acceptor + Send + 'static,
@@ -451,8 +456,15 @@ where
         .and_then(|value| value.trim().parse::<u64>().ok())
         .filter(|secs| *secs > 0)
         .map(std::time::Duration::from_secs);
+    // Long-lived transports get an explicit drain notice before the listener
+    // stops, so peers checkpoint and reconnect instead of discovering the
+    // shutdown as a dropped socket. The notice needs a finite deadline even
+    // when the request grace is "wait indefinitely".
+    let drain_grace = shutdown_grace.unwrap_or(DEFAULT_CONNECTION_DRAIN_GRACE);
+    let drain_state = state.clone();
     tokio::spawn(async move {
         shutdown_signal().await;
+        drain_state.begin_connection_drain(drain_grace);
         handle.stop_graceful(shutdown_grace);
     });
     server.serve(service(state)).await;

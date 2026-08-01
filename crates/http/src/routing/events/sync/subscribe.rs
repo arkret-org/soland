@@ -446,7 +446,7 @@ fn account_subscribe_query(req: &mut Request) -> SyncRequestBody {
     }
 }
 
-async fn wait_for_account_projection_barrier(
+pub(crate) async fn wait_for_account_projection_barrier(
     state: &AppState,
     rx: &mut tokio::sync::broadcast::Receiver<crate::state::EventNotification>,
     event_id: &str,

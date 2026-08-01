@@ -5,7 +5,9 @@
 
 use super::*;
 
-const EVENTS_CATCHUP_LIMIT: usize = 100;
+/// Bounded catch-up page size, shared by the NDJSON surface and the WebSocket
+/// events channel so both bindings truncate at the same point.
+pub(crate) const EVENTS_CATCHUP_LIMIT: usize = 100;
 const EVENTS_SUBSCRIBE_DEFAULT_WAIT_MS: u64 = 30_000;
 
 /// `ak.self.events.stream.subscribe` at `GET /_arkret/self/events/subscribe`. NDJSON
@@ -350,12 +352,11 @@ pub(crate) async fn events_subscribe(depot: &mut Depot, req: &mut Request, res: 
                                         "payload": event_envelope,
                                     })
                                 }
-                                EventNotificationKind::EpochRotation { previous_epoch, new_epoch } => {
+                                EventNotificationKind::EpochRotation { previous_epoch: _, new_epoch } => {
                                     json!({
                                         "kind": "epoch_rotation",
                                         "realm_id": realm_id,
                                         "payload": {
-                                            "previous_epoch": previous_epoch,
                                             "new_epoch": new_epoch,
                                         },
                                     })

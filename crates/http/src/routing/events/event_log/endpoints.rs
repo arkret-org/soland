@@ -112,6 +112,7 @@ async fn events_describe(
         state.config().resumable_upload_incomplete_ttl_seconds,
         state.config().to_device_queue_capacity,
     );
+    crate::routing::events::sync::websocket::advertise_websocket_binding(state, &mut description);
     crate::routing::system::describe::apply_claim_level_partition(
         &mut description,
         state.verified_profiles(),

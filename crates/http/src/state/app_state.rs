@@ -63,6 +63,18 @@ use crate::verified_profiles::VerifiedProfileDescriptor;
 /// binding only costs one re-acceptance — never a downgrade of trust.
 const DID_BINDING_STORE_CAPACITY: usize = 4_096;
 
+/// Reconnect delay a drained peer must honour before dialling again. It gives
+/// the replacement instance time to become the one that answers.
+const CONNECTION_DRAIN_RECONNECT_AFTER_MS: u32 = 5_000;
+
+/// A published service drain: reconnect no sooner than `reconnect_after_ms`,
+/// and expect this instance to stop serving at `deadline`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConnectionDrain {
+    pub reconnect_after_ms: u32,
+    pub deadline: chrono::DateTime<chrono::Utc>,
+}
+
 /// Single-process service state. Every long-lived data surface lives behind
 /// `persistence` (a `dyn PersistenceStore`); the few remaining fields are
 /// either non-record state (config, db pool, hlc, authz engine) or runtime
@@ -162,6 +174,11 @@ pub struct AppState {
     /// publishes over LISTEN/NOTIFY so subscribers connected to another
     /// replica receive the same live frames.
     event_broadcast: EventBroadcast,
+    /// Latched service-drain notice for long-lived transports. `None` until a
+    /// shutdown signal arrives; a `watch` (not a broadcast) because a
+    /// connection that opens mid-drain must observe the notice immediately
+    /// rather than wait for an edge that already passed.
+    connection_drain: Arc<tokio::sync::watch::Sender<Option<ConnectionDrain>>>,
     /// Lossy process-local acceleration signal. Durable pending rows remain
     /// the reconciliation source of truth after missed wakeups or restarts.
     control_seal_wakeup: Arc<tokio::sync::Notify>,
@@ -851,6 +868,7 @@ impl AppState {
             to_device_position_counter: Arc::new(AtomicI64::new(now.timestamp_micros())),
             federation_peer_verifying_keys: Arc::new(ArcSwap::from_pointee(BTreeMap::new())),
             event_broadcast,
+            connection_drain: Arc::new(tokio::sync::watch::Sender::new(None)),
             control_seal_wakeup: Arc::new(tokio::sync::Notify::new()),
             notary_signing_key,
             notary_signing_key_origin,
@@ -1531,6 +1549,35 @@ impl AppState {
         &self,
     ) -> tokio::sync::broadcast::Receiver<EventNotification> {
         self.event_broadcast.subscribe()
+    }
+
+    /// Announce a bounded service drain. Long-lived transports tell their peers
+    /// to checkpoint and reconnect elsewhere, then stop by `deadline`.
+    ///
+    /// Idempotent: a second signal keeps the first deadline, so a repeated
+    /// SIGTERM cannot extend the window a client was already given.
+    pub fn begin_connection_drain(&self, grace: std::time::Duration) {
+        self.connection_drain.send_if_modified(|current| {
+            if current.is_some() {
+                return false;
+            }
+            *current = Some(ConnectionDrain {
+                reconnect_after_ms: CONNECTION_DRAIN_RECONNECT_AFTER_MS,
+                deadline: chrono::Utc::now()
+                    + chrono::Duration::from_std(grace).unwrap_or(chrono::Duration::zero()),
+            });
+            true
+        });
+    }
+
+    pub(crate) fn subscribe_connection_drain(
+        &self,
+    ) -> tokio::sync::watch::Receiver<Option<ConnectionDrain>> {
+        self.connection_drain.subscribe()
+    }
+
+    pub(crate) fn current_connection_drain(&self) -> Option<ConnectionDrain> {
+        *self.connection_drain.borrow()
     }
 
     pub(crate) fn publish_event_notification(

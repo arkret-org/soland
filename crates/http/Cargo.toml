@@ -73,6 +73,7 @@ uuid = { workspace = true, features = ["v4", "v7", "serde"] }
 zeroize = { workspace = true, features = ["derive"] }
 
 [dev-dependencies]
+rustls.workspace = true
 salvo = { workspace = true, features = ["test"] }
 soland-services = { workspace = true, features = ["test-support"] }
 soland-domain.workspace = true
@@ -80,3 +81,4 @@ soland-storage.workspace = true
 soland-storage-memory.workspace = true
 soland-storage-postgres.workspace = true
 tokio = { workspace = true, features = ["test-util"] }
+tokio-tungstenite.workspace = true
