@@ -130,6 +130,7 @@ async fn seed_realm(
                     std::collections::BTreeSet::from([PlaintextDataClassKind::MessageContent]),
                 )]),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },

@@ -292,6 +292,7 @@ async fn policy_bundle_media_plaintext_reads_realm_meta() {
                     ]),
                 )]),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -330,6 +331,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: true,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -740,6 +742,7 @@ async fn applet_registration_requires_realm_admin() {
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -798,9 +801,12 @@ async fn applet_registration_requires_realm_admin() {
 }
 
 #[tokio::test]
-async fn non_minimal_metadata_realm_allows_any_aad() {
-    // SEC-08 — a Realm that did not declare the profile is unaffected: a
-    // non-hidden aad encrypted message passes this gate.
+async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
+    // SEC-08 — a Realm that did not declare `ak.profile.mls.minimal_metadata_realm.v1`
+    // is unaffected by *that* gate. It is still bound by the Realm
+    // `aad_visibility` ceiling (`encryption-and-audit.md` §2.8): the two gates
+    // are orthogonal, and an undeclared component is the `hidden` ceiling, so
+    // `routing_digest` only becomes reachable once the Realm declares it.
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-a11ce0000003";
     let now = chrono::Utc::now();
@@ -823,6 +829,8 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
+                // Undeclared component: the hidden ceiling.
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -860,6 +868,27 @@ async fn non_minimal_metadata_realm_allows_any_aad() {
             }
         }),
     );
+    // The envelope is wider than the hidden ceiling, so it is rejected rather
+    // than silently downgraded and routed on.
+    assert_eq!(
+        validate_operation_policy(&state, std::slice::from_ref(&op)).await,
+        Err(arkret_wire::ReasonCode::AAD_VISIBILITY_POLICY_VIOLATION)
+    );
+
+    // Once the Realm declares the ceiling the same envelope is admissible.
+    let mut declared = state
+        .realms()
+        .realm_metadata(realm_id)
+        .await
+        .unwrap()
+        .unwrap();
+    declared.aad_visibility_ceiling =
+        arkret_models_crypto::EncryptedEnvelopeAadVisibility::RoutingDigest;
+    state
+        .realms()
+        .store_realm_metadata(realm_id, declared)
+        .await
+        .unwrap();
     validate_operation_policy(&state, std::slice::from_ref(&op))
         .await
         .unwrap();

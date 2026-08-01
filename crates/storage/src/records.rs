@@ -350,6 +350,17 @@ pub struct RealmMetaRecord {
     /// defence-in-depth reject of non-`hidden` `aad_visibility_event_id` on
     /// encrypted `ak.message.create` / reaction envelopes.
     pub minimal_metadata_realm: bool,
+    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id`, projected
+    /// from the `aad_visibility` component of the accepted
+    /// `ak.realm.policy_bundle` (`crypto-media/encryption-and-audit.md` §2.8).
+    ///
+    /// Unlike [`Self::minimal_metadata_realm`] this does **not** latch: the
+    /// bundle is a `cas_register` that restates its complete component set, so
+    /// a revision that omits `aad_visibility` genuinely lowers the ceiling back
+    /// to `hidden`. `Default` is `hidden`, which is also what an undeclared
+    /// component means — a Realm that never declared the component MUST NOT be
+    /// treated as unrestricted.
+    pub aad_visibility_ceiling: arkret_models_crypto::EncryptedEnvelopeAadVisibility,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub updated_at: chrono::DateTime<chrono::Utc>,
 }

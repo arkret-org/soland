@@ -339,6 +339,33 @@ pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> b
     })
 }
 
+/// The `aad_visibility` ceiling an `ak.realm.policy_bundle` payload declares
+/// (`crypto-media/encryption-and-audit.md` §2.8).
+///
+/// Returns `None` for a payload that is not a policy bundle, so a caller can
+/// tell "this Event says nothing about the ceiling" apart from "this bundle
+/// declares no component". The latter is `Some(Hidden)`: the bundle is a
+/// `cas_register` restating its whole component set, so an omitted component
+/// genuinely lowers the ceiling to `hidden` rather than leaving it unchanged.
+pub fn policy_bundle_aad_visibility_ceiling(
+    payload: &serde_json::Value,
+) -> Option<arkret_models_crypto::EncryptedEnvelopeAadVisibility> {
+    let bundle = payload.get("value").unwrap_or(payload);
+    // Only a bundle revision restates the component set.
+    bundle.get("policy_revision")?;
+    let declared = bundle
+        .get("aad_visibility")
+        .and_then(|component| component.get("event_id"))
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| {
+            serde_json::from_value::<arkret_models_crypto::EncryptedEnvelopeAadVisibility>(
+                serde_json::Value::String(value.to_owned()),
+            )
+            .ok()
+        });
+    Some(arkret_models_crypto::AadVisibilityCeiling::from_declared(declared).value())
+}
+
 #[cfg(test)]
 mod audit_profile_tests {
     use super::*;

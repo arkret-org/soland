@@ -163,6 +163,7 @@ impl PersistenceHandle {
                     plaintext_visible_services: BTreeSet::new(),
                     plaintext_visible_service_classes: BTreeMap::new(),
                     minimal_metadata_realm: false,
+                    aad_visibility_ceiling: Default::default(),
                     created_at: now,
                     updated_at: now,
                 },

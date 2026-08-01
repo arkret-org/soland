@@ -357,6 +357,66 @@ pub(super) async fn validate_minimal_metadata_aad_policy(
         .map_err(|_| "minimal_metadata_realm requires aad_visibility_event_id=hidden")
 }
 
+/// `encryption-and-audit.md` §§2.3.2 / 2.8 — reject an encrypted envelope that
+/// declares an `aad_visibility_event_id` wider than the Realm ceiling.
+///
+/// This is the Realm-policy gate, orthogonal to the minimal-metadata profile
+/// gate above: that one pins `hidden` for one profile, this one enforces
+/// whatever ceiling the Realm declared through the `aad_visibility` component
+/// of `ak.realm.policy_bundle`. An undeclared component is the `hidden`
+/// ceiling, so `routing_digest` and `opaque_id` are only reachable once the
+/// Realm declares them.
+///
+/// The judgement itself is [`arkret_models_crypto::AadVisibilityCeiling`], the
+/// shared entry clients use, so the two sides cannot disagree about which
+/// envelopes are admissible.
+///
+/// **MUST NOT** downgrade: an over-wide envelope is rejected with
+/// `aad_visibility_policy_violation`, never rewritten to `hidden` and routed on.
+/// A silent downgrade would leave the sender believing its disclosure level took
+/// effect and the receiver believing the policy held — both wrong, and neither
+/// observable.
+pub(super) async fn validate_aad_visibility_policy(
+    state: &AppState,
+    operation: &Operation,
+) -> Result<(), &'static str> {
+    let Some(envelope) = encrypted_envelope_of(operation) else {
+        return Ok(());
+    };
+    let Ok(Some(record)) = state
+        .realms()
+        .realm_metadata(operation.realm_id.as_str())
+        .await
+    else {
+        // Unknown Realm: this gate has no accepted bundle to read, and the
+        // admission path rejects the operation on its own grounds.
+        return Ok(());
+    };
+    let ceiling = arkret_models_crypto::AadVisibilityCeiling::from_declared(Some(
+        record.aad_visibility_ceiling,
+    ));
+    let Some(visibility) = minimal_metadata_aad_visibility(envelope) else {
+        // An encrypted envelope whose discriminator is absent or unrecognised
+        // cannot be proven to sit under the ceiling.
+        return Err(arkret_wire::ReasonCode::AAD_VISIBILITY_POLICY_VIOLATION);
+    };
+    ceiling
+        .check(visibility)
+        .map_err(|_| arkret_wire::ReasonCode::AAD_VISIBILITY_POLICY_VIOLATION)
+}
+
+/// The encrypted envelope an operation carries, if any.
+///
+/// Kept separate from the message/reaction narrowing of the minimal-metadata
+/// gate: the aad_visibility ceiling governs **every** encrypted envelope this
+/// service ingests or fans out, not one kind family.
+fn encrypted_envelope_of(operation: &Operation) -> Option<&Value> {
+    operation
+        .payload
+        .get("encrypted_content")
+        .or_else(|| operation.payload.get("encrypted_payload"))
+}
+
 /// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted
 /// envelope to the SDK [`arkret_models_crypto::encrypted_envelope::EncryptedEnvelopeAadVisibility`]
 /// enum. Returns `None` when the field is missing or carries an unknown value, which the caller

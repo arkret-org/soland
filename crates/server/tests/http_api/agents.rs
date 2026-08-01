@@ -357,6 +357,7 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
                 plaintext_visible_services: Default::default(),
                 plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },

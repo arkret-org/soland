@@ -474,10 +474,16 @@ async fn project_accepted_operations_inner(
         {
             project_member_identity_update(state, operation);
         }
-        // Cache ak.realm.read_receipt_policy state into ProjectionState so
-        // ephemeral ak.receipt.read fanout (and other readers) can hit a
-        // BTreeMap lookup instead of scanning the durable Event store.
+        // Cache ak.realm.read_receipt_policy state into ProjectionState so the
+        // parent/child policy-combination validators hit a BTreeMap lookup
+        // instead of scanning the durable Event store.
         // (R1.2 renamed `ak.space.read_receipt_policy` to `ak.realm.*`.)
+        //
+        // NOT a Signal fanout filter: `disclosure="disabled"` and
+        // `visibility="private"` are enforced client-side
+        // (`discovery/read-receipts.md` §2.5). `ak.receipt.read` travels as
+        // Signal plaintext inside the ciphertext, so this service cannot read
+        // it and MUST NOT route or drop an envelope by receipt content.
         if kinds::canonical_kind_string(operation) == "ak.realm.read_receipt_policy" {
             project_read_receipt_policy(state, operation);
         }

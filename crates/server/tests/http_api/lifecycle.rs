@@ -399,6 +399,7 @@ async fn encrypted_realm_rejects_plaintext_strand_content_before_event_log_persi
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: Default::default(),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },

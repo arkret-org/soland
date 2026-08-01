@@ -306,6 +306,7 @@ pub async fn validate_operation_policy_with_plaintext_service_binding(
         validate_message_edit_redact_window_policy(state, operation).await?;
         validate_reaction_scope_policy(state, operation)?;
         validate_minimal_metadata_aad_policy(state, operation).await?;
+        validate_aad_visibility_policy(state, operation).await?;
         validate_disappearing_message_policy(state, operation)?;
     }
     Ok(())

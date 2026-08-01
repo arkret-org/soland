@@ -658,6 +658,7 @@ pub(crate) async fn seed_test_realm(
                 plaintext_visible_services,
                 plaintext_visible_service_classes,
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },
@@ -1352,6 +1353,7 @@ pub(crate) async fn authorize_test_plaintext_message_service(
             plaintext_visible_services: Default::default(),
             plaintext_visible_service_classes: Default::default(),
             minimal_metadata_realm: false,
+            aad_visibility_ceiling: Default::default(),
             created_at: now,
             updated_at: now,
         });

@@ -259,6 +259,7 @@ impl SolandMemoryPersistenceStore {
                 plaintext_visible_services: std::collections::BTreeSet::new(),
                 plaintext_visible_service_classes: std::collections::BTreeMap::new(),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },

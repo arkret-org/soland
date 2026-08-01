@@ -1137,3 +1137,201 @@ fn realm_search_policy_rejects_access_hiding_until_supported_profile_exists() {
     policy["leakage_class"] = serde_json::json!("access_hiding");
     assert_search_policy_rejected(policy, "search_policy_access_hiding_unsupported");
 }
+
+// ── 2026-08-01 policy bundle component set ──
+
+fn realm_with_schema_refs(state: &mut ProjectionState, realm_id: &str, schema_refs: Value) {
+    state.realm_create_cells.insert(
+        realm_id.to_owned(),
+        CellState::Value(serde_json::json!([{ "schema_refs": schema_refs }])),
+    );
+}
+
+fn apply_bundle(state: &mut ProjectionState, realm_id: &str, payload: Value) -> ProjectionEffect {
+    let operation = make_operation(
+        arkret_wire::EventKind::REALM_POLICY_BUNDLE,
+        realm_id,
+        payload,
+    );
+    state.apply_realm_policy_bundle(&operation)
+}
+
+#[test]
+fn the_bundle_projects_every_registered_component() {
+    let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d101";
+    let mut state = ProjectionState::new();
+    realm_with_schema_refs(
+        &mut state,
+        realm_id,
+        serde_json::json!([arkret_wire::ProfileId::E2EE_RELAXED_V1]),
+    );
+    let effect = apply_bundle(
+        &mut state,
+        realm_id,
+        serde_json::json!({
+            "policy_revision": 1,
+            "aad_visibility": {"event_id": "routing_digest"},
+            "mls_send_pause": "advisory",
+            "relaxed_window_max_ms": 60000,
+            "media_service_decrypts": true,
+            "join_policy": {"combinator": "all", "gates": [{
+                "gate_id": "open",
+                "kind": "principal_admission",
+                "auto_resolve": true,
+                "allowed_did_methods": ["did:web"]
+            }]},
+            "agent_participation": {"native_agent": {"reply": true}},
+            "account_deactivation": {"member_action": "leave_all"},
+            "availability_policy": {
+                "min_holders": 1,
+                "holder_roles": ["notary"],
+                "applies_to": ["seal_include"]
+            },
+            "audit_policy": {
+                "range_completeness_witnesses": ["did:web:witness.example"],
+                "witnessed_min_attestations": 1,
+                "witness_independence": "distinct_did"
+            },
+            "preauth": {"require_consent": true}
+        }),
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+
+    // Every added component has to be readable back out of the cell: the
+    // bundle is the only carrier for components with no facet Event kind, so a
+    // component the reducer drops is a component the Realm cannot express.
+    let projected = state
+        .realm_policy_bundle_cell_value(realm_id)
+        .expect("bundle projects");
+    for component in [
+        "aad_visibility",
+        "mls_send_pause",
+        "relaxed_window_max_ms",
+        "media_service_decrypts",
+        "join_policy",
+        "agent_participation",
+        "account_deactivation",
+        "availability_policy",
+        "audit_policy",
+        "preauth",
+    ] {
+        assert!(
+            projected.get(component).is_some(),
+            "the reducer dropped '{component}'"
+        );
+    }
+    assert_eq!(
+        state.realm_aad_visibility_ceiling(realm_id).value(),
+        arkret_models_crypto::EncryptedEnvelopeAadVisibility::RoutingDigest
+    );
+}
+
+#[test]
+fn an_over_ceiling_relaxed_window_is_rejected_not_truncated() {
+    let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d102";
+    let mut state = ProjectionState::new();
+    let effect = apply_bundle(
+        &mut state,
+        realm_id,
+        serde_json::json!({"policy_revision": 1, "relaxed_window_max_ms": 300_001}),
+    );
+    assert!(
+        matches!(&effect, ProjectionEffect::Rejected { reason }
+            if reason == arkret_wire::ReasonCode::RELAXED_WINDOW_EXCEEDS_CEILING),
+        "300001 must surface as the ceiling reason code, not schema_violation: {effect:?}"
+    );
+    assert!(
+        state.realm_policy_bundle_cell_value(realm_id).is_none(),
+        "a rejected revision must not be projected at a clamped value"
+    );
+
+    let at_ceiling = apply_bundle(
+        &mut state,
+        realm_id,
+        serde_json::json!({"policy_revision": 1, "relaxed_window_max_ms": 300_000}),
+    );
+    assert!(matches!(
+        at_ceiling,
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+}
+
+#[test]
+fn advisory_send_pause_is_gated_on_the_realm_schema_refs() {
+    let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d103";
+    let mut state = ProjectionState::new();
+    // A Realm that declares no profile: `advisory` must not be accepted, and
+    // the check reads `schema_refs`, not a nonexistent `supported_profiles`.
+    realm_with_schema_refs(
+        &mut state,
+        realm_id,
+        serde_json::json!(["ak.profile.core.v1"]),
+    );
+    let undeclared = apply_bundle(
+        &mut state,
+        realm_id,
+        serde_json::json!({"policy_revision": 1, "mls_send_pause": "advisory"}),
+    );
+    assert!(
+        matches!(&undeclared, ProjectionEffect::Rejected { reason }
+            if reason
+                == arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE),
+        "{undeclared:?}"
+    );
+
+    realm_with_schema_refs(
+        &mut state,
+        realm_id,
+        serde_json::json!([
+            "ak.profile.core.v1",
+            arkret_wire::ProfileId::E2EE_RELAXED_V1
+        ]),
+    );
+    assert!(matches!(
+        apply_bundle(
+            &mut state,
+            realm_id,
+            serde_json::json!({"policy_revision": 1, "mls_send_pause": "advisory"}),
+        ),
+        ProjectionEffect::RealmPolicyBundleProjected { .. }
+    ));
+}
+
+#[test]
+fn the_policy_frontier_digest_is_a_filtered_state_root() {
+    let realm_id = "ak:realm:01904100-0000-7000-8000-0f863ed7d104";
+    let other_realm = "ak:realm:01904100-0000-7000-8000-0f863ed7d105";
+    let mut state = ProjectionState::new();
+    let empty = state
+        .realm_policy_frontier_digest(realm_id)
+        .expect("empty frontier is computable");
+
+    apply_bundle(
+        &mut state,
+        realm_id,
+        serde_json::json!({"policy_revision": 1, "media_service_decrypts": true}),
+    );
+    let after_bundle = state
+        .realm_policy_frontier_digest(realm_id)
+        .expect("frontier after one policy cell");
+    assert_ne!(
+        empty, after_bundle,
+        "a projected policy cell must move the frontier"
+    );
+
+    // Cross-Realm isolation: another Realm's policy cells must not enter this
+    // Realm's frontier, or two Realms would report the same digest.
+    apply_bundle(
+        &mut state,
+        other_realm,
+        serde_json::json!({"policy_revision": 1, "media_service_decrypts": false}),
+    );
+    assert_eq!(
+        state.realm_policy_frontier_digest(realm_id),
+        Some(after_bundle),
+        "another Realm's policy write must not move this Realm's frontier"
+    );
+}

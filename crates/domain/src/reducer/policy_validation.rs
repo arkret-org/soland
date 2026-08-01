@@ -1025,3 +1025,130 @@ pub(crate) fn validate_durability_policy(
     }
     Ok(())
 }
+
+/// `encryption-and-audit.md` §2.4.1 — absolute ceiling on the declared
+/// `ak.profile.e2ee_relaxed.v1` removed-member decryption window.
+///
+/// Spelled once here and taken from the SDK's wire-type constant so the
+/// reducer, the schema and the receivers cannot drift.
+pub(crate) const RELAXED_WINDOW_MAX_MS_CEILING: u64 =
+    arkret_models_collaboration::events_payloads::RELAXED_WINDOW_MAX_MS_CEILING;
+
+/// `encryption-and-audit.md` §2.4.1 — reject a `relaxed_window_max_ms` above
+/// the absolute ceiling.
+///
+/// The schema leaves the field unbounded above on purpose so an over-ceiling
+/// value reaches this check as `relaxed_window_exceeds_ceiling` rather than as
+/// `schema_violation`. Silently clamping to the ceiling is forbidden: a sender
+/// that asked for a longer window would believe it got one.
+pub(crate) fn validate_relaxed_window(value: &Value) -> Result<(), &'static str> {
+    let Some(declared) = value.get("relaxed_window_max_ms") else {
+        return Ok(());
+    };
+    // A non-integer or negative value never reaches the ceiling rule; it is an
+    // ordinary schema violation of `{"type":"integer","minimum":1}`.
+    let Some(window_ms) = declared.as_u64().filter(|window| *window >= 1) else {
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    };
+    if window_ms > RELAXED_WINDOW_MAX_MS_CEILING {
+        return Err(arkret_wire::ReasonCode::RELAXED_WINDOW_EXCEEDS_CEILING);
+    }
+    Ok(())
+}
+
+/// `encryption-and-audit.md` §2.4.1 — `mls_send_pause="advisory"` is only
+/// accepted when the Realm declares `ak.profile.e2ee_relaxed.v1`.
+///
+/// The declaration lives in the Realm object's `schema_refs[]`. There is no
+/// Realm `supported_profiles` field, and the profile is deliberately not echoed
+/// into the bundle itself: a bundle that vouched for its own profile would be
+/// self-authorizing.
+pub(crate) fn validate_mls_send_pause(
+    value: &Value,
+    realm_schema_refs: &[String],
+) -> Result<(), &'static str> {
+    let Some(pause) = value.get("mls_send_pause").and_then(Value::as_str) else {
+        return Ok(());
+    };
+    if pause != "advisory" {
+        return Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION);
+    }
+    if realm_schema_refs
+        .iter()
+        .any(|declared| declared == arkret_wire::ProfileId::E2EE_RELAXED_V1)
+    {
+        return Ok(());
+    }
+    Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
+}
+
+/// The Realm ceiling on encrypted-envelope `aad_visibility_event_id`, resolved
+/// from the accepted `ak.realm.policy_bundle` value.
+///
+/// An absent or malformed component resolves to the `hidden` ceiling. That is
+/// the fail-closed reading `encryption-and-audit.md` §2.8 requires: "the Realm
+/// did not declare a ceiling" is never "do not check".
+pub(crate) fn aad_visibility_ceiling_from_bundle(
+    bundle: Option<&Value>,
+) -> arkret_models_crypto::AadVisibilityCeiling {
+    let declared = bundle
+        .and_then(|value| value.get("aad_visibility"))
+        .and_then(|component| component.get("event_id"))
+        .and_then(Value::as_str)
+        .and_then(|value| {
+            serde_json::from_value::<arkret_models_crypto::EncryptedEnvelopeAadVisibility>(
+                Value::String(value.to_owned()),
+            )
+            .ok()
+        });
+    arkret_models_crypto::AadVisibilityCeiling::from_declared(declared)
+}
+
+#[cfg(test)]
+mod policy_bundle_component_tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn an_over_ceiling_relaxed_window_is_not_a_schema_violation() {
+        validate_relaxed_window(&json!({"relaxed_window_max_ms": 300_000})).unwrap();
+        validate_relaxed_window(&json!({"policy_revision": 1})).unwrap();
+        assert_eq!(
+            validate_relaxed_window(&json!({"relaxed_window_max_ms": 300_001})),
+            Err(arkret_wire::ReasonCode::RELAXED_WINDOW_EXCEEDS_CEILING)
+        );
+        assert_eq!(
+            validate_relaxed_window(&json!({"relaxed_window_max_ms": 0})),
+            Err(arkret_wire::ErrorCode::SCHEMA_VIOLATION)
+        );
+    }
+
+    #[test]
+    fn advisory_send_pause_reads_the_realm_schema_refs() {
+        let advisory = json!({"mls_send_pause": "advisory"});
+        let declared = vec![arkret_wire::ProfileId::E2EE_RELAXED_V1.to_owned()];
+        validate_mls_send_pause(&advisory, &declared).unwrap();
+        assert_eq!(
+            validate_mls_send_pause(&advisory, &["ak.profile.core.v1".to_owned()]),
+            Err(arkret_wire::ReasonCode::MLS_SEND_PAUSE_ADVISORY_REQUIRES_E2EE_RELAXED_PROFILE)
+        );
+        validate_mls_send_pause(&json!({"policy_revision": 1}), &[]).unwrap();
+    }
+
+    #[test]
+    fn an_undeclared_aad_visibility_component_is_the_hidden_ceiling() {
+        use arkret_models_crypto::EncryptedEnvelopeAadVisibility as Visibility;
+
+        let declared = json!({"aad_visibility": {"event_id": "routing_digest"}});
+        let ceiling = aad_visibility_ceiling_from_bundle(Some(&declared));
+        assert!(ceiling.permits(Visibility::RoutingDigest));
+        assert!(!ceiling.permits(Visibility::OpaqueId));
+
+        for undeclared in [None, Some(json!({"policy_revision": 1}))] {
+            let ceiling = aad_visibility_ceiling_from_bundle(undeclared.as_ref());
+            assert_eq!(ceiling.value(), Visibility::Hidden);
+            assert!(!ceiling.permits(Visibility::RoutingDigest));
+        }
+    }
+}

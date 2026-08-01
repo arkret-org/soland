@@ -779,6 +779,99 @@ impl ProjectionState {
             .map(ToOwned::to_owned)
     }
 
+    /// Profiles the Realm object declares in `schema_refs[]`.
+    ///
+    /// This is where a Realm declares `ak.profile.e2ee_relaxed.v1`
+    /// (`encryption-and-audit.md` §2.4.1). The Realm has no
+    /// `supported_profiles` field — that name belongs to the *service*
+    /// description — and the policy bundle deliberately does not carry the
+    /// profile either, so this create-log read is the only source.
+    pub fn realm_schema_refs(&self, realm_id: &str) -> Vec<String> {
+        self.realm_create_log(realm_id)
+            .and_then(|entries| entries.last())
+            .and_then(|entry| entry.get("schema_refs"))
+            .and_then(Value::as_array)
+            .map(|refs| {
+                refs.iter()
+                    .filter_map(Value::as_str)
+                    .map(ToOwned::to_owned)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Realm ceiling on encrypted-envelope `aad_visibility_event_id`, resolved
+    /// from the accepted policy bundle. An absent component is the `hidden`
+    /// ceiling, never an unchecked one.
+    pub fn realm_aad_visibility_ceiling(
+        &self,
+        realm_id: &str,
+    ) -> arkret_models_crypto::AadVisibilityCeiling {
+        crate::reducer::policy_validation::aad_visibility_ceiling_from_bundle(
+            self.realm_policy_bundle_cell_value(realm_id),
+        )
+    }
+
+    /// The Realm's non-`⊥` policy control cells, as the map
+    /// [`arkret_state::mls_governance_proof::derive_mls_policy_root`] filters.
+    ///
+    /// `authz/policy-server.md` §5 defines `policy_frontier_digest` as a
+    /// *filtered state root* over exactly these cells, reusing the governance
+    /// `state_root` Merkle rules of `event-auth-state-resolution.md` §6.2.1 —
+    /// JCS leaves, cell-id order, `leaf=H(0x00||bytes)`, `node=H(0x01||l||r)`.
+    /// It is explicitly not an issuer-local opaque value, which is why this
+    /// enumerates cells rather than hashing a hand-built object: a cross-issuer
+    /// verifier has to be able to recompute the same number from the same Seal
+    /// view.
+    ///
+    /// `⊥` cells are excluded: §5 says "全部 non-`⊥` policy control cell".
+    pub fn realm_policy_control_cells(
+        &self,
+        realm_id: &str,
+    ) -> BTreeMap<CellRef, arkret_state::lattice::CellState> {
+        let mut cells = BTreeMap::new();
+        let mut insert = |wire: String, state: &arkret_state::lattice::CellState| {
+            if matches!(state, arkret_state::lattice::CellState::Bottom(_)) {
+                return;
+            }
+            if let Ok(cell_ref) = CellRef::new(wire) {
+                cells.insert(cell_ref, state.clone());
+            }
+        };
+        if let Some(bundle) = self.realm_policy_bundle_cells.get(realm_id) {
+            insert(
+                "ak:cell:ak.component.realm.policy_bundle.v1:null".to_owned(),
+                bundle,
+            );
+        }
+        for ((cell_realm_id, wire), state) in &self.realm_null_subject_cells {
+            if cell_realm_id == realm_id {
+                insert(wire.clone(), state);
+            }
+        }
+        // Realm-subject cells (families keyed by the Realm id rather than the
+        // null subject) live in the generic cell store.
+        for (cell_ref, state) in &self.cells {
+            if cell_ref.as_str().ends_with(&format!(":{realm_id}")) {
+                insert(cell_ref.as_str().to_owned(), state);
+            }
+        }
+        cells
+    }
+
+    /// `authz/policy-server.md` §5 `policy_frontier_digest` for this Realm.
+    ///
+    /// Delegates the leaf/sort/combine rules to the SDK so an issuer and a
+    /// verifier cannot drift; a hash assembled from policy field names would be
+    /// issuer-local and would fail the cross-issuer structured comparison the
+    /// section requires.
+    pub fn realm_policy_frontier_digest(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
+        arkret_state::mls_governance_proof::derive_mls_policy_root(
+            &self.realm_policy_control_cells(realm_id),
+        )
+        .ok()
+    }
+
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
         self.realm_null_subject_cell_value(realm_id, "ak.component.realm.digest_suite.v1")
             .and_then(|value| value.get("to_digest_algorithm"))

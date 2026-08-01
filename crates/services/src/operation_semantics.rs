@@ -55,6 +55,12 @@ pub fn payload_declares_minimal_metadata_realm(payload: &serde_json::Value) -> b
     soland_domain::kinds::payload_declares_minimal_metadata_realm(payload)
 }
 
+pub fn policy_bundle_aad_visibility_ceiling(
+    payload: &serde_json::Value,
+) -> Option<arkret_models_crypto::EncryptedEnvelopeAadVisibility> {
+    soland_domain::kinds::policy_bundle_aad_visibility_ceiling(payload)
+}
+
 pub fn validate_join_policy_payload(join_policy: &Value) -> Result<(), &'static str> {
     soland_domain::reducer::validate_join_policy_payload(join_policy)
 }

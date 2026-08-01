@@ -224,6 +224,23 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
+        // `encryption-and-audit.md` §2.4.1 — the 300000 ms ceiling is a reducer
+        // rule, not a schema bound, so an over-ceiling window arrives here and
+        // leaves as `relaxed_window_exceeds_ceiling`. It is never clamped.
+        if let Err(reason) = validate_relaxed_window(&value) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
+        // §2.4.1 — `advisory` is gated on the Realm declaring
+        // `ak.profile.e2ee_relaxed.v1` in its `schema_refs[]`. There is no Realm
+        // `supported_profiles` field to read, and the bundle MUST NOT vouch for
+        // its own profile.
+        if let Err(reason) = validate_mls_send_pause(&value, &self.realm_schema_refs(&realm_id)) {
+            return ProjectionEffect::Rejected {
+                reason: reason.to_owned(),
+            };
+        }
         // One-way encryption-floor ratchet (realm-and-space.md §2.5): the
         // effective content / metadata encryption floor MUST be monotonically
         // non-decreasing. Compare the incoming snapshot against the currently

@@ -269,23 +269,6 @@ async fn policy_request_for_operation(
             "operation preview serialization failed: {error}"
         ))
     })?;
-    let mut policy_doc_ids = state
-        .governance()
-        .active_policy_documents()
-        .await
-        .map_err(|error| PolicyGateRejection::internal(format!("policy documents: {error}")))?
-        .into_iter()
-        .filter(|policy| policy.active)
-        .map(|policy| {
-            format!(
-                "{}@{}",
-                policy.policy_id,
-                arkret_canonical::format_timestamp_canonical(policy.updated_at)
-            )
-        })
-        .collect::<Vec<_>>();
-    policy_doc_ids.sort();
-
     let mut request = PolicyCheckRequestInput {
         request_id: format!("ak:policy_request:{}", ids::generate_event_id()),
         realm_id,
@@ -305,8 +288,7 @@ async fn policy_request_for_operation(
         expected_frontiers: zero_frontiers(),
         bypass_cache: false,
     };
-    request.expected_frontiers =
-        policy_frontier_snapshot_for_operation(state, &request, &policy_doc_ids)?;
+    request.expected_frontiers = policy_frontier_snapshot_for_operation(state, &request)?;
     Ok(request)
 }
 
@@ -322,7 +304,6 @@ fn zero_frontiers() -> PolicyFrontierSnapshot {
 fn policy_frontier_snapshot_for_operation(
     state: &AppState,
     request: &PolicyCheckRequestInput,
-    policy_doc_ids: &[String],
 ) -> Result<PolicyFrontierSnapshot, PolicyGateRejection> {
     let request_canonical_digest = request.canonical_request_hash();
     let auth_state_value = json!({
@@ -333,8 +314,14 @@ fn policy_frontier_snapshot_for_operation(
     });
     let auth_state_digest = canonical_policy_hash(&auth_state_value)?;
 
-    let policy_frontier_digest =
-        canonical_policy_hash(&json!({ "policy_documents": policy_doc_ids }))?;
+    // `authz/policy-server.md` §5 — the expected frontier this gate compares an
+    // issuer response against MUST be the same filtered state root the issuer
+    // computes, not a locally-invented hash over policy document ids.
+    let policy_frontier_digest = state
+        .projections()
+        .snapshot()
+        .realm_policy_frontier_digest(request.realm_id.as_str())
+        .ok_or_else(|| PolicyGateRejection::internal("policy frontier state root".to_owned()))?;
 
     let mut members = collect_realm_member_dids(state, request.realm_id.as_str());
     members.sort();

@@ -325,22 +325,14 @@ async fn policy_check(
     });
     let auth_state_digest = canonical_hash(&auth_state_value)?;
 
-    let mut policy_doc_ids: Vec<String> = active_policy_documents
-        .iter()
-        .map(|policy| {
-            // Encode (policy_id, updated_at) so a policy mutation
-            // (`PATCH /policies/{id}`) shifts the frontier even if the
-            // policy_id set is unchanged.
-            format!(
-                "{}@{}",
-                policy.policy_id,
-                arkret_canonical::format_timestamp_canonical(policy.updated_at)
-            )
-        })
-        .collect();
-    policy_doc_ids.sort();
-    let policy_frontier_value = json!({ "policy_documents": policy_doc_ids });
-    let policy_frontier_digest = canonical_hash(&policy_frontier_value)?;
+    // `authz/policy-server.md` §5 — `policy_frontier_digest` is a filtered
+    // state root over the Realm's non-`⊥` policy control cells, recomputable by
+    // any issuer from the same Seal view. It is deliberately NOT a hash
+    // assembled from policy field names or document ids: such a value is
+    // issuer-local, so a cross-issuer receiver could never reproduce it and the
+    // structured comparison path in §5.1 would always fall back to a full local
+    // re-run.
+    let policy_frontier_digest = realm_policy_frontier_digest(state, body.realm_id.as_str())?;
 
     let mut members = collect_realm_member_dids(state, body.realm_id.as_str());
     members.sort();
@@ -438,6 +430,22 @@ async fn policy_check(
 /// **no** non-canonical fallback: if canonicalization fails the error is
 /// surfaced to the caller rather than silently hashing a non-canonical
 /// `serde_json::to_vec` byte stream.
+/// `authz/policy-server.md` §5 — the filtered state root over the Realm's
+/// non-`⊥` policy control cells.
+///
+/// The leaf, ordering and combine rules are the SDK's
+/// `derive_mls_policy_root`, which is the same `event-auth-state-resolution.md`
+/// §6.2.1 governance `state_root` computation the `policy_root` binding uses.
+/// Sharing it is the point: §5 requires issuer and verifier to enumerate and
+/// recompute independently and get the same number.
+fn realm_policy_frontier_digest(state: &AppState, realm_id: &str) -> Result<Hash, AppError> {
+    state
+        .projections()
+        .snapshot()
+        .realm_policy_frontier_digest(realm_id)
+        .ok_or_else(|| AppError::internal("policy frontier state root failed".to_owned()))
+}
+
 fn canonical_hash(value: &Value) -> Result<Hash, AppError> {
     let digest = arkret_canonical::canonical_sha256(value)
         .map_err(|e| AppError::internal(format!("canonical digest failed: {e}")))?;

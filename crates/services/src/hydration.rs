@@ -1270,6 +1270,13 @@ pub async fn hydrate_realm_create_event(
         plaintext_visible_services,
         plaintext_visible_service_classes,
         minimal_metadata_realm,
+        // This hydrator replays the Realm genesis object, which carries no
+        // policy bundle; the ceiling is re-derived when the replayed
+        // `ak.realm.policy_bundle` revisions project. Until one does, `hidden`
+        // is both the default and the correct fail-closed answer.
+        aad_visibility_ceiling: payload_object
+            .and_then(soland_domain::kinds::policy_bundle_aad_visibility_ceiling)
+            .unwrap_or_default(),
         created_at: record.received_at,
         updated_at: record.received_at,
     };

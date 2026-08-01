@@ -330,6 +330,12 @@ pub(super) async fn bootstrap_realm_member_index(
         plaintext_visible_services,
         plaintext_visible_service_classes,
         minimal_metadata_realm,
+        // Bootstrap indexes the Realm genesis object, which carries no policy
+        // bundle. `hidden` is both the default and the fail-closed answer until
+        // a bundle revision declares a wider ceiling.
+        aad_visibility_ceiling: payload_object
+            .and_then(soland_services::operation_semantics::policy_bundle_aad_visibility_ceiling)
+            .unwrap_or_default(),
         created_at: super::now(),
         updated_at: super::now(),
     };

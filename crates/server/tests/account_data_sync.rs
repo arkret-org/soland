@@ -135,6 +135,7 @@ async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> St
                     ]),
                 )]),
                 minimal_metadata_realm: false,
+                aad_visibility_ceiling: Default::default(),
                 created_at: now,
                 updated_at: now,
             },

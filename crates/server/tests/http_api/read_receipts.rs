@@ -8,7 +8,9 @@
 //! `POST /_arkret/self/ephemeral` any more, and the server cannot read — and
 //! therefore cannot route on — any product field of a receipt.
 
-use arkret_models_collaboration::objects::read_receipts::ReadReceipt;
+use arkret_models_collaboration::signal_plaintext::{
+    ReadReceipt, SignalPlaintext, open_signal_plaintext, seal_signal_plaintext,
+};
 
 use super::common::*;
 
@@ -55,6 +57,7 @@ async fn set_demo_realm_visibility(
                 ]),
             )]),
             minimal_metadata_realm: false,
+            aad_visibility_ceiling: Default::default(),
             created_at: now,
             updated_at: now,
         });
@@ -225,25 +228,22 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
     envelope
 }
 
-/// The `ak.schema.read_receipt.v1` object that becomes the Signal plaintext.
+/// The `ak.schema.read_receipt.v1` Signal plaintext.
 ///
-/// Every field here is one §2.1 forbids on the outer envelope.
-fn read_receipt_plaintext(
-    actor: &str,
-    event_id: &str,
-    created_at: chrono::DateTime<chrono::Utc>,
-) -> String {
-    let receipt = ReadReceipt {
-        receipt_kind: "read".to_owned(),
-        schema: arkret_wire::SchemaId::READ_RECEIPT_V1.to_owned(),
-        realm_id: RealmId::new(DEMO_REALM_ID.to_owned()).unwrap(),
-        actor_id: Did::new(actor.to_owned()).unwrap(),
-        event_id: arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
-        hlc: None,
-        read_scope: arkret_wire::ReadReceiptScope::strand(TARGET_STRAND_ID, Some("discussion")),
-        created_at: chrono::DateTime::from_timestamp_millis(created_at.timestamp_millis()).unwrap(),
-    };
-    String::from_utf8(arkret_canonical::canonical_json_bytes(&receipt).unwrap()).unwrap()
+/// The closed profile carries `kind` + `payload_sequence` plus the reader,
+/// target and scope. Realm id and send time are NOT here: §2.1 forbids
+/// duplicating what the signed envelope already carries, and the AAD binds the
+/// Realm into the ciphertext. `payload_sequence` is the sender-device sequence
+/// the receiver dedupe triple needs.
+fn read_receipt_plaintext(actor: &str, event_id: &str, payload_sequence: u64) -> String {
+    let receipt = ReadReceipt::new(
+        payload_sequence,
+        Did::new(actor.to_owned()).unwrap(),
+        arkret_wire::EventId::new(event_id.to_owned()).unwrap(),
+        arkret_wire::ReadReceiptScope::strand(TARGET_STRAND_ID, Some("discussion")),
+    )
+    .expect("closed read receipt plaintext");
+    String::from_utf8(seal_signal_plaintext(&receipt).unwrap()).unwrap()
 }
 
 /// Recover the receipt a receiving client would see after decrypting.
@@ -256,7 +256,10 @@ fn decrypted_receipt(envelope: &arkret_wire::SignalEnvelope) -> ReadReceipt {
     let plaintext = URL_SAFE_NO_PAD
         .decode(&envelope.encrypted_payload.ciphertext)
         .expect("signal ciphertext is base64url");
-    ReadReceipt::from_canonical_json_slice(&plaintext).expect("canonical ak.schema.read_receipt.v1")
+    match open_signal_plaintext(&plaintext).expect("registered Signal plaintext kind") {
+        SignalPlaintext::ReadReceipt(receipt) => receipt,
+        other => panic!("expected ak.receipt.read, got {:?}", other.kind()),
+    }
 }
 
 /// Everything about the delivered envelope the Sync Service is allowed to read.
@@ -388,7 +391,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     let circle_id = "ak:circle:01904100-0000-7000-8000-c17c1e000003";
     seed_test_circle(&state, DEMO_REALM_ID, circle_id, &[ALICE, BOB]);
     let sent_at = chrono::Utc::now();
-    let plaintext = read_receipt_plaintext(BOB, &target_event_id, sent_at);
+    let plaintext = read_receipt_plaintext(BOB, &target_event_id, 1);
     let receipt = bob_receipt_signal(
         circle_scope(circle_id),
         &seal_ref,
@@ -434,7 +437,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
     assert_eq!(delivered.signal_class, arkret_wire::SignalClass::Session);
 
     let decrypted = decrypted_receipt(delivered);
-    assert_eq!(decrypted.schema, arkret_wire::SchemaId::READ_RECEIPT_V1);
+    assert_eq!(decrypted.payload_sequence, 1);
     assert_eq!(decrypted.event_id.as_str(), target_event_id);
     assert_eq!(
         decrypted.actor_id.as_str(),
@@ -478,7 +481,7 @@ async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_
         &seal_ref,
         members_sent_at,
         30,
-        &read_receipt_plaintext(BOB, &target_event_id, members_sent_at),
+        &read_receipt_plaintext(BOB, &target_event_id, 1),
         &bob_key,
     );
     let mut members_submit = post_signal(state.clone(), &bob_token, &members_receipt).await;
@@ -511,7 +514,7 @@ async fn read_receipt_fanout_stays_inside_the_realm_member_set_even_when_policy_
         &seal_ref,
         public_sent_at,
         30,
-        &read_receipt_plaintext(BOB, &target_event_id, public_sent_at),
+        &read_receipt_plaintext(BOB, &target_event_id, 2),
         &bob_key,
     );
     assert_eq!(
@@ -557,7 +560,9 @@ async fn read_receipt_signal_is_session_ttl_bounded_and_never_durable() {
 
     let target_event_id =
         submit_alice_target_message(state.clone(), &alice_token, "ttl receipt target").await;
-    let plaintext = |sent_at| read_receipt_plaintext(BOB, &target_event_id, sent_at);
+    // The plaintext is invariant across these cases; the TTL rules under test
+    // live entirely on the signed envelope.
+    let plaintext = |_sent_at| read_receipt_plaintext(BOB, &target_event_id, 1);
 
     // §2 — one second past the `session` ceiling fails closed at the ingress.
     let over_ceiling_at = chrono::Utc::now();

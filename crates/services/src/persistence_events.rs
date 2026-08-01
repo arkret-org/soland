@@ -1262,6 +1262,7 @@ fn application_realm_metadata(
         plaintext_visible_services: metadata.plaintext_visible_services,
         plaintext_visible_service_classes: metadata.plaintext_visible_service_classes,
         minimal_metadata_realm: metadata.minimal_metadata_realm,
+        aad_visibility_ceiling: metadata.aad_visibility_ceiling,
         created_at: metadata.created_at,
         updated_at: metadata.updated_at,
     }
@@ -1284,6 +1285,7 @@ fn persistence_realm_metadata(
         plaintext_visible_services: metadata.plaintext_visible_services,
         plaintext_visible_service_classes: metadata.plaintext_visible_service_classes,
         minimal_metadata_realm: metadata.minimal_metadata_realm,
+        aad_visibility_ceiling: metadata.aad_visibility_ceiling,
         created_at: metadata.created_at,
         updated_at: metadata.updated_at,
     }
