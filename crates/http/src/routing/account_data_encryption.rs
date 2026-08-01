@@ -25,6 +25,8 @@ const SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES: &[&str] = &[
     AccountDataKey::DRAFT_V1,
     AccountDataKey::FILE_TRANSFER_V1,
     AccountDataKey::SEARCH_INDEX_MANIFEST_V1,
+    AccountDataKey::VIEWS_PRIVATE,
+    AccountDataKey::NOTIFICATIONS_INBOX,
 ];
 
 // `ak.agent.sidecar_projection.v1` is intentionally absent: the exchange
@@ -159,6 +161,16 @@ pub(crate) fn validate_encrypted_account_data_key(
     if account_data_key
         .strip_prefix(AccountDataKey::ACCOUNT_BLOCKLIST)
         .is_some_and(|rest| rest.starts_with('.'))
+    {
+        return Err(AccountDataEncryptionError::InvalidKeyPattern);
+    }
+    // Every parameterized namespace below registers a key *pattern* with a
+    // mandatory tail. The bare namespace is therefore not a writable key, and
+    // must not reach the permissive unregistered-key fallback at the end of
+    // this function — that is the same fail-open shape
+    // `RETIRED_ENCRYPTED_ACCOUNT_DATA_PREFIXES` guards against.
+    if account_data_key == AccountDataKey::TAGS_REALM
+        || SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES.contains(&account_data_key)
     {
         return Err(AccountDataEncryptionError::InvalidKeyPattern);
     }
@@ -447,6 +459,80 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
+    }
+
+    const PRIVATE_VIEW_KEY: &str = "ak.views.private.ak:view:0196419b-0000-7000-8000-000000000001";
+    const NOTIFICATION_INBOX_KEY: &str =
+        "ak.notifications.inbox.ak:notification:0196419b-0000-7000-8000-000000000002";
+
+    #[test]
+    fn private_view_and_notification_inbox_require_encrypted_envelope() {
+        for key in [PRIVATE_VIEW_KEY, NOTIFICATION_INBOX_KEY] {
+            validate_encrypted_account_data_key(key).unwrap();
+            assert!(encrypted_account_data_prefix(key).is_some());
+            validate_encrypted_account_data_value(key, &encrypted_envelope(key)).unwrap();
+        }
+
+        // The whole point of `storage: encrypted_account_data` for
+        // `ak.views.private.<view_id>`: title / query / layout are plaintext
+        // the server must never accept.
+        let err = validate_encrypted_account_data_value(
+            PRIVATE_VIEW_KEY,
+            &json!({
+                "schema": "ak.schema.view.v1",
+                "id": "ak:view:0196419b-0000-7000-8000-000000000001",
+                "visibility": "private",
+                "title": "Quarterly plan",
+                "layout": {"columns": 3}
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
+
+        let err = validate_encrypted_account_data_value(
+            NOTIFICATION_INBOX_KEY,
+            &json!({
+                "notification_id": "ak:notification:0196419b-0000-7000-8000-000000000002",
+                "state": "dismissed",
+                "updated_hlc": "01904100-0000-7000-8000-000000000001"
+            }),
+        )
+        .unwrap_err();
+        assert_eq!(err, AccountDataEncryptionError::MissingEncryptedCarrier);
+    }
+
+    #[test]
+    fn private_view_and_notification_inbox_reject_malformed_typed_id_tails() {
+        for key in [
+            "ak.views.private",
+            "ak.views.private.",
+            "ak.views.private.ak:realm:0196419b-0000-7000-8000-000000000001",
+            "ak.views.private.quarterly-plan",
+            "ak.notifications.inbox",
+            "ak.notifications.inbox.",
+            "ak.notifications.inbox.ak:view:0196419b-0000-7000-8000-000000000001",
+        ] {
+            assert_eq!(
+                validate_encrypted_account_data_key(key).unwrap_err(),
+                AccountDataEncryptionError::InvalidKeyPattern,
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_parameterized_namespaces_are_not_writable_keys() {
+        for key in SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES
+            .iter()
+            .copied()
+            .chain([AccountDataKey::TAGS_REALM])
+        {
+            assert_eq!(
+                validate_encrypted_account_data_key(key).unwrap_err(),
+                AccountDataEncryptionError::InvalidKeyPattern,
+                "{key}"
+            );
+        }
     }
 
     #[test]

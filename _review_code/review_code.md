@@ -1,5 +1,42 @@
 # Regression Review
 
+## 2026-08-01 — encrypted account-data key space fell open for two registered namespaces
+
+- Surface: `crates/http/src/routing/account_data_encryption.rs`.
+- Regression: `ak.views.private.<view_id>` and `ak.notifications.inbox.<notification_id>` went
+  active in `account-data-key-registry.json` with `storage=encrypted_account_data`, but neither
+  reached any of the three prefix tables. `encrypted_account_data_prefix` therefore returned `None`
+  and `validate_encrypted_account_data_value_for_actor` returned `Ok(())` unconditionally: a client
+  could write a View's `title` / `query` / `layout` to the server in **plaintext** and be accepted.
+  The same hole existed for the bare form of every parameterized namespace
+  (`ak.contacts.actor`, `ak.tags.realm`, …): the registry rows are key *patterns* with a mandatory
+  tail, so the bare namespace is not a writable key, yet it fell through to the permissive
+  unregistered-key branch — exactly the shape the `RETIRED_ENCRYPTED_ACCOUNT_DATA_PREFIXES` comment
+  warns about.
+- Detection: downstream-impact review of spec `bcf57efa`; nothing failed, because there was no test
+  asserting the two keys were governed at all.
+- Resolution: both prefixes joined `SDK_VALIDATED_ENCRYPTED_ACCOUNT_DATA_PREFIXES` (key validation
+  delegates to `arkret_models_collaboration::…::validate_private_account_data_key`, which gained the
+  matching typed-id branches), and a bare parameterized namespace is now `InvalidKeyPattern` instead
+  of reaching the fallback. Regressions added for plaintext-rejected / envelope-accepted / malformed
+  typed-id tail / bare namespace.
+- Prevention dimension: a new `storage=encrypted_account_data` registry row must land in a prefix
+  table in the same change; "not listed anywhere" currently means "accepted as plaintext", so the
+  default is fail-open rather than fail-closed.
+- Status: resolved.
+
+## 2026-08-01 — five `jws_verify::did_binding_tests` fail at HEAD (pre-existing, not fixed here)
+
+- Surface: `crates/http/src/jws_verify.rs` DID-binding tests.
+- Regression: all five fail with
+  `HighRiskDidFreshness("DID document freshness unavailable for high-risk verification: no ingested
+  record for did:web:principal.example")` — the high-risk freshness gate now demands an ingested DID
+  document record the tests never seed.
+- Detection: `cargo test -p soland-http --lib` during unrelated account-data work. Confirmed
+  pre-existing by re-running with the account-data change stashed: same 5 failures at HEAD.
+- Status: open, untouched by this change. Needs the freshness fixture seeded (or the gate scoped) by
+  whoever owns the high-risk DID freshness work.
+
 ## 2026-07-28 — standard recovery receipt write was not actually retry-safe
 
 - Surface: `POST /_arkret/root/identity/recovery-receipt`.
