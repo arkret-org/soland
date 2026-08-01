@@ -776,55 +776,7 @@ impl ProjectionState {
     }
 
     fn pin_target_is_blocked_by_moderation(&self, target_ref: &str) -> bool {
-        self.cells
-            .iter()
-            .filter(|(cell_ref, _)| {
-                cell_ref
-                    .as_str()
-                    .starts_with("ak:cell:ak.component.moderation_state.v1:")
-            })
-            .any(|(_, state)| {
-                let CellState::Value(Value::Array(items)) = state else {
-                    return false;
-                };
-                items.iter().any(|item| {
-                    let value = item.get("value").unwrap_or(item);
-                    if value
-                        .get("lifted")
-                        .and_then(Value::as_bool)
-                        .unwrap_or(false)
-                    {
-                        return false;
-                    }
-                    if !moderation_value_targets_ref(value, target_ref) {
-                        return false;
-                    }
-                    let decision = value
-                        .get("decision")
-                        .or_else(|| value.get("verdict"))
-                        .and_then(Value::as_str);
-                    let action = value.get("action").and_then(Value::as_str);
-                    match decision {
-                        Some("soft_deny") => false,
-                        Some("hard_deny" | "quarantine" | "quarantined" | "require_review") => true,
-                        Some(_) => true,
-                        None => match action {
-                            Some(
-                                "deny_join"
-                                | "deny_restricted_join"
-                                | "deny_invite"
-                                | "deny_write"
-                                | "deny_federation"
-                                | "quarantine_message"
-                                | "require_review"
-                                | "redact_on_accept"
-                                | "shadow_collapse",
-                            ) => true,
-                            Some(_) | None => true,
-                        },
-                    }
-                })
-            })
+        self.effective_moderation_verdict(target_ref) != "none"
     }
 
     pub(crate) fn apply_read_cursor(
@@ -1108,12 +1060,4 @@ fn rsvp_source_event_digest(operation: &Operation) -> String {
 struct PinEffectiveScope {
     realm_id: String,
     scope_circle_id: Option<String>,
-}
-
-fn moderation_value_targets_ref(value: &Value, target_ref: &str) -> bool {
-    let Some(value_target_ref) = value.get("target_ref").and_then(Value::as_str) else {
-        return false;
-    };
-    value_target_ref == target_ref
-        || message_event_id_from_ref(value_target_ref) == message_event_id_from_ref(target_ref)
 }

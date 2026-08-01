@@ -95,6 +95,14 @@ fn moderation_add_tag(decision_kind: &str, issuer: &str, request_digest: &str) -
     format!("{decision_kind}:{issuer}:{request_digest}")
 }
 
+fn moderation_value_targets_ref(value: &Value, target_ref: &str) -> bool {
+    let Some(value_target_ref) = value.get("target_ref").and_then(Value::as_str) else {
+        return false;
+    };
+    value_target_ref == target_ref
+        || message_event_id_from_ref(value_target_ref) == message_event_id_from_ref(target_ref)
+}
+
 impl ProjectionState {
     fn moderation_state_cell_ref(target_ref: &str) -> Option<CellRef> {
         CellRef::new(format!(
@@ -116,6 +124,61 @@ impl ProjectionState {
         match self.cells.get(cell_ref) {
             Some(CellState::Value(Value::Array(items))) => items.clone(),
             _ => Vec::new(),
+        }
+    }
+
+    /// Fold every live decision for one target using the normative tightening
+    /// order `hard_deny > quarantine > require_review > none`.
+    ///
+    /// Arrival order and issuer count are deliberately irrelevant: the cell
+    /// is an OR-Set and concurrent decisions are ordinary joinable state.
+    pub fn effective_moderation_verdict(&self, target_ref: &str) -> &'static str {
+        let mut rank = 0_u8;
+        for (cell_ref, state) in &self.cells {
+            if !cell_ref
+                .as_str()
+                .starts_with("ak:cell:ak.component.moderation_state.v1:")
+            {
+                continue;
+            }
+            let CellState::Value(Value::Array(items)) = state else {
+                continue;
+            };
+            for item in items {
+                let value = item.get("value").unwrap_or(item);
+                if !moderation_value_targets_ref(value, target_ref) {
+                    continue;
+                }
+                if value
+                    .get("lifted")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+                {
+                    continue;
+                }
+                rank = rank.max(
+                    match value
+                        .get("decision")
+                        .or_else(|| value.get("verdict"))
+                        .and_then(Value::as_str)
+                    {
+                        Some("hard_deny") => 3,
+                        Some("quarantine") => 2,
+                        Some("require_review") => 1,
+                        Some("dismiss" | "soft_deny") | None => 0,
+                        // Corrupt/unregistered values fail closed. Admission never
+                        // emits these, but a damaged projection must not weaken a
+                        // surviving moderation decision.
+                        Some(_) => 3,
+                    },
+                );
+            }
+        }
+        match rank {
+            3 => "hard_deny",
+            2 => "quarantine",
+            1 => "require_review",
+            _ => "none",
         }
     }
 
