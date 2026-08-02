@@ -273,12 +273,33 @@ pub(crate) fn agent_grant_within_requested_scope(
 pub(super) fn agent_requested_participation_ceiling(
     record: &AgentPrincipalRecord,
 ) -> AgentParticipation {
-    let actions = requested_scope_actions(record);
-    let message_create = actions.contains(CapabilityActionId::MESSAGE_CREATE);
-    let approval_required = record
+    let scope = record
         .requested_scope
+        .clone()
+        .and_then(|value| serde_json::from_value::<AgentKeyScope>(value).ok());
+    let bits = scope
         .as_ref()
-        .and_then(|scope| scope.get("constraints"))
+        .map(requested_scope_participation_ceiling)
+        .unwrap_or_default();
+    AgentParticipation {
+        reply: bits.reply_message,
+        accept_third_party_mention: bits.accept_third_party_mention,
+        act_on_behalf: bits.act_on_behalf,
+    }
+}
+
+pub(crate) fn requested_scope_participation_ceiling(scope: &AgentKeyScope) -> ParticipationBits {
+    let value = serde_json::to_value(scope).unwrap_or(Value::Null);
+    let actions = value
+        .get("actions")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<BTreeSet<_>>();
+    let message_create = actions.contains(CapabilityActionId::MESSAGE_CREATE);
+    let approval_required = value
+        .get("constraints")
         .and_then(Value::as_array)
         .into_iter()
         .flatten()
@@ -320,8 +341,10 @@ pub(super) fn agent_requested_participation_ceiling(
                 });
             controller_requirement && applies_to_message_create
         });
-    AgentParticipation {
-        reply: message_create && actions.contains(CapabilityActionId::REACTION_ADD),
+    ParticipationBits {
+        reply_message: message_create && actions.contains(CapabilityActionId::REACTION_ADD),
+        reaction_add: actions.contains(CapabilityActionId::REACTION_ADD),
+        reaction_remove: actions.contains(CapabilityActionId::REACTION_REMOVE),
         accept_third_party_mention: actions.contains(CapabilityActionId::EVENT_READ),
         act_on_behalf: message_create && approval_required,
     }
@@ -667,6 +690,25 @@ pub(super) fn agent_projection_from_record(
     record: &AgentPrincipalRecord,
     runtime_state: AgentRuntimeState,
 ) -> AgentProjection {
+    let lifecycle = agent_lifecycle_from_record(record);
+    let (readiness_state, blockers) = match (lifecycle, runtime_state) {
+        (AgentLifecycleState::Active, AgentRuntimeState::Ready) => {
+            (AgentReadinessState::Ready, Vec::new())
+        }
+        (_, AgentRuntimeState::PendingRuntimeKey) => (
+            AgentReadinessState::NotReady,
+            vec![AgentReadinessBlocker::RuntimeKeyMissing],
+        ),
+        (_, AgentRuntimeState::Replacing) => (
+            AgentReadinessState::NotReady,
+            vec![AgentReadinessBlocker::PairingOpen],
+        ),
+        _ => (
+            AgentReadinessState::NotReady,
+            vec![AgentReadinessBlocker::SessionMissing],
+        ),
+    };
+    let observed_at = chrono::Utc::now();
     AgentProjection {
         agent_id: Did::new(record.id.clone())
             .unwrap_or_else(|_| Did::new("did:webvh:invalid:invalid").expect("static did")),
@@ -680,8 +722,16 @@ pub(super) fn agent_projection_from_record(
             .as_ref()
             .filter(|value| !value.is_empty())
             .and_then(|value| BlobRef::new(value.clone()).ok()),
-        status: agent_lifecycle_from_record(record),
-        runtime_state,
+        lifecycle,
+        readiness: AgentReadiness {
+            state: readiness_state,
+            blockers,
+        },
+        presence: AgentPresence {
+            state: AgentPresenceState::Unknown,
+            expires_at: observed_at + chrono::Duration::seconds(30),
+            refresh_after: observed_at,
+        },
         created_at: Some(record.created_at),
         updated_at: Some(record.updated_at),
     }
@@ -710,8 +760,6 @@ pub(super) async fn agent_view_from_record(
     let key_state =
         agent_key_state_from_record(record, pcr_recovery, active_authorizations, runtime_state)?;
     Ok(AgentView {
-        status: agent.status,
-        runtime_state,
         agent,
         grants: Vec::new(),
         key_state: Some(key_state),
@@ -753,6 +801,7 @@ pub(super) fn agent_key_state_from_record(
         &agent_id,
         &controller_id,
         &requested_scope,
+        requested_scope_participation_ceiling(&requested_scope),
     )
     .map_err(|error| {
         AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))
@@ -789,8 +838,6 @@ pub(super) fn agent_key_state_from_record(
                 AppError::internal(format!("persisted Agent PCR is invalid: {error}"))
             })?,
         controller_authorization_ref: record.controller_authorization_ref.clone(),
-        status: agent_lifecycle_from_record(record),
-        runtime_state,
         pcr_recovery,
         requested_scope,
         requested_scope_digest,

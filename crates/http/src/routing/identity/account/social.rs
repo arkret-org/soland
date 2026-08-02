@@ -1297,41 +1297,10 @@ fn direct_summary(binding: DirectConversationBindingRecord) -> DirectConversatio
     }
 }
 
-fn direct_conversation_binding_state(state: &str) -> DirectConversationBindingState {
+fn direct_conversation_binding_state(state: &str) -> DirectConversationSummaryState {
     match state {
-        "active" => DirectConversationBindingState::Active,
-        "retired" => DirectConversationBindingState::Retired,
-        "duplicate" => DirectConversationBindingState::Duplicate,
-        "non_canonical" => DirectConversationBindingState::NonCanonical,
-        other => panic!("invalid stored direct conversation binding state: {other}"),
-    }
-}
-
-pub(crate) fn direct_resolve_response(
-    binding: DirectConversationBindingRecord,
-    created: bool,
-    state: DirectConversationResolveState,
-    materialization_draft: Option<
-        arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft,
-    >,
-) -> DirectConversationResolveOutcome {
-    DirectConversationResolveOutcome {
-        state,
-        realm_id: Some(
-            RealmId::new(binding.realm_id).expect("direct conversation realm id is valid"),
-        ),
-        main_strand_id: Some(
-            StrandId::new(binding.main_strand_id).expect("direct conversation strand id is valid"),
-        ),
-        binding_event_ref: Some(
-            EventId::new(binding.binding_event_ref).expect("direct conversation event id is valid"),
-        ),
-        created: Some(created),
-        authoring_kind: (state == DirectConversationResolveState::AuthoringRequired).then_some(
-            arkret_models_collaboration::http_bodies::DirectConversationAuthoringKind::DirectConversationMaterialization,
-        ),
-        claim_authorization_draft: None,
-        materialization_draft,
+        "active" => DirectConversationSummaryState::Found,
+        _ => DirectConversationSummaryState::Suspended,
     }
 }
 

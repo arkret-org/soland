@@ -182,6 +182,9 @@ async fn federation_submissions(
     events: &[Event],
     current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
     pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
+    membership_compensation_evidence: Option<
+        &arkret_wire::MembershipCompensationSubmissionEvidence,
+    >,
 ) -> Result<Vec<arkret_wire::EventFederationSubmission>, String> {
     let mut digests = Vec::with_capacity(events.len());
     for event in events {
@@ -253,6 +256,7 @@ async fn federation_submissions(
                 .map(|record| vec![record.ingress_receipt.clone()])
                 .unwrap_or_default(),
             control_proposal_receipt,
+            membership_compensation_evidence: membership_compensation_evidence.cloned(),
         });
     }
     Ok(submissions)
@@ -348,7 +352,7 @@ pub(super) async fn peer_event_batch_fanout_records(
     })?;
     // The Realm genesis path stores its ingress receipts before it gets here
     // (`mint_and_store_ingress_receipt`), so the store is the only source.
-    let submissions = federation_submissions(state, &events, None, &[]).await?;
+    let submissions = federation_submissions(state, &events, None, &[], None).await?;
     let binding_payload = json!({
         "domain": "ak.peer.events.command.submit.service_binding.v1",
         "realm_id": first.realm_id,
@@ -441,6 +445,9 @@ pub(super) async fn peer_event_fanout_records(
     envelope: &Value,
     current_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
     pending_evidence: &[soland_services::events::PublicationEvidenceRecord],
+    membership_compensation_evidence: Option<
+        &arkret_wire::MembershipCompensationSubmissionEvidence,
+    >,
 ) -> Result<Vec<soland_services::federation::FederationDeliveryRecord>, String> {
     let peers = dynamic_peer_event_targets(state, parsed).await;
     if peers.is_empty() {
@@ -570,6 +577,7 @@ pub(super) async fn peer_event_fanout_records(
             &peer_events,
             current_control_proposal_receipt,
             pending_evidence,
+            membership_compensation_evidence,
         )
         .await?;
         let body = EventsSubmitFederationRequestBody {
@@ -824,7 +832,7 @@ async fn realm_bootstrap_fanout_record(
     let idempotency_key = format!("ak:outbox:realm-bootstrap:{}", sha256_hex(&hasher_input));
     // This prerequisite is a *stored* Realm genesis unit, so its evidence is
     // already durable — nothing pending to fold in.
-    let submissions = federation_submissions(state, &events, None, &[]).await?;
+    let submissions = federation_submissions(state, &events, None, &[], None).await?;
     let body = EventsSubmitFederationRequestBody {
         service_binding_ref,
         events: submissions,

@@ -730,7 +730,7 @@ pub(super) async fn submit_event_batch_outcome(
     session: &SessionRecord,
     envelopes: Vec<Value>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
-    submit_event_batch_outcome_with_leases(state, session, envelopes, None, None).await
+    submit_event_batch_outcome_with_leases(state, session, envelopes, None, None, None).await
 }
 
 pub(in crate::routing) async fn submit_initial_event_batch_outcome(
@@ -742,6 +742,7 @@ pub(in crate::routing) async fn submit_initial_event_batch_outcome(
     let mut typed_events = Vec::with_capacity(submissions.len());
     let mut leases = Vec::with_capacity(submissions.len());
     let mut proposal_receipts = Vec::with_capacity(submissions.len());
+    let mut compensation_evidence = Vec::with_capacity(submissions.len());
     for submission in &submissions {
         typed_events.push(submission.event.clone());
         envelopes.push(typed_event_to_canonical_value(submission.event.clone())?);
@@ -763,9 +764,11 @@ pub(in crate::routing) async fn submit_initial_event_batch_outcome(
             authorization_lease,
             cba_proof_bundles: _,
             control_proposal_receipt,
+            membership_compensation_evidence,
         } = submission;
         leases.push(authorization_lease);
         proposal_receipts.push(control_proposal_receipt);
+        compensation_evidence.push(membership_compensation_evidence);
     }
     if submit_context == arkret_wire::EventSubmitContext::AnchorUnit
         && leases.iter().any(Option::is_some)
@@ -797,6 +800,7 @@ pub(in crate::routing) async fn submit_initial_event_batch_outcome(
         envelopes,
         Some(&leases),
         Some(&proposal_receipts),
+        Some(&compensation_evidence),
     )
     .await
 }
@@ -807,6 +811,9 @@ async fn submit_event_batch_outcome_with_leases(
     envelopes: Vec<Value>,
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
     control_proposal_receipts: Option<&[Option<arkret_wire::ControlProposalReceipt>]>,
+    membership_compensation_evidence: Option<
+        &[Option<arkret_wire::MembershipCompensationSubmissionEvidence>],
+    >,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
@@ -820,6 +827,13 @@ async fn submit_event_batch_outcome_with_leases(
             StatusCode::BAD_REQUEST,
             "schema_violation",
             "initial publication batch proposal-receipt cardinality mismatch",
+        ));
+    }
+    if membership_compensation_evidence.is_some_and(|evidence| evidence.len() != envelopes.len()) {
+        return Err(SubmitOneError::new(
+            StatusCode::BAD_REQUEST,
+            "schema_violation",
+            "initial publication batch compensation-evidence cardinality mismatch",
         ));
     }
     if envelopes.is_empty() {
@@ -890,6 +904,9 @@ async fn submit_event_batch_outcome_with_leases(
                 .and_then(Option::as_ref),
             control_proposal_receipts
                 .and_then(|receipts| receipts.get(index))
+                .and_then(Option::as_ref),
+            membership_compensation_evidence
+                .and_then(|evidence| evidence.get(index))
                 .and_then(Option::as_ref),
         )
         .await
@@ -2004,6 +2021,10 @@ pub(crate) async fn submit_federation_events(
             // evidence is stored verbatim below instead.
             None,
             inbound_control_proposal_receipts.get(&id),
+            submissions
+                .iter()
+                .find(|submission| submission.event.event_id.as_str() == id)
+                .and_then(|submission| submission.membership_compensation_evidence.as_ref()),
         )
         .await
         {

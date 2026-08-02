@@ -38,9 +38,10 @@ use arkret_models_collaboration::agent_operations::{
     AgentGrantDetachOutcome, AgentKeyPairActivationState, AgentKeyPairOutcome,
     AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState, AgentList,
     AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody, AgentPauseRequestBody,
-    AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery, AgentProvisionRequestBody,
-    AgentRenewPairingOutcome, AgentRenewPairingRequestBody, AgentResumeRequestBody,
-    AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentPresence, AgentPresenceState, AgentProjection, AgentProvisionOutcome,
+    AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentReadiness, AgentReadinessBlocker,
+    AgentReadinessState, AgentRenewPairingOutcome, AgentRenewPairingRequestBody,
+    AgentResumeRequestBody, AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
     AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
     AgentView, KeyState,
 };
@@ -52,8 +53,11 @@ use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSi
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
     AgentParticipation, AgentParticipationEntry, AgentParticipationOutcome,
-    AgentParticipationReplaceRequestBody, AgentParticipationScope, effective_participation,
-    validate_selection_within_ceiling,
+    AgentParticipationScope, effective_participation,
+};
+use arkret_models_collaboration::protocol_journey::{
+    ParticipationBits, ParticipationReplaceReceipt, ParticipationReplacementBatch,
+    ParticipationScope, ParticipationScopeEvidence, ProtocolSignature,
 };
 use arkret_models_identity::validate_agent_slug;
 use base64::Engine as _;
@@ -78,9 +82,9 @@ use crate::state::AppState;
 
 mod dev_fanout;
 use dev_fanout::{
-    attach_agent_grant_event, fanout_provision_subevents,
-    require_controller_principal_control_realm, revoke_capability_grant,
-    submit_durable_agent_lifecycle, submit_signed_agent_event, validate_durable_agent_lifecycle,
+    fanout_provision_subevents, require_controller_principal_control_realm,
+    revoke_capability_grant, submit_durable_agent_lifecycle, submit_signed_agent_event,
+    validate_durable_agent_lifecycle,
 };
 
 mod common;
@@ -91,6 +95,7 @@ mod pairing;
 mod participation;
 pub(crate) mod sidecar;
 
+pub(crate) use common::requested_scope_participation_ceiling;
 use common::*;
 use lifecycle::*;
 use pairing::*;
@@ -297,6 +302,7 @@ mod tests {
             event,
             cba_proof_bundles: Vec::new(),
             control_proposal_receipt: None,
+            membership_compensation_evidence: None,
         }
     }
 
@@ -446,6 +452,7 @@ mod tests {
             &agent_id,
             &controller_id,
             &requested_scope,
+            requested_scope_participation_ceiling(&requested_scope),
         )
         .unwrap();
         let requested_scope_disclosure = serde_json::from_value(json!({

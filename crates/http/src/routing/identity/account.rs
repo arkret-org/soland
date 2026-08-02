@@ -27,11 +27,15 @@ use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEv
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
     ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
-    ContactTombstone, ContactTombstoneRequestBody, DirectConversationBindingState,
-    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
-    DirectConversationResolveState, DirectConversationSummary,
+    ContactTombstone, ContactTombstoneRequestBody, DirectConversationSummary,
+    DirectConversationSummaryState,
 };
 use arkret_models_collaboration::objects::account_status::AccountStatus;
+use arkret_models_collaboration::protocol_journey::{
+    ContactPeer, DirectConversationCoordinates, DirectConversationOperationState,
+    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
+    DirectConversationResolveStateOutcome,
+};
 use arkret_models_identity::account::{
     AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
     AccountRegistrationEvidenceSummary, AccountRegistrationPolicy,
@@ -1361,10 +1365,39 @@ async fn direct_conversation_resolve(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    if body.peer.as_str() == session.actor {
+    let (peer_descriptor, create_request) = match body {
+        DirectConversationResolveRequestBody::Lookup(lookup) => (lookup.peer, None),
+        DirectConversationResolveRequestBody::Create(create) => {
+            create
+                .operation_control_authorization
+                .validate()
+                .map_err(|error| AppError::invalid_param(error.to_string()))?;
+            if create.operation_control_authorization.operation_id != create.operation_id {
+                return Err(AppError::invalid_param(
+                    "operation_control_authorization.operation_id mismatch",
+                ));
+            }
+            (create.peer.clone(), Some(create))
+        }
+    };
+    if peer_descriptor.subject_id().as_str() == session.actor {
         return Err(AppError::invalid_param("invalid direct conversation peer"));
     }
-    let peer = body.peer.as_str().to_owned();
+    let peer = peer_descriptor.subject_id().as_str().to_owned();
+    if let ContactPeer::Agent { controller_id, .. } = &peer_descriptor {
+        let record =
+            state.agent_pairings().agent(&peer).await.map_err(|error| {
+                AppError::internal(format!("managed Agent lookup failed: {error}"))
+            })?;
+        if record.as_ref().map(|record| record.controller_id.as_str())
+            != Some(controller_id.as_str())
+        {
+            return Err(direct_resolve_precondition(
+                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+                "direct conversation Agent controller binding is unavailable",
+            ));
+        }
+    }
     // The peer MAY be either an active controller-owned local Agent or a
     // contact hosted on this or another Principal Server. The former is
     // authorized by its immutable controller/provisioning/runtime-key facts;
@@ -1400,34 +1433,51 @@ async fn direct_conversation_resolve(
         (Some(contact), basis)
     };
     let pair_key = direct_pair_key(state, &session.actor, &peer)?;
-    if let Some(binding) = active_direct_binding(state, &pair_key) {
-        return json_ok(direct_resolve_response(
-            binding,
-            false,
-            DirectConversationResolveState::Found,
-            None,
+    let pair_key_hash = Hash::new(pair_key.clone())
+        .map_err(|error| AppError::internal(format!("direct pair key invalid: {error}")))?;
+    if let Some(create) = &create_request
+        && create.operation_control_authorization.pair_key != pair_key_hash
+    {
+        return Err(direct_resolve_precondition(
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+            "operation-control authorization does not bind the direct pair",
         ));
     }
-    if !body.create {
-        return json_ok(DirectConversationResolveOutcome {
-            state: DirectConversationResolveState::NotFound,
-            realm_id: None,
-            main_strand_id: None,
-            binding_event_ref: None,
-            created: Some(false),
-            authoring_kind: None,
-            claim_authorization_draft: None,
-            materialization_draft: None,
-        });
+    if let Some(binding) = active_direct_binding(state, &pair_key) {
+        return json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::Found {
+                coordinates: direct_coordinates(pair_key_hash, &binding)?,
+                send_blockers: Vec::new(),
+            },
+        ));
     }
+    if let Some(binding) = state.contacts().direct_binding(&pair_key)
+        && binding.state != "active"
+        && EventId::new(binding.binding_event_ref.clone()).is_ok()
+    {
+        return json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::Suspended {
+                coordinates: direct_coordinates(pair_key_hash, &binding)?,
+                suspension_reason: arkret_models_collaboration::protocol_journey::DirectConversationSuspensionReason::ContactDirectionRevoked,
+            },
+        ));
+    }
+    let Some(create_request) = create_request else {
+        return json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::CreationRequired,
+        ));
+    };
+    let operation_id = create_request.operation_id.clone();
     if let Some((binding, materialization_draft)) =
         pending_direct_materialization_reusable(state, &pair_key).await?
     {
-        return json_ok(direct_resolve_response(
-            binding,
-            false,
-            DirectConversationResolveState::AuthoringRequired,
-            Some(materialization_draft),
+        let _ = (binding, materialization_draft);
+        return json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::Materializing {
+                operation_id,
+                attempt_sequence: 1,
+                operation_state: DirectConversationOperationState::Materializing,
+            },
         ));
     }
     let remote_peer_service_id = contact
@@ -1438,7 +1488,7 @@ async fn direct_conversation_resolve(
         let contact = contact
             .as_ref()
             .expect("remote direct conversation authorization requires an accepted contact");
-        if let Some(signed_claim) = body.peer_claim_request.as_ref() {
+        if let Some(signed_claim) = create_request.peer_claim_request.as_ref() {
             let (binding, created, materialization_draft) =
                 complete_remote_direct_binding_with_realm(
                     state,
@@ -1450,14 +1500,24 @@ async fn direct_conversation_resolve(
                     signed_claim,
                 )
                 .await?;
-            return json_ok(direct_resolve_response(
-                binding,
-                created,
-                DirectConversationResolveState::AuthoringRequired,
-                materialization_draft,
+            let _ = created;
+            if materialization_draft.is_none() && binding.state == "active" {
+                return json_ok(DirectConversationResolveOutcome::State(
+                    DirectConversationResolveStateOutcome::Found {
+                        coordinates: direct_coordinates(pair_key_hash, &binding)?,
+                        send_blockers: Vec::new(),
+                    },
+                ));
+            }
+            return json_ok(DirectConversationResolveOutcome::State(
+                DirectConversationResolveStateOutcome::Materializing {
+                    operation_id,
+                    attempt_sequence: 1,
+                    operation_state: DirectConversationOperationState::Materializing,
+                },
             ));
         }
-        let (binding, claim_authorization_draft) = prepare_remote_direct_keypackage_claim(
+        let (_binding, _claim_authorization_draft) = prepare_remote_direct_keypackage_claim(
             state,
             &pair_key,
             &session.actor,
@@ -1465,24 +1525,15 @@ async fn direct_conversation_resolve(
             peer_service_id,
         )
         .await?;
-        return json_ok(DirectConversationResolveOutcome {
-            state: DirectConversationResolveState::AuthoringRequired,
-            realm_id: Some(RealmId::new(binding.realm_id).map_err(|error| {
-                AppError::internal(format!("reserved direct realm id invalid: {error}"))
-            })?),
-            main_strand_id: Some(StrandId::new(binding.main_strand_id).map_err(|error| {
-                AppError::internal(format!("reserved direct strand id invalid: {error}"))
-            })?),
-            binding_event_ref: None,
-            created: Some(false),
-            authoring_kind: Some(
-                arkret_models_collaboration::http_bodies::DirectConversationAuthoringKind::RemoteKeypackageClaim,
-            ),
-            claim_authorization_draft: Some(claim_authorization_draft),
-            materialization_draft: None,
-        });
+        return json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::Materializing {
+                operation_id,
+                attempt_sequence: 1,
+                operation_state: DirectConversationOperationState::Reserved,
+            },
+        ));
     }
-    if body.peer_claim_request.is_some() {
+    if create_request.peer_claim_request.is_some() {
         return Err(AppError::invalid_param(
             "peer_claim_request is only valid for a remote direct conversation peer",
         ));
@@ -1498,17 +1549,38 @@ async fn direct_conversation_resolve(
         authorization_basis,
     )
     .await?;
-    let resolve_state = if materialization_draft.is_some() {
-        DirectConversationResolveState::AuthoringRequired
+    let _ = created;
+    if materialization_draft.is_some() || binding.state != "active" {
+        json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::Materializing {
+                operation_id,
+                attempt_sequence: 1,
+                operation_state: DirectConversationOperationState::Materializing,
+            },
+        ))
     } else {
-        DirectConversationResolveState::Found
-    };
-    json_ok(direct_resolve_response(
-        binding,
-        created,
-        resolve_state,
-        materialization_draft,
-    ))
+        json_ok(DirectConversationResolveOutcome::State(
+            DirectConversationResolveStateOutcome::Found {
+                coordinates: direct_coordinates(pair_key_hash, &binding)?,
+                send_blockers: Vec::new(),
+            },
+        ))
+    }
+}
+
+fn direct_coordinates(
+    pair_key: Hash,
+    binding: &DirectConversationBindingRecord,
+) -> Result<DirectConversationCoordinates, AppError> {
+    Ok(DirectConversationCoordinates {
+        pair_key,
+        realm_id: RealmId::new(binding.realm_id.clone())
+            .map_err(|error| AppError::internal(format!("stored direct Realm id: {error}")))?,
+        main_strand_id: StrandId::new(binding.main_strand_id.clone())
+            .map_err(|error| AppError::internal(format!("stored direct Strand id: {error}")))?,
+        binding_event_ref: EventId::new(binding.binding_event_ref.clone())
+            .map_err(|error| AppError::internal(format!("stored direct binding ref: {error}")))?,
+    })
 }
 
 fn account_response(account: AccountRecord, state: &AppState) -> SolandAccountRegisterOutcome {

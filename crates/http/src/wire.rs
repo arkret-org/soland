@@ -1,7 +1,7 @@
 use arkret_identifiers::Did;
 pub use arkret_models_collaboration::event_query::EventsQueryPostRequestBody;
 pub use arkret_models_collaboration::http_bodies::{
-    ContactListRow, ContactState, DirectConversationBindingState, DirectConversationSummary,
+    ContactListRow, ContactState, DirectConversationSummary, DirectConversationSummaryState,
 };
 pub use arkret_models_collaboration::session_grant_bodies::{
     SessionGrantIntrospectGrant, SessionGrantIntrospectOutcome, SessionGrantIntrospectRequestBody,

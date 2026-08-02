@@ -17,15 +17,20 @@
 
 use arkret_canonical as canonical;
 use arkret_identifiers::{Did, EventId, Hash, Hlc, RealmId};
-use arkret_models_collaboration::governance::invite_addressing::DisclosedOutcome;
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress, PeerContactDeliveryRequest,
     PeerContactFactKind,
 };
-use arkret_wire::{Event, InviteReceiveAction, Proof, proof_kind};
+use arkret_models_collaboration::protocol_journey::{
+    PeerContactDisposition, PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain,
+    PeerContactSubmitOutcome, PeerContactSubmitRequestBody, ProtocolSignature,
+};
+use arkret_wire::{Base64UrlString, DidUrl, Event, Proof, proof_kind};
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
+use ed25519_dalek::Signer as _;
 use salvo::prelude::*;
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use soland_http::error::AppError;
@@ -46,17 +51,6 @@ const CONTACT_MESSAGE_STUB: &str = "[message withheld until contact is accepted]
 
 pub(crate) fn peer_router() -> Router {
     Router::new().push(Router::with_path("contacts").post(peer_contacts_submit))
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize, salvo::oapi::ToSchema)]
-struct PeerContactDeliveryOutcome {
-    status: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disclosed_outcome: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    received_at: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    retry_after_ms: Option<u64>,
 }
 
 /// Issuer-side: federate a signed contact fact to `subject_id`'s home
@@ -305,28 +299,117 @@ fn contact_delivery_idempotency_key(
 async fn peer_contacts_submit(
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<PeerContactDeliveryOutcome> {
+) -> JsonResult<PeerContactSubmitOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     super::super::events::peer::validate_peer_request(state, req, true).await?;
     let delivery = req
-        .parse_json::<PeerContactDeliveryRequest>()
+        .parse_json::<PeerContactSubmitRequestBody>()
         .await
         .map_err(|_| AppError::bad_json("invalid ak.peer.contacts.command.submit request body"))?;
-    delivery.validate_minimal().map_err(|error| {
-        super::super::events::peer::schema_violation(format!(
-            "invalid contact delivery request: {error}"
-        ))
-    })?;
-    let fact_kind = delivery.fact_kind.as_str();
-    let issuer = delivery.contact_event.actor_id.as_str().to_owned();
-    let subject_id = delivery.contact_address.subject_id.as_str().to_owned();
-    let recipient_service_id = delivery.contact_address.recipient_service_id.as_str();
+    let (fact_kind, signed_event, contact_address) = match &delivery {
+        PeerContactSubmitRequestBody::Request {
+            signed_event,
+            request_receipt,
+            contact_address,
+            ..
+        } => {
+            request_receipt.core.validate().map_err(|error| {
+                super::super::events::peer::schema_violation(format!(
+                    "invalid Contact request receipt: {error}"
+                ))
+            })?;
+            if request_receipt.core.request_event_ref != signed_event.event_id
+                || request_receipt.core.holder.subject_id() != &signed_event.actor_id
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "Contact request receipt does not bind signed_event",
+                ));
+            }
+            ("ak.contact.requested", signed_event, contact_address)
+        }
+        PeerContactSubmitRequestBody::Response {
+            signed_event,
+            response_receipt,
+            contact_address,
+            ..
+        } => {
+            response_receipt
+                .request_receipt
+                .core
+                .validate()
+                .map_err(|error| {
+                    super::super::events::peer::schema_violation(format!(
+                        "invalid Contact response request receipt: {error}"
+                    ))
+                })?;
+            if response_receipt.response_event_ref != signed_event.event_id
+                || response_receipt.issuer != signed_event.actor_id
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "Contact response receipt does not bind signed_event",
+                ));
+            }
+            ("ak.contact.accepted", signed_event, contact_address)
+        }
+        PeerContactSubmitRequestBody::Reject {
+            signed_event,
+            reject_receipt,
+            contact_address,
+            ..
+        } => {
+            reject_receipt
+                .request_receipt
+                .core
+                .validate()
+                .map_err(|error| {
+                    super::super::events::peer::schema_violation(format!(
+                        "invalid Contact reject request receipt: {error}"
+                    ))
+                })?;
+            if reject_receipt.reject_event_ref != signed_event.event_id
+                || reject_receipt.issuer != signed_event.actor_id
+            {
+                return Err(super::super::events::peer::schema_violation(
+                    "Contact reject receipt does not bind signed_event",
+                ));
+            }
+            ("ak.contact.rejected", signed_event, contact_address)
+        }
+        PeerContactSubmitRequestBody::ScopeUpdate {
+            signed_event,
+            lineage,
+            current_proof,
+            contact_address,
+            ..
+        } => {
+            validate_contact_lineage_carrier(signed_event, lineage, current_proof, false)?;
+            ("ak.contact.scope_updated", signed_event, contact_address)
+        }
+        PeerContactSubmitRequestBody::Tombstone {
+            signed_event,
+            lineage,
+            current_proof,
+            contact_address,
+            ..
+        } => {
+            validate_contact_lineage_carrier(signed_event, lineage, current_proof, true)?;
+            ("ak.contact.tombstoned", signed_event, contact_address)
+        }
+    };
+    if signed_event.kind.as_str() != fact_kind {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact carrier branch does not match signed_event.kind",
+        ));
+    }
+    let issuer = signed_event.actor_id.as_str().to_owned();
+    let subject_id = contact_address.subject_id.as_str().to_owned();
+    let recipient_service_id = contact_address.recipient_service_id.as_str();
     if recipient_service_id != state.service_id() {
         return Err(super::super::events::peer::cross_domain_replay(
             "contact_address.recipient_service_id does not match this service",
         ));
     }
-    let payload = delivery.contact_event.payload.clone();
+    let payload = signed_event.payload.clone();
 
     // Originating Principal Server of this delivery: the peer end of the
     // projected contact row (the issuer) is hosted there. `validate_peer_request`
@@ -343,86 +426,20 @@ async fn peer_contacts_submit(
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned);
 
-    // §2 hard boundary: project the issuer's original signed envelope into the
-    // local target holder's contact projection. We do NOT re-sign it as a
-    // local fact. soland's contact projection is the ContactRecord store +
-    // contact-managed consent cells, so projection means upserting the
-    // holder-scoped row (and, for accept, the target-controlled consent grant
-    // refs the original issuer already wrote on its own PCR).
-    if delivery.fact_kind == PeerContactFactKind::Requested {
-        let Some(evidence) = delivery.introduction_evidence.as_ref() else {
-            return Err(super::super::events::peer::schema_violation(
-                "introduction_evidence is required for ak.contact.requested",
-            ));
-        };
-        let payload_value = serde_json::to_value(&payload).map_err(|error| {
+    // Project the issuer's exact signed envelope; peer transport never
+    // re-signs or rewrites the Contact fact.
+    let outcome = project_delivered_contact_fact(
+        state,
+        fact_kind,
+        &issuer,
+        &subject_id,
+        &serde_json::to_value(&payload).map_err(|error| {
             AppError::internal(format!("contact payload encode failed: {error}"))
-        })?;
-        validate_contact_introduction_evidence_digest(&payload_value, evidence)?;
-        let subject_did = Did::new(subject_id.clone()).map_err(|error| {
-            super::super::events::peer::schema_violation(format!(
-                "invalid contact subject_id: {error}"
-            ))
-        })?;
-        let policy = crate::routing::invites::resolve_invite_receive_policy(state, &subject_did);
-        let decision = crate::routing::invites::evaluate_contact_receive(
-            state,
-            &policy,
-            evidence,
-            &issuer,
-            &subject_id,
-            recipient_service_id,
-            source_service_id.as_deref().unwrap_or_default(),
-        );
-        if decision.action != InviteReceiveAction::Notify {
-            super::append_audit_log(
-                state,
-                Some(&subject_id),
-                "peer.contacts.submit",
-                json!({
-                    "fact_kind": fact_kind,
-                    "issuer": issuer,
-                    "subject_id": subject_id,
-                    "introduction_kind": evidence.kind(),
-                    "effective_kind": decision.effective_kind,
-                    "trust_tier": decision.trust_tier.as_str(),
-                    "receive_action": receive_action_str(&decision.action),
-                }),
-                "deferred",
-            )
-            .await;
-            return json_ok(PeerContactDeliveryOutcome {
-                status: "deferred".to_owned(),
-                disclosed_outcome: decision.disclosed_outcome.map(disclosed_outcome_str),
-                received_at: Some(arkret_canonical::format_timestamp_canonical(now())),
-                retry_after_ms: None,
-            });
-        }
-    }
-
-    let outcome = if delivery.fact_kind == PeerContactFactKind::DirectConversationBound {
-        accept_delivered_direct_binding(
-            state,
-            &delivery.contact_event,
-            &subject_id,
-            source_service_id.as_deref(),
-            &delivery.signer_key_evidence,
-        )
-        .await?
-    } else {
-        project_delivered_contact_fact(
-            state,
-            fact_kind,
-            &issuer,
-            &subject_id,
-            &serde_json::to_value(&payload).map_err(|error| {
-                AppError::internal(format!("contact payload encode failed: {error}"))
-            })?,
-            delivery.contact_event.event_id.as_str(),
-            source_service_id.as_deref(),
-        )
-        .await?
-    };
+        })?,
+        signed_event.event_id.as_str(),
+        source_service_id.as_deref(),
+    )
+    .await?;
 
     super::append_audit_log(
         state,
@@ -437,11 +454,92 @@ async fn peer_contacts_submit(
         outcome,
     )
     .await;
-    json_ok(PeerContactDeliveryOutcome {
-        status: outcome.to_owned(),
-        disclosed_outcome: None,
-        received_at: Some(arkret_canonical::format_timestamp_canonical(now())),
-        retry_after_ms: None,
+    let disposition = if outcome == "duplicate" {
+        PeerContactDisposition::Duplicate
+    } else {
+        PeerContactDisposition::Accepted
+    };
+    let mirror_receipt = sign_contact_mirror_receipt(state, &delivery, signed_event, disposition)?;
+    json_ok(match disposition {
+        PeerContactDisposition::Accepted => PeerContactSubmitOutcome::Accepted { mirror_receipt },
+        PeerContactDisposition::Duplicate => PeerContactSubmitOutcome::Duplicate { mirror_receipt },
+        PeerContactDisposition::Deferred => PeerContactSubmitOutcome::Deferred { mirror_receipt },
+    })
+}
+
+fn validate_contact_lineage_carrier(
+    event: &Event,
+    lineage: &arkret_models_collaboration::protocol_journey::ContactLineage,
+    current_proof: &arkret_models_collaboration::protocol_journey::ContactCurrentProof,
+    terminal: bool,
+) -> Result<(), AppError> {
+    if lineage.event_ref != event.event_id
+        || lineage.issuer.subject_id() != &event.actor_id
+        || lineage.basis_id != current_proof.basis_id
+        || current_proof.head_event_ref != event.event_id
+        || terminal != lineage.terminal.unwrap_or(false)
+    {
+        return Err(super::super::events::peer::schema_violation(
+            "Contact lineage/current proof does not bind signed_event",
+        ));
+    }
+    Ok(())
+}
+
+fn sign_contact_mirror_receipt(
+    state: &AppState,
+    request: &PeerContactSubmitRequestBody,
+    event: &Event,
+    disposition: PeerContactDisposition,
+) -> Result<PeerContactMirrorReceipt, AppError> {
+    let request_digest = Hash::new(
+        canonical::canonical_sha256(request)
+            .map_err(|error| AppError::internal(format!("Contact request digest: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Contact request digest invalid: {error}")))?;
+    let signed_event_digest = Hash::new(
+        event
+            .event_digest()
+            .map_err(|error| AppError::internal(format!("Contact Event digest: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Contact Event digest invalid: {error}")))?;
+    let received_at = now();
+    let issuer = Did::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
+    let verification_method = DidUrl::new(
+        crate::routing::federation::federation_service_signature_key_id(state.service_id()),
+    )
+    .map_err(|error| AppError::internal(format!("service verification method invalid: {error}")))?;
+    let signing_bytes = canonical::canonical_json_bytes(&json!({
+        "domain": "ak.peer-contact.mirror-receipt.v1",
+        "request_digest": request_digest,
+        "signed_event_ref": event.event_id,
+        "signed_event_digest": signed_event_digest,
+        "disposition": disposition,
+        "recipient_service_id": issuer,
+        "received_at": arkret_canonical::format_timestamp_canonical(received_at),
+        "issuer": issuer,
+    }))
+    .map_err(|error| AppError::internal(format!("Contact mirror receipt canonicalize: {error}")))?;
+    let signature = state.notary_signing_key().sign(&signing_bytes);
+    let jws =
+        Base64UrlString::new(URL_SAFE_NO_PAD.encode(signature.to_bytes())).map_err(|error| {
+            AppError::internal(format!("Contact mirror signature invalid: {error}"))
+        })?;
+    Ok(PeerContactMirrorReceipt {
+        domain: PeerContactMirrorReceiptDomain::V1,
+        request_digest,
+        signed_event_ref: event.event_id.clone(),
+        signed_event_digest,
+        disposition,
+        recipient_service_id: issuer.clone(),
+        received_at,
+        issuer,
+        signature: ProtocolSignature {
+            verification_method,
+            created_at: received_at,
+            jws,
+        },
     })
 }
 
@@ -648,22 +746,6 @@ fn validate_contact_introduction_evidence_digest(
         ));
     }
     Ok(())
-}
-
-fn receive_action_str(action: &InviteReceiveAction) -> &'static str {
-    match action {
-        InviteReceiveAction::Drop => "drop",
-        InviteReceiveAction::Quarantine => "quarantine",
-        InviteReceiveAction::Notify => "notify",
-    }
-}
-
-fn disclosed_outcome_str(outcome: DisclosedOutcome) -> String {
-    match outcome {
-        DisclosedOutcome::Delivered => "delivered",
-        DisclosedOutcome::Blocked => "blocked",
-    }
-    .to_owned()
 }
 
 async fn should_stub_incoming_contact_message(

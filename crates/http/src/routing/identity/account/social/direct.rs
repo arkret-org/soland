@@ -1170,7 +1170,7 @@ pub(crate) async fn pending_direct_materialization_reusable(
         rollback_reserved_direct_binding(state, pair_key, &binding).await;
         return Ok(None);
     }
-    match pending_direct_materialization_disposition(draft.expires_at, now()) {
+    match pending_direct_materialization_disposition(draft.claimed_keypackage.expires_at, now()) {
         PendingDirectMaterializationDisposition::ReuseByteIdentical => {
             return Ok(Some((binding, draft)));
         }
@@ -1746,23 +1746,6 @@ async fn prepare_reserved_direct_materialization(
             fail_closed: true,
         });
 
-    let creator_member_event =
-        direct_creator_member_rebind_payload(state, realm_scope.clone(), actor, contact)
-            .map_err(AppError::internal)?
-            .map(|payload| {
-                let mut event = unsigned_direct_materialization_event(
-                    state,
-                    actor,
-                    &crate::ids::generate_event_id(),
-                    realm_id,
-                    arkret_wire::EventKind::MEMBER_STATE,
-                    payload,
-                )?;
-                attach_member_rebind_cell_contract(&mut event, actor)?;
-                Ok::<_, AppError>(event)
-            })
-            .transpose()?;
-
     let member_payload = direct_member_join_operation(state, realm_scope.clone(), peer, contact)
         .map_err(AppError::internal)?
         .payload;
@@ -1880,8 +1863,13 @@ async fn prepare_reserved_direct_materialization(
         })?,
     )?;
     let draft = arkret_models_collaboration::http_bodies::DirectConversationMaterializationDraft {
-        materialization_id: arkret_wire::NonEmptyString::new(reserved.binding_event_ref.clone())
-            .map_err(|error| AppError::internal(format!("materialization id invalid: {error}")))?,
+        operation_id: arkret_wire::NonEmptyString::new(reserved.binding_event_ref.clone())
+            .map_err(|error| AppError::internal(format!("operation id invalid: {error}")))?,
+        operation_state: arkret_models_collaboration::http_bodies::DirectConversationOperationState::Materializing,
+        pair_key: arkret_identifiers::Hash::new(pair_key.to_owned())
+            .map_err(|error| AppError::internal(format!("pair key invalid: {error}")))?,
+        coordinator_service_id: arkret_identifiers::Did::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("coordinator service DID invalid: {error}")))?,
         claim_nonce: arkret_wire::Base64UrlString::new(claim_nonce.to_owned())
             .map_err(|error| AppError::internal(format!("claim nonce invalid: {error}")))?,
         mls_group_id: arkret_wire::MlsGroupId::new(mls_group_id.to_owned())
@@ -1894,11 +1882,9 @@ async fn prepare_reserved_direct_materialization(
         mls_welcome_event_ref: arkret_identifiers::EventId::new(mls_welcome_event_ref).map_err(
             |error| AppError::internal(format!("MLS Welcome Event id invalid: {error}")),
         )?,
-        expires_at: claim.expires_at,
         claimed_keypackage: claim,
         claim_receipt,
         realm_event,
-        creator_member_event,
         peer_member_event,
         main_strand_event,
         binding_event,

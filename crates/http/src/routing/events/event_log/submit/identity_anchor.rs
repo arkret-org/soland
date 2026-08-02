@@ -745,7 +745,7 @@ async fn identity_anchor_fanout_records(
         deliveries.extend(
             // This unit's ingress receipts are minted but not yet durable —
             // they commit alongside these very outbox rows.
-            peer_event_fanout_records(state, parsed, envelope, None, publication_evidence)
+            peer_event_fanout_records(state, parsed, envelope, None, publication_evidence, None)
                 .await
                 .map_err(|error| {
                     SubmitOneError::new(

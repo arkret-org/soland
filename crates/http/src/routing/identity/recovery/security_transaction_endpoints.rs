@@ -2045,6 +2045,7 @@ async fn continue_submit_reanchor_unit(
         authorization_lease: Some(authority_outcome.authorization_lease),
         cba_proof_bundles: authority_outcome.cba_proof_bundles,
         control_proposal_receipt: None,
+        membership_compensation_evidence: None,
     };
     authorize_submission
         .validate_structural_in_context(arkret_wire::EventSubmitContext::AnchorUnit)

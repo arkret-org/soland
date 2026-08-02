@@ -242,6 +242,7 @@ pub(in crate::routing) async fn submit_event_value(
         None,
         None,
         None,
+        None,
     )
     .await
 }
@@ -267,6 +268,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         authorization_lease,
         cba_proof_bundles: _,
         control_proposal_receipt,
+        membership_compensation_evidence,
     } = submission;
     let envelope = typed_event_to_canonical_value(event)?;
     if event_string_field_from_value(&envelope, "kind").as_deref()
@@ -297,6 +299,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         None,
         authorization_lease.as_ref(),
         control_proposal_receipt.as_ref(),
+        membership_compensation_evidence.as_ref(),
     )
     .await
 }
@@ -317,6 +320,7 @@ pub(in crate::routing) async fn submit_mimi_event_value(
         &[],
         None,
         Some(&admission),
+        None,
         None,
         None,
     )
@@ -347,6 +351,7 @@ pub(in crate::routing) async fn submit_account_data_event_value(
         Some(&admission),
         None,
         None,
+        None,
     )
     .await
 }
@@ -374,6 +379,7 @@ pub(in crate::routing) async fn submit_moderation_report_event_value(
         Some(&admission),
         None,
         None,
+        None,
     )
     .await
 }
@@ -399,6 +405,7 @@ pub(in crate::routing) async fn submit_realm_policy_server_event_value(
         &[],
         None,
         Some(&admission),
+        None,
         None,
         None,
     )
@@ -430,6 +437,7 @@ pub(in crate::routing) async fn submit_event_value_with_idempotency(
         envelope,
         &[],
         Some(idempotency),
+        None,
         None,
         None,
         None,
@@ -543,6 +551,9 @@ pub(super) async fn submit_event_value_with_context(
     internal_admission: Option<&InternalEventAdmission>,
     authorization_lease: Option<&arkret_wire::AuthorizationLease>,
     submitted_control_proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
+    membership_compensation_evidence: Option<
+        &arkret_wire::MembershipCompensationSubmissionEvidence,
+    >,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
@@ -1550,6 +1561,7 @@ pub(super) async fn submit_event_value_with_context(
             // This path stores its ingress receipt up front
             // (`mint_and_store_ingress_receipt`), so nothing is pending.
             &[],
+            membership_compensation_evidence,
         )
         .await
         .map_err(|error| {

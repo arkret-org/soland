@@ -218,6 +218,7 @@ pub(super) async fn provision_agent(
             &Did::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
             &requested_scope_typed,
+            requested_scope_participation_ceiling(&requested_scope_typed),
         )
         .map_err(|error| AppError::internal(format!("requested_scope digest failed: {error}")))?;
         let pairing_request_id = record.pairing_request_id.clone().ok_or_else(|| {
@@ -281,6 +282,7 @@ pub(super) async fn provision_agent(
                     AppError::internal(format!("controller DID invalid: {error}"))
                 })?,
                 &requested_scope_typed,
+                requested_scope_participation_ceiling(&requested_scope_typed),
             )
             .map_err(|error| {
                 AppError::internal(format!("requested_scope digest failed: {error}"))
@@ -347,6 +349,7 @@ pub(super) async fn provision_agent(
         &agent_principal_did,
         &controller_did,
         &requested_scope_typed,
+        requested_scope_participation_ceiling(&requested_scope_typed),
     )
     .map_err(|err| AppError::internal(format!("requested_scope digest failed: {err}")))?;
     let controller_authorization_ref =
@@ -1071,86 +1074,10 @@ pub(super) async fn deactivate_agent(
         &body.lifecycle_event.event,
     )?;
 
-    let (active_key_authorizations, active_key_ids, active_grant_locations, all_grant_locations) = {
-        let projection = state.projections().snapshot();
-        let active_key_authorizations = projection
-            .active_agent_key_authorizations(&agent_id)
-            .into_iter()
-            .collect::<BTreeMap<_, _>>();
-        (
-            active_key_authorizations.clone(),
-            active_key_authorizations.keys().cloned().collect(),
-            projection
-                .unrevoked_grant_locations_for_subject(&agent_id)
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
-            projection
-                .grant_locations_for_subject(&agent_id)
-                .into_iter()
-                .collect::<BTreeSet<_>>(),
-        )
-    };
-
-    let mut supplied_key_ids = BTreeSet::new();
-    for event in &body.key_revocation_events {
-        let key_id = validate_agent_key_revocation_event(
-            &session,
-            &record,
-            &agent_id,
-            reason,
-            &active_key_authorizations,
-            &event.event,
-        )?;
-        if !supplied_key_ids.insert(key_id) {
-            return Err(AppError::invalid_param(
-                "key_revocation_events contains a duplicate key_id",
-            ));
-        }
-    }
-    let mut supplied_grant_locations = BTreeSet::new();
-    for event in &body.capability_revocation_events {
-        let location = validate_agent_capability_revocation_event(&session, reason, &event.event)?;
-        if !all_grant_locations.contains(&location) {
-            return Err(AppError::capability_denied(
-                "capability_revocation_events contains a grant not held by the Agent",
-            ));
-        }
-        if !supplied_grant_locations.insert(location) {
-            return Err(AppError::invalid_param(
-                "capability_revocation_events contains a duplicate grant",
-            ));
-        }
-    }
-    require_deactivation_revocation_coverage(
-        &active_key_ids,
-        &supplied_key_ids,
-        &active_grant_locations,
-        &supplied_grant_locations,
-    )?;
-
-    for event in body.key_revocation_events {
-        submit_signed_agent_event(state, &session, event).await?;
-    }
-    for event in body.capability_revocation_events {
-        submit_signed_agent_event(state, &session, event).await?;
-    }
-
-    let (remaining_key_ids, remaining_grant_locations) = {
-        let projection = state.projections().snapshot();
-        (
-            projection.authorized_key_ids_for(&agent_id),
-            projection.unrevoked_grant_locations_for_subject(&agent_id),
-        )
-    };
-    if !remaining_key_ids.is_empty() || !remaining_grant_locations.is_empty() {
-        return Err(AppError::new(
-            ErrorCode::FailedPrecondition,
-            "Agent revocations were not fully projected; deactivation remains non-terminal",
-        )
-        .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_reason_code("agent_deactivation_revocations_incomplete"));
-    }
-
+    // The final contract makes the accepted terminal lifecycle Event the
+    // single atomic cascade boundary.  Key and grant invalidation is reducer
+    // derived; accepting caller-supplied auxiliary revocation arrays created
+    // a partial-deactivation state and has therefore been removed from wire.
     json_ok(
         lifecycle_transition(
             state,
@@ -1333,11 +1260,19 @@ pub(super) async fn attach_agent_grant(
     )
     .await?;
     let body = body.into_inner();
+    body.validate()
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    let grant_payload: arkret_models_collaboration::events_payloads::capability::CapabilityGrantPayload =
+        body.grant_event
+            .event
+            .payload_as()
+            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    let grant = &grant_payload.grant;
     if !agent_grant_within_requested_scope(
         &record,
-        &body.grant.actions,
-        &body.grant.resources,
-        &body.grant.constraints,
+        &grant.actions,
+        &grant.resources,
+        &grant.constraints,
     ) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
@@ -1346,14 +1281,9 @@ pub(super) async fn attach_agent_grant(
         .with_status(StatusCode::PRECONDITION_FAILED)
         .with_wire_code("agent_grant_exceeds_requested_scope"));
     }
-    if !state.config().development_mode {
-        return Err(AppError::unsupported_feature(
-            "production Agent grant attachment requires protocol-valid Event authoring",
-        )
-        .with_wire_code("agent_grant_fanout_unavailable"));
-    }
-    let grant_id = body.grant.id.clone();
-    attach_agent_grant_event(state, &session, &agent_id, &body.grant).await?;
+    let grant_id = grant.id.clone();
+    let realm_id = grant.realm_id.clone();
+    submit_signed_agent_event(state, &session, body.grant_event).await?;
     append_audit_log(
         state,
         Some(&session.actor),
@@ -1361,7 +1291,7 @@ pub(super) async fn attach_agent_grant(
         json!({
             "agent_id": agent_id,
             "grant_id": grant_id,
-            "realm_id": body.grant.realm_id,
+            "realm_id": realm_id,
         }),
         "accepted",
     )

@@ -266,6 +266,7 @@ async fn prepare_ghost_event(
         &envelope,
         control_proposal_receipt.as_ref(),
         &[],
+        None,
     )
     .await
     .map_err(|error| {
