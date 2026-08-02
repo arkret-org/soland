@@ -1007,7 +1007,8 @@ pub(crate) async fn post_recovery_policy(
     )
     .unwrap();
     event.prev_refs = prev_refs;
-    event.requirements.schema_profile_refs = vec!["ak.schema.recovery_policy.v1".to_owned()];
+    event.requirements.schema_profile_refs =
+        vec![arkret_wire::ProfileRef::new("ak.schema.recovery_policy.v1").unwrap()];
     soland_test_support::cba_basis::apply_registered_cba_plane(
         &mut event,
         &event_verification_method,

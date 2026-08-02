@@ -193,7 +193,8 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
     .unwrap();
     authorize.prev_refs = vec![bootstrap.event_id.clone()];
     authorize.executed_by = Some(actor);
-    authorize.authorization_ref = Some(authorization_ref.to_string());
+    authorize.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(authorization_ref.to_string()).unwrap());
     arkret_signatures::sign_event(
         &mut authorize,
         &bootstrap_signer,

@@ -416,7 +416,8 @@ fn signed_ghost_provision_body(
     )
     .unwrap();
     accountability_event.applet_id = Some(applet_id.clone());
-    accountability_event.authorization_ref = Some(authorization_ref.clone());
+    accountability_event.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new(authorization_ref.clone()).unwrap());
     accountability_event.seal_basis = Some(seal_basis.clone());
     let event_grant: AccountabilityGrantPayload =
         serde_json::from_value(serde_json::to_value(&accountability_event.payload).unwrap())
@@ -459,7 +460,7 @@ fn signed_ghost_provision_body(
     .with_external_ref(serde_json::from_value(profile_external_ref).unwrap());
     let delegation = arkret_models_integration::AppletDelegatedEventAuthorization::new(
         package.service_id.clone(),
-        authorization_ref,
+        arkret_wire::AuthorizationRef::new(authorization_ref).unwrap(),
         applet_id,
     );
     let mut profile_event = profile
@@ -1144,7 +1145,8 @@ async fn applet_message_event(
     event.prev_refs =
         vec![arkret_wire::EventId::new((*prev_ref).to_owned()).expect("fixture prev_ref")];
     event.executed_by = Some(package.service_id.clone());
-    event.authorization_ref = Some((*authorization_ref).to_owned());
+    event.authorization_ref =
+        Some(arkret_wire::AuthorizationRef::new((*authorization_ref).to_owned()).unwrap());
     event.applet_id = Some(
         arkret_identifiers::AppletId::new((*applet_id).to_owned()).expect("fixture applet id"),
     );

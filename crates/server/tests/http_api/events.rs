@@ -1538,10 +1538,8 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     create.created_at = created_at;
     create.executed_by = Some(Did::new(controller_id).unwrap());
     create.authorization_ref = Some(
-        agent_record
-            .controller_authorization_ref
-            .as_str()
-            .to_owned(),
+        arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
+            .unwrap(),
     );
     // `arkret_bootstrap::realm_create_effects` is gone with the producer effect
     // array. The genesis write set is now derived by the receiver, and the only
@@ -1698,10 +1696,8 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     pending.created_at = created_at;
     pending.executed_by = Some(Did::new(controller_id).unwrap());
     pending.authorization_ref = Some(
-        agent_record
-            .controller_authorization_ref
-            .as_str()
-            .to_owned(),
+        arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
+            .unwrap(),
     );
     arkret_signatures::sign_event(
         &mut pending,
