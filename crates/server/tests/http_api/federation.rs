@@ -1111,10 +1111,7 @@ fn mls_governance_binding(group_id: &str) -> Value {
         "mls_group_id": group_id,
         "previous_epoch": 0,
         "next_epoch": 0,
-        "membership_frontier": [
-            "ak:event:01904100-0000-7000-8000-fede00000a01"
-        ],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     })

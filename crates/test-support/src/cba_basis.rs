@@ -24,10 +24,8 @@
 //! 3. an explicit content grant carrying only requested data-plane actions not already covered by
 //!    the owner bootstrap grant.
 //!
-//! The retired `covered_seals` MLS governance accumulator is deliberately not
-//! reproduced here. MLS admission consumes its separate key-affecting
-//! security frontier; this helper builds only the general Event authority
-//! basis and therefore needs exactly one Seal.
+//! MLS security-frontier admission is independent from this general Event
+//! authority basis, which therefore needs exactly one Seal.
 
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};

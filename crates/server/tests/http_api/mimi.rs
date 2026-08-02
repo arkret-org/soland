@@ -157,19 +157,13 @@ fn mimi_submit_body(
     mut message: Value,
 ) -> Value {
     let governance_binding = mimi_governance_binding(realm_id, group_id, epoch);
-    let covered_seals_cell = json!({
-        "cell_id": format!("ak:cell:ak.component.covered_seals.v1:{group_id}"),
-        "seal_refs": ["ak:seal:0196419b-0000-7000-8000-000000000001"],
-    });
     if let Value::Object(object) = &mut message {
         object.insert("mls_group_id".to_owned(), json!(group_id));
         object.insert("epoch".to_owned(), json!(epoch));
         object.insert("governance_binding".to_owned(), governance_binding.clone());
-        object.insert("covered_seals_cell".to_owned(), covered_seals_cell.clone());
     }
     let associated_data = json!({
         "governance_binding": governance_binding,
-        "covered_seals_cell": covered_seals_cell,
     });
     json!({
         "sender_actor_id": sender,
@@ -195,9 +189,7 @@ fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value 
             "kind": "realm",
             "realm_id": realm_id,
         },
-        "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
-        "policy_root": MIMI_TEST_POLICY_ROOT,
-        "capability_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
     })
 }
 

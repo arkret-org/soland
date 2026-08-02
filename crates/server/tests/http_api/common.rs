@@ -850,9 +850,6 @@ pub(crate) async fn delete_test_realm(state: &AppState, realm_id: &str) -> Value
 }
 
 /// The MLS group every E2EE fixture ciphertext in this test suite names.
-/// `covered_seals_cell` is keyed by the group id (the registered
-/// `payload.mls_group_id` subject), so the fixture Realm basis MUST seed
-/// coverage under this exact id.
 pub(crate) const FIXTURE_MLS_GROUP_ID: &str = "httpApiFixtureMlsGroup01";
 
 pub(crate) fn encrypted_envelope(content_type: &str, ciphertext: &str) -> Value {
@@ -1607,9 +1604,8 @@ pub(crate) type TestRealmBasis = soland_services::conformance_basis::Conformance
 ///    embedded `capability-action-registry.json` digest;
 /// 3. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`].
 ///
-/// The basis deliberately has no `covered_seals` MLS accumulator. That retired
-/// gate duplicated general governance progress; current MLS admission uses its
-/// separate key-affecting security frontier.
+/// MLS security-frontier admission is independent from this ordinary Event
+/// authorization basis.
 /// Cached per-(realm, subject, notary) genesis basis shared by the fixtures.
 type TestRealmBasisCache =
     std::sync::Mutex<std::collections::BTreeMap<(String, String, String), TestRealmBasis>>;

@@ -10,6 +10,18 @@ pub(crate) async fn validate_event_envelope(
     validate_event_envelope_with_context(state, session, envelope, &[], None).await
 }
 
+fn require_verified_mls_commit_frontier_material(kind: &str) -> Result<(), EventValidationError> {
+    if kind != arkret_wire::EventKind::MLS_COMMIT {
+        return Ok(());
+    }
+    Err(EventValidationError {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        code: arkret_wire::ErrorCode::FRONTIER_UNAVAILABLE,
+        message: "verified RFC 9420 group-state material is unavailable for MLS Commit security-frontier admission".to_owned(),
+        reason_code: Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE),
+    })
+}
+
 pub(crate) async fn validate_event_envelope_with_context(
     state: &AppState,
     session: &SessionRecord,
@@ -360,7 +372,17 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_self_principal_pcr_bootstrap_create,
     )?;
+    // Commit admission requires a receiver-owned RFC 9420 public-group view:
+    // accepted GroupInfo + ratchet-tree bytes establish the actual leaf
+    // indexes, and the candidate Commit advances that verified tree before the
+    // SDK projector compares security_frontier_digest. The current registered
+    // carrier exposes only genesis digests, so deriving leaves from claimed
+    // KeyPackage iteration order would invent tree positions. Stay fail-closed
+    // until the standard digest-verified group-state material operation is
+    // available; do not accept the producer-supplied digest on shape alone.
+    require_verified_mls_commit_frontier_material(&kind)?;
     capability_grant::validate_capability_grant_body(&kind, &actor_id, object)?;
+
     // The capability gate needs the write set, and v1 carries none on the wire:
     // the receiver projects it from `kind + payload` through the registered
     // reducer contract (`event-and-patch.md` §2.4.2). Derived here rather than
@@ -913,4 +935,27 @@ fn enforce_ordered_log_cell_contract(
                 error.to_string(),
             )
         })
+}
+
+#[cfg(test)]
+mod security_frontier_material_tests {
+    use super::*;
+
+    #[test]
+    fn mls_commit_fails_closed_without_verified_group_state_material() {
+        let error =
+            require_verified_mls_commit_frontier_material(arkret_wire::EventKind::MLS_COMMIT)
+                .unwrap_err();
+        assert_eq!(error.status, StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(error.code, arkret_wire::ErrorCode::FRONTIER_UNAVAILABLE);
+        assert_eq!(
+            error.reason_code,
+            Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE)
+        );
+    }
+
+    #[test]
+    fn non_commit_events_do_not_use_the_commit_material_gate() {
+        require_verified_mls_commit_frontier_material(arkret_wire::EventKind::MLS_GENESIS).unwrap();
+    }
 }

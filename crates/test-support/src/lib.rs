@@ -172,9 +172,9 @@ pub trait AppStateTestExt {
     /// `arkret_state::effective_state_at` resolves a Seal's governance view
     /// from the cell log filtered by that Seal's covered Control-Move digests,
     /// so a fixture that only puts a Seal object leaves the view empty. A
-    /// fixture that needs the Seal to actually *carry* state — a capability
-    /// grant, an MLS `covered_seals` accumulator — has to write the ops the
-    /// sealed Control Moves projected, which is what this does.
+    /// fixture that needs the Seal to actually *carry* state — for example a
+    /// capability grant — has to write the ops the sealed Control Moves
+    /// projected, which is what this does.
     fn test_append_sealed_effects(
         &self,
         realm_id: &RealmId,

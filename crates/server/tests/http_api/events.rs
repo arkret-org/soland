@@ -1760,11 +1760,14 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
             "creator_device_id": super::agents::CONTROLLER_DEVICE_ID,
             "cipher_suite": "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519",
             "governance_binding": {
+                "binding_version": 1,
+                "encoding_profile": "cbor-deterministic-rfc8949-v1",
                 "realm_id": realm_id,
+                "effective_scope": {"kind": "realm", "realm_id": realm_id},
                 "mls_group_id": "YXJrcmV0LW1scy1tYW5hZ2VkLXNjcg",
                 "previous_epoch": 0,
-                "next_epoch": 1,
-                "covered_seal_refs": [seal.id],
+                "next_epoch": 0,
+                "security_frontier_digest": format!("sha256:{}", "1".repeat(64)),
                 "binding_profile": "ak.profile.mls_governance_binding.full.v1",
                 "reducer_profile": "ak.reducer.v1"
             }

@@ -1534,9 +1534,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
 const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
 const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-7000-8000-000000000001";
-/// The MLS group the E2EE fixture ciphertexts name. `covered_seals_cell` is
-/// keyed by the group id (the registered `payload.mls_group_id` subject), so
-/// the fixture basis MUST seed coverage under this exact id.
+/// The MLS group named by every E2EE fixture ciphertext.
 const DATA_EVENT_MLS_GROUP: &str = "group.01js0mls0000000000000000";
 
 fn data_event_seal_id() -> arkret_identifiers::SealId {
@@ -1867,12 +1865,7 @@ fn insert_historical_data_event_child_grant_with_revoked_authority(
     insert_data_event_seal(state, vec![parent_move_id, child_move_id])
 }
 
-/// A single-Seal E2EE fixture with NO `covered_seals_cell` write.
-///
-/// Coverage always has to come from a second Seal — a Move can only attest a
-/// Seal that already existed when it was authored — so a fixture that needs the
-/// gate satisfied uses [`insert_reducer_reachable_e2ee_state`] instead. This one
-/// exists only for the refusal cases.
+/// A single-Seal E2EE fixture used by refusal cases.
 fn insert_historical_data_event_grant_with_e2ee_state(
     state: &AppState,
     grant_id: &str,
@@ -2349,7 +2342,7 @@ fn high_risk_data_event_revocation_has_no_grace_window() {
 }
 
 #[test]
-fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
+fn relaxed_e2ee_data_event_keeps_independent_capability_gate() {
     let state = make_state(true);
     let grant_id = "ak:grant:01904100-0000-7000-8000-00000000011a";
     let seal_ref = insert_historical_data_event_grant_with_e2ee_state(&state, grant_id, true);
@@ -2364,7 +2357,7 @@ fn relaxed_e2ee_data_event_keeps_capability_gate_without_covered_seals_gate() {
         &data_event_derived_cells(),
         false,
     )
-    .expect("relaxed E2EE profile should not require the full covered_seals gate");
+    .expect("relaxed E2EE profile still uses ordinary capability admission");
 }
 
 // ----------------------------------------------------------------------------

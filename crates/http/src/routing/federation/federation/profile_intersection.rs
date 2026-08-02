@@ -540,9 +540,14 @@ fn collect_payload_semantics(value: &Value, atoms: &mut SemanticAtoms, depth: us
                             atoms.requires_mls_governance = true;
                         }
                     }
-                    "governance_binding" | "covered_seals_cell" | "covered_seals"
-                    | "encrypted_payload" | "encrypted_content" | "ciphertext" | "mls_group_id"
-                    | "mls_epoch" | "key_schedule_ref" => {
+                    "governance_binding"
+                    | "security_frontier_digest"
+                    | "encrypted_payload"
+                    | "encrypted_content"
+                    | "ciphertext"
+                    | "mls_group_id"
+                    | "mls_epoch"
+                    | "key_schedule_ref" => {
                         atoms.requires_mls_governance = true;
                     }
                     _ => {}

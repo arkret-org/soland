@@ -433,11 +433,9 @@ async fn policy_check(
 /// `authz/policy-server.md` §5 — the filtered state root over the Realm's
 /// non-`⊥` policy control cells.
 ///
-/// The leaf, ordering and combine rules are the SDK's
-/// `derive_mls_policy_root`, which is the same `event-auth-state-resolution.md`
-/// §6.2.1 governance `state_root` computation the `policy_root` binding uses.
-/// Sharing it is the point: §5 requires issuer and verifier to enumerate and
-/// recompute independently and get the same number.
+/// The leaf, ordering and combine rules are the SDK's canonical Realm policy
+/// frontier projection. This digest is specific to policy-server decisions;
+/// it is not an MLS governance-binding commitment.
 fn realm_policy_frontier_digest(state: &AppState, realm_id: &str) -> Result<Hash, AppError> {
     state
         .projections()

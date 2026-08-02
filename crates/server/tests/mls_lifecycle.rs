@@ -661,7 +661,6 @@ async fn mls_lifecycle_end_to_end() {
         .to_owned();
 
     let effective_scope = json!({"kind": "realm", "realm_id": realm_id});
-    let frontier_ref = "ak:event:01904100-0000-7000-8000-00000000f00d";
     let keypackage_ref = claimed_keypackage_ref;
     let welcome_ref =
         "ak:blob:sha256:8888888888888888888888888888888888888888888888888888888888888888";
@@ -724,9 +723,8 @@ async fn mls_lifecycle_end_to_end() {
     }
 
     // The bootstrapped Realm now has an accepted governance Seal. Every MLS
-    // Control Move below cites it as its `seal_basis`, and
-    // `encryption-and-audit.md` §2.5.2 makes the binding attest the governance
-    // Seal set the epoch covers — here that set is exactly this one Seal.
+    // Control Move below cites it as its independent Event-admission
+    // `seal_basis`. The MLS binding carries only the unique security frontier.
     let realm_seal = realm_seal_frontier(state.clone(), &alice_token, realm_id).await;
     let realm_seal_basis = realm_seal.seal_basis();
     let governance_binding = json!({
@@ -737,11 +735,7 @@ async fn mls_lifecycle_end_to_end() {
         "mls_group_id": group_id,
         "previous_epoch": 0,
         "next_epoch": 0,
-        "membership_frontier": [frontier_ref],
-        "covered_seal_refs": [realm_seal.seal_id],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-        "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -881,14 +875,11 @@ async fn mls_lifecycle_end_to_end() {
         "mls_group_id": group_id,
         "previous_epoch": 0,
         "next_epoch": 1,
-        "membership_frontier": [frontier_ref],
-        "covered_seal_refs": [realm_seal.seal_id],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-        "capability_root": "sha256:5555555555555555555555555555555555555555555555555555555555555555",
-        "discussion_metadata_digest": "sha256:6666666666666666666666666666666666666666666666666666666666666666",
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
+    let commit_bytes = b"opaque-mls-commit";
     let mut commit = signed_event(
         "ak:event:01904100-0000-7000-8000-00000000e2e3",
         3,
@@ -902,7 +893,8 @@ async fn mls_lifecycle_end_to_end() {
             "base_epoch_ref": "ak:event:01904100-0000-7000-8000-00000000e2e1",
             "proposal_refs": [],
             "next_epoch": 1,
-            "commit_digest": "sha256:7777777777777777777777777777777777777777777777777777777777777777",
+            "commit_bytes_b64": b64(commit_bytes),
+            "commit_digest": arkret_canonical::sha256_digest(commit_bytes),
             "governance_binding": commit_binding
         }),
         Some(realm_seal_basis),
@@ -911,12 +903,21 @@ async fn mls_lifecycle_end_to_end() {
         &mut commit,
         &["ak:event:01904100-0000-7000-8000-00000000e2e2"],
     );
-    let commit_resp = TestClient::post("http://server/_arkret/self/events")
+    let mut commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
         .json(&commit)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(commit_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(
+        commit_resp.status_code,
+        Some(StatusCode::SERVICE_UNAVAILABLE)
+    );
+    let commit_error: Value = commit_resp.take_json().await.unwrap();
+    assert_eq!(commit_error["error"]["code"], "frontier_unavailable");
+    assert_eq!(
+        commit_error["error"]["details"]["reason_code"],
+        "mls_governance_binding_stale"
+    );
     assert_eq!(
         state
             .test_persistence()
@@ -924,9 +925,9 @@ async fn mls_lifecycle_end_to_end() {
             .get(&effective_scope, group_id)
             .await
             .unwrap()
-            .expect("commit persisted")
+            .expect("genesis remains persisted")
             .epoch,
-        1
+        0
     );
 
     // ── 4. Bob sees the Welcome on the standard to-device queue ─

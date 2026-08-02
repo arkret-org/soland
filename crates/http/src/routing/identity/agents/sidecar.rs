@@ -1504,11 +1504,7 @@ mod tests {
             "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",
             "previous_epoch": 0,
             "next_epoch": 1,
-            "membership_frontier": ["ak:event:01964137-0000-7000-8000-000000000040"],
-            "covered_seal_refs": [format!("ak:seal:sha256:{}", "5".repeat(64))],
-            "policy_root": format!("sha256:{}", "1".repeat(64)),
-            "capability_root": format!("sha256:{}", "2".repeat(64)),
-            "discussion_metadata_digest": format!("sha256:{}", "3".repeat(64)),
+            "security_frontier_digest": format!("sha256:{}", "1".repeat(64)),
             "binding_profile": "ak.profile.mls_governance_binding.full.v1",
             "reducer_profile": "ak.reducer.v1",
             "sidecar_binding": {

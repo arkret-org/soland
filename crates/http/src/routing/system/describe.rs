@@ -580,9 +580,9 @@ pub(crate) fn apply_claim_level_partition(
         ),
         arkret_models_discovery::service_description::ClaimedProfileEntry {
             notes: Some(
-                "Full MLS Governance Binding: reducer validates governance_binding \
-                 policy_root / metadata coverage and the covered_seals_cell coverage \
-                 gate for E2EE DataEvent seal_refs. This is the cross-deployment E2EE \
+                "Full MLS Governance Binding: receivers derive and validate the unique \
+                 security_frontier_digest from accepted key-access state and the RFC 9420 \
+                 leaf set. This is the cross-deployment E2EE \
                  federation interop floor (crypto-media/encryption-and-audit.md §2.5 / \
                  §295); a principal server federating MLS-backed Realms MUST advertise \
                  it, and it is mutually exclusive with ak.profile.e2ee_relaxed.v1 \

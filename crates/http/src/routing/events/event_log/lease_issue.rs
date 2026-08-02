@@ -725,7 +725,7 @@ mod tests {
             status: StatusCode::CONFLICT,
             code: arkret_wire::ErrorCode::FAILED_PRECONDITION,
             message: format!(
-                "{}: covered_seals_cell is stale",
+                "{}: security_frontier_digest is stale",
                 arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE
             ),
             reason_code: Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE),
