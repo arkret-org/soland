@@ -152,7 +152,6 @@ async fn peer_events_describe(depot: &mut Depot) -> JsonResult<PeerEventsDescrib
             "destination-service-id".to_owned(),
             "source-trust-domain".to_owned(),
             "destination-trust-domain".to_owned(),
-            "request-canonical-digest".to_owned(),
         ],
         limits: PeerEventsDescribeLimits {
             max_batch_item_count: MAX_FEDERATED_EVENTS,
@@ -1567,9 +1566,7 @@ pub(in crate::routing) async fn validate_peer_request(
                 cross_domain_replay("Destination-Trust-Domain header does not match this service")
             })?;
     } else {
-        if req.headers().contains_key("content-digest")
-            || req.headers().contains_key("request-canonical-digest")
-        {
+        if req.headers().contains_key("content-digest") {
             return Err(schema_violation(
                 "GET peer read requests must not carry body digest headers",
             ));
@@ -1580,9 +1577,7 @@ pub(in crate::routing) async fn validate_peer_request(
             .and_then(|value| value.to_str().ok())
         {
             let signature_input = signature_input.to_ascii_lowercase();
-            if signature_input.contains("\"content-digest\"")
-                || signature_input.contains("\"request-canonical-digest\"")
-            {
+            if signature_input.contains("\"content-digest\"") {
                 return Err(schema_violation(
                     "GET peer read Signature-Input must not bind body digest components",
                 ));

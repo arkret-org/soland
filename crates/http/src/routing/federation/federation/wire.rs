@@ -8,18 +8,17 @@ use serde_json::{Value, json};
 // binding handover (spec B1.7 / B1.8 / B1.9 / T14).
 // ════════════════════════════════════════════════════════════════════════
 
-/// Spec B1.7 — the three federation trust-domain headers that MUST appear
+/// Spec B1.7 — the two federation trust-domain headers that MUST appear
 /// on every inbound federation request.
 #[derive(Debug, Clone)]
 pub(crate) struct FederationTrustHeaders {
     pub source_trust_domain: arkret_identifiers::TypedTrustDomainId,
     pub destination_trust_domain: arkret_identifiers::TypedTrustDomainId,
-    pub request_canonical_digest: arkret_identifiers::Hash,
 }
 
 impl FederationTrustHeaders {
     /// Spec B1.7 — extract + validate the three headers from a salvo
-    /// `Request`. Returns the typed triple on success or a
+    /// `Request`. Returns the typed pair on success or a
     /// [`HeaderViolation`] on the first missing / malformed header.
     pub(crate) fn from_salvo_request(req: &salvo::http::Request) -> Result<Self, HeaderViolation> {
         let header_value = |name: &str| -> Result<&str, HeaderViolation> {
@@ -34,8 +33,6 @@ impl FederationTrustHeaders {
         let source = header_value(arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN)?.to_owned();
         let destination =
             header_value(arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN)?.to_owned();
-        let canonical_hash =
-            header_value(arkret_wire::constants::HEADER_REQUEST_CANONICAL_DIGEST)?.to_owned();
         let source = arkret_identifiers::TypedTrustDomainId::new(source).map_err(|_| {
             HeaderViolation::Malformed(
                 arkret_wire::constants::HEADER_SOURCE_TRUST_DOMAIN.to_owned(),
@@ -47,15 +44,9 @@ impl FederationTrustHeaders {
                     arkret_wire::constants::HEADER_DESTINATION_TRUST_DOMAIN.to_owned(),
                 )
             })?;
-        let canonical_hash = arkret_identifiers::Hash::new(canonical_hash).map_err(|_| {
-            HeaderViolation::Malformed(
-                arkret_wire::constants::HEADER_REQUEST_CANONICAL_DIGEST.to_owned(),
-            )
-        })?;
         Ok(Self {
             source_trust_domain: source,
             destination_trust_domain: destination,
-            request_canonical_digest: canonical_hash,
         })
     }
 

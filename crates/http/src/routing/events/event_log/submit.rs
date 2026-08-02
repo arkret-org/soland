@@ -1229,19 +1229,32 @@ pub(crate) async fn submit_federation_events(
     body_value: Value,
     res: &mut Response,
 ) {
-    let submit =
-        match serde_json::from_value::<EventsSubmitFederationRequestBody>(body_value.clone()) {
-            Ok(value) => value,
-            Err(error) => {
-                render_error(
-                    res,
-                    StatusCode::BAD_REQUEST,
-                    "bad_json",
-                    &format!("invalid ak.peer.events.command.submit request body: {error}"),
-                );
-                return;
-            }
-        };
+    // The transport carries only RFC 9530 Content-Digest. Compute the Arkret
+    // request digest internally for idempotency, replay, and audit records.
+    let request_hash = match canonical::canonical_sha256(&body_value) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                &format!("ak.peer.events.command.submit body is not canonical-hashable: {error}"),
+            );
+            return;
+        }
+    };
+    let submit = match serde_json::from_value::<EventsSubmitFederationRequestBody>(body_value) {
+        Ok(value) => value,
+        Err(error) => {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "bad_json",
+                &format!("invalid ak.peer.events.command.submit request body: {error}"),
+            );
+            return;
+        }
+    };
     if let Err(error) = submit.validate_federation_transport() {
         tracing::debug!(%error, "federation transport contract rejected");
         render_error(
@@ -1472,29 +1485,6 @@ pub(crate) async fn submit_federation_events(
         );
         return;
     }
-    let request_hash = match canonical::canonical_sha256(&body_value) {
-        Ok(value) => value,
-        Err(error) => {
-            render_error(
-                res,
-                StatusCode::BAD_REQUEST,
-                "schema_violation",
-                &format!("ak.peer.events.command.submit body is not canonical-hashable: {error}"),
-            );
-            return;
-        }
-    };
-    if request_hash != trust_headers.request_canonical_digest.as_str() {
-        crate::metrics::record_digest_mismatch("events_federation_request_binding");
-        render_error(
-            res,
-            StatusCode::CONFLICT,
-            "cross_domain_replay_rejected",
-            "Request-Canonical-Digest does not match the canonical request body",
-        );
-        return;
-    }
-
     if let Err((code, message)) =
         SolandEventsSubmitRequestBody::validate_federation_service_binding(&service_binding_ref)
     {

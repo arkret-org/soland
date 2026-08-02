@@ -14,8 +14,8 @@ in-memory mode keeps the same API for fast local iteration.
 > - [`docs/runbook.md`](docs/runbook.md) — common error codes, log-search
 >   recipes, restart strategy, fault-injection drills.
 > - [`docs/federation-s2s.md`](docs/federation-s2s.md) — peer onboarding,
->   the three signed `Source-Trust-Domain` / `Destination-Trust-Domain` /
->   `Request-Canonical-Digest` headers, trust-domain immutability.
+>   signed trust-domain headers, canonical `Content-Digest`, and trust-domain
+>   immutability.
 > - [`examples/prometheus-alerts.yml`](examples/prometheus-alerts.yml) —
 >   ready-made alert rules (audit-append failures, federation DLQ rate,
 >   /readyz outages).
@@ -53,10 +53,9 @@ Operator-visible highlights:
   `EventsSubscribeFrame{event|frontier|heartbeat|catchup_complete|
   epoch_rotation|dropped|resync_required|unauthorized}`. `dropped`
   MUST carry `cursor`.
-- **Federation S2S transport adds three signed headers** —
-  `Source-Trust-Domain`, `Destination-Trust-Domain`,
-  `Request-Canonical-Digest`. Verified into the signature transcript;
-  mismatch rejects.
+- **Federation S2S transport signs trust-domain and body bindings** —
+  `Source-Trust-Domain`, `Destination-Trust-Domain`, and the single RFC 9530
+  `Content-Digest` are verified through the signature transcript.
 - **Federation idempotency `historical_only`** — cache hits after
   source-key revocation return the cached body with
   `reason_code=historical_only`; no side effects.

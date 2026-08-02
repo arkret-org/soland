@@ -9,8 +9,7 @@ use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
 
 use super::actor_signature::{
-    federation_verify_actor_digest, federation_verify_actor_unsigned_digest,
-    verify_federation_actor_signature,
+    federation_verify_actor_unsigned_digest, verify_federation_actor_signature,
 };
 use super::inbound_policy::ensure_private_inbound_read_rail_local;
 use super::signature::validate_federation_request_binding;
@@ -149,11 +148,7 @@ pub(crate) async fn federation_verify_actor(
 ) -> JsonResult<arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let body = body.into_inner();
-    let request_hash = federation_verify_actor_digest(&body).map_err(|message| {
-        AppError::new(soland_http::error::ErrorCode::SchemaViolation, message)
-            .with_status(StatusCode::BAD_REQUEST)
-    })?;
-    validate_federation_request_binding(&state.config().trust_domain, req, &request_hash)?;
+    validate_federation_request_binding(&state.config().trust_domain, req)?;
 
     if state.config().development_mode {
         return json_ok(

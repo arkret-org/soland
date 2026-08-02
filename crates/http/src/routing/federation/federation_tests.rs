@@ -4,82 +4,31 @@ use super::*;
 
 const FEDERATION_AUTH_FAILURE_MESSAGE_FOR_TEST: &str = "federation request authentication failed";
 
-fn verify_actor_body()
--> arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody {
-    arkret_models_collaboration::federation::wire_dtos::FederationVerifyActorRequestBody {
-        actor_id: arkret_identifiers::Did::new("did:web:alice.example").unwrap(),
-        challenge: Some("challenge-1".to_owned()),
-        signed_payload_digest: None,
-        signature: arkret_models_collaboration::federation::frames::VerifyActorChallengeSignature {
-            key_id: "did:web:alice.example#key-1".to_owned(),
-            signature: "test-signature".to_owned(),
-        },
-        purpose: "federation.verify_actor".to_owned(),
-        realm_id: None,
-    }
-}
-
 fn trust_domain(value: &str) -> arkret_identifiers::TypedTrustDomainId {
     arkret_identifiers::TypedTrustDomainId::new(value.to_owned()).unwrap()
 }
 
-fn federation_headers(digest: &str) -> FederationTrustHeaders {
+fn federation_headers() -> FederationTrustHeaders {
     FederationTrustHeaders {
         source_trust_domain: trust_domain("ak:trust_domain:peer.example"),
         destination_trust_domain: trust_domain("ak:trust_domain:soland.local"),
-        request_canonical_digest: arkret_identifiers::Hash::new(digest.to_owned()).unwrap(),
     }
 }
 
 #[test]
-fn verify_actor_digest_uses_canonical_json() {
-    let body = verify_actor_body();
-    let value = serde_json::to_value(&body).unwrap();
-    let expected = arkret_canonical::canonical_sha256(&value).unwrap();
-
-    assert_eq!(federation_verify_actor_digest(&body).unwrap(), expected);
-}
-
-#[test]
-fn verify_actor_headers_accept_matching_canonical_digest() {
-    let body = verify_actor_body();
-    let digest = federation_verify_actor_digest(&body).unwrap();
-    let headers = federation_headers(&digest);
-
+fn federation_headers_accept_destination_match() {
     validate_federation_headers(
-        &headers,
+        &federation_headers(),
         &trust_domain("ak:trust_domain:soland.local"),
-        &digest,
     )
-    .expect("matching digest and destination accepted");
-}
-
-#[test]
-fn verify_actor_headers_reject_digest_mismatch() {
-    let body = verify_actor_body();
-    let digest = federation_verify_actor_digest(&body).unwrap();
-    let headers = federation_headers(&format!("sha256:{}", "0".repeat(64)));
-
-    let error = validate_federation_headers(
-        &headers,
-        &trust_domain("ak:trust_domain:soland.local"),
-        &digest,
-    )
-    .expect_err("mismatched digest rejected");
-
-    assert_auth_rejection_is_minimal(error);
+    .expect("matching destination accepted");
 }
 
 #[test]
 fn verify_actor_headers_reject_destination_mismatch() {
-    let body = verify_actor_body();
-    let digest = federation_verify_actor_digest(&body).unwrap();
-    let headers = federation_headers(&digest);
-
     let error = validate_federation_headers(
-        &headers,
+        &federation_headers(),
         &trust_domain("ak:trust_domain:other.example"),
-        &digest,
     )
     .expect_err("wrong destination rejected");
 

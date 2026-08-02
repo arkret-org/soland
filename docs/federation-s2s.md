@@ -8,19 +8,19 @@ peer onboarding.
 
 ## Required headers
 
-Every outbound federation POST is signed with three headers in addition
-to the canonical body signature. The receiver verifies each header
+Every outbound federation POST signs two trust-domain headers together with
+the canonical RFC 9530 body digest. The receiver verifies each component
 inside the signature transcript; any mismatch rejects the request.
 
 | Header | Source | Verified into |
 | --- | --- | --- |
 | `Source-Trust-Domain` | The sender's `SOLAND_TRUST_DOMAIN` | Signature transcript + `cross_domain_replay_rejected` guard on receive |
 | `Destination-Trust-Domain` | The intended peer's published `trust_domain` (from the peer's `/_arkret/describe`) | Signature transcript — protects against on-path mis-routing |
-| `Request-Canonical-Digest` | SHA-256 of the canonical request body | Signature transcript — pins the body the signature covered |
+| `Content-Digest` | RFC 9530 `sha-256` over the exact canonical JSON bytes | Signature transcript — pins the body the signature covered |
 
-The receiver applies the same canonicalization to recompute
-`Request-Canonical-Digest` and compares; mismatch returns 401 with
-the canonical SDK error code.
+The receiver verifies `Content-Digest` against the exact HTTP content before
+JSON parsing, rejects non-canonical JSON bytes, and computes any Arkret
+`sha256:<hex>` request digest internally for replay, idempotency, and audit.
 
 ## Trust-domain immutability
 

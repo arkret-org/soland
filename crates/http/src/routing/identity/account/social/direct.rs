@@ -1553,13 +1553,8 @@ async fn send_signed_peer_json(
     ] {
         crate::routing::federation::outbox::insert_header_if_valid(&mut headers, name, value);
     }
-    let headers = crate::routing::federation::outbox::rfc9421_sign(
-        state,
-        headers,
-        "POST",
-        &target_url,
-        &body_bytes,
-    );
+    let headers =
+        crate::routing::federation::outbox::rfc9421_sign(state, headers, "POST", &target_url);
     let response = client
         .post(parsed_url)
         .headers(headers)

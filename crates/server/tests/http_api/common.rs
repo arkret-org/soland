@@ -436,7 +436,6 @@ fn signed_federation_request_headers(
     } = request;
     let body_bytes = arkret_canonical::canonical_json_bytes(body).unwrap();
     let content_digest = format!("sha-256=:{}:", STANDARD.encode(Sha256::digest(&body_bytes)));
-    let request_digest = format!("sha256:{}", hex::encode(Sha256::digest(&body_bytes)));
     let source_trust_domain = source_trust_domain_override
         .map(ToOwned::to_owned)
         .unwrap_or_else(|| trust_domain_from_service_id(origin));
@@ -444,9 +443,9 @@ fn signed_federation_request_headers(
     let expires = created + 300;
     let keyid = format!("{origin}#federation-fanout-key");
     let covered_components = if idempotency_key.is_some() {
-        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\" \"idempotency-key\""
+        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"idempotency-key\""
     } else {
-        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\" \"request-canonical-digest\""
+        "\"@method\" \"@target-uri\" \"@authority\" \"content-digest\" \"source-service-id\" \"destination-service-id\" \"source-trust-domain\" \"destination-trust-domain\""
     };
     let signature_params = format!(
         "({covered_components});created={created};expires={expires};keyid=\"{keyid}\";alg=\"ed25519\"",
@@ -460,8 +459,7 @@ fn signed_federation_request_headers(
          \"source-service-id\": {origin}\n\
          \"destination-service-id\": {destination}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
-         \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"request-canonical-digest\": {request_digest}",
+         \"destination-trust-domain\": {destination_trust_domain}",
     );
     if let Some(idempotency_key) = idempotency_key {
         signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));
@@ -470,7 +468,6 @@ fn signed_federation_request_headers(
     let signature = development_service_signing_key(origin).sign(signature_base.as_bytes());
     let mut headers = vec![
         ("content-digest", content_digest),
-        ("request-canonical-digest", request_digest),
         ("source-service-id", origin.to_owned()),
         ("destination-service-id", destination.to_owned()),
         ("source-trust-domain", source_trust_domain),

@@ -21,8 +21,6 @@ mod wire;
 // `router()` assembly is unchanged.
 // Test-only re-exports so `federation_tests.rs` (`use super::*`) keeps
 // resolving the helpers it exercises after the structural split.
-#[cfg(test)]
-use actor_signature::federation_verify_actor_digest;
 // Imports re-exported for `federation_tests.rs` (`use super::*`) which relies
 // on these names resolving through the module that hosts `mod tests`.
 #[cfg(test)]

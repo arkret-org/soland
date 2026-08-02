@@ -153,9 +153,8 @@ pub(crate) fn rfc9421_sign(
     headers: reqwest::header::HeaderMap,
     method: &str,
     target_url: &str,
-    body: &[u8],
 ) -> reqwest::header::HeaderMap {
-    rfc9421_sign_with_window(state, headers, method, target_url, body, 300)
+    rfc9421_sign_with_window(state, headers, method, target_url, 300)
 }
 
 fn rfc9421_sign_with_window(
@@ -163,16 +162,8 @@ fn rfc9421_sign_with_window(
     mut headers: reqwest::header::HeaderMap,
     method: &str,
     target_url: &str,
-    body: &[u8],
     validity_seconds: i64,
 ) -> reqwest::header::HeaderMap {
-    let request_canonical_digest = arkret_canonical::sha256_digest(body);
-    insert_header_if_valid(
-        &mut headers,
-        "request-canonical-digest",
-        &request_canonical_digest,
-    );
-
     let created = now_unix_secs();
     let expires = created + validity_seconds;
     let keyid = super::federation_service_signature_key_id(state.service_id());
@@ -185,7 +176,6 @@ fn rfc9421_sign_with_window(
         "\"destination-service-id\"",
         "\"source-trust-domain\"",
         "\"destination-trust-domain\"",
-        "\"request-canonical-digest\"",
     ];
     let idempotency_key = header_value(&headers, "idempotency-key");
     if idempotency_key.is_some() {
@@ -215,7 +205,6 @@ fn rfc9421_sign_with_window(
             SignatureBaseComponent::required("destination-service-id", &destination_service_id),
             SignatureBaseComponent::required("source-trust-domain", &source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", &destination_trust_domain),
-            SignatureBaseComponent::required("request-canonical-digest", &request_canonical_digest),
             SignatureBaseComponent::optional("idempotency-key", idempotency_key.as_deref()),
         ],
         &signature_params,
@@ -270,7 +259,7 @@ pub(crate) async fn relay_signal_once(
         "destination-trust-domain",
         &trust_domain_from_service_id(peer_did),
     );
-    let headers = rfc9421_sign_with_window(state, headers, "POST", &target, &body, 5);
+    let headers = rfc9421_sign_with_window(state, headers, "POST", &target, 5);
     let response = client
         .post(parsed_url)
         .headers(headers)
@@ -877,7 +866,7 @@ impl FederationDispatcher {
         );
         // A transport retry keeps the body and the key but always re-signs:
         // the signature window is short-lived and the old one has expired.
-        let headers = rfc9421_sign(&self.state, headers, "POST", &url, &body_bytes);
+        let headers = rfc9421_sign(&self.state, headers, "POST", &url);
 
         let response = client
             .post(parsed_url)

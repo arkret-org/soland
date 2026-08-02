@@ -29,13 +29,6 @@ pub(super) async fn verify_mimi_write_service_proof(
             "Content-Digest does not cover the canonical MIMI request body",
         ));
     }
-    let expected_request_digest = body_digests.request_digest;
-    let request_digest = mimi_required_header(req, "request-canonical-digest")?;
-    if request_digest != expected_request_digest {
-        return Err(mimi_signature_error_invalid(
-            "Request-Canonical-Digest does not match the canonical MIMI request body",
-        ));
-    }
     http_signature::validate_canonical_json_body(&body_bytes, |error| {
         mimi_signature_error_invalid(format!("MIMI request body is not canonical JSON: {error}"))
     })?;
@@ -82,7 +75,6 @@ pub(super) async fn verify_mimi_write_service_proof(
         &target_uri,
         &authority,
         &content_digest,
-        &request_digest,
         &source_service_id,
         &destination_service_id,
         &provider_id,
@@ -122,7 +114,6 @@ pub(super) fn mimi_validate_signature_params(
         "@target-uri",
         "@authority",
         "content-digest",
-        "request-canonical-digest",
         "source-service-id",
         "destination-service-id",
         "provider-id",
@@ -181,7 +172,6 @@ pub(super) fn mimi_http_signature_base(
     target_uri: &str,
     authority: &str,
     content_digest: &str,
-    request_digest: &str,
     source_service_id: &str,
     destination_service_id: &str,
     provider_id: &str,
@@ -194,7 +184,6 @@ pub(super) fn mimi_http_signature_base(
             SignatureBaseComponent::required("@target-uri", target_uri),
             SignatureBaseComponent::required("@authority", authority),
             SignatureBaseComponent::required("content-digest", content_digest),
-            SignatureBaseComponent::required("request-canonical-digest", request_digest),
             SignatureBaseComponent::required("source-service-id", source_service_id),
             SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("provider-id", provider_id),

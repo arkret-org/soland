@@ -176,8 +176,8 @@ async fn enqueue_then_dispatch_delivers_payload_with_spec_headers() {
         captured.captured
     );
     assert!(
-        lower.contains("request-canonical-digest: sha256:"),
-        "captured request missing Request-Canonical-Digest binding; got: {}",
+        !lower.contains("request-canonical-digest:"),
+        "captured request must not carry retired Request-Canonical-Digest; got: {}",
         captured.captured
     );
     assert!(
@@ -1163,14 +1163,12 @@ fn http_signature_verifies_with_headers(
         Some(destination_service_id),
         Some(source_trust_domain),
         Some(destination_trust_domain),
-        Some(request_canonical_digest),
     ) = (
         headers.get("content-digest"),
         headers.get("source-service-id"),
         headers.get("destination-service-id"),
         headers.get("source-trust-domain"),
         headers.get("destination-trust-domain"),
-        headers.get("request-canonical-digest"),
     )
     else {
         return false;
@@ -1185,8 +1183,7 @@ fn http_signature_verifies_with_headers(
          \"source-service-id\": {source_service_id}\n\
          \"destination-service-id\": {destination_service_id}\n\
          \"source-trust-domain\": {source_trust_domain}\n\
-         \"destination-trust-domain\": {destination_trust_domain}\n\
-         \"request-canonical-digest\": {request_canonical_digest}",
+         \"destination-trust-domain\": {destination_trust_domain}",
     );
     if let Some(idempotency_key) = headers.get("idempotency-key") {
         signature_base.push_str(&format!("\n\"idempotency-key\": {idempotency_key}"));

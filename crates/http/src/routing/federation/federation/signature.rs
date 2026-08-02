@@ -34,7 +34,6 @@ async fn apply_federation_auth_failure_delay(started_at: Instant) {
 pub(super) fn validate_federation_request_binding(
     trust_domain: &str,
     req: &Request,
-    request_hash: &str,
 ) -> Result<(), AppError> {
     let headers = FederationTrustHeaders::from_salvo_request(req).map_err(|violation| {
         signature_error(format!(
@@ -44,13 +43,12 @@ pub(super) fn validate_federation_request_binding(
     })?;
     let expected_destination = arkret_identifiers::TypedTrustDomainId::new(trust_domain.to_owned())
         .map_err(|error| AppError::internal(format!("configured trust_domain invalid: {error}")))?;
-    validate_federation_headers(&headers, &expected_destination, request_hash)
+    validate_federation_headers(&headers, &expected_destination)
 }
 
 pub(super) fn validate_federation_headers(
     headers: &FederationTrustHeaders,
     expected_destination: &arkret_identifiers::TypedTrustDomainId,
-    request_hash: &str,
 ) -> Result<(), AppError> {
     headers
         .verify_destination(expected_destination)
@@ -59,12 +57,6 @@ pub(super) fn validate_federation_headers(
                 "federation Destination-Trust-Domain header does not match this service",
             )
         })?;
-    if request_hash != headers.request_canonical_digest.as_str() {
-        crate::metrics::record_digest_mismatch("federation_request_binding");
-        return Err(cross_domain_replay_error(
-            "Request-Canonical-Digest does not match the canonical request body",
-        ));
-    }
     Ok(())
 }
 
@@ -120,29 +112,18 @@ fn verify_inbound_peer_http_signature_inner(
     let body_digests = match body_bytes {
         Some(bytes) => {
             let body_digests = http_signature::exact_body_digests(bytes);
-            validate_federation_request_binding(
-                &state.config().trust_domain,
-                req,
-                &body_digests.request_digest,
-            )?;
+            validate_federation_request_binding(&state.config().trust_domain, req)?;
             Some(body_digests)
         }
         None => None,
     };
 
-    let (content_digest, request_digest) = if let Some(expected) = body_digests {
+    let content_digest = if let Some(expected) = body_digests {
         let content_digest = required_header(req, "content-digest")?;
         if content_digest != expected.content_digest {
             crate::metrics::record_digest_mismatch("peer_request_content_digest");
             return Err(signature_error(
                 "Content-Digest does not match peer canonical request body",
-            ));
-        }
-        let request_digest = required_header(req, "request-canonical-digest")?;
-        if request_digest != expected.request_digest {
-            crate::metrics::record_digest_mismatch("peer_request_request_digest");
-            return Err(signature_error(
-                "Request-Canonical-Digest does not match peer canonical request body",
             ));
         }
         http_signature::validate_canonical_json_body(
@@ -155,9 +136,9 @@ fn verify_inbound_peer_http_signature_inner(
                 .with_status(StatusCode::BAD_REQUEST)
             },
         )?;
-        (Some(content_digest), Some(request_digest))
+        Some(content_digest)
     } else {
-        (None, None)
+        None
     };
 
     let source_service_id = required_header(req, "source-service-id")?;
@@ -200,7 +181,6 @@ fn verify_inbound_peer_http_signature_inner(
         &destination_service_id,
         &source_trust_domain,
         &destination_trust_domain,
-        request_digest.as_deref(),
         idempotency_key,
         endpoint_digest.as_deref(),
         &outer_params,
@@ -240,7 +220,6 @@ fn peer_http_signature_base(
     destination_service_id: &str,
     source_trust_domain: &str,
     destination_trust_domain: &str,
-    request_digest: Option<&str>,
     idempotency_key: Option<&str>,
     destination_service_endpoint_digest: Option<&str>,
     signature_params: &str,
@@ -255,7 +234,6 @@ fn peer_http_signature_base(
             SignatureBaseComponent::required("destination-service-id", destination_service_id),
             SignatureBaseComponent::required("source-trust-domain", source_trust_domain),
             SignatureBaseComponent::required("destination-trust-domain", destination_trust_domain),
-            SignatureBaseComponent::optional("request-canonical-digest", request_digest),
             SignatureBaseComponent::optional("idempotency-key", idempotency_key),
             SignatureBaseComponent::optional(
                 "destination-service-endpoint-digest",
