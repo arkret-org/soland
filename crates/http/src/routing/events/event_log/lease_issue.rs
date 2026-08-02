@@ -700,7 +700,9 @@ mod tests {
             json!({"value": {"version": 1}}),
         );
         followup.prev_refs = vec![create.event_id.clone()];
-        followup.authorization_ref = Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned());
+        followup.authorization_ref = Some(
+            arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL).unwrap(),
+        );
 
         let context = anchor_context(&[create, followup])
             .expect("ordinary Realm anchor unit is valid")

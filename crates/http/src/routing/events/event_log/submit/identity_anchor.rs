@@ -1933,7 +1933,8 @@ mod tests {
         authorize.created_at = create.created_at;
         authorize.prev_refs = vec![create.event_id.clone()];
         authorize.executed_by = Some(authority.clone());
-        authorize.authorization_ref = Some(authorization_ref.to_string());
+        authorize.authorization_ref =
+            Some(arkret_wire::AuthorizationRef::new(authorization_ref.to_string()).unwrap());
         attach_bootstrap_fixture_proof(
             &mut authorize,
             &format!("{authority}#z6MkgZb469vbyZCg3L7kx1PbQuUD4NToPpcy1utdLxUUfpsh"),
@@ -1976,7 +1977,9 @@ mod tests {
         let mut create: arkret_wire::Event = serde_json::from_value(envelopes[0].clone()).unwrap();
         create.executed_by =
             Some(arkret_identifiers::Did::new("did:web:controller.example").unwrap());
-        create.authorization_ref = Some("ak:capability:managed-agent".to_owned());
+        create.authorization_ref = Some(
+            arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
+        );
         create.proofs.clear();
         attach_bootstrap_fixture_proof(
             &mut create,

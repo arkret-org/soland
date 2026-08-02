@@ -1772,7 +1772,10 @@ async fn prepare_reserved_direct_materialization(
     // (`realm-and-space.md` section 2.5). There is no genesis grant to cite,
     // and the service still never signs a participant Event on the client's
     // behalf.
-    peer_member_event.authorization_ref = Some(arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned());
+    peer_member_event.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(arkret_wire::REALM_AUTHORITY_ROOT_CELL)
+            .expect("realm authority-root constant must be valid"),
+    );
     let strand_payload =
         direct_strand_create_payload(realm_scope, main_strand_id, actor, reserved.created_at)
             .map_err(AppError::internal)?;

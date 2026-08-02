@@ -2206,7 +2206,9 @@ mod managed_agent_pcr_batch_tests {
         .unwrap();
         event.executed_by =
             Some(arkret_identifiers::Did::new("did:web:alice.example".to_owned()).unwrap());
-        event.authorization_ref = Some("did:web:agent.example#managed-controller".to_owned());
+        event.authorization_ref = Some(
+            arkret_wire::AuthorizationRef::new("did:web:agent.example#managed-controller").unwrap(),
+        );
         // v1 carries no producer `effects[]`: the router recognises a managed
         // Agent PCR create by whether the registered contract materializes its
         // control material, so the fixture is the bare signed Event.

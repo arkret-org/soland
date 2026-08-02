@@ -414,7 +414,7 @@ fn capability_grant_from_authz_grant(
         issuer_authority_refs: grant
             .issuer_authority_refs
             .iter()
-            .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id)
+            .filter_map(arkret_policy::authz::authority::IssuerAuthorityRef::grant_id)
             .map(|id| {
                 GrantId::new(id).map(|grant_id| {
                     arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
@@ -539,6 +539,7 @@ fn wire_constraint_from_authz_constraint(
         }
         Constraint::AuthorityControl {
             max_authority_depth,
+            authority_regrant_allowed,
             constraint_subkind,
             applet_id,
             executed_by,
@@ -549,6 +550,7 @@ fn wire_constraint_from_authz_constraint(
                 WireGrantConstraintEffect::Allow,
             );
             wire.max_authority_depth = max_authority_depth.map(u64::from);
+            wire.authority_regrant_allowed = Some(authority_regrant_allowed);
             wire.constraint_subkind = constraint_subkind;
             wire.applet_id = applet_id;
             wire.executed_by = executed_by;

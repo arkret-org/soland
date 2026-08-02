@@ -769,7 +769,7 @@ fn sdk_event_from_record(
         authorization_ref: object
             .get("authorization_ref")
             .and_then(Value::as_str)
-            .map(ToOwned::to_owned),
+            .and_then(|value| arkret_wire::AuthorizationRef::new(value.to_owned()).ok()),
         applet_id: object
             .get("applet_id")
             .and_then(Value::as_str)

@@ -204,10 +204,17 @@ async fn persist_canonical_policy_server_move(
         AppError::internal(format!("policy server Control Move build failed: {error}"))
     })?;
     event.executed_by = Some(service_did.clone());
-    event.authorization_ref = Some(format!(
-        "{}#realm-policy-server-service",
-        state.service_id()
-    ));
+    event.authorization_ref = Some(
+        arkret_wire::AuthorizationRef::new(format!(
+            "{}#realm-policy-server-service",
+            state.service_id()
+        ))
+        .map_err(|error| {
+            AppError::internal(format!(
+                "policy server authorization reference is invalid: {error}"
+            ))
+        })?,
+    );
     event.prev_refs = frontier.frontier_event_ids;
     event.preconditions = preconditions;
     event.seal_basis = Some(crate::routing::admin::pick_admin_seal_basis(
