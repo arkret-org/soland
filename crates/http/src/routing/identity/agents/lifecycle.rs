@@ -741,7 +741,8 @@ pub(super) async fn get_agent(
             Some(GrantSnapshot {
                 grant_id: GrantId::new(grant_id).ok()?,
                 realm_id: RealmId::new(realm_id).ok()?,
-                status: display.map(|(_, status)| status.clone()),
+                status: display
+                    .and_then(|(_, status)| arkret_wire::NonEmptyString::new(status.clone()).ok()),
                 grant_digest: None,
                 expires_at: display.and_then(|(expires_at, _)| *expires_at),
             })
@@ -994,7 +995,7 @@ pub(super) async fn pause_agent(
             agent_id.into_inner(),
             AgentLifecycleState::Paused,
             "ak.self.agent.pause",
-            body.reason,
+            body.reason.map(arkret_wire::NonEmptyString::into_string),
             None,
             Some(body.lifecycle_event),
         )
@@ -1157,7 +1158,7 @@ pub(super) async fn deactivate_agent(
             agent_id,
             AgentLifecycleState::Deactivated,
             "ak.self.agent.deactivate",
-            body.reason,
+            body.reason.map(arkret_wire::NonEmptyString::into_string),
             None,
             Some(body.lifecycle_event),
         )

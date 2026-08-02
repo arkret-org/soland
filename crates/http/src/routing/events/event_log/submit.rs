@@ -3,6 +3,7 @@ use std::hash::Hasher;
 use std::sync::{Arc, OnceLock};
 
 use arkret_models_collaboration::http_bodies::EventsSubmitRejectedItem;
+use arkret_wire::ReasonCode;
 
 use super::*;
 use crate::invite_claim_proofs::{
@@ -35,6 +36,22 @@ mod ghost_provision;
 pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
 mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
+
+fn rejected_item(
+    id: String,
+    reason_code: ReasonCode,
+    detail: Option<String>,
+) -> EventsSubmitRejectedItem {
+    EventsSubmitRejectedItem {
+        index: None,
+        id,
+        reason_code,
+        detail,
+        missing_event_ids: Vec::new(),
+        missing_seal_refs: Vec::new(),
+        missing_event_digests: Vec::new(),
+    }
+}
 
 fn actor_submit_lock(realm_id: &str, actor_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     let locks = ACTOR_SUBMIT_LOCKS.get_or_init(|| {
@@ -897,12 +914,11 @@ async fn submit_event_batch_outcome_with_leases(
                 if let Some(event_id) = error.quarantine_event_id {
                     quarantine.push(event_id);
                 } else {
-                    rejected.push(EventsSubmitRejectedItem {
+                    rejected.push(rejected_item(
                         id,
-                        reason_code: error.code.to_owned(),
-                        detail: Some(error.message),
-                        ..Default::default()
-                    });
+                        ReasonCode::from_wire(&error.code),
+                        Some(error.message),
+                    ));
                 }
             }
         }
@@ -1609,12 +1625,13 @@ pub(crate) async fn submit_federation_events(
             Err(rejection) => {
                 let rejected = events
                     .iter()
-                    .map(|envelope| EventsSubmitRejectedItem {
-                        id: event_string_field_from_value(envelope, "event_id")
-                            .unwrap_or_else(|| "unknown".to_owned()),
-                        reason_code: rejection.code.to_owned(),
-                        detail: Some(rejection.message.clone()),
-                        ..Default::default()
+                    .map(|envelope| {
+                        rejected_item(
+                            event_string_field_from_value(envelope, "event_id")
+                                .unwrap_or_else(|| "unknown".to_owned()),
+                            ReasonCode::from_wire(&rejection.code),
+                            Some(rejection.message.clone()),
+                        )
                     })
                     .collect::<Vec<_>>();
                 append_audit_log(
@@ -1767,14 +1784,14 @@ pub(crate) async fn submit_federation_events(
         })
     {
         rejected.extend(events.iter().map(|event| {
-            EventsSubmitRejectedItem {
-                id: event_string_field_from_value(event, "event_id")
+            let mut item = rejected_item(
+                event_string_field_from_value(event, "event_id")
                     .unwrap_or_else(|| "unknown".to_owned()),
-                reason_code: "dependency_missing".to_owned(),
-                missing_event_ids: service_binding_ref.membership_frontier.clone(),
-                detail: Some("the referenced Realm bootstrap has not arrived yet".to_owned()),
-                ..Default::default()
-            }
+                ReasonCode::DependencyMissing,
+                Some("the referenced Realm bootstrap has not arrived yet".to_owned()),
+            );
+            item.missing_event_ids = service_binding_ref.membership_frontier.clone();
+            item
         }));
         res.render(Json(events_submit_outcome(
             EventsSubmitStatus::Partial,
@@ -1792,39 +1809,35 @@ pub(crate) async fn submit_federation_events(
             .unwrap_or_else(|| "unknown".to_owned());
         let event_realm = event_string_field_from_value(&envelope, "realm_id");
         if event_realm.as_deref() != Some(binding_realm.as_str()) {
-            rejected.push(EventsSubmitRejectedItem {
+            rejected.push(rejected_item(
                 id,
-                reason_code: "schema_violation".to_owned(),
-                detail: Some("event realm_id must match service_binding_ref.realm_id".to_owned()),
-                ..Default::default()
-            });
+                ReasonCode::from_wire("schema_violation"),
+                Some("event realm_id must match service_binding_ref.realm_id".to_owned()),
+            ));
             continue;
         }
         let Some(actor) = event_string_field_from_value(&envelope, "actor_id") else {
-            rejected.push(EventsSubmitRejectedItem {
+            rejected.push(rejected_item(
                 id,
-                reason_code: "missing_param".to_owned(),
-                detail: Some("actor_id is required".to_owned()),
-                ..Default::default()
-            });
+                ReasonCode::from_wire("missing_param"),
+                Some("actor_id is required".to_owned()),
+            ));
             continue;
         };
         if validate_did(&actor).is_err() {
-            rejected.push(EventsSubmitRejectedItem {
+            rejected.push(rejected_item(
                 id,
-                reason_code: "invalid_param".to_owned(),
-                detail: Some("actor_id must be a DID".to_owned()),
-                ..Default::default()
-            });
+                ReasonCode::from_wire("invalid_param"),
+                Some("actor_id must be a DID".to_owned()),
+            ));
             continue;
         }
         if let Err(rejection) = profile_gate.enforce_event(&envelope) {
-            rejected.push(EventsSubmitRejectedItem {
+            rejected.push(rejected_item(
                 id,
-                reason_code: rejection.code.to_owned(),
-                detail: Some(rejection.message),
-                ..Default::default()
-            });
+                ReasonCode::from_wire(&rejection.code),
+                Some(rejection.message),
+            ));
             continue;
         }
         let event_kind = event_string_field_from_value(&envelope, "kind");
@@ -1832,12 +1845,11 @@ pub(crate) async fn submit_federation_events(
             == Some(arkret_wire::EventKind::MLS_WELCOME)
         {
             let Some(payload) = envelope.get("payload") else {
-                rejected.push(EventsSubmitRejectedItem {
+                rejected.push(rejected_item(
                     id,
-                    reason_code: "schema_violation".to_owned(),
-                    detail: Some("MLS Welcome payload is required".to_owned()),
-                    ..Default::default()
-                });
+                    ReasonCode::from_wire("schema_violation"),
+                    Some("MLS Welcome payload is required".to_owned()),
+                ));
                 continue;
             };
             match crate::routing::mls::validate_federated_welcome_peer_claim(
@@ -1851,30 +1863,24 @@ pub(crate) async fn submit_federation_events(
             {
                 Ok(()) => {}
                 Err("peer_claim_welcome_pending") => {
-                    rejected.push(EventsSubmitRejectedItem {
+                    let mut item = rejected_item(
                         id,
-                        reason_code: "dependency_missing".to_owned(),
-                        missing_event_ids: serde_json::from_value::<arkret_wire::Event>(
-                            envelope.clone(),
-                        )
-                        .map(|event| event.prev_refs)
-                        .unwrap_or_default(),
-                        detail: Some(
-                            "the Welcome peer claim ledger entry is not available yet".to_owned(),
-                        ),
-                        ..Default::default()
-                    });
+                        ReasonCode::DependencyMissing,
+                        Some("the Welcome peer claim ledger entry is not available yet".to_owned()),
+                    );
+                    item.missing_event_ids =
+                        serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+                            .map(|event| event.prev_refs)
+                            .unwrap_or_default();
+                    rejected.push(item);
                     continue;
                 }
                 Err(_) => {
-                    rejected.push(EventsSubmitRejectedItem {
+                    rejected.push(rejected_item(
                         id,
-                        reason_code: "failed_precondition".to_owned(),
-                        detail: Some(
-                            "MLS Welcome is not bound to the authenticated peer claim".to_owned(),
-                        ),
-                        ..Default::default()
-                    });
+                        ReasonCode::from_wire("failed_precondition"),
+                        Some("MLS Welcome is not bound to the authenticated peer claim".to_owned()),
+                    ));
                     continue;
                 }
             }
@@ -1896,12 +1902,11 @@ pub(crate) async fn submit_federation_events(
         )
         .await
         {
-            rejected.push(EventsSubmitRejectedItem {
+            rejected.push(rejected_item(
                 id,
-                reason_code: "capability_denied".to_owned(),
-                detail: Some("actor_id is not hosted by the source service authority and is not a known member of the binding realm".to_owned()),
-                ..Default::default()
-            });
+                ReasonCode::from_wire("capability_denied"),
+                Some("actor_id is not hosted by the source service authority and is not a known member of the binding realm".to_owned()),
+            ));
             continue;
         }
         let device_id = event_string_field_from_value(&envelope, "device_id")
@@ -1956,25 +1961,25 @@ pub(crate) async fn submit_federation_events(
         .await
         {
             tracing::debug!(%error, event_id = %id, "federation Seal prerequisite is unavailable");
-            rejected.push(EventsSubmitRejectedItem {
+            let mut item = rejected_item(
                 id,
-                reason_code: if error.code == ErrorCode::DependencyMissing {
-                    "dependency_missing".to_owned()
+                if error.code == ErrorCode::DependencyMissing {
+                    ReasonCode::DependencyMissing
                 } else {
-                    error.wire_code().to_owned()
+                    ReasonCode::from_wire(error.wire_code())
                 },
-                missing_seal_refs: if error.code == ErrorCode::DependencyMissing {
-                    serde_json::from_value::<arkret_wire::Event>(envelope.clone())
-                        .ok()
-                        .and_then(|event| event.seal_ref)
-                        .into_iter()
-                        .collect()
-                } else {
-                    Vec::new()
-                },
-                detail: Some(error.message.to_string()),
-                ..Default::default()
-            });
+                Some(error.message.to_string()),
+            );
+            item.missing_seal_refs = if error.code == ErrorCode::DependencyMissing {
+                serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+                    .ok()
+                    .and_then(|event| event.seal_ref)
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            rejected.push(item);
             continue;
         }
         match submit_event_value_with_context(
@@ -2010,28 +2015,26 @@ pub(crate) async fn submit_federation_events(
             }
             Err(error) => {
                 if error.code == "dependency_missing" {
-                    rejected.push(EventsSubmitRejectedItem {
+                    let mut item = rejected_item(
                         id,
-                        reason_code: "dependency_missing".to_owned(),
-                        missing_event_ids: serde_json::from_value::<arkret_wire::Event>(
-                            envelope.clone(),
-                        )
-                        .map(|event| event.prev_refs)
-                        .unwrap_or_default(),
-                        detail: Some("a predecessor Event has not arrived yet".to_owned()),
-                        ..Default::default()
-                    });
+                        ReasonCode::DependencyMissing,
+                        Some("a predecessor Event has not arrived yet".to_owned()),
+                    );
+                    item.missing_event_ids =
+                        serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+                            .map(|event| event.prev_refs)
+                            .unwrap_or_default();
+                    rejected.push(item);
                     continue;
                 }
                 if let Some(event_id) = error.quarantine_event_id {
                     quarantine.push(event_id);
                 } else {
-                    rejected.push(EventsSubmitRejectedItem {
+                    rejected.push(rejected_item(
                         id,
-                        reason_code: error.code.to_owned(),
-                        detail: Some(error.message),
-                        ..Default::default()
-                    });
+                        ReasonCode::from_wire(&error.code),
+                        Some(error.message),
+                    ));
                 }
             }
         }

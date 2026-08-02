@@ -199,11 +199,7 @@ pub(crate) async fn enforce_operation_policy_server(
                 .unwrap_or_else(|| "local policy gate denied operation".to_owned()),
         )),
         MergedAuthzDecision::RemoteDeny { remote, .. } => Err(PolicyGateRejection::forbidden(
-            if remote.reason_code.trim().is_empty() {
-                "policy_server_denied".to_owned()
-            } else {
-                remote.reason_code
-            },
+            remote.reason_code.as_str().to_owned(),
             "realm policy server denied operation",
         )),
         MergedAuthzDecision::RemoteObligationFailed { error, .. } => {

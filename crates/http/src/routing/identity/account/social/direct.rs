@@ -2323,11 +2323,12 @@ pub(super) async fn claim_direct_keypackage(
         .failures
         .first()
         .map(|failure| failure.reason_code.clone())
-        .unwrap_or_else(|| "no_claim".to_owned());
+        .unwrap_or_else(|| arkret_wire::ReasonCode::from_wire("no_claim"));
     let available = outcome.available_count.unwrap_or(0);
     outcome.claims.into_iter().next().ok_or_else(|| {
         direct_conversation_unavailable().with_private_detail(format!(
-            "local KeyPackage claim returned no usable claim (reason={reason}, available={available})"
+            "local KeyPackage claim returned no usable claim (reason={}, available={available})",
+            reason.as_str()
         ))
     })
 }

@@ -1474,7 +1474,7 @@ async fn claim_keypackages_for_request_inner(
             failures: vec![KeypackageFailure {
                 keypackage_ref: None,
                 device_id: target_device_ids.iter().next().cloned(),
-                reason_code: reason_code.to_owned(),
+                reason_code: arkret_wire::ReasonCode::from_wire(reason_code),
                 retry_after_ms: None,
             }],
             available_count: Some(available_before),
@@ -1580,8 +1580,9 @@ async fn claim_keypackages_for_request_inner(
         failures: vec![KeypackageFailure {
             keypackage_ref: None,
             device_id: target_device_ids.iter().next().cloned(),
-            reason_code: soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND
-                .to_owned(),
+            reason_code: arkret_wire::ReasonCode::from_wire(
+                soland_services::operation_semantics::REASON_KEYPACKAGE_NOT_FOUND,
+            ),
             retry_after_ms: None,
         }],
         available_count: Some(available_before),
@@ -2831,7 +2832,7 @@ fn device_authorize_trust_binding(
 fn keypackage_failure(
     entry: &KeyPackageUploadEntry,
     device_id: &str,
-    reason_code: impl Into<String>,
+    reason_code: impl AsRef<str>,
 ) -> KeypackageFailure {
     let keypackage_ref = if entry.keypackage_ref.is_empty() {
         entry.keypackage_id.clone()
@@ -2841,19 +2842,19 @@ fn keypackage_failure(
     KeypackageFailure {
         keypackage_ref: (!keypackage_ref.is_empty()).then_some(keypackage_ref),
         device_id: Some(device_id.to_owned()),
-        reason_code: reason_code.into(),
+        reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
         retry_after_ms: None,
     }
 }
 
 fn keypackage_ref_failure(
     keypackage_ref: String,
-    reason_code: impl Into<String>,
+    reason_code: impl AsRef<str>,
 ) -> KeypackageFailure {
     KeypackageFailure {
         keypackage_ref: Some(keypackage_ref),
         device_id: None,
-        reason_code: reason_code.into(),
+        reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
         retry_after_ms: None,
     }
 }

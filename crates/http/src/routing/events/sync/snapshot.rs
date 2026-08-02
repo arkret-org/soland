@@ -348,8 +348,6 @@ async fn agent_signer_evidence_bundle_for_sync(
         arkret_models_collaboration::sync_frames::account_sync::RealmSyncEntry,
     >,
 ) -> Option<arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle> {
-    use arkret_wire::NonEmptyString;
-
     let mut selectors = BTreeMap::new();
     for (realm_id, entry) in realms {
         let Ok(value) = serde_json::to_value(entry) else {
@@ -370,8 +368,7 @@ async fn agent_signer_evidence_bundle_for_sync(
     }
     Some(
         arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceBundle {
-            schema: NonEmptyString::new(SchemaId::AGENT_SIGNER_EVIDENCE_BUNDLE_V1.to_owned())
-                .ok()?,
+            schema: SchemaId::AgentSignerEvidenceBundleV1,
             evidence,
         },
     )

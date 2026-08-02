@@ -641,7 +641,7 @@ fn refresh_backup_erase_completion(
         BackupSeriesEraseStatus::Partial
     };
     outcome.confirmation = complete.then(|| BackupSeriesEraseConfirmation {
-        schema: SchemaId::BACKUP_SERIES_ERASE_CONFIRMATION_V1.to_owned(),
+        schema: SchemaId::BackupSeriesEraseConfirmationV1,
         transaction_id: request.transaction_id.clone(),
         transaction_request_digest: request.transaction_request_digest.clone(),
         prepared_plan_digest: request.prepared_plan_digest.clone(),
@@ -1003,7 +1003,9 @@ pub(crate) async fn backup_series_erase_command(
         let result = &mut progress.outcome.series_results[result_index];
         if storage_failed && !result.remaining_backups.is_empty() {
             result.status = BackupSeriesEraseResultStatus::FailedRetryable;
-            result.reason_code = Some("storage_temporarily_unavailable".to_owned());
+            result.reason_code = Some(arkret_wire::ReasonCode::from_wire(
+                "storage_temporarily_unavailable",
+            ));
             progress = state
                 .security_transactions()
                 .update_backup_erase(progress)
@@ -2624,8 +2626,14 @@ fn did_version_id_from_ref<'a>(principal_id: &Did, reference: &'a str) -> Option
         .then_some(value)
 }
 
-fn did_publication_status_is_success(status: &str) -> bool {
-    matches!(status, "accepted" | "duplicate")
+fn did_publication_status_is_success(
+    status: &arkret_models_identity::identity::DidOperationSubmitStatus,
+) -> bool {
+    matches!(
+        status,
+        arkret_models_identity::identity::DidOperationSubmitStatus::Accepted
+            | arkret_models_identity::identity::DidOperationSubmitStatus::Duplicate
+    )
 }
 
 fn security_transaction_service_error(error: soland_services::ServiceError) -> AppError {
@@ -2668,8 +2676,15 @@ mod tests {
 
     #[test]
     fn did_publication_exact_replay_is_successful() {
-        assert!(did_publication_status_is_success("accepted"));
-        assert!(did_publication_status_is_success("duplicate"));
-        assert!(!did_publication_status_is_success("rejected"));
+        use arkret_models_identity::identity::DidOperationSubmitStatus;
+        assert!(did_publication_status_is_success(
+            &DidOperationSubmitStatus::Accepted
+        ));
+        assert!(did_publication_status_is_success(
+            &DidOperationSubmitStatus::Duplicate
+        ));
+        assert!(!did_publication_status_is_success(
+            &DidOperationSubmitStatus::Pending
+        ));
     }
 }

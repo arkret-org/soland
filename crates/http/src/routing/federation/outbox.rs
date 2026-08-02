@@ -443,7 +443,7 @@ fn peer_event_partial_retry(
         || outcome
             .rejected
             .iter()
-            .any(|item| item.reason_code != "dependency_missing")
+            .any(|item| item.reason_code != arkret_wire::ReasonCode::DependencyMissing)
     {
         return None;
     }

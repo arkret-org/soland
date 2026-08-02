@@ -202,17 +202,17 @@ fn namespace_pattern_is_wildcard(pattern: &str) -> bool {
     pattern.contains('*') || pattern.ends_with(':') || pattern.ends_with('/')
 }
 
-fn rejected_event(event_id: &str, reason_code: impl Into<String>) -> RejectedItem {
+fn rejected_event(event_id: &str, reason_code: impl AsRef<str>) -> RejectedItem {
     RejectedItem {
         event_id: EventId::new(event_id.to_owned()).ok(),
-        reason_code: reason_code.into(),
+        reason_code: arkret_wire::ReasonCode::from_wire(reason_code.as_ref()),
         retry_after_ms: None,
     }
 }
 
 fn rejected_event_with_detail(
     event_id: &str,
-    reason_code: impl Into<String>,
+    reason_code: impl AsRef<str>,
     detail: impl Into<String>,
 ) -> RejectedItem {
     let _detail = detail.into();

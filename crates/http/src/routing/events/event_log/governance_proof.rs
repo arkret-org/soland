@@ -2,14 +2,12 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use arkret_identifiers::{CellRef, Hash, RealmId, SealId};
 use arkret_models_crypto::{
-    MaterializedMlsGovernanceProofBundle, MlsGovernanceBindingPayload,
-    MlsGovernanceControlStateLeaf, MlsGovernanceControlStateValue, MlsGovernanceProofBundle,
-    MlsGovernanceProofRequestBodyBody, build_mls_governance_proof_chunks,
-    derive_mls_discussion_metadata_digest, is_mls_membership_frontier_component,
+    MaterializedMlsGovernanceProofBundle, MlsGovernanceControlStateLeaf,
+    MlsGovernanceControlStateValue, MlsGovernanceProofBundle, MlsGovernanceProofRequestBodyBody,
+    build_mls_governance_proof_chunks, is_mls_membership_frontier_component,
 };
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
-use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
 use arkret_state::state::{BottomMode, compute_state_root, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cba::LatticeOp;
@@ -1046,11 +1044,6 @@ async fn materialize_governance_proof(
             CellState::Bottom(_) => None,
         })
         .collect::<Vec<_>>();
-    let policy_root = derive_mls_policy_root(&joined).map_err(proof_state_error)?;
-    let capability_root = derive_mls_capability_root(&joined).map_err(proof_state_error)?;
-    let discussion_metadata_digest =
-        derive_mls_discussion_metadata_digest(&control_state).map_err(proof_state_error)?;
-
     let mut frontier_events = events
         .into_iter()
         .filter(|event| event.scope_ref == request.effective_scope)
@@ -1078,11 +1071,6 @@ async fn materialize_governance_proof(
             "Realm/scope has no materialized membership frontier Event",
         ));
     }
-    let membership_frontier = frontier_events
-        .iter()
-        .map(|event| event.event_id.clone())
-        .collect::<Vec<_>>();
-
     let anchor_position = seal_view
         .seal_path
         .iter()
@@ -1108,50 +1096,11 @@ async fn materialize_governance_proof(
         }
         prior.insert(seal.id.clone());
     }
-    // `encryption-and-audit.md` §2.5.1/§2.5.2 — the binding attests which
-    // governance Seals the next epoch covers, and §2.5.2 makes coverage a
-    // universal quantification over the scope's governance Seal set. The
-    // bundle proves exactly the ancestry from the requested trusted anchor to
-    // the accepted Seal, so that path — not a producer-chosen subset — is the
-    // set this binding may claim. `prior` already holds it, deduplicated.
-    let covered_seal_refs = prior.into_iter().collect::<Vec<SealId>>();
-
-    let governance_binding = match &request.effective_scope {
-        GovernanceScope::Realm { .. } => MlsGovernanceBindingPayload::realm(
-            request.realm_id.clone(),
-            request.mls_group_id.clone(),
-            request.previous_epoch,
-            request.next_epoch,
-            membership_frontier,
-            covered_seal_refs,
-            policy_root,
-            capability_root,
-            discussion_metadata_digest,
-            request.binding_profile.clone(),
-            request.reducer_profile.clone(),
-        ),
-        GovernanceScope::Circle { circle_id, .. } => MlsGovernanceBindingPayload::circle(
-            request.realm_id.clone(),
-            circle_id.clone(),
-            request.mls_group_id.clone(),
-            request.previous_epoch,
-            request.next_epoch,
-            membership_frontier,
-            covered_seal_refs,
-            policy_root,
-            capability_root,
-            discussion_metadata_digest,
-            request.binding_profile.clone(),
-            request.reducer_profile.clone(),
-        ),
-        _ => {
-            return Err(AppError::new(
-                ErrorCode::ProfileUnsupported,
-                "unsupported MLS governance effective scope",
-            ));
-        }
-    }
-    .map_err(proof_state_error)?;
+    // Validate that the exact trusted anchor bridges the complete accepted
+    // Seal ancestry. The bundle materializes this proof only; the MLS client
+    // owns the current/pending leaf set and combines it with the verified
+    // control state to derive the unique security_frontier_digest.
+    drop(prior);
 
     Ok(MaterializedMlsGovernanceProofBundle {
         bundle_version: arkret_models_crypto::mls_governance_proof::MLS_GOVERNANCE_PROOF_BUNDLE_VERSION,
@@ -1164,7 +1113,6 @@ async fn materialize_governance_proof(
         realm_id: request.realm_id.clone(),
         effective_scope: request.effective_scope.clone(),
         reducer_profile: request.reducer_profile.clone(),
-        governance_binding,
         trusted_anchor_seal_id: request.trusted_anchor_seal_id.clone(),
         accepted_seal_id: seal_view.accepted_seal.id,
         seal_path,

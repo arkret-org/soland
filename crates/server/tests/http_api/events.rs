@@ -1135,15 +1135,25 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     assert_eq!(bundle.realm_id.as_str(), realm_id);
     assert_eq!(
         bundle
-            .governance_binding
-            .membership_frontier()
+            .frontier_events
             .iter()
-            .map(arkret_identifiers::EventId::as_str)
+            .map(|event| event.event_id.as_str())
             .collect::<Vec<_>>(),
         vec![event["event_id"].as_str().unwrap()],
-        "the genesis create is the bootstrap Realm's only membership-frontier Event: {:?}",
-        bundle.governance_binding.membership_frontier()
+        "the genesis create is the bootstrap Realm's only key-access frontier Event"
     );
+    let expected_frontier_digest =
+        arkret_identifiers::Hash::new(format!("sha256:{}", "aa".repeat(32))).unwrap();
+    let expected_binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+        arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
+        "YXJrcmV0LW1scy1wcm9vZi10ZXN0",
+        0,
+        1,
+        expected_frontier_digest.clone(),
+        "ak.profile.mls_governance_binding.full.v1",
+        "ak.reducer.v1",
+    )
+    .unwrap();
 
     // A §5 anchor unit verifies as a governance-proof frontier.
     //
@@ -1162,13 +1172,15 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         _,
         _,
         _,
+        _,
     >(
         &bundle,
-        &bundle.governance_binding,
+        &expected_binding,
         &bundle.trusted_anchor_seal_id,
         |_| Ok(()),
         |_| Ok(()),
         proof_project_cells,
+        move |_, _, _| Ok(expected_frontier_digest.clone()),
     )
     .expect("a basis-exempt genesis frontier Event verifies");
 }
@@ -1330,18 +1342,32 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     });
     let (proof_chunks, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
+    let expected_frontier_digest =
+        arkret_identifiers::Hash::new(format!("sha256:{}", "aa".repeat(32))).unwrap();
+    let expected_binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
+        arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
+        "YXJrcmV0LW1scy1wcm9vZi10ZXN0",
+        0,
+        1,
+        expected_frontier_digest.clone(),
+        "ak.profile.mls_governance_binding.full.v1",
+        "ak.reducer.v1",
+    )
+    .unwrap();
     let verified = arkret_state::mls_governance_proof::verify_mls_governance_proof_bundle::<
         arkret_wire::WireError,
         _,
         _,
         _,
+        _,
     >(
         &bundle,
-        &bundle.governance_binding,
+        &expected_binding,
         &bundle.trusted_anchor_seal_id,
         |_| Ok(()),
         |_| Ok(()),
         proof_project_cells,
+        move |_, _, _| Ok(expected_frontier_digest.clone()),
     )
     .expect("server proof verifies with SDK");
     assert_eq!(verified.accepted_seal_id, bundle.accepted_seal_id);

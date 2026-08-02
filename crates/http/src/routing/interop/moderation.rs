@@ -883,7 +883,8 @@ async fn moderation_report(
     }
     json_ok(ModerationReportOutcome {
         report_id,
-        status: "submitted".to_owned(),
+        status:
+            arkret_models_collaboration::governance::moderation::ModerationReportStatus::Submitted,
         routed_to,
     })
 }

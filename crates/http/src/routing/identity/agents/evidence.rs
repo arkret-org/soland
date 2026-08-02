@@ -469,7 +469,7 @@ pub(crate) async fn signer_evidence_bundle_for_events(
         return None;
     }
     Some(AgentSignerEvidenceBundle {
-        schema: NonEmptyString::new(SchemaId::AGENT_SIGNER_EVIDENCE_BUNDLE_V1.to_owned()).ok()?,
+        schema: SchemaId::AgentSignerEvidenceBundleV1,
         evidence,
     })
 }

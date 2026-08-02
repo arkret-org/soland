@@ -1276,7 +1276,7 @@ pub(super) fn denied_scope_values(
         .filter(|scope| !approved.contains(scope))
         .map(|scope| DeniedScope {
             requested_scope: scope.clone(),
-            reason_code: "not_approved".to_owned(),
+            reason_code: arkret_wire::ReasonCode::from_wire("not_approved"),
         })
         .collect()
 }

@@ -158,7 +158,7 @@ async fn authz_check(
         last_known_frontier_age_ms: None,
         notary_status: None,
         cache_expires_at: None,
-        reason_code,
+        reason_code: reason_code.map(|code| arkret_wire::ReasonCode::from_wire(&code)),
         retry_after_ms: None,
         obligations: Vec::new(),
     })

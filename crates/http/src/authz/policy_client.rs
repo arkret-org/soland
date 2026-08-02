@@ -457,7 +457,7 @@ impl PolicyClient {
             request_id: request.request_id.clone(),
             decision: AuthzDecision::HardDeny,
             bound_to,
-            reason_code: reason_code.to_owned(),
+            reason_code: arkret_wire::ReasonCode::from_wire(reason_code),
             expires_at: now,
             freshness_state: FreshnessState::Unknown,
             auth_state_digest: expected_frontiers.auth_state_digest.clone(),
@@ -533,8 +533,8 @@ impl PolicyClient {
             decision: AuthzDecision::HardDeny,
             bound_to,
             reason_code: match config.on_timeout.as_str() {
-                "deny" => "policy_server_denied_on_timeout".to_owned(),
-                _ => reason_code.to_owned(),
+                "deny" => arkret_wire::ReasonCode::from_wire("policy_server_denied_on_timeout"),
+                _ => arkret_wire::ReasonCode::from_wire(reason_code),
             },
             expires_at: chrono::Utc::now()
                 + chrono::Duration::seconds(config.cache_ttl_seconds as i64),
@@ -734,7 +734,7 @@ mod tests {
                 kid: "did:web:policy.example.com#key-1".to_owned(),
                 sig: "base64stub".to_owned(),
             },
-            reason_code: "ok".to_owned(),
+            reason_code: arkret_wire::ReasonCode::Ok,
             expires_at: Utc::now() + chrono::Duration::seconds(60),
             next_retry_at: None,
             obligations: Vec::new(),
@@ -799,7 +799,7 @@ mod tests {
                 kid: "did:web:policy.example.com#key-1".to_owned(),
                 sig: String::new(),
             },
-            reason_code: "ok".to_owned(),
+            reason_code: arkret_wire::ReasonCode::Ok,
             expires_at: Utc::now() + chrono::Duration::seconds(60),
             next_retry_at: None,
             obligations: Vec::new(),
@@ -863,7 +863,7 @@ mod tests {
         let cfg_clone = cfg.clone();
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(matches!(resp.decision, AuthzDecision::Allow));
-        assert_eq!(resp.reason_code, "ok");
+        assert_eq!(resp.reason_code, arkret_wire::ReasonCode::Ok);
     }
 
     #[tokio::test]
@@ -932,7 +932,7 @@ mod tests {
         let cfg_clone = cfg.clone();
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(matches!(resp.decision, AuthzDecision::HardDeny));
-        assert_eq!(resp.reason_code, "snapshot_risk");
+        assert_eq!(resp.reason_code.as_str(), "snapshot_risk");
         assert!(resp.signature.kid.ends_with("#proxy-snapshot_risk"));
     }
 
@@ -953,7 +953,7 @@ mod tests {
         let cfg_clone = cfg.clone();
         let resp = client.check(input, move |_| Some(cfg_clone)).await.unwrap();
         assert!(matches!(resp.decision, AuthzDecision::HardDeny));
-        assert_eq!(resp.reason_code, "fork_risk");
+        assert_eq!(resp.reason_code.as_str(), "fork_risk");
         assert!(resp.signature.kid.ends_with("#proxy-fork_risk"));
         assert_eq!(resp.policy_frontier_digest, hash_with('0'));
     }

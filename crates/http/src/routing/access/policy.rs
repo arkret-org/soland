@@ -399,7 +399,7 @@ async fn policy_check(
         request_id: body.request_id.clone(),
         decision,
         bound_to,
-        reason_code,
+        reason_code: arkret_wire::ReasonCode::from_wire(&reason_code),
         freshness_state,
         expires_at,
         auth_state_digest,

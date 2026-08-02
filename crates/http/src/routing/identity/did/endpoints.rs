@@ -1075,7 +1075,7 @@ pub(crate) async fn identity_submit_did_operation(
     }) {
         if existing_event.event_digest == event_digest && existing_event.operation == operation {
             return did_operation_submit_outcome(
-                "duplicate",
+                arkret_models_identity::identity::DidOperationSubmitStatus::Duplicate,
                 typed_did,
                 next_seq,
                 &version_id,
@@ -1183,7 +1183,7 @@ pub(crate) async fn identity_submit_did_operation(
         }
         WebvhLogCommitOutcome::Duplicate => {
             return did_operation_submit_outcome(
-                "duplicate",
+                arkret_models_identity::identity::DidOperationSubmitStatus::Duplicate,
                 typed_did,
                 next_seq,
                 &version_id,
@@ -1207,11 +1207,17 @@ pub(crate) async fn identity_submit_did_operation(
         "accepted",
     )
     .await;
-    did_operation_submit_outcome("accepted", typed_did, next_seq, &version_id, &event_digest)
+    did_operation_submit_outcome(
+        arkret_models_identity::identity::DidOperationSubmitStatus::Accepted,
+        typed_did,
+        next_seq,
+        &version_id,
+        &event_digest,
+    )
 }
 
 fn did_operation_submit_outcome(
-    status: &str,
+    status: arkret_models_identity::identity::DidOperationSubmitStatus,
     did: Did,
     seq: u64,
     version_id: &str,
@@ -1224,7 +1230,7 @@ fn did_operation_submit_outcome(
     })?;
     let operation_ref = format!("{did}?versionId={version_id}");
     json_ok(DidOperationSubmitOutcome {
-        status: status.to_owned(),
+        status,
         did,
         seq: Some(seq),
         head_event_digest: Some(head_event_digest),

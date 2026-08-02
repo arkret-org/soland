@@ -146,7 +146,7 @@ fn mock_allow_response(
             kid: format!("{POLICY_SERVER_DID}#key-1"),
             sig: String::new(),
         },
-        reason_code: "ok".to_owned(),
+        reason_code: arkret_wire::ReasonCode::Ok,
         expires_at,
         next_retry_at: None,
         obligations: Vec::new(),

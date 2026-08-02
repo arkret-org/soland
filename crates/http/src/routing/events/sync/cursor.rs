@@ -899,7 +899,7 @@ pub(super) async fn account_cursor_revoke(
     if !cursor.starts_with("ak:cursor:") || cursor.len() <= "ak:cursor:".len() {
         return Err(AppError::invalid_param("cursor must be a ak:cursor token"));
     }
-    let reason_code = body.reason_code.trim();
+    let reason_code = body.reason_code.as_str().trim();
     if reason_code.is_empty() {
         return Err(AppError::invalid_param("reason_code is required"));
     }

@@ -1580,11 +1580,11 @@ fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary
         .filter(|name| !name.is_empty());
     let authorized = device.revoked_at.is_none() && device.verification_state == "verified";
     let status = if device.revoked_at.is_some() {
-        "revoked"
+        arkret_models_identity::artifacts_account::DeviceSummaryStatus::Revoked
     } else if authorized {
-        "active"
+        arkret_models_identity::artifacts_account::DeviceSummaryStatus::Active
     } else {
-        "unknown"
+        arkret_models_identity::artifacts_account::DeviceSummaryStatus::Unknown
     };
     let authorized_event_ref = device
         .payload
@@ -1601,7 +1601,7 @@ fn account_device_summary(device: DeviceIdentity) -> Result<AccountDeviceSummary
         .transpose()?;
     Ok(AccountDeviceSummary {
         device_id,
-        status: status.to_owned(),
+        status,
         verification_state: device.verification_state.clone(),
         display_name,
         authorized_event_ref,

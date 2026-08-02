@@ -464,7 +464,8 @@ pub(super) async fn mimi_consent_request(
     );
     json_ok(MimiRequestConsentOutcome {
         consent_id,
-        status: "requested".to_owned(),
+        status: arkret_wire::NonEmptyString::new("requested")
+            .expect("requested is a non-empty protocol literal"),
         challenge: None,
     })
 }
@@ -513,7 +514,8 @@ pub(super) async fn mimi_consent_update(
         }),
     );
     json_ok(MimiUpdateConsentOutcome {
-        status: if granted { "accepted" } else { "revoked" }.to_owned(),
+        status: arkret_wire::NonEmptyString::new(if granted { "accepted" } else { "revoked" })
+            .expect("consent status protocol literals are non-empty"),
         updated_at,
         event_ref,
     })
@@ -921,7 +923,8 @@ pub(super) async fn mimi_report_abuse(
         .map_err(|error| AppError::internal(format!("MIMI report id: {error}")))?;
     json_ok(MimiReportAbuseOutcome {
         report_id,
-        status: "queued".to_owned(),
+        status: arkret_wire::NonEmptyString::new("queued")
+            .expect("queued is a non-empty protocol literal"),
         routed_to,
     })
 }
