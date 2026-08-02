@@ -159,6 +159,13 @@ mod tests {
                     "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
                     "match_scope": "realm_wide"
                 }],
+                "issuer_authority_refs": [{
+                    "kind": "realm_root",
+                    "realm_id": "ak:realm:01904100-0000-7000-8000-000000000012",
+                    "cell_ref": "ak:cell:ak.component.realm.authority_root.v1:null",
+                    "controller_epoch_at_issuance": 0,
+                    "authority_generation": 0
+                }],
                 "issued_at": "2026-07-21T08:00:00.000Z",
                 "proofs": []
             }))

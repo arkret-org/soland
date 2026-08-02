@@ -20,7 +20,7 @@ pub(crate) const REACTION_TARGET_FIELDS: &[&str] = &[
 ];
 pub(crate) const REACTION_ACTOR_FIELDS: &[&str] = &["actor", "sender"];
 pub(crate) const REACTION_KEY_FIELDS: &[&str] = &["key", "reaction", "reaction_key"];
-pub(crate) const RELATION_ID_FIELDS: &[&str] = &["relation_id", "id"];
+pub(crate) const RELATION_ID_FIELDS: &[&str] = &["relation_id"];
 pub(crate) const RELATION_KIND_FIELDS: &[&str] = &["relation_kind", "kind"];
 pub(crate) const RELATION_FROM_FIELDS: &[&str] = &["from_ref", "from"];
 pub(crate) const RELATION_TO_FIELDS: &[&str] = &["to_ref", "to"];

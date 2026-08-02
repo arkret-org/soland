@@ -460,7 +460,7 @@ pub(crate) async fn verify_authoritative_event_seal_signature(
             )
             .map_err(|error| error.to_string())
     } else {
-        crate::jws_verify::verify_jws_ed25519_async(
+        crate::jws_verify::verify_did_controlled_jws_async(
             canonical_bytes,
             &signature.jws,
             &signature.verification_method,

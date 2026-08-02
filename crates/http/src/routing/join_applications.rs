@@ -140,7 +140,7 @@ async fn verify_receipt_proof(
     let result = if state.config().development_mode {
         crate::jws_verify::verify_jws_shape(&binding, jws, verification_method, actor)
     } else {
-        crate::jws_verify::verify_jws_ed25519_async(
+        crate::jws_verify::verify_did_controlled_jws_async(
             &binding,
             jws,
             verification_method,

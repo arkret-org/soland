@@ -463,7 +463,7 @@ async fn verify_remote_handle_claim_proof(
                 peer_did,
             )
         } else {
-            crate::jws_verify::verify_jws_ed25519_async(
+            crate::jws_verify::verify_did_controlled_jws_async(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,

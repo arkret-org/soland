@@ -246,7 +246,7 @@ pub(crate) async fn verify_control_proposal_receipt(
             .await
             .map_err(|error| error.to_string())?;
         } else {
-            crate::jws_verify::verify_jws_ed25519_async(
+            crate::jws_verify::verify_did_controlled_jws_async(
                 &bytes,
                 &member.signature.jws,
                 &member.signature.verification_method,

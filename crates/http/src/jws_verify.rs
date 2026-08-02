@@ -1,28 +1,25 @@
-//! Soland thin wrapper over the canonical detached-JWS verifier in
-//! [`arkret_identity::jws`].
+//! Soland thin adapter over the canonical detached-JWS verifier in the SDK.
 //!
 //! All JWS verification semantics (RFC 7515 detached shape, Ed25519
-//! signature check, DID resolution, replay-window timing) live in the
+//! signature check, authority binding, replay-window timing) live in the
 //! SDK so inkson, floria, cotest, teabay and soland share one
-//! wire-compatible implementation. This module exists only to bridge
-//! soland's [`AppState`]-rooted resolver into the SDK's
-//! `&dyn DidResolver` API and to re-export the pure helpers (replay
-//! windows, HLC parsing) for soland callers that reference
-//! `crate::jws_verify::*`.
+//! wire-compatible implementation. This module selects a document or accepted
+//! key from [`AppState`], then hands pinned material to the resolver-free SDK
+//! verifier. It also re-exports pure replay-window helpers.
 //!
 //! # Two-tier verifier model (unchanged)
 //!
 //! - Dev mode (`config.development_mode == true`): handlers use [`verify_jws_shape`] — RFC 7515
 //!   §3.2 detached shape, alg=EdDSA, no zero-sentinel signature, no actual crypto. Lets test
 //!   fixtures and local dev iterate without managing real keys.
-//! - Production mode (default): handlers use [`verify_jws_ed25519`] via
-//!   [`AppState::jws_verifier`]'s closure factory — same shape checks PLUS DID resolution + Ed25519
-//!   public-key extraction + RFC 7515 §5.2 signing-input reconstruction + ed25519-dalek verify.
+//! - Production mode (default): handlers use [`verify_did_controlled_jws`] or its async
+//!   counterpart. The selected document, issuer and verification-method DID root must agree before
+//!   the SDK performs Ed25519 verification.
 
 use std::collections::BTreeMap;
 
 use arkret_identifiers::{Did, Hash};
-use arkret_identity::{DidDocument, DidResolver};
+use arkret_identity::DidDocument;
 use arkret_signatures::{
     Ed25519DetachedJwsVerifier, PublicKeyMaterial, VerifierError, build_proof_envelope,
 };
@@ -67,7 +64,7 @@ pub use arkret_identity::jws::{
 ///
 /// This is intentionally colocated with soland's production SDK verifier
 /// adapter so handlers do not define their own detached-JWS shape semantics.
-/// Production mode still delegates to [`verify_jws_ed25519`].
+/// Production mode still delegates to the SDK's resolver-free verifier.
 pub fn verify_jws_shape(
     canonical_bytes: &[u8],
     jws: &str,
@@ -128,53 +125,12 @@ fn dev_shape_only_public_key() -> PublicKeyMaterial {
     }
 }
 
-/// Production Ed25519 detached-JWS verifier.
+/// Production detached-JWS verifier for a DID-controlled method.
 ///
-/// Soland-side adapter: dispatches the injected DID resolver to
-/// [`arkret_identity::jws::verify_jws_ed25519`]. See the SDK module docs for
-/// the full spec (RFC 7515 detached shape, alg=EdDSA, did:key /
-/// did:web / did:webvh resolution).
-pub fn verify_jws_ed25519(
-    canonical_bytes: &[u8],
-    jws: &str,
-    verification_method: &str,
-    issuer: &str,
-    state: &AppState,
-) -> Result<(), String> {
-    // MIGRATION NOTE (`did-usage-and-verification.md` §3/§6):
-    // `arkret_identity::jws::verify_jws_ed25519` is deprecated. The replacement
-    // `verify_jws_with_document` additionally compares `document.id == issuer`
-    // — a semantic the deprecated function accepts and silently ignores. The
-    // remaining call sites of this wrapper (`applet_bridge::install`,
-    // `federation::move_seal`) have not each been shown to pass an `issuer`
-    // equal to the verification method's DID root, so flipping them here would
-    // be an unreviewed behaviour change rather than a refactor. Kept explicit
-    // rather than silenced crate-wide.
-    //
-    // The resolver handed in is `SolandDidResolver`'s **synchronous**
-    // `DidResolver` impl: snapshot lookup plus the no-IO SDK fallback chain, so
-    // this path cannot reach the network regardless.
-    #[allow(deprecated)]
-    let outcome = arkret_identity::jws::verify_jws_ed25519(
-        canonical_bytes,
-        jws,
-        verification_method,
-        issuer,
-        state.dids().resolver(),
-    )
-    .map_err(|error| error.to_string());
-    crate::metrics::record_signature_verify(
-        crate::metrics::SIGNATURE_SCHEME_ED25519_JWS,
-        outcome.is_ok(),
-    );
-    outcome
-}
-
-/// Async-native production Ed25519 detached-JWS verifier.
-///
-/// This resolves the DID document through soland's async resolver service
-/// before delegating shape and signature verification to the SDK verifier.
-pub async fn verify_jws_ed25519_async(
+/// This synchronous form uses only deployment-local snapshots and configured
+/// keys. Signature verification is delegated to the SDK after the document is
+/// pinned; `issuer` is compared with both document id and the method's DID root.
+pub fn verify_did_controlled_jws(
     canonical_bytes: &[u8],
     jws: &str,
     verification_method: &str,
@@ -183,29 +139,67 @@ pub async fn verify_jws_ed25519_async(
 ) -> Result<(), String> {
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
+    let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    if did != issuer_did {
+        return Err("verification method controller does not match issuer".to_owned());
+    }
+    let document = document_for_verification_sync(state, &did, verification_method)?;
+    verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
+}
+
+/// Async-native production Ed25519 detached-JWS verifier.
+///
+/// This resolves the DID document through soland's async resolver service
+/// before delegating shape and signature verification to the SDK verifier.
+pub async fn verify_did_controlled_jws_async(
+    canonical_bytes: &[u8],
+    jws: &str,
+    verification_method: &str,
+    issuer: &str,
+    state: &AppState,
+) -> Result<(), String> {
+    let did = arkret_identity::verification_method_did(verification_method)
+        .map_err(|error| error.to_string())?;
+    let issuer_did = Did::new(issuer.to_owned()).map_err(|error| error.to_string())?;
+    if did != issuer_did {
+        return Err("verification method controller does not match issuer".to_owned());
+    }
     let document = document_for_verification(state, &did, verification_method).await?;
-    let resolver = ResolvedDidDocumentResolver {
-        document: &document,
-    };
-    // See the migration note on [`verify_jws_ed25519`]: the document is already
-    // pinned here (the "resolver" only replays it), so the only thing the
-    // replacement API would add is the `document.id == issuer` comparison. Nine
-    // call sites depend on the current looser behaviour and are migrated
-    // separately.
-    #[allow(deprecated)]
-    let outcome = arkret_identity::jws::verify_jws_ed25519(
-        canonical_bytes,
-        jws,
-        verification_method,
-        issuer,
-        &resolver,
-    )
-    .map_err(|error| error.to_string());
-    crate::metrics::record_signature_verify(
-        crate::metrics::SIGNATURE_SCHEME_ED25519_JWS,
-        outcome.is_ok(),
-    );
-    outcome
+    verify_jws_with_pinned_document(canonical_bytes, jws, verification_method, issuer, &document)
+}
+
+fn document_for_verification_sync(
+    state: &AppState,
+    did: &Did,
+    verification_method: &str,
+) -> Result<DidDocument, String> {
+    if is_local_service_notary_method(state, did, verification_method) {
+        return Ok(DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.to_owned(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(
+                    state.notary_verifying_key().as_bytes(),
+                ),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        });
+    }
+    if let Some(key) = state.federation_peer_verification_method_key(verification_method) {
+        return Ok(DidDocument {
+            id: did.clone(),
+            verification_methods: BTreeMap::from([(
+                verification_method.to_owned(),
+                arkret_canonical::ed25519_pubkey_to_did_key_multibase(key.as_bytes()),
+            )]),
+            also_known_as: Vec::new(),
+            updated_at: Some(chrono::Utc::now()),
+            raw_properties: BTreeMap::new(),
+        });
+    }
+    resolve_did_document(state, did)
 }
 
 /// Produce the DID document a JWS should be verified against.
@@ -886,10 +880,7 @@ pub async fn resolve_ed25519_pubkey_async(
     let did = arkret_identity::verification_method_did(verification_method)
         .map_err(|error| error.to_string())?;
     let document = resolve_did_document_async(state, &did).await?;
-    let resolver = ResolvedDidDocumentResolver {
-        document: &document,
-    };
-    arkret_identity::jws::resolve_ed25519_pubkey(&resolver, verification_method)
+    arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
         .map_err(|error| error.to_string())
 }
 
@@ -907,13 +898,9 @@ pub async fn resolve_ed25519_verification_key_for_did(
     validate_verification_method_controller(did.as_str(), verification_method)?;
     let document = resolve_did_document_async(state, did).await?;
     require_verification_method_in_document(&document, verification_method)?;
-    let public_key = {
-        let resolver = ResolvedDidDocumentResolver {
-            document: &document,
-        };
-        arkret_identity::jws::resolve_ed25519_pubkey(&resolver, verification_method)
-            .map_err(|error| error.to_string())?
-    };
+    let public_key =
+        arkret_identity::jws::resolve_ed25519_pubkey_from_document(&document, verification_method)
+            .map_err(|error| error.to_string())?;
     let key_log_head = did_document_key_log_head(state, did, &document).await?;
     Ok(ResolvedVerificationKey {
         verification_method: verification_method.to_owned(),
@@ -967,29 +954,6 @@ pub async fn resolve_did_document_async(
     Ok(document)
 }
 
-struct ResolvedDidDocumentResolver<'a> {
-    document: &'a DidDocument,
-}
-
-impl DidResolver for ResolvedDidDocumentResolver<'_> {
-    fn supports(&self, did: &Did) -> bool {
-        &self.document.id == did
-    }
-
-    fn resolve_did(&self, did: &Did) -> arkret_identity::Result<arkret_identity::ResolvedDid> {
-        if self.supports(did) {
-            // Already pinned: this adapter only reuses the SDK key lookup, so it
-            // asserts no method evidence of its own.
-            return Ok(arkret_identity::ResolvedDid::proofless(
-                self.document.clone(),
-            ));
-        }
-        Err(arkret_identity::IdentityError::Protocol(
-            "resolved DID document does not match requested DID".to_owned(),
-        ))
-    }
-}
-
 /// DID document freshness gate for high-risk paths (fail-closed-on-stale).
 ///
 /// Fetches the DID's persisted [`WebvhDocumentRecord`] (the ingested
@@ -1003,7 +967,7 @@ impl DidResolver for ResolvedDidDocumentResolver<'_> {
 /// there is no trusted ingestion evidence for high-risk verification and the
 /// path also fails closed. Local immediate documents such as dev / extension
 /// actors are not persisted here and are handled directly by the SDK resolver
-/// inside `verify_jws_ed25519`; this gate only covers cached remote/submitted
+/// inside the SDK resolver chain; this gate only covers cached remote/submitted
 /// documents.
 ///
 /// Because soland does not perform on-demand network fetches, "stale" means
@@ -1170,16 +1134,18 @@ mod did_binding_tests {
 
     const PRINCIPAL: &str = "did:web:principal.example";
 
-    /// A state whose resolver chain can reach **nothing**: an empty
-    /// `did_resolver_allow_methods` makes every resolution fail. Any
-    /// verification that still succeeds therefore provably did not resolve.
+    /// A state whose resolver chain has no document for [`PRINCIPAL`]. The
+    /// `web` method remains registered so the resolver-policy digest is valid
+    /// and an accepted binding can be keyed by that policy. Any verification
+    /// that succeeds after seeding the binding therefore used the binding; an
+    /// authority-path lookup still fails because no document was ingested.
     fn state_without_any_resolver() -> AppState {
         AppState::new(
             crate::config::AppConfig {
                 object_storage: crate::config::ObjectStorageConfig::local(
                     std::env::temp_dir().join("soland-did-binding-test"),
                 ),
-                did_resolver_allow_methods: Vec::new(),
+                did_resolver_allow_methods: vec!["web".to_owned()],
                 jws_replay_window_seconds: 0,
                 ..crate::config::AppConfig::test_default()
             },
@@ -1371,6 +1337,37 @@ mod did_binding_tests {
             &current,
         )
         .expect_err("the rotated current document must not accept the old key");
+    }
+
+    #[test]
+    fn pinned_document_rejects_issuer_and_method_controller_mismatch() {
+        let issuer = Did::new(PRINCIPAL.to_owned()).unwrap();
+        let other = Did::new("did:web:other.example".to_owned()).unwrap();
+        let verification_method = format!("{issuer}#control-1");
+        let key = SigningKey::from_bytes(&[11u8; 32]);
+        let document = document_for(&issuer, &verification_method, &key);
+        let payload = b"issuer-bound-object";
+        let jws = signed(&key, payload);
+
+        verify_jws_with_pinned_document(
+            payload,
+            &jws,
+            &verification_method,
+            other.as_str(),
+            &document,
+        )
+        .expect_err("a valid signature cannot substitute a different issuer");
+
+        let other_method = format!("{other}#control-1");
+        let other_document = document_for(&issuer, &other_method, &key);
+        verify_jws_with_pinned_document(
+            payload,
+            &signed(&key, payload),
+            &other_method,
+            issuer.as_str(),
+            &other_document,
+        )
+        .expect_err("a method rooted in another DID cannot control the issuer");
     }
 
     // ========================================================================

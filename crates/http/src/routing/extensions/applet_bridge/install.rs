@@ -993,7 +993,7 @@ fn validate_controller_proof(
             controller_id,
         )
     } else {
-        crate::jws_verify::verify_jws_ed25519(
+        crate::jws_verify::verify_did_controlled_jws(
             unsigned_canonical_bytes,
             &proof.jws,
             &proof.verification_method,

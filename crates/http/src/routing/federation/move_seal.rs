@@ -137,7 +137,7 @@ fn verify_control_move_proofs(state: &AppState, event: &Event) -> Result<(), Str
                 &signer_root,
             )?;
         } else {
-            crate::jws_verify::verify_jws_ed25519(
+            crate::jws_verify::verify_did_controlled_jws(
                 &canonical_bytes,
                 &proof.jws,
                 &proof.verification_method,

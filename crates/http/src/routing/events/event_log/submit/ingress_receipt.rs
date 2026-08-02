@@ -207,8 +207,14 @@ async fn verify_service_publication_proof(
             )
             .map_err(|error| error.to_string());
     }
-    crate::jws_verify::verify_jws_ed25519_async(binding, jws, verification_method, issuer, state)
-        .await
+    crate::jws_verify::verify_did_controlled_jws_async(
+        binding,
+        jws,
+        verification_method,
+        issuer,
+        state,
+    )
+    .await
 }
 
 /// Mint this service's ingress receipt for `parsed`, store it first-writer-wins

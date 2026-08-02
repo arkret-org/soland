@@ -95,7 +95,7 @@ pub(super) async fn verify_federation_actor_signature(
         .map_err(|error| AppError::internal(format!("verify-actor transcript failed: {error}")))?;
 
     if let Some(jws) = actor_signature.jws.as_deref() {
-        crate::jws_verify::verify_jws_ed25519_async(
+        crate::jws_verify::verify_did_controlled_jws_async(
             &transcript_bytes,
             jws,
             &actor_signature.verification_method,

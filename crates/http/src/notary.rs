@@ -18,7 +18,7 @@
 //!     here because it requires the same real multi-signer coordination as threshold.
 //! - **Real Ed25519** signing on both verify *and* sign sides. The signing side delegates the
 //!   detached-JWS construction to `arkret_signatures::jws::sign_jws_ed25519` (symmetric counterpart
-//!   of `verify_jws_ed25519` — the SDK's verify path round-trips against the JWS this worker
+//!   of the SDK detached-JWS verifier — the verify path round-trips against the JWS this worker
 //!   emits). The signing key is sourced from `AppState::notary_signing_key()`, which loads from
 //!   `SOLAND_NOTARY_SIGNING_KEY` (configured) or mints an in-process ephemeral seed at boot
 //!   (dev/test, sticky-warn). Dev mode's shape-only verifier (`select_jws_verifier` in
@@ -1159,7 +1159,7 @@ impl NotaryWorker {
     /// sticky-warn log line on every signing pass.
     ///
     /// The JWS is constructed by `arkret_signatures::jws::sign_jws_ed25519`,
-    /// the symmetric counterpart of `verify_jws_ed25519`. Both sides of
+    /// the symmetric counterpart of the SDK detached-JWS verifier. Both sides of
     /// the wire therefore agree on the protected header (`{"alg":"EdDSA"}`)
     /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
     /// '.' || BASE64URL(canonical_bytes)`) byte-for-byte.
@@ -1260,7 +1260,7 @@ fn zero_notary_sig_placeholder(service_id: &str) -> Result<PayloadSignature, Not
     // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
     // JWS shape is `header..signature`, with the SDK-canonical EdDSA
     // header so the placeholder is at least well-typed for the
-    // `PayloadSignature` field. `verify_jws_ed25519` would reject the
+    // `PayloadSignature` field. The SDK detached-JWS verifier rejects the
     // all-zero signature as a sentinel — that's intended; this value
     // must not survive past the overwrite at the end of step 7.
     let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);

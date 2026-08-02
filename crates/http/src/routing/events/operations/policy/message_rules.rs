@@ -103,7 +103,7 @@ pub(super) fn operation_target_scope_circle_id(
             .or_else(|| inline_scope("object"))
             .or_else(top_level_scope),
         arkret_wire::EventKind::RELATION_UPDATE | arkret_wire::EventKind::RELATION_TOMBSTONE => {
-            relation_scope("relation_id").or_else(|| relation_scope("id"))
+            relation_scope("relation_id")
         }
         arkret_wire::EventKind::MESSAGE_CREATE => strand_scope("strand_id"),
         arkret_wire::EventKind::STRAND_UPDATE => strand_scope("target_ref"),

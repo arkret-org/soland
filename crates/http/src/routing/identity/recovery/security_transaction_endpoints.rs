@@ -789,7 +789,7 @@ pub(crate) async fn backup_series_erase_command(
             .authorization_lease
             .proof_binding_bytes(proof)
             .map_err(|error| AppError::invalid_param(error.to_string()))?;
-        crate::jws_verify::verify_jws_ed25519_async(
+        crate::jws_verify::verify_did_controlled_jws_async(
             &binding_bytes,
             &proof.jws,
             &proof.verification_method,

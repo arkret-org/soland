@@ -1123,7 +1123,7 @@ async fn validate_requested_scope_disclosure(
                 disclosure.controller_id.as_str(),
             )
         } else {
-            crate::jws_verify::verify_jws_ed25519_async(
+            crate::jws_verify::verify_did_controlled_jws_async(
                 &binding_bytes,
                 &proof.jws,
                 &proof.verification_method,
