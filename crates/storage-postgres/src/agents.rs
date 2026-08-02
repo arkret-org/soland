@@ -5,9 +5,10 @@ use diesel::{
 
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow,
-    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentStore, Array, Bool, Jsonb, Nullable,
-    OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName, RunQueryDsl,
-    SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn, sql_query,
+    AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentStore, Array, BigInt, Bool, Jsonb,
+    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
+    RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn,
+    sql_query,
 };
 use crate::schema::agent_principals;
 #[derive(QueryableByName)]
@@ -22,12 +23,24 @@ struct AgentParticipationRow {
     realm_id: Uuid,
     #[diesel(sql_type = Jsonb)]
     scope: Value,
+    #[diesel(sql_type = BigInt)]
+    version: i64,
     #[diesel(sql_type = Bool)]
-    reply: bool,
+    reply_message: bool,
+    #[diesel(sql_type = Bool)]
+    reaction_add: bool,
+    #[diesel(sql_type = Bool)]
+    reaction_remove: bool,
     #[diesel(sql_type = Bool)]
     accept_third_party_mention: bool,
     #[diesel(sql_type = Bool)]
     act_on_behalf: bool,
+    #[diesel(sql_type = Jsonb)]
+    basis: Value,
+    #[diesel(sql_type = Text)]
+    batch_digest: String,
+    #[diesel(sql_type = Text)]
+    scope_evidence_digest: String,
 }
 impl From<AgentParticipationRow> for Value {
     fn from(row: AgentParticipationRow) -> Self {
@@ -37,9 +50,15 @@ impl From<AgentParticipationRow> for Value {
             "scope_key": row.scope_key,
             "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
             "scope": row.scope,
-            "reply": row.reply,
+            "version": row.version,
+            "reply_message": row.reply_message,
+            "reaction_add": row.reaction_add,
+            "reaction_remove": row.reaction_remove,
             "accept_third_party_mention": row.accept_third_party_mention,
             "act_on_behalf": row.act_on_behalf,
+            "basis": row.basis,
+            "batch_digest": row.batch_digest,
+            "scope_evidence_digest": row.scope_evidence_digest,
         })
     }
 }
@@ -52,7 +71,11 @@ struct AgentParticipationCeilingRow {
     #[diesel(sql_type = SqlUuid)]
     realm_id: Uuid,
     #[diesel(sql_type = Bool)]
-    reply: bool,
+    reply_message: bool,
+    #[diesel(sql_type = Bool)]
+    reaction_add: bool,
+    #[diesel(sql_type = Bool)]
+    reaction_remove: bool,
     #[diesel(sql_type = Bool)]
     accept_third_party_mention: bool,
     #[diesel(sql_type = Bool)]
@@ -64,7 +87,9 @@ impl From<AgentParticipationCeilingRow> for Value {
             "scope_kind": row.scope_kind,
             "scope_key": row.scope_key,
             "realm_id": ids::format_typed_uuid("realm", &row.realm_id),
-            "reply": row.reply,
+            "reply_message": row.reply_message,
+            "reaction_add": row.reaction_add,
+            "reaction_remove": row.reaction_remove,
             "accept_third_party_mention": row.accept_third_party_mention,
             "act_on_behalf": row.act_on_behalf,
         })
@@ -89,21 +114,30 @@ impl AgentParticipationStore for PgAgentParticipationStore {
                 })
         };
         let get_bool = |key: &str| record.get(key).and_then(Value::as_bool).unwrap_or(false);
+        let get_i64 = |key: &str| record.get(key).and_then(Value::as_i64).unwrap_or(0);
         let agent_id = get_str("agent_id")?;
         let scope_kind = get_str("scope_kind")?;
         let scope_key = get_str("scope_key")?;
         let realm_id = get_str("realm_id")?;
         let scope = record.get("scope").cloned().unwrap_or(Value::Null);
+        let basis = record.get("basis").cloned().unwrap_or(Value::Null);
+        let batch_digest = get_str("batch_digest")?;
+        let scope_evidence_digest = get_str("scope_evidence_digest")?;
         sql_query(
             "INSERT INTO agent_participation \
-             (id, agent_id, scope_kind, scope_key, realm_id, scope, reply, \
-              accept_third_party_mention, act_on_behalf, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW()) \
+             (id, agent_id, scope_kind, scope_key, realm_id, scope, version, reply_message, \
+              reaction_add, reaction_remove, accept_third_party_mention, act_on_behalf, basis, \
+              batch_digest, scope_evidence_digest, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, NOW()) \
              ON CONFLICT (agent_id, scope_key) DO UPDATE SET \
              scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
-             scope = EXCLUDED.scope, reply = EXCLUDED.reply, \
+             scope = EXCLUDED.scope, version = EXCLUDED.version, \
+             reply_message = EXCLUDED.reply_message, reaction_add = EXCLUDED.reaction_add, \
+             reaction_remove = EXCLUDED.reaction_remove, \
              accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
-             act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
+             act_on_behalf = EXCLUDED.act_on_behalf, basis = EXCLUDED.basis, \
+             batch_digest = EXCLUDED.batch_digest, \
+             scope_evidence_digest = EXCLUDED.scope_evidence_digest, updated_at = NOW()",
         )
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&agent_id)
@@ -111,9 +145,15 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         .bind::<Text, _>(&scope_key)
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&realm_id))
         .bind::<Jsonb, _>(&scope)
-        .bind::<Bool, _>(get_bool("reply"))
+        .bind::<BigInt, _>(get_i64("version"))
+        .bind::<Bool, _>(get_bool("reply_message"))
+        .bind::<Bool, _>(get_bool("reaction_add"))
+        .bind::<Bool, _>(get_bool("reaction_remove"))
         .bind::<Bool, _>(get_bool("accept_third_party_mention"))
         .bind::<Bool, _>(get_bool("act_on_behalf"))
+        .bind::<Jsonb, _>(&basis)
+        .bind::<Text, _>(&batch_digest)
+        .bind::<Text, _>(&scope_evidence_digest)
         .execute(&mut *conn)
         .await
         .map(|_| ())
@@ -125,8 +165,9 @@ impl AgentParticipationStore for PgAgentParticipationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT agent_id, scope_kind, scope_key, realm_id, scope, reply, \
-             accept_third_party_mention, act_on_behalf FROM agent_participation \
+            "SELECT agent_id, scope_kind, scope_key, realm_id, scope, version, reply_message, \
+             reaction_add, reaction_remove, accept_third_party_mention, act_on_behalf, basis, \
+             batch_digest, scope_evidence_digest FROM agent_participation \
              WHERE agent_id = $1 ORDER BY scope_key",
         )
         .bind::<Text, _>(agent_id)
@@ -147,8 +188,9 @@ impl AgentParticipationStore for PgAgentParticipationStore {
             .await
             .map_err(PersistenceError::database)?;
         sql_query(
-            "SELECT scope_kind, id AS scope_key, realm_id, reply, accept_third_party_mention, \
-             act_on_behalf FROM agent_participation_ceiling WHERE id = ANY($1) \
+            "SELECT scope_kind, id AS scope_key, realm_id, reply_message, reaction_add, \
+             reaction_remove, accept_third_party_mention, act_on_behalf \
+             FROM agent_participation_ceiling WHERE id = ANY($1) \
              ORDER BY id",
         )
         .bind::<Array<Text>, _>(scope_keys.to_vec())
@@ -179,19 +221,22 @@ impl AgentParticipationStore for PgAgentParticipationStore {
         let realm_id = get_str("realm_id")?;
         sql_query(
             "INSERT INTO agent_participation_ceiling \
-             (scope_kind, id, realm_id, reply, accept_third_party_mention, \
-              act_on_behalf, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, NOW()) \
+             (scope_kind, id, realm_id, reply_message, reaction_add, reaction_remove, \
+              accept_third_party_mention, act_on_behalf, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW()) \
              ON CONFLICT (id) DO UPDATE SET \
              scope_kind = EXCLUDED.scope_kind, realm_id = EXCLUDED.realm_id, \
-             reply = EXCLUDED.reply, \
+             reply_message = EXCLUDED.reply_message, reaction_add = EXCLUDED.reaction_add, \
+             reaction_remove = EXCLUDED.reaction_remove, \
              accept_third_party_mention = EXCLUDED.accept_third_party_mention, \
              act_on_behalf = EXCLUDED.act_on_behalf, updated_at = NOW()",
         )
         .bind::<Text, _>(&scope_kind)
         .bind::<Text, _>(&scope_key)
         .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&realm_id))
-        .bind::<Bool, _>(get_bool("reply"))
+        .bind::<Bool, _>(get_bool("reply_message"))
+        .bind::<Bool, _>(get_bool("reaction_add"))
+        .bind::<Bool, _>(get_bool("reaction_remove"))
         .bind::<Bool, _>(get_bool("accept_third_party_mention"))
         .bind::<Bool, _>(get_bool("act_on_behalf"))
         .execute(&mut *conn)

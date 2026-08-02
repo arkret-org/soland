@@ -13,7 +13,10 @@ pub(super) fn participation_scope_kind(scope: &AgentParticipationScope) -> &'sta
 
 pub(super) fn participation_from_value(row: &Value) -> AgentParticipation {
     AgentParticipation {
-        reply: row.get("reply").and_then(Value::as_bool).unwrap_or(false),
+        reply: row
+            .get("reply_message")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
         accept_third_party_mention: row
             .get("accept_third_party_mention")
             .and_then(Value::as_bool)
@@ -44,11 +47,11 @@ pub(super) fn agent_participation_failed_precondition(reason: &'static str) -> A
 }
 
 #[endpoint(
-    operation_id = "ak.self.agent.participation.command.replace",
+    operation_id = "ak.self.agent.participation.resource.replace",
     summary = "Replace an agent's participation policy",
     tags("agent_participation")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.command.replace"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.agent.participation.resource.replace"))]
 pub(super) async fn set_agent_participation(
     aa: AuthArgs,
     agent_id: PathParam<String>,
@@ -192,7 +195,7 @@ pub(super) async fn set_agent_participation(
     append_audit_log(
         state,
         Some(&session.actor),
-        "ak.self.agent.participation.command.replace",
+        "ak.self.agent.participation.resource.replace",
         json!({
             "agent_id": agent_id,
             "controller_id": session.actor.clone(),

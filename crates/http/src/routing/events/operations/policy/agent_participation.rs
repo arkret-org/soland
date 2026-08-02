@@ -177,7 +177,7 @@ pub async fn validate_agent_participation_ceiling(
                 .unwrap_or_default();
             for row in &rows {
                 parent = parent.intersect(AgentParticipation {
-                    reply: ap_bool(row, "reply"),
+                    reply: ap_bool(row, "reply_message"),
                     accept_third_party_mention: ap_bool(row, "accept_third_party_mention"),
                     act_on_behalf: ap_bool(row, "act_on_behalf"),
                 });
@@ -198,7 +198,9 @@ pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Optio
         "scope_kind": scope_kind,
         "scope_key": scope_key,
         "realm_id": operation.realm_id.as_str(),
-        "reply": child.reply,
+        "reply_message": child.reply,
+        "reaction_add": false,
+        "reaction_remove": false,
         "accept_third_party_mention": child.accept_third_party_mention,
         "act_on_behalf": child.act_on_behalf,
     }))
