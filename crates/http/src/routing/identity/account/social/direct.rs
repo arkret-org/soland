@@ -444,6 +444,19 @@ async fn validate_direct_binding_event_refs(
         arkret_wire::EventKind::REALM_CREATE,
     )
     .await?;
+    let realm = realm_create
+        .payload
+        .get("object")
+        .cloned()
+        .and_then(|object| {
+            serde_json::from_value::<arkret_models_collaboration::objects::realm::Realm>(object)
+                .ok()
+        })
+        .ok_or("direct_conversation_realm_role_invalid")?;
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::validate(
+        &realm,
+    )
+    .map_err(|_| "direct_conversation_realm_role_invalid")?;
     let creator = realm_create
         .payload
         .get("object")
