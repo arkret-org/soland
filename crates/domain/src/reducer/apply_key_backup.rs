@@ -1,5 +1,6 @@
 use super::*;
-const KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY: &str = "ak.component.key_backup.active_series.v1";
+const KEY_BACKUP_ACTIVE_SERIES_CELL_FAMILY: &str =
+    arkret_wire::CellFamilyId::KEY_BACKUP_ACTIVE_SERIES_V1;
 
 impl ProjectionState {
     pub(crate) fn apply_key_backup_active_series(

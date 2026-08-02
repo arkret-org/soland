@@ -34,7 +34,7 @@ fn test_config() -> crate::config::AppConfig {
 /// `service_id`.
 fn install_media_service_with_service_id(state: &AppState, service_id: &str, issuer_kid: &str) {
     let cell_id = CellRef::new(arkret_wire::null_subject_cell(
-        "ak.component.realm.media_service.v1",
+        arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
     ))
     .unwrap();
     state

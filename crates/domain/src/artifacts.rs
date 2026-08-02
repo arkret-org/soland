@@ -515,14 +515,17 @@ mod tests {
             .iter()
             .find(|binding| binding.event_kind == "ak.member.state")
             .expect("member state binding should come from event-kind registry");
-        assert_eq!(member.cell_family, "ak.component.member.state.v1");
+        assert_eq!(
+            member.cell_family,
+            arkret_wire::CellFamilyId::MEMBER_STATE_V1
+        );
         assert_eq!(member.lattice, "fsm");
         assert_eq!(member.bottom, "reject");
 
         let families = cell_family_bindings();
         let consent = families
             .iter()
-            .find(|binding| binding.cell_family == "ak.component.consent.grant.v1")
+            .find(|binding| binding.cell_family == arkret_wire::CellFamilyId::CONSENT_GRANT_V1)
             .expect("consent grant family should be grouped");
         assert!(
             consent

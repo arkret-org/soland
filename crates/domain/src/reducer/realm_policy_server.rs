@@ -135,7 +135,7 @@ fn join_policy_server_cell_bottom(
         details: Some(arkret_wire::bottom_details([
             (
                 "cell_family",
-                serde_json::json!("ak.component.realm.policy_server.v1"),
+                serde_json::json!(arkret_wire::CellFamilyId::REALM_POLICY_SERVER_V1),
             ),
             (
                 "reason",
@@ -385,7 +385,10 @@ mod tests {
 
         // Cell projection.
         let value = state
-            .realm_null_subject_cell_value(REALM_CHILD, "ak.component.realm.policy_server.v1")
+            .realm_null_subject_cell_value(
+                REALM_CHILD,
+                arkret_wire::CellFamilyId::REALM_POLICY_SERVER_V1,
+            )
             .expect("cell present");
         assert_eq!(
             value.get("policy_server_did").and_then(Value::as_str),
@@ -570,7 +573,10 @@ mod tests {
             .expect("organization fallback");
         assert_eq!(inherited.realm_id, REALM_ORG);
         assert_eq!(
-            state.realm_null_subject_cell_value(REALM_CHILD, "ak.component.realm.policy_server.v1"),
+            state.realm_null_subject_cell_value(
+                REALM_CHILD,
+                arkret_wire::CellFamilyId::REALM_POLICY_SERVER_V1
+            ),
             Some(&json!({"tombstone": true}))
         );
 
@@ -580,7 +586,10 @@ mod tests {
             ProjectionEffect::RealmPolicyServerTombstoned { .. }
         ));
         assert_eq!(
-            state.realm_null_subject_cell_value(REALM_CHILD, "ak.component.realm.policy_server.v1"),
+            state.realm_null_subject_cell_value(
+                REALM_CHILD,
+                arkret_wire::CellFamilyId::REALM_POLICY_SERVER_V1
+            ),
             Some(&json!({"tombstone": true}))
         );
     }

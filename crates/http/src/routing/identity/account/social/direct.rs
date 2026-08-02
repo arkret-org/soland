@@ -1802,7 +1802,7 @@ async fn prepare_reserved_direct_materialization(
     // MUST use the registered family.
     attach_create_cell_contract(
         &mut main_strand_event,
-        "ak.component.strand.object.v1",
+        arkret_wire::CellFamilyId::STRAND_OBJECT_V1,
         main_strand_id,
         false,
     )?;
@@ -2022,7 +2022,7 @@ fn attach_member_join_cell_contract(
     event: &mut arkret_wire::Event,
     participant: &str,
 ) -> Result<(), AppError> {
-    let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
+    let cell = direct_cell_ref(arkret_wire::CellFamilyId::MEMBER_STATE_V1, participant)?;
     event.preconditions = vec![arkret_wire::cba::Precondition {
         cell: cell.clone(),
         predicate: arkret_wire::cba::Predicate {
@@ -2041,7 +2041,7 @@ fn attach_member_rebind_cell_contract(
     event: &mut arkret_wire::Event,
     participant: &str,
 ) -> Result<(), AppError> {
-    let cell = direct_cell_ref("ak.component.member.state.v1", participant)?;
+    let cell = direct_cell_ref(arkret_wire::CellFamilyId::MEMBER_STATE_V1, participant)?;
     event.preconditions = vec![arkret_wire::cba::Precondition {
         cell: cell.clone(),
         predicate: arkret_wire::cba::Predicate {

@@ -1196,7 +1196,7 @@ fn seed_call_state(
 
 fn install_media_service_epoch(state: &AppState, media_service: Value) {
     let cell_id = CellRef::new(arkret_wire::null_subject_cell(
-        "ak.component.realm.media_service.v1",
+        arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
     ))
     .unwrap();
     state

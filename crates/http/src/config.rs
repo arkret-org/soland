@@ -686,11 +686,11 @@ impl AppConfig {
     /// default still applies to everything else.
     pub fn default_replay_overrides() -> std::collections::BTreeMap<&'static str, u64> {
         let mut m = std::collections::BTreeMap::new();
-        m.insert("ak.component.notary.v1", 60);
-        m.insert("ak.component.mls.epoch.v1", 60);
-        m.insert("ak.component.consent.grant.v1", 120);
-        m.insert("ak.component.capability.grant.v1", 120);
-        m.insert("ak.component.capability.derived.v1", 120);
+        m.insert(arkret_wire::CellFamilyId::NOTARY_V1, 60);
+        m.insert(arkret_wire::CellFamilyId::MLS_EPOCH_V1, 60);
+        m.insert(arkret_wire::CellFamilyId::CONSENT_GRANT_V1, 120);
+        m.insert(arkret_wire::CellFamilyId::CAPABILITY_GRANT_V1, 120);
+        m.insert(arkret_wire::CellFamilyId::CAPABILITY_DERIVED_V1, 120);
         m
     }
 }

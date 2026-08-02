@@ -268,7 +268,7 @@ fn direct_strand_create_payload_is_sdk_schema_valid() {
     .unwrap();
     attach_create_cell_contract(
         &mut event,
-        "ak.component.strand.object.v1",
+        arkret_wire::CellFamilyId::STRAND_OBJECT_V1,
         strand_id,
         false,
     )

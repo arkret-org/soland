@@ -202,7 +202,7 @@ impl ProjectionState {
         let value = operation.payload.clone();
         self.set_realm_null_subject_cell(
             &realm_id,
-            "ak.component.realm.delivery_binding_policy.v1",
+            arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1,
             value,
         );
         ProjectionEffect::DeliveryBindingPolicyProjected { realm_id }
@@ -342,7 +342,7 @@ impl ProjectionState {
         let realm_id = operation.realm_id.to_string();
         self.set_realm_null_subject_cell(
             &realm_id,
-            "ak.component.realm.disappearing_policy.v1",
+            arkret_wire::CellFamilyId::REALM_DISAPPEARING_POLICY_V1,
             operation.payload.clone(),
         );
         ProjectionEffect::RealmDisappearingPolicyProjected { realm_id }
@@ -356,7 +356,11 @@ impl ProjectionState {
                 reason: reason.to_owned(),
             };
         }
-        self.set_realm_null_subject_cell(&realm_id, "ak.component.realm.search_policy.v1", value);
+        self.set_realm_null_subject_cell(
+            &realm_id,
+            arkret_wire::CellFamilyId::REALM_SEARCH_POLICY_V1,
+            value,
+        );
         ProjectionEffect::RealmSearchPolicyProjected { realm_id }
     }
 
@@ -378,7 +382,11 @@ impl ProjectionState {
                 reason: "media_service_foci_required".to_owned(),
             };
         }
-        self.set_realm_null_subject_cell(&realm_id, "ak.component.realm.media_service.v1", value);
+        self.set_realm_null_subject_cell(
+            &realm_id,
+            arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
+            value,
+        );
         ProjectionEffect::RealmMediaServiceProjected { realm_id }
     }
 
@@ -535,7 +543,7 @@ impl ProjectionState {
                     reason: arkret_wire::ReasonCode::REDUCER_PROJECTION_FAILED.to_owned(),
                 };
             };
-            if family == "ak.component.call.focus.v1"
+            if family == arkret_wire::CellFamilyId::CALL_FOCUS_V1
                 && !focus_write_preserves_committed(
                     self.cells.get(&cell_id),
                     match &next {
@@ -1068,23 +1076,23 @@ fn call_cell_family_allowed(family: &str, recording_start: bool) -> bool {
     if recording_start {
         return matches!(
             family,
-            "ak.component.call.recording.v1"
-                | "ak.component.call.recording_result.v1"
-                | "ak.component.call.transcript.v1"
-                | "ak.component.call.transcript_result.v1"
+            arkret_wire::CellFamilyId::CALL_RECORDING_V1
+                | arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1
+                | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1
+                | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_RESULT_V1
         );
     }
     matches!(
         family,
-        "ak.component.call.state.v1"
-            | "ak.component.call.focus.v1"
-            | "ak.component.call.recording.v1"
-            | "ak.component.call.recording_result.v1"
-            | "ak.component.call.transcript.v1"
-            | "ak.component.call.transcript_result.v1"
-            | "ak.component.call.moderation.v1"
-            | "ak.component.call.roster.v1"
-            | "ak.component.call.mute_override.v1"
+        arkret_wire::CellFamilyId::CALL_STATE_V1
+            | arkret_wire::CellFamilyId::CALL_FOCUS_V1
+            | arkret_wire::CellFamilyId::CALL_RECORDING_V1
+            | arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1
+            | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1
+            | arkret_wire::CellFamilyId::CALL_TRANSCRIPT_RESULT_V1
+            | arkret_wire::CellFamilyId::CALL_MODERATION_V1
+            | arkret_wire::CellFamilyId::CALL_ROSTER_V1
+            | arkret_wire::CellFamilyId::CALL_MUTE_OVERRIDE_V1
     )
 }
 
@@ -1153,12 +1161,13 @@ fn project_call_fsm_transition(
         (None, None) => {}
         (Some(current), Some(from)) if current == from => {}
         (Some(current), _)
-            if family == "ak.component.call.state.v1" && is_terminal_call_state(current) =>
+            if family == arkret_wire::CellFamilyId::CALL_STATE_V1
+                && is_terminal_call_state(current) =>
         {
             return Err(arkret_wire::ReasonCode::CALL_STATE_TERMINAL);
         }
         _ => {
-            return Err(if family == "ak.component.call.state.v1" {
+            return Err(if family == arkret_wire::CellFamilyId::CALL_STATE_V1 {
                 arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID
             } else {
                 arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID
@@ -1183,7 +1192,7 @@ fn validate_call_fsm_edge(
     recording_start: bool,
 ) -> Result<(), &'static str> {
     match family {
-        "ak.component.call.state.v1" => {
+        arkret_wire::CellFamilyId::CALL_STATE_V1 => {
             let legal = match from {
                 None => matches!(to, "scheduled" | "ringing" | "connecting"),
                 Some("scheduled") => {
@@ -1210,7 +1219,7 @@ fn validate_call_fsm_edge(
                 Err(arkret_wire::ReasonCode::CALL_STATE_TRANSITION_INVALID)
             }
         }
-        "ak.component.call.recording.v1" => {
+        arkret_wire::CellFamilyId::CALL_RECORDING_V1 => {
             let legal = if recording_start {
                 from.is_none() && to == "recording"
             } else {
@@ -1224,7 +1233,7 @@ fn validate_call_fsm_edge(
                 .then_some(())
                 .ok_or(arkret_wire::ReasonCode::RECORDING_STATE_TRANSITION_INVALID)
         }
-        "ak.component.call.transcript.v1" => {
+        arkret_wire::CellFamilyId::CALL_TRANSCRIPT_V1 => {
             let legal = if recording_start {
                 from.is_none() && to == "transcribing"
             } else {
@@ -1318,7 +1327,7 @@ fn call_observed_remove_matches(
         return false;
     };
     match family {
-        "ak.component.call.roster.v1" => {
+        arkret_wire::CellFamilyId::CALL_ROSTER_V1 => {
             let Some(delta) = payload.get("roster_delta") else {
                 return false;
             };
@@ -1326,7 +1335,7 @@ fn call_observed_remove_matches(
                 && delta.get("actor_id") == value.get("actor_id")
                 && delta.get("device_id") == value.get("device_id")
         }
-        "ak.component.call.moderation.v1" => {
+        arkret_wire::CellFamilyId::CALL_MODERATION_V1 => {
             let Some(delta) = payload.get("moderation_delta") else {
                 return false;
             };

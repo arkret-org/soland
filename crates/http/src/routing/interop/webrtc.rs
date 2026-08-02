@@ -832,10 +832,11 @@ impl CallMediaCells {
         actor_id: &str,
         device_id: &str,
     ) -> Result<Self, AppError> {
-        let focus_cell = call_cell_ref("ak.component.call.focus.v1", &[call_id])?;
-        let moderation_cell = call_cell_ref("ak.component.call.moderation.v1", &[call_id])?;
+        let focus_cell = call_cell_ref(arkret_wire::CellFamilyId::CALL_FOCUS_V1, &[call_id])?;
+        let moderation_cell =
+            call_cell_ref(arkret_wire::CellFamilyId::CALL_MODERATION_V1, &[call_id])?;
         let mute_cell = call_cell_ref(
-            "ak.component.call.mute_override.v1",
+            arkret_wire::CellFamilyId::CALL_MUTE_OVERRIDE_V1,
             &[call_id, actor_id, device_id],
         )?;
         Ok(Self {

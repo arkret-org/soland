@@ -5,7 +5,7 @@ use super::*;
 /// `realm_null_subject_cells` keys the Realm-scoped `null`-subject families by
 /// their family id, so the wire cell ref constant is split here rather than
 /// re-spelled.
-const REALM_AUTHORITY_ROOT_FAMILY: &str = "ak.component.realm.authority_root.v1";
+const REALM_AUTHORITY_ROOT_FAMILY: &str = arkret_wire::CellFamilyId::REALM_AUTHORITY_ROOT_V1;
 
 /// Re-derive the registered `ak.component.realm.authority_root.v1` genesis
 /// value from an `ak.realm.create` payload.

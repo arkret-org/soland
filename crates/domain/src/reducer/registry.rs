@@ -55,11 +55,11 @@ mod lattice_kind_scaffold_tests {
     #[test]
     fn lattice_kind_error_display_is_stable() {
         let err = LatticeKindError::MissingSubjectField {
-            cell_family: "ak.component.strand.position.v1",
+            cell_family: arkret_wire::CellFamilyId::STRAND_POSITION_V1,
             field: "strand_id",
         };
         let msg = format!("{err}");
-        assert!(msg.contains("ak.component.strand.position.v1"));
+        assert!(msg.contains(arkret_wire::CellFamilyId::STRAND_POSITION_V1));
         assert!(msg.contains("strand_id"));
 
         let err = LatticeKindError::UnknownCellFamily {

@@ -830,7 +830,7 @@ impl ProjectionState {
     /// Compare `predicate.value` with the current cell head. Missing cells are
     /// the JSON null head used by genesis CAS writes.
     fn head_eq_holds(&self, realm_id: &str, cell_ref: &str, expected: &Value) -> bool {
-        const MEMBER_STATE_FAMILY: &str = "ak.component.member.state.v1";
+        const MEMBER_STATE_FAMILY: &str = arkret_wire::CellFamilyId::MEMBER_STATE_V1;
         const STRAND_FIELDS_FAMILY: &str = "ak.component.strand.fields.v1";
         // CellStore keys are `(realm_id, cell_ref)`. Membership CellRefs use
         // only the actor DID as their subject, so consulting the flattened

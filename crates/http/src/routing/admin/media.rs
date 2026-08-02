@@ -118,7 +118,7 @@ async fn admin_get_realm_media_service(
         .with_status(StatusCode::BAD_REQUEST));
     }
     let cell_id = CellRef::new(arkret_wire::null_subject_cell(
-        "ak.component.realm.media_service.v1",
+        arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1,
     ))
     .map_err(|error| AppError::internal(format!("invalid media_service cell id: {error}")))?;
     let value = {

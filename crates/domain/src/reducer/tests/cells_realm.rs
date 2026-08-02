@@ -49,7 +49,7 @@ fn cell_value_returns_none_for_bottom_state() {
 fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
     const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
     const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-cfc039892037";
-    const FAMILY: &str = "ak.component.realm.delivery_binding_policy.v1";
+    const FAMILY: &str = arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1;
 
     let mut state = ProjectionState::new();
     for (index, (realm_id, binding_mode)) in [(REALM_A, "direct"), (REALM_B, "relay")]

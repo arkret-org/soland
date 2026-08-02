@@ -10,11 +10,11 @@ fn is_policy_frontier_component(component: &str) -> bool {
         && (component.contains("policy")
             || matches!(
                 component,
-                "ak.component.realm.join_rule.v1"
-                    | "ak.component.realm.history_visibility.v1"
-                    | "ak.component.realm.media_service.v1"
-                    | "ak.component.realm.policy_bundle.v1"
-                    | "ak.component.realm.plaintext_visible_services.v1"
+                arkret_wire::CellFamilyId::REALM_JOIN_RULE_V1
+                    | arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1
+                    | arkret_wire::CellFamilyId::REALM_MEDIA_SERVICE_V1
+                    | arkret_wire::CellFamilyId::REALM_POLICY_BUNDLE_V1
+                    | arkret_wire::CellFamilyId::REALM_PLAINTEXT_VISIBLE_SERVICES_V1
             )))
         || (component.starts_with("ak.component.circle.")
             && ["policy", "history", "encryption", "lifecycle"]
@@ -280,7 +280,10 @@ impl ProjectionState {
     ///   - the cell has never been written, OR
     ///   - the cell is in `Bottom` state (concurrent conflict needs recovery)
     pub fn read_receipt_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.read_receipt_policy.v1")
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::REALM_READ_RECEIPT_POLICY_V1,
+        )
     }
 
     // ── Realm lifecycle cell helpers ──
@@ -340,13 +343,13 @@ impl ProjectionState {
 
     /// True when the `ak.component.realm.destroy.v1` cell has a Value.
     pub fn realm_is_destroyed(&self, realm_id: &str) -> bool {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.destroy.v1")
+        self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_DESTROY_V1)
             .is_some()
     }
 
     /// True when the `ak.component.realm.tombstone.v1` cell has a Value.
     pub fn realm_is_tombstoned(&self, realm_id: &str) -> bool {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.tombstone.v1")
+        self.realm_null_subject_cell_value(realm_id, arkret_wire::CellFamilyId::REALM_TOMBSTONE_V1)
             .is_some()
     }
 
@@ -386,7 +389,7 @@ impl ProjectionState {
     pub fn realm_delivery_binding_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
         self.realm_null_subject_cell_value(
             realm_id,
-            "ak.component.realm.delivery_binding_policy.v1",
+            arkret_wire::CellFamilyId::REALM_DELIVERY_BINDING_POLICY_V1,
         )
     }
 
@@ -643,11 +646,17 @@ impl ProjectionState {
     }
 
     pub fn realm_disappearing_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.disappearing_policy.v1")
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::REALM_DISAPPEARING_POLICY_V1,
+        )
     }
 
     pub fn realm_search_policy_cell_value(&self, realm_id: &str) -> Option<&Value> {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.search_policy.v1")
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::REALM_SEARCH_POLICY_V1,
+        )
     }
 
     /// Read the `policy_frontier` declared on the most recent
@@ -894,17 +903,20 @@ impl ProjectionState {
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {
-        self.realm_null_subject_cell_value(realm_id, "ak.component.realm.digest_suite.v1")
-            .and_then(|value| value.get("to_digest_algorithm"))
-            .and_then(Value::as_str)
-            .map(ToOwned::to_owned)
-            .or_else(|| {
-                self.realm_create_log(realm_id)
-                    .and_then(|entries| entries.last())
-                    .and_then(|entry| entry.get("digest_algorithm"))
-                    .and_then(Value::as_str)
-                    .map(ToOwned::to_owned)
-            })
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::REALM_DIGEST_SUITE_V1,
+        )
+        .and_then(|value| value.get("to_digest_algorithm"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            self.realm_create_log(realm_id)
+                .and_then(|entries| entries.last())
+                .and_then(|entry| entry.get("digest_algorithm"))
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
     }
 
     pub fn realm_requires_content_encryption(&self, realm_id: &str) -> bool {

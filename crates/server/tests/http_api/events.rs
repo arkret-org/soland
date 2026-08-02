@@ -993,15 +993,15 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         // producer-written effect chose to store.
         for (family, expected) in [
             (
-                "ak.component.realm.join_rule.v1",
+                arkret_wire::CellFamilyId::REALM_JOIN_RULE_V1,
                 serde_json::json!({"value": "invite"}),
             ),
             (
-                "ak.component.realm.history_visibility.v1",
+                arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1,
                 serde_json::json!({"value": "shared"}),
             ),
             (
-                "ak.component.realm.discovery.v1",
+                arkret_wire::CellFamilyId::REALM_DISCOVERY_V1,
                 serde_json::json!({"value": "listed"}),
             ),
         ] {
@@ -1101,15 +1101,15 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         // producer-written effect chose to store.
         for (family, expected) in [
             (
-                "ak.component.realm.join_rule.v1",
+                arkret_wire::CellFamilyId::REALM_JOIN_RULE_V1,
                 serde_json::json!({"value": "invite"}),
             ),
             (
-                "ak.component.realm.history_visibility.v1",
+                arkret_wire::CellFamilyId::REALM_HISTORY_VISIBILITY_V1,
                 serde_json::json!({"value": "shared"}),
             ),
             (
-                "ak.component.realm.discovery.v1",
+                arkret_wire::CellFamilyId::REALM_DISCOVERY_V1,
                 serde_json::json!({"value": "listed"}),
             ),
         ] {

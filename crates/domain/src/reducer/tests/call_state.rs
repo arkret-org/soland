@@ -64,19 +64,28 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
     ));
     assert_eq!(
         state
-            .cell_value(&call_cell("ak.component.call.state.v1", call_id))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_STATE_V1,
+                call_id
+            ))
             .unwrap(),
         &serde_json::json!("ringing")
     );
     assert_eq!(
         state
-            .cell_value(&call_cell("ak.component.call.focus.v1", call_id))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_FOCUS_V1,
+                call_id
+            ))
             .unwrap()["session_focus"],
         "fra-1"
     );
     assert_eq!(
         state
-            .cell_value(&call_cell("ak.component.call.roster.v1", call_id))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_ROSTER_V1,
+                call_id
+            ))
             .unwrap()[0]["tag"],
         Value::String(arkret_schema::or_set_dot(
             event_id,
@@ -176,7 +185,10 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     ));
     assert_eq!(
         state
-            .cell_value(&call_cell("ak.component.call.moderation.v1", call_id))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_MODERATION_V1,
+                call_id
+            ))
             .unwrap(),
         &serde_json::json!([{
             "tag": dot,
@@ -187,7 +199,10 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     apply_call(&mut state, &add, &hlc);
     assert_eq!(
         state
-            .cell_value(&call_cell("ak.component.call.moderation.v1", call_id))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_MODERATION_V1,
+                call_id
+            ))
             .unwrap()[0]["removed"],
         true
     );
@@ -232,13 +247,16 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
     ));
     assert!(
         state
-            .cell_value(&call_cell("ak.component.call.recording.v1", &subject))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_RECORDING_V1,
+                &subject
+            ))
             .is_none()
     );
     assert!(
         state
             .cell_value(&call_cell(
-                "ak.component.call.recording_result.v1",
+                arkret_wire::CellFamilyId::CALL_RECORDING_RESULT_V1,
                 &subject
             ))
             .is_none()
@@ -346,9 +364,10 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
         ProjectionEffect::CallStateProjected { .. }
     ));
     assert!(matches!(
-        state
-            .cells
-            .get(&call_cell("ak.component.call.state.v1", call_id)),
+        state.cells.get(&call_cell(
+            arkret_wire::CellFamilyId::CALL_STATE_V1,
+            call_id
+        )),
         Some(CellState::Bottom(_))
     ));
 
@@ -372,7 +391,10 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
     ));
     assert_eq!(
         state
-            .cell_value(&call_cell("ak.component.call.roster.v1", call_id))
+            .cell_value(&call_cell(
+                arkret_wire::CellFamilyId::CALL_ROSTER_V1,
+                call_id
+            ))
             .unwrap()[0]["tag"],
         Value::String(arkret_schema::or_set_dot(
             join_event_id,
