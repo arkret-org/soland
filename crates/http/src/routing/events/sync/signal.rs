@@ -307,10 +307,15 @@ async fn admit_signal(
         ));
     }
 
-    // (4) — the device proof, against the key the accepted device directory
-    // authorizes for `sender_device_id` under `sender_actor_id`. The
-    // verification-method fragment is never accepted as a stand-in.
-    verify_signal_device_proof(state, envelope).await
+    // (4) — resolve the signer through the authenticated principal's identity
+    // model. Native Agent endpoints use their accepted `ak.agent.key.authorize`
+    // binding; ordinary principals use the accepted device directory. The
+    // shared outer shape remains `{actor}#{device_id}` in both branches.
+    if session.agent_session.is_some() {
+        verify_signal_agent_proof(state, envelope).await
+    } else {
+        verify_signal_device_proof(state, envelope).await
+    }
 }
 
 /// `signal.md` §3(2) — live send eligibility for the envelope's scope.
@@ -395,6 +400,64 @@ async fn verify_signal_device_proof(
     })
 }
 
+async fn verify_signal_agent_proof(
+    state: &AppState,
+    envelope: &SignalEnvelope,
+) -> Result<(), AppError> {
+    let record = state
+        .agent_pairings()
+        .agent(envelope.sender_actor_id.as_str())
+        .await
+        .map_err(|error| {
+            tracing::error!(%error, "failed to resolve the Signal sender Agent authorization");
+            signal_rail_unavailable("resolve the Agent signing authorization")
+        })?
+        .ok_or_else(|| signal_proof_invalid("Signal sender Agent is not managed here"))?;
+    if record.state != arkret_models_collaboration::agent_operations::AgentLifecycleState::Active {
+        return Err(signal_proof_invalid("Signal sender Agent is not active"));
+    }
+    let binding = record
+        .authorized_signing_key_binding
+        .as_ref()
+        .ok_or_else(|| signal_proof_invalid("Signal sender Agent has no active signing key"))?;
+    if binding.agent_id != envelope.sender_actor_id
+        || binding.verification_method != envelope.proof.verification_method
+        || record.authorized_event_ref.as_deref()
+            != Some(binding.agent_key_authorize_event_id.as_str())
+        || binding
+            .expires_at
+            .is_some_and(|expires_at| expires_at <= chrono::Utc::now())
+    {
+        return Err(signal_proof_invalid(
+            "Signal proof does not match the current Agent key authorization",
+        ));
+    }
+    let active = state
+        .projections()
+        .snapshot()
+        .active_agent_key_authorizations(envelope.sender_actor_id.as_str());
+    if !active.iter().any(|(key_id, event_id)| {
+        key_id == binding.agent_key_id.as_str()
+            && event_id == binding.agent_key_authorize_event_id.as_str()
+    }) {
+        return Err(signal_proof_invalid(
+            "Signal sender Agent key is revoked, superseded, or conflicted",
+        ));
+    }
+    let bytes = arkret_canonical::base64url_decode(binding.public_key.key.as_str())
+        .map_err(|_| signal_proof_invalid("Signal sender Agent key is malformed"))?;
+    let public_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes };
+    arkret_signatures::verify_eddsa_signal_proof(envelope, &public_key).map_err(|error| {
+        tracing::warn!(
+            %error,
+            actor = %envelope.sender_actor_id,
+            device = %envelope.sender_device_id,
+            "Signal Agent proof verification failed"
+        );
+        signal_proof_invalid("Signal Agent proof verification failed")
+    })
+}
+
 /// Admit one item from an authenticated single-hop peer relay.
 ///
 /// Every item-level failure is returned only to the caller for audit logging;
@@ -461,7 +524,17 @@ pub(in crate::routing::events) async fn accept_peer_signal(
     {
         return Err(signal_invalid("signal sender lacks the moderation action"));
     }
-    verify_signal_device_proof(state, envelope).await?;
+    if state
+        .agent_pairings()
+        .agent(envelope.sender_actor_id.as_str())
+        .await
+        .map_err(|_| signal_rail_unavailable("resolve peer Agent signing authorization"))?
+        .is_some()
+    {
+        verify_signal_agent_proof(state, envelope).await?;
+    } else {
+        verify_signal_device_proof(state, envelope).await?;
+    }
 
     let local_service_id = state.service_id().as_str();
     let has_local_recipient = projection.members.values().any(|membership| {

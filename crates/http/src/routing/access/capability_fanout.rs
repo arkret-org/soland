@@ -212,67 +212,6 @@ async fn validate_fanout_proofs(
             AppError::unauthenticated("capability fanout proof verification failed")
         })?;
     }
-    if body.operation == "grant" {
-        validate_protocol_grant_proofs(state, body).await?;
-    }
-    Ok(())
-}
-
-async fn validate_protocol_grant_proofs(
-    state: &AppState,
-    body: &CapabilityFanoutBody,
-) -> Result<(), AppError> {
-    let payload: arkret_models_collaboration::events_payloads::capability::CapabilityGrantPayload =
-        serde_json::from_value(body.payload.clone()).map_err(|error| {
-            AppError::invalid_param(format!("invalid capability grant payload: {error}"))
-        })?;
-    let grant = payload
-        .grant
-        .ok_or_else(|| AppError::invalid_param("payload.grant is required"))?;
-    if grant.proofs.is_empty() {
-        return Err(AppError::invalid_param("payload.grant.proofs is required"));
-    }
-    for proof in &grant.proofs {
-        proof.validate().map_err(|error| {
-            AppError::invalid_param(format!("invalid capability grant proof: {error}"))
-        })?;
-        if proof.kind != arkret_wire::proof_kind::DETACHED_JWS
-            || proof.alg != "EdDSA"
-            || proof.proof_purpose != Some(arkret_wire::PayloadProofPurpose::IssuerAttestation)
-        {
-            return Err(AppError::unauthenticated(
-                "capability grant proof metadata is invalid",
-            ));
-        }
-        let method_did = arkret_identity::verification_method_did(&proof.verification_method)
-            .map_err(|_| {
-                AppError::unauthenticated("capability grant verification method is invalid")
-            })?;
-        if method_did != grant.issuer || method_did.as_str() != body.issuer_service_id {
-            return Err(AppError::unauthenticated(
-                "capability grant proof issuer does not match issuer_service_id",
-            ));
-        }
-        let binding = grant
-            .canonical_proof_binding_bytes(proof)
-            .map_err(|error| {
-                AppError::unauthenticated(format!(
-                    "capability grant proof binding is invalid: {error}"
-                ))
-            })?;
-        crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
-            &binding,
-            &proof.jws,
-            &proof.verification_method,
-            &body.issuer_service_id,
-            state,
-        )
-        .await
-        .map_err(|error| {
-            tracing::debug!(%error, "capability grant proof verification failed");
-            AppError::unauthenticated("capability grant proof verification failed")
-        })?;
-    }
     Ok(())
 }
 
@@ -465,7 +404,6 @@ fn validate_grant_payload(
             "payload.grant.resources must be a non-empty array",
         ));
     }
-    require_non_empty_proofs(grant, "payload.grant.proofs")?;
     Ok((realm_id.to_owned(), Some(subject.to_owned())))
 }
 
@@ -476,20 +414,6 @@ fn validate_revoke_payload(payload: &serde_json::Map<String, Value>) -> Result<(
     .map_err(|error| {
         AppError::invalid_param(format!("invalid capability revoke payload: {error}"))
     })?;
-    Ok(())
-}
-
-fn require_non_empty_proofs(
-    object: &serde_json::Map<String, Value>,
-    field: &'static str,
-) -> Result<(), AppError> {
-    if object
-        .get("proofs")
-        .and_then(Value::as_array)
-        .is_none_or(|proofs| proofs.is_empty())
-    {
-        return Err(AppError::invalid_param(format!("{field} is required")));
-    }
     Ok(())
 }
 

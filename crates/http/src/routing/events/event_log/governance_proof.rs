@@ -10,7 +10,7 @@ use arkret_models_crypto::{
 use arkret_state::lattice::ordered_log::IssuedOp;
 use arkret_state::lattice::{CellState, SealedOp};
 use arkret_state::mls_governance_proof::{derive_mls_capability_root, derive_mls_policy_root};
-use arkret_state::state::{compute_state_root, control_event_set_root};
+use arkret_state::state::{BottomMode, compute_state_root, control_event_set_root};
 #[cfg(test)]
 use arkret_wire::cba::LatticeOp;
 use arkret_wire::cba::LatticeOpType;
@@ -1436,9 +1436,16 @@ fn join_control_state_batches(
                     format!("no lattice registered for governance cell {cell}: {error}"),
                 )
             })?;
+        let bottom_mode = binding.bottom_mode;
         let resolved =
             arkret_state::join_cell_seal_batches(binding.lattice.as_ref(), cell, &batches);
-        if matches!(resolved, CellState::Bottom(_)) {
+        // `event-auth-state-resolution.md` §9.1.1: an exposed Bottom remains
+        // part of the materialized governance view (and is omitted from the
+        // state-root leaf set by `compute_state_root`). Only reject-mode cells
+        // — plus an impossible Bottom from an inert lattice — fail closed.
+        // Rejecting every Bottom here lets one ambiguous, unrelated selector
+        // poison all later controller-PCR authorization and Seal material.
+        if matches!(resolved, CellState::Bottom(_)) && bottom_mode != BottomMode::Expose {
             return Err(AppError::new(
                 ErrorCode::StateMismatch,
                 format!("governance cell {cell} is in Bottom state"),
@@ -1636,6 +1643,24 @@ fn proof_state_error(error: impl std::fmt::Display) -> AppError {
 mod tests {
     use super::*;
 
+    fn issued_set(move_byte: u8, value: serde_json::Value) -> IssuedOp {
+        IssuedOp {
+            issuer: arkret_identifiers::Did::new("did:web:alice.example").unwrap(),
+            op: SealedOp::new(
+                Hash::new(format!("sha256:{}", format!("{move_byte:02x}").repeat(32))).unwrap(),
+                LatticeOp {
+                    op_type: LatticeOpType::Set,
+                    tag: None,
+                    value: Some(value),
+                    from: None,
+                    to: None,
+                    reason: None,
+                    issuer_seq: None,
+                },
+            ),
+        }
+    }
+
     #[test]
     fn authoritative_notary_lookup_uses_canonical_wire_singleton_cell() {
         let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000a11c").unwrap();
@@ -1653,6 +1678,69 @@ mod tests {
             authoritative_notary_dids(&realm_id, &joined).unwrap(),
             vec![notary.to_owned()]
         );
+    }
+
+    #[test]
+    fn governance_join_preserves_exposed_bottom_without_poisoning_the_realm() {
+        let state = test_state();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000b077").unwrap();
+        let selector_cell = CellRef::new(
+            "ak:cell:ak.component.agent.selector_claim.v1:conflicted-selector".to_owned(),
+        )
+        .unwrap();
+        let selector_ops = vec![
+            issued_set(1, serde_json::json!({"subject": "did:web:first.example"})),
+            issued_set(2, serde_json::json!({"subject": "did:web:second.example"})),
+        ];
+        let covered = selector_ops
+            .iter()
+            .map(|issued| issued.op.move_id.clone())
+            .collect::<BTreeSet<_>>();
+        let ops_by_cell = BTreeMap::from([(selector_cell.clone(), selector_ops)]);
+
+        let joined = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
+            .expect("bottom=expose must not make unrelated governance unavailable");
+
+        assert!(matches!(
+            joined.get(&selector_cell),
+            Some(CellState::Bottom(_))
+        ));
+        assert_eq!(
+            compute_state_root(&joined).unwrap(),
+            compute_state_root(&BTreeMap::new()).unwrap(),
+            "an exposed Bottom is omitted from the governance state-root leaves"
+        );
+    }
+
+    #[test]
+    fn governance_join_still_fails_closed_for_rejected_bottom() {
+        let state = test_state();
+        let realm_id = RealmId::new("ak:realm:01999999-0000-7000-8000-00000000b078").unwrap();
+        let accountability_cell = CellRef::new(
+            "ak:cell:ak.component.identity.accountability.v1:did:web:agent.example".to_owned(),
+        )
+        .unwrap();
+        let accountability_ops = vec![
+            issued_set(
+                3,
+                serde_json::json!({"controller": "did:web:first.example"}),
+            ),
+            issued_set(
+                4,
+                serde_json::json!({"controller": "did:web:second.example"}),
+            ),
+        ];
+        let covered = accountability_ops
+            .iter()
+            .map(|issued| issued.op.move_id.clone())
+            .collect::<BTreeSet<_>>();
+        let ops_by_cell = BTreeMap::from([(accountability_cell.clone(), accountability_ops)]);
+
+        let error = join_control_state_batches(&state, &realm_id, &ops_by_cell, &covered)
+            .expect_err("bottom=reject must remain fail closed");
+
+        assert_eq!(error.code, ErrorCode::StateMismatch);
+        assert!(error.to_string().contains(accountability_cell.as_str()));
     }
 
     fn test_state() -> AppState {

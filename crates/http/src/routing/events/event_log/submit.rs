@@ -156,6 +156,7 @@ pub(in crate::routing) struct EventValidationError {
     pub(in crate::routing) status: StatusCode,
     pub(in crate::routing) code: &'static str,
     pub(in crate::routing) message: String,
+    pub(in crate::routing) reason_code: Option<&'static str>,
 }
 
 #[derive(Debug)]
@@ -626,7 +627,13 @@ fn cba_bottom_reject(reason: &'static str) -> (&'static str, &'static str) {
 
 impl From<EventValidationError> for SubmitOneError {
     fn from(error: EventValidationError) -> Self {
-        Self::new(error.status, error.code, error.message)
+        let mut rendered = Self::new(error.status, error.code, error.message);
+        if let Some(reason_code) = error.reason_code {
+            rendered = rendered.with_details(serde_json::json!({
+                "reason_code": reason_code,
+            }));
+        }
+        rendered
     }
 }
 
@@ -639,6 +646,7 @@ pub(super) fn event_validation_error(
         status,
         code,
         message: message.into(),
+        reason_code: None,
     }
 }
 

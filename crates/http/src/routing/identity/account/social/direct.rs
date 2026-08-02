@@ -65,13 +65,13 @@ pub(crate) async fn ensure_direct_peer_resolvable(
             return Ok(());
         }
         return Err(direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation peer is not resolvable on this Principal Server",
         ));
     }
     let peer_did = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation peer DID is invalid",
         )
     })?;
@@ -81,7 +81,7 @@ pub(crate) async fn ensure_direct_peer_resolvable(
         .is_some();
     if !has_cross_signing_control {
         return Err(direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation peer has no accepted cross-signing control state",
         ));
     }
@@ -126,7 +126,7 @@ pub(super) fn direct_pair_key_participant(
         .any(|prefix| did_str.starts_with(prefix))
     {
         return Err(direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation pairwise DID requires a verified stable-subject identity link",
         ));
     }
@@ -870,7 +870,7 @@ pub(crate) async fn prepare_remote_direct_keypackage_claim(
         .is_none()
     {
         return Err(direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation peer service is not configured",
         ));
     }
@@ -1196,7 +1196,7 @@ async fn execute_remote_peer_claim(
     )
     .ok_or_else(|| {
         direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation peer service is not configured",
         )
     })?;
@@ -2241,13 +2241,13 @@ pub(super) async fn claim_direct_keypackage(
 ) -> Result<arkret_models_crypto::artifacts_keys::KeyPackageClaimRecord, AppError> {
     let target_principal_id = Did::new(peer.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation peer DID is invalid",
         )
     })?;
     let requester = Did::new(actor.to_owned()).map_err(|_| {
         direct_resolve_precondition(
-            arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
             "direct conversation requester DID is invalid",
         )
     })?;
@@ -2305,7 +2305,7 @@ pub(super) async fn claim_direct_keypackage(
         .await
         .map_err(|error| match error.wire_code_override.as_deref() {
             Some("claim_generation_mismatch") => direct_resolve_precondition(
-                arkret_wire::ErrorCode::PEER_UNRESOLVABLE,
+                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
                 "direct conversation peer has no accepted cross-signing control state",
             ),
             _ => error,

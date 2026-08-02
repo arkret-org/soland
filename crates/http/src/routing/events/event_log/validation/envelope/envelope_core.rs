@@ -360,15 +360,7 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_self_principal_pcr_bootstrap_create,
     )?;
-    capability_grant_proofs::validate_capability_grant_proofs(
-        state,
-        session,
-        &kind,
-        &actor_id,
-        object,
-        internal_admission,
-    )
-    .await?;
+    capability_grant::validate_capability_grant_body(&kind, &actor_id, object)?;
     // The capability gate needs the write set, and v1 carries none on the wire:
     // the receiver projects it from `kind + payload` through the registered
     // reducer contract (`event-and-patch.md` §2.4.2). Derived here rather than

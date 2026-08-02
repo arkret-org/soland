@@ -806,8 +806,7 @@ pub(super) async fn lazily_expire_pairing(
 
 pub(super) async fn lifecycle_transition(
     state: &AppState,
-    aa: &AuthArgs,
-    req: &Request,
+    session: &SessionRecord,
     agent_id: String,
     new_state: AgentLifecycleState,
     event_kind: &str,
@@ -815,8 +814,11 @@ pub(super) async fn lifecycle_transition(
     sidecar_exposure_ack: Option<Value>,
     lifecycle_event: Option<arkret_wire::EventInitialSubmission>,
 ) -> Result<AgentLifecycleOutcome, AppError> {
-    let session = aa.authenticated_session(state, req).await?;
-    let record = require_agent_controller(state, &session, &agent_id).await?;
+    // Authentication is deliberately completed by the endpoint before this
+    // helper is entered. A DPoP proof is single-use, so passing `AuthArgs` and
+    // `Request` through here would verify the same proof twice and reject the
+    // lifecycle command as a replay.
+    let record = require_agent_controller(state, session, &agent_id).await?;
     let terminal_notification = (event_kind == "ak.self.agent.deactivate")
         .then(|| account_notification_context(&record))
         .flatten();
@@ -890,7 +892,7 @@ pub(super) async fn lifecycle_transition(
     let authorization_ref = record.controller_authorization_ref.clone();
     submit_durable_agent_lifecycle(
         state,
-        &session,
+        session,
         &realm,
         &agent_id,
         &authorization_ref,
@@ -983,12 +985,12 @@ pub(super) async fn pause_agent(
     req: &mut Request,
 ) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     json_ok(
         lifecycle_transition(
             state,
-            &aa,
-            req,
+            &session,
             agent_id.into_inner(),
             AgentLifecycleState::Paused,
             "ak.self.agent.pause",
@@ -1014,12 +1016,12 @@ pub(super) async fn resume_agent(
     req: &mut Request,
 ) -> JsonResult<AgentLifecycleOutcome> {
     let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
     json_ok(
         lifecycle_transition(
             state,
-            &aa,
-            req,
+            &session,
             agent_id.into_inner(),
             AgentLifecycleState::Active,
             "ak.self.agent.resume",
@@ -1151,8 +1153,7 @@ pub(super) async fn deactivate_agent(
     json_ok(
         lifecycle_transition(
             state,
-            &aa,
-            req,
+            &session,
             agent_id,
             AgentLifecycleState::Deactivated,
             "ak.self.agent.deactivate",
@@ -1430,6 +1431,28 @@ pub(super) async fn detach_agent_grant(
 #[cfg(test)]
 mod deactivation_tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_transition_contract_uses_a_pre_authenticated_session() {
+        // This compile-time contract keeps the transition layer below the HTTP
+        // authentication boundary. In particular, it must not regain access
+        // to AuthArgs/Request and consume a single-use DPoP proof twice.
+        async fn call_transition(state: &AppState, session: &SessionRecord) {
+            let _ = lifecycle_transition(
+                state,
+                session,
+                "did:web:agent.example".to_owned(),
+                AgentLifecycleState::Paused,
+                "ak.self.agent.pause",
+                None,
+                None,
+                None,
+            )
+            .await;
+        }
+
+        let _ = call_transition;
+    }
 
     #[test]
     fn revocation_coverage_rejects_missing_active_key() {

@@ -352,7 +352,10 @@ async fn direct_realm_genesis_projects_peer_as_timeline_reader() {
         arkret_models_collaboration::events_payloads::MessageCreatePayload::with_encrypted_content(
             arkret_identifiers::StrandId::new(main_strand_id.clone()).unwrap(),
             "discussion",
-            encrypted_content,
+            arkret_models_crypto::MlsEncryptedPayload::<
+                arkret_models_collaboration::events_payloads::ContentBlock,
+            >::new(encrypted_content)
+            .unwrap(),
         )
         .to_value()
         .unwrap();

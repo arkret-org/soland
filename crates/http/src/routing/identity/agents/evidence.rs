@@ -108,7 +108,33 @@ pub(super) async fn query_agent_signer_evidence(
     let mut evidence = Vec::new();
     let mut failures = Vec::new();
     for selector in request.queries {
-        if !realm_contains_matching_agent_event(&realm_events, &selector) {
+        let event_context = realm_contains_matching_agent_event(&realm_events, &selector);
+        let live_signal_selector = selector_is_live_signal_query(&selector);
+        let agent_is_realm_member = crate::routing::spaces::space::realm_has_member(
+            state,
+            realm_id,
+            selector.agent_id.as_str(),
+        )
+        .await;
+        let direct_binding_context = active_direct_binding_is_shared_context(
+            state,
+            realm_id,
+            &session.actor,
+            selector.agent_id.as_str(),
+        );
+        let live_signal_context =
+            live_signal_selector && (agent_is_realm_member || direct_binding_context);
+        tracing::debug!(
+            %realm_id,
+            requester = %session.actor,
+            agent_id = %selector.agent_id,
+            event_context,
+            live_signal_selector,
+            agent_is_realm_member,
+            direct_binding_context,
+            "diagnosing Agent signer evidence query context"
+        );
+        if !event_context && !live_signal_context {
             failures.push(query_failure(
                 selector,
                 AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing,
@@ -121,7 +147,15 @@ pub(super) async fn query_agent_signer_evidence(
                 selector,
                 AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing,
             )),
-            Err(reason) => failures.push(query_failure(selector, reason)),
+            Err(reason) => {
+                tracing::debug!(
+                    %realm_id,
+                    agent_id = %selector.agent_id,
+                    ?reason,
+                    "diagnosing Agent signer evidence construction failure"
+                );
+                failures.push(query_failure(selector, reason));
+            }
         }
     }
 
@@ -129,6 +163,53 @@ pub(super) async fn query_agent_signer_evidence(
         evidence,
         failures: (!failures.is_empty()).then_some(failures),
     })
+}
+
+/// A live Signal has no durable Event admission receipt to cite. Its evidence
+/// selector therefore omits both Event-only fields and relies on the current
+/// shared-Realm membership check performed by the query handler. Requiring a
+/// prior Agent-authored Event here deadlocks presence: the receiver needs the
+/// evidence to admit the Agent's first Signal, before the Agent has authored
+/// any durable Event in that Realm.
+fn selector_is_live_signal_query(selector: &AgentSignerEvidenceQuerySelector) -> bool {
+    selector.agent_key_authorize_event_id.is_none() && selector.event_accepted_frontier.is_none()
+}
+
+fn active_direct_binding_is_shared_context(
+    state: &AppState,
+    realm_id: &str,
+    requester: &str,
+    agent_id: &str,
+) -> bool {
+    state
+        .contacts()
+        .active_direct_binding_for_realm(realm_id)
+        .filter(|binding| {
+            crate::routing::identity::account::direct_binding_matches_projection(state, binding)
+        })
+        .is_some_and(|binding| {
+            direct_binding_has_exact_participants(&binding, realm_id, requester, agent_id)
+        })
+}
+
+fn direct_binding_has_exact_participants(
+    binding: &soland_services::identity::DirectConversationBindingRecord,
+    realm_id: &str,
+    requester: &str,
+    agent_id: &str,
+) -> bool {
+    binding.state == "active"
+        && binding.realm_id == realm_id
+        && binding.participants_unordered.len() == 2
+        && requester != agent_id
+        && binding
+            .participants_unordered
+            .iter()
+            .any(|participant| participant == requester)
+        && binding
+            .participants_unordered
+            .iter()
+            .any(|participant| participant == agent_id)
 }
 
 fn query_failure(
@@ -162,19 +243,52 @@ pub(crate) async fn build_evidence(
             .then_with(|| left.event_id.cmp(&right.event_id))
     });
 
-    let authorization_event = select_authorization_event(&events, selector, &record)
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    let binding = binding_for_event(authorization_event, &record)
-        .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
-    if binding.agent_id != selector.agent_id
-        || binding.verification_method != selector.verification_method
-        || binding.agent_key_authorize_event_id.as_str() != authorization_event.event_id
-        || !authorization_payload_matches_binding(authorization_event, &binding)
-    {
+    let authorization_event =
+        select_authorization_event(&events, selector, &record).ok_or_else(|| {
+            tracing::debug!(
+                agent_id = %selector.agent_id,
+                pcr_id = %pcr_id,
+                event_count = events.len(),
+                authorized_event_ref = ?record.authorized_event_ref,
+                "diagnosing Agent signer evidence: authorization Event missing"
+            );
+            AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+        })?;
+    let binding = binding_for_event(authorization_event, &record).ok_or_else(|| {
+        tracing::debug!(
+            agent_id = %selector.agent_id,
+            event_id = %authorization_event.event_id,
+            "diagnosing Agent signer evidence: signing-key binding missing"
+        );
+        AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+    })?;
+    let agent_matches = binding.agent_id == selector.agent_id;
+    let verification_method_matches = binding.verification_method == selector.verification_method;
+    let event_id_matches =
+        binding.agent_key_authorize_event_id.as_str() == authorization_event.event_id;
+    let payload_matches = authorization_payload_matches_binding(authorization_event, &binding);
+    if !agent_matches || !verification_method_matches || !event_id_matches || !payload_matches {
+        tracing::debug!(
+            agent_id = %selector.agent_id,
+            event_id = %authorization_event.event_id,
+            agent_matches,
+            verification_method_matches,
+            event_id_matches,
+            payload_matches,
+            "diagnosing Agent signer evidence: authorization binding mismatch"
+        );
         return Err(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing);
     }
 
-    let head = unique_realm_head(state, &pcr_id)?;
+    let head = unique_realm_head(state, &pcr_id).map_err(|reason| {
+        tracing::debug!(
+            agent_id = %selector.agent_id,
+            pcr_id = %pcr_id,
+            ?reason,
+            "diagnosing Agent signer evidence: unique PCR head unavailable"
+        );
+        reason
+    })?;
     let seals = head_lineage(state, &pcr_id, &head)?;
     let authorization_witness = find_event_witness(
         state,
@@ -184,7 +298,16 @@ pub(crate) async fn build_evidence(
         &binding.agent_key_id,
         binding.agent_key_authorize_event_id.as_str(),
     )?
-    .ok_or(AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing)?;
+    .ok_or_else(|| {
+        tracing::debug!(
+            agent_id = %selector.agent_id,
+            pcr_id = %pcr_id,
+            event_id = %authorization_event.event_id,
+            seal_count = seals.len(),
+            "diagnosing Agent signer evidence: authorization state witness missing"
+        );
+        AgentSignerEvidenceQueryFailureReason::AgentSignerEvidenceMissing
+    })?;
     let transition = find_transition(
         state,
         &pcr_id,
@@ -681,13 +804,29 @@ fn find_event_witness(
             .projections()
             .effective_state_at(std::slice::from_ref(&seal.id), realm_id)
             .map_err(|_| AgentSignerEvidenceQueryFailureReason::AgentAuthorizationConflicted)?;
+        tracing::debug!(
+            realm_id = %realm_id,
+            seal_id = %seal.id,
+            expected_cell_ref = %cell_ref,
+            cell_count = cells.len(),
+            expected_cell_present = cells.contains_key(&cell_ref),
+            "diagnosing Agent signer evidence state witness Seal view"
+        );
         let Some(cell_state) = cells.get(&cell_ref) else {
             continue;
         };
         let CellState::Value(cell_value) = cell_state else {
             return Err(AgentSignerEvidenceQueryFailureReason::AgentAuthorizationConflicted);
         };
-        if !value_contains_string(cell_value, event_id) {
+        let contains_authorization_event = value_contains_event_dot(cell_value, event_id);
+        tracing::debug!(
+            realm_id = %realm_id,
+            seal_id = %seal.id,
+            expected_cell_ref = %cell_ref,
+            contains_authorization_event,
+            "diagnosing Agent signer evidence authorization cell value"
+        );
+        if !contains_authorization_event {
             continue;
         }
         let computed_root = arkret_state::compute_state_root(&cells)
@@ -847,15 +986,19 @@ fn transition_witness(
     })
 }
 
-fn value_contains_string(value: &Value, expected: &str) -> bool {
+fn value_contains_event_dot(value: &Value, event_id: &str) -> bool {
     match value {
-        Value::String(value) => value == expected,
+        Value::String(value) => {
+            arkret_signatures::agent_evidence::agent_authorization_dot_matches_event(
+                value, event_id,
+            )
+        }
         Value::Array(values) => values
             .iter()
-            .any(|value| value_contains_string(value, expected)),
+            .any(|value| value_contains_event_dot(value, event_id)),
         Value::Object(values) => values
             .values()
-            .any(|value| value_contains_string(value, expected)),
+            .any(|value| value_contains_event_dot(value, event_id)),
         Value::Null | Value::Bool(_) | Value::Number(_) => false,
     }
 }
@@ -931,6 +1074,67 @@ mod tests {
                 Some("did:web:other-agent.example"),
             )],
             &selector,
+        ));
+    }
+
+    #[test]
+    fn live_signal_selector_omits_both_event_admission_fields() {
+        let live: AgentSignerEvidenceQuerySelector = serde_json::from_value(json!({
+            "agent_id": "did:web:agent.example",
+            "verification_method": "did:web:agent.example#runtime-1"
+        }))
+        .unwrap();
+        assert!(selector_is_live_signal_query(&live));
+
+        let mut partial = live;
+        partial.agent_key_authorize_event_id =
+            Some(EventId::new("ak:event:01964137-0000-7000-8000-000000000001".to_owned()).unwrap());
+        assert!(!selector_is_live_signal_query(&partial));
+    }
+
+    #[test]
+    fn authorization_witness_finds_only_a_canonical_dot_for_the_event() {
+        let event_id = "ak:event:01964137-0000-7000-8000-000000000001";
+        assert!(value_contains_event_dot(
+            &json!([{"tag": format!("{event_id}:1")}]),
+            event_id,
+        ));
+        assert!(!value_contains_event_dot(
+            &json!([{"tag": event_id}]),
+            event_id,
+        ));
+        assert!(!value_contains_event_dot(
+            &json!([{"tag": "ak:event:01964137-0000-7000-8000-000000000002:1"}]),
+            event_id,
+        ));
+    }
+
+    #[test]
+    fn active_direct_binding_is_a_live_signal_shared_context() {
+        let binding = soland_services::identity::DirectConversationBindingRecord {
+            participants_unordered: vec![
+                "did:web:agent.example".to_owned(),
+                "did:web:alice.example".to_owned(),
+            ],
+            realm_id: "ak:realm:01964137-0000-7000-8000-000000000004".to_owned(),
+            main_strand_id: "ak:strand:01964137-0000-7000-8000-000000000005".to_owned(),
+            binding_event_ref: "ak:event:01964137-0000-7000-8000-000000000006".to_owned(),
+            state: "active".to_owned(),
+            authoring_context: None,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        };
+        assert!(direct_binding_has_exact_participants(
+            &binding,
+            &binding.realm_id,
+            "did:web:alice.example",
+            "did:web:agent.example",
+        ));
+        assert!(!direct_binding_has_exact_participants(
+            &binding,
+            &binding.realm_id,
+            "did:web:mallory.example",
+            "did:web:agent.example",
         ));
     }
 }

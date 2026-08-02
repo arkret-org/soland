@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 
+use arkret_schema::ProtocolSchemaRegistry;
 use serde_json::Value;
 
 pub const PQ_HYBRID_TLS_DEPLOYMENT_PROBE_ARTIFACT_REF: &str =
@@ -43,4 +44,18 @@ pub fn active_durable_event_kinds() -> &'static BTreeSet<String> {
 
 pub fn schema_ids() -> BTreeSet<String> {
     soland_domain::artifacts::schema_ids()
+}
+
+/// The process-wide Draft 2020-12 protocol schema catalog, compiled at startup.
+pub fn protocol_schema_registry()
+-> Result<&'static ProtocolSchemaRegistry, soland_domain::artifacts::ArtifactError> {
+    soland_domain::artifacts::protocol_schema_registry()
+}
+
+/// The live spec artifacts directory this process resolved, if any.
+///
+/// `None` means the catalog comes from the SDK's embedded snapshot, which is
+/// the normal shape for a deployment without a spec checkout.
+pub fn spec_artifacts_dir() -> Option<std::path::PathBuf> {
+    arkret_schema::default_spec_artifacts_dir()
 }

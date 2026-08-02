@@ -572,11 +572,13 @@ fn agent_account_service_scope(scope: &str) -> bool {
             | "ak.self.events.query.scan"
             | "ak.self.events.stream.subscribe"
             | "ak.self.events.query.frontier"
+            | "ak.self.authorization_leases.command.issue"
             | "ak.self.keys.keypackages.upload.create"
             | "ak.self.keys.keypackages.command.consume"
             | "ak.self.keys.keypackages.command.revoke"
             | "ak.self.device_messages.query.list"
             | "ak.self.device_messages.command.ack"
+            | "ak.self.signal.command.send"
     )
 }
 

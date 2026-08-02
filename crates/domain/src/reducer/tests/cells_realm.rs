@@ -629,7 +629,7 @@ fn realm_create_bootstraps_creator_member_and_rejects_duplicate_create() {
 }
 
 #[test]
-fn direct_conversation_role_reads_the_genesis_object_from_the_create_log() {
+fn direct_conversation_role_survives_sealed_create_log_reload_via_metadata() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id =
@@ -669,18 +669,33 @@ fn direct_conversation_role_reads_the_genesis_object_from_the_create_log() {
     .unwrap();
     assert!(state.realm_is_direct_conversation(realm_id.as_str()));
 
-    let mut replayed_value = serde_json::to_value(projected).unwrap();
-    replayed_value["entry_id"] = serde_json::json!("ak:event:01904100-0000-7000-8000-cfc039892037");
     state.realm_create_cells.insert(
         realm_id.to_string(),
         arkret_state::lattice::CellState::Value(serde_json::json!([{
             "issuer": "did:web:alice.example",
             "issuer_seq": 1,
-            "value": replayed_value,
+            "value": realm_id.as_str(),
         }])),
     );
 
-    assert!(state.realm_is_direct_conversation(realm_id.as_str()));
+    assert!(
+        state.realm_is_direct_conversation(realm_id.as_str()),
+        "sealed create-log reload stores only the Realm id; typed role must survive in canonical metadata"
+    );
+
+    state.realm_metadata_cells.insert(
+        realm_id.to_string(),
+        arkret_state::lattice::CellState::Value(serde_json::json!({
+            "id": realm_id.as_str(),
+            "schema": "ak.schema.realm.v1",
+            "schema_refs": ["ak.schema.realm.v1"],
+            "fields": {"collaboration_role": "direct_conversation"}
+        })),
+    );
+    assert!(
+        !state.realm_is_direct_conversation(realm_id.as_str()),
+        "a discriminator without the registered profile/security shape must fail closed"
+    );
 }
 
 #[test]

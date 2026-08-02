@@ -49,9 +49,22 @@ async fn run() -> anyhow::Result<()> {
     let log_format = soland_http::config::LogFormat::from_env(dev_mode_for_logging);
     let _tracing_guards = init_tracing(log_format, dev_mode_for_logging)?;
 
-    // Fail fast at startup if a bundled Arkret artifact is malformed instead
-    // of crashing the first request that touches the offending OnceLock.
-    validate_embedded_artifacts()?;
+    // Fail fast at startup if a bundled Arkret artifact is malformed, or if the
+    // Draft 2020-12 schema catalog does not compile as a whole, instead of
+    // crashing the first request that touches the offending OnceLock or Event.
+    if let Err(error) = validate_embedded_artifacts() {
+        tracing::error!(
+            artifact = error.label,
+            detail = %error.detail,
+            spec_artifacts_dir = ?soland_services::protocol_artifacts::spec_artifacts_dir(),
+            "startup artifact gate failed; refusing to serve protocol traffic"
+        );
+        return Err(error.into());
+    }
+    tracing::info!(
+        spec_artifacts_dir = ?soland_services::protocol_artifacts::spec_artifacts_dir(),
+        "protocol schema catalog compiled at startup"
+    );
 
     let mut config = AppConfig::from_env_and_args()?;
     if let Some(database_url) = &config.database_url {

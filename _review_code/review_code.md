@@ -370,143 +370,18 @@ coordinator`. Same two cases the fixture-Realm entry above also leaves open.
 - Prevention dimension: every claim surface must bind its protocol idempotency key to a canonical
   request digest and immutable terminal outcome in the same transaction as inventory mutation;
   last-resort eligibility must be explicit, never an implicit empty-pool fallback.
-## 2026-08-01 — authority root audit sorting used object serialization order
 
-- Surface: reducer materialization of `authority_root_refs[]` on capability grant cells.
-- Regression: roots were sorted and deduplicated by the serialized JSON object. Object key order
-  is not the normative identity order `(realm_id, cell_ref, authority_generation)`, so two
-  implementations could seal different root arrays for the same multi-root grant.
-- Correction: the reducer now validates every root identity member, constructs the explicit
-  tuple key, and sorts/deduplicates by that key. Cotest independently materializes the same
-  fixture and compares its result with the Soland reducer output.
-- Prevention dimension: derived protocol arrays need an explicit spec-named comparison key;
-  whole-object serialization is not a substitute unless the spec explicitly defines it so.
+## 2026-08-01 — persisted Direct role and local claim terminal state diverged from the spec
 
-## 2026-08-01 — effective-grant projection dropped authority-control evidence
-
-- Surface: the Soland runtime-constraint to SDK wire-constraint projection used by effective-grant
-  HTTP responses.
-- Regression: after the SDK runtime authority-control shape gained the normative
-  `authority_regrant_allowed` member, the projection did not carry that member into the wire DTO;
-  the same boundary had previously omitted reducer-derived `authority_depth` and
-  `authority_root_refs`. Audit clients could therefore observe an incomplete authority basis.
-- Correction: the projection now maps the boolean explicitly and preserves both reducer-derived
-  audit fields; a focused HTTP test pins the full effective-grant authority projection.
-- Prevention dimension: exhaustive protocol projections need field-completeness tests whenever a
-  closed source type changes; successful source deserialization alone does not prove the response
-  preserves authorization evidence.
-## Known failing on main: `jws_verify::did_binding_tests` (2026-08-01)
-
-Reproduced on a clean tree at `79b529ab` with all local work stashed, so it is not a regression
-from the 2026-08-01 review-code work (L1 drift gate, `ak.conflict.repair` removal, sovereign
-outbound `trust_domain` allow-list, holder-private consent cell):
-
-```powershell
-cd D:\Works\arkret-org\soland; cargo test -p soland-http --lib jws_verify::did_binding_tests
-```
-
-5 of 9 fail with
-`HighRiskDidFreshness("DID document freshness unavailable for high-risk verification: no ingested
-record for did:web:principal.example")`. Deterministic — it also fails when the module is run
-alone, so this is not cross-test interference: the fixtures accept a DID binding without seeding
-the ingested freshness record the high-risk verification path now requires.
-
-- Prevention dimension: when a verification path gains a new *external* precondition (here, an
-  ingested freshness record), the fixtures that construct the accepted state have to gain it in
-  the same change. A test that builds "an accepted binding" through a constructor rather than
-  through the real acceptance path stops tracking what acceptance actually requires, and the
-  divergence surfaces later as a failure that reads like a broken assertion rather than an
-  incomplete fixture.
-
-## 2026-08-01 — accepted identity/recovery retry compared the wrong digest domain
-
-- Surface: byte-identical retry of accepted identity-anchor and recovery publication units.
-- Regression: the first commit persisted the typed Event digest, while the retry path compared a
-  generic canonical-JSON digest of the whole Event value including proofs. An exact replay was
-  therefore misclassified as missing atomic publication evidence.
-- Correction: retry lookup now parses the typed Event and computes `Event::event_digest()` through
-  the same normative digest domain used by the initial commit.
-- Prevention dimension: idempotent persistence and replay must share one typed digest constructor;
-  generic JSON hashing is not interchangeable with a protocol object's domain-separated digest.
-
-## 2026-08-01 — terminal invite cancellation could be overwritten by accepted reprojection
-
-- Surface: invite projection replay after cancellation/revocation.
-- Regression: a later replay of an earlier accepted invite event overwrote the terminal frozen
-  state, allowing projections to resurrect a cancelled invite.
-- Correction: terminal invite states are monotonic and accepted reprojection preserves the frozen
-  value; focused reducer coverage exercises replay order.
-- Prevention dimension: terminal lattice values require an explicit no-resurrection assertion for
-  every historical accepted-event replay path.
-
-## 2026-08-01 — conformance Realm grants omitted their typed issuer authority
-
-- Surface: the shared synthetic Realm basis used by Soland HTTP and conformance tests.
-- Regression: the fixture sealed grant bodies with actions/resources but no
-  `issuer_authority_refs`, so the purported genesis grants were not valid instances of the current
-  authority model even though the runtime's empty-edge chain walk did not itself reject them.
-- Correction: every fixture grant now names the canonical `realm_root` authority cell with its
-  issuance epoch/generation; reducer-derived depth/root audit members remain receiver-derived.
-- Prevention dimension: a synthetic governance basis must self-check notary resolution, proposal
-  policy, typed grant authority, and a representative allow decision before downstream tests use it.
-
-## 2026-08-01 — one unregistered self-authored action invalidated the shared Realm grant
-
-- Surface: the sealed capability basis used by DataEvent HTTP tests.
-- Regression: the fixture included `ak.self.moderation.report` in a Realm grant. That event uses
-  `self_authored_proof` admission and is intentionally absent from the capability-action registry.
-  Grant validation is atomic and fail-closed, so the single invalid entry discarded the entire
-  grant and denied otherwise registered actions such as RSVP, Morph, Space and Strand writes.
-- Correction: the self-authored action was removed from the grant. Fixture setup now reconstructs
-  every expected grant through the production `effective_state_at` path and asserts its subject,
-  Realm and actions before populating any live test-only index.
-- Prevention dimension: shared authorization fixtures must validate the whole sealed grant through
-  the frozen historical view; checking only that a requested string appears in input masks atomic
-  rejection of the complete grant.
-
-## 2026-08-01 — MLS tests overwrote group binding and sent unsigned legacy claims
-
-- Surface: HTTP encrypted-message and end-to-end MLS KeyPackage lifecycle fixtures.
-- Regression: the message builder replaced the caller's MLS group id with a stale `mls_test`
-  literal, while the Seal basis correctly seeded `covered_seals_cell` under the suite's canonical
-  group. The lifecycle test also sent proof-free self claims with undersized nonces and effectively
-  unbounded expiries after the protocol required one holder proof and a five-minute window.
-- Correction: encrypted envelopes preserve their declared group id. Self claims are now typed,
-  carry at least 128-bit nonces, expire within four minutes, bind the proof-free payload digest and
-  are signed as detached Ed25519 JWS by the authorized requester device.
-- Prevention dimension: cryptographic lifecycle tests must construct current typed requests and
-  sign their normative binding bytes; JSON literals and post-construction field overrides silently
-  sever cross-object bindings.
-# 2026-08-02 — call moderation Signal checked the content-moderation action
-
-- Regression: local and federated `signal_class=moderation` admission checked
-  `ak.moderation.decision`. The normative call signaling model requires the
-  independent `ak.call.moderate` action; the old check rejected legitimate call
-  moderators and conflated durable content decisions with ephemeral call
-  moderation.
-- Fix: both Signal admission paths now resolve `ak.call.moderate` at the
-  accepted Realm Seal basis. The denial remains fail-closed as
-  `signal_class_not_permitted`.
-
-# 2026-08-02 — call runtime authorization trusted the Realm metadata owner mirror
-
-- Regression: media-token and Signal capability checks supplied
-  `RealmMetadata.owner` to the shared authorization engine. The spec makes that
-  field audit-only; only the sealed `ak.component.realm.authority_root.v1`
-  controller may receive root-owner authority.
-- Fix: call authorization now resolves the current controller from the
-  projected authority-root cell, expands only the registry-derived
-  `ak.realm.owner.grant_authority_actions` set for that controller, and uses the
-  metadata directory only for Realm membership enumeration. Ordinary grants
-  continue through the projection-backed authorization index.
-
-# 2026-08-02 — Signal moderation negative fixture accidentally made the member root owner
-
-- Regression: the negative HTTP test created its sealed Realm basis with Bob as the genesis
-  subject. The shared basis correctly makes that subject the authority-root controller, so the
-  registry-derived owner authority allowed `ak.call.moderate` and invalidated the intended
-  no-capability premise. Its positive half also installed the retired content-moderation action.
-- Fix: the basis retains Alice as root controller, Bob remains a plain member, and the positive
-  half grants the normative `ak.call.moderate` action explicitly.
-- Prevention dimension: an authorization negative must assert the subject's authority source,
-  not merely its membership; changing a fixture's genesis subject changes the Realm root.
+- Surface: restart-time canonical Direct binding validation and local KeyPackage claim replay.
+- Regression: the reducer read `collaboration_role` from the sealed Realm-create log cell, whose
+  canonical value is only the Realm id; after restart an otherwise valid Direct Realm failed
+  closed. The local claim ledger persisted terminal failures as `failed`, although the schema and
+  lifecycle require `claim_failed`, and retained replay records forever instead of for the
+  normative 24-hour window after request expiry.
+- Correction: role classification now reads the merge-preserved canonical Realm metadata cell;
+  missing or discriminator-only metadata still fails closed. Claim failure/replay uses
+  `claim_failed`, while the immutable replay record expires at checked `request.expires_at + 24h`
+  independently from the KeyPackage lifecycle.
+- Prevention dimension: restart-shaped cell fixtures cover both complete and incomplete metadata,
+  and the terminal replay test asserts exact response reuse plus nonce rebinding rejection.

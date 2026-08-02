@@ -225,12 +225,12 @@ pub(super) fn ghost_provision_authorization_ref(record: &AppletRecord) -> Result
                 "stored Applet capability grant payload is invalid: {error}"
             ))
         })?;
-        if payload.grant.as_ref().is_some_and(|grant| {
-            grant
-                .actions
-                .iter()
-                .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION)
-        }) {
+        if payload
+            .grant
+            .actions
+            .iter()
+            .any(|action| action == CapabilityActionId::APPLET_GHOST_PROVISION)
+        {
             return Ok(payload.grant_id.to_string());
         }
     }

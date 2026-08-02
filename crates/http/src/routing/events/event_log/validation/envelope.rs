@@ -89,7 +89,7 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
 }
 
 mod applet;
-mod capability_grant_proofs;
+mod capability_grant;
 mod capability_refs;
 mod control_move;
 mod envelope_core;

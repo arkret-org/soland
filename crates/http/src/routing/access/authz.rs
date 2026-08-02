@@ -414,25 +414,11 @@ fn capability_grant_from_authz_grant(
         issuer_authority_refs: grant
             .issuer_authority_refs
             .iter()
-            .map(|authority| match authority {
-                arkret_policy::authz::authority::IssuerAuthorityRef::Grant { grant_id } => {
-                    GrantId::new(grant_id.clone()).map(|grant_id| {
-                        arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
-                    })
-                }
-                arkret_policy::authz::authority::IssuerAuthorityRef::RealmRoot {
-                    realm_id,
-                    cell_ref,
-                    controller_epoch_at_issuance,
-                    authority_generation,
-                } => RealmId::new(realm_id.clone()).map(|realm_id| {
-                    arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::RealmRoot {
-                        realm_id,
-                        cell_ref: cell_ref.clone(),
-                        controller_epoch_at_issuance: *controller_epoch_at_issuance,
-                        authority_generation: *authority_generation,
-                    }
-                }),
+            .filter_map(arkret_policy::authz::delegation::IssuerAuthorityRef::grant_id)
+            .map(|id| {
+                GrantId::new(id).map(|grant_id| {
+                    arkret_models_collaboration::governance::grant_constraint::IssuerAuthorityRef::Grant { grant_id }
+                })
             })
             .collect::<Result<Vec<_>, _>>()
             .map_err(|error| AppError::internal(error.to_string()))?,
@@ -443,9 +429,6 @@ fn capability_grant_from_authz_grant(
         updated_at: None,
         revoked_by: None,
         revoked_at: grant.revoked.then_some(now()),
-        proofs: Vec::new(),
-        authority_depth: grant.authority_depth,
-        authority_root_refs: grant.authority_root_refs,
     })
 }
 
@@ -556,7 +539,6 @@ fn wire_constraint_from_authz_constraint(
         }
         Constraint::AuthorityControl {
             max_authority_depth,
-            authority_regrant_allowed,
             constraint_subkind,
             applet_id,
             executed_by,
@@ -567,7 +549,6 @@ fn wire_constraint_from_authz_constraint(
                 WireGrantConstraintEffect::Allow,
             );
             wire.max_authority_depth = max_authority_depth.map(u64::from);
-            wire.authority_regrant_allowed = Some(authority_regrant_allowed);
             wire.constraint_subkind = constraint_subkind;
             wire.applet_id = applet_id;
             wire.executed_by = executed_by;
@@ -767,51 +748,5 @@ fn invite_state_from_record(status: &str) -> InviteState {
         "revoked" => InviteState::Revoked,
         "expired" => InviteState::Expired,
         _ => InviteState::Pending,
-    }
-}
-
-#[cfg(test)]
-mod authority_audit_tests {
-    use arkret_models_collaboration::governance::grant_constraint::AuthorityRootRef;
-
-    use super::*;
-
-    #[test]
-    fn effective_grant_preserves_authority_audit_projection() {
-        let realm_id = "ak:realm:01904100-0000-7000-8000-000000000001";
-        let grant = crate::authz::Grant {
-            grant_id: "ak:grant:01904100-0000-7000-8000-000000000002".to_owned(),
-            realm_id: realm_id.to_owned(),
-            issuer: "did:web:issuer.example".to_owned(),
-            subject: "did:web:subject.example".to_owned(),
-            resource: realm_id.to_owned(),
-            actions: vec!["ak.message.create".to_owned()],
-            capability_action_registry_digest: None,
-            constraints: Vec::new(),
-            revoked: false,
-            created_at: chrono::DateTime::parse_from_rfc3339("2026-08-01T00:00:00Z")
-                .unwrap()
-                .with_timezone(&chrono::Utc),
-            issuer_authority_refs: vec![
-                arkret_policy::authz::authority::IssuerAuthorityRef::RealmRoot {
-                    realm_id: realm_id.to_owned(),
-                    cell_ref: "ak:cell:ak.component.realm.authority_root.v1:null".to_owned(),
-                    controller_epoch_at_issuance: 3,
-                    authority_generation: 2,
-                },
-            ],
-            authority_depth: Some(1),
-            authority_root_refs: vec![AuthorityRootRef::RealmRoot {
-                realm_id: RealmId::new(realm_id).unwrap(),
-                cell_ref: "ak:cell:ak.component.realm.authority_root.v1:null".to_owned(),
-                authority_generation: 2,
-            }],
-            expires_at: None,
-        };
-
-        let wire = capability_grant_from_authz_grant(grant).unwrap();
-        assert_eq!(wire.authority_depth, Some(1));
-        assert_eq!(wire.issuer_authority_refs.len(), 1);
-        assert_eq!(wire.authority_root_refs.len(), 1);
     }
 }

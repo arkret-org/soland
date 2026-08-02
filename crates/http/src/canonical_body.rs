@@ -1,21 +1,38 @@
 //! Canonical JSON operation-body admission.
 //!
 //! The transport wire limit is 16 MiB, while every parsed non-streaming JSON
-//! operation has a separate 8 MiB JCS-canonical body limit. Keeping this check
-//! in middleware makes the bound uniform across the protocol and product
-//! routers without changing the schema-error ordering for malformed JSON.
+//! operation has a separate 8 MiB JCS-canonical body limit. The middleware uses
+//! the SDK's duplicate-aware, depth-bounded ingress boundary and derives lower
+//! per-operation limits from the generated operation registry.
 
-use arkret_wire::MAX_OPERATION_CANONICAL_BODY_BYTES;
+use arkret_canonical::CanonicalError;
+use arkret_wire::{SERVICE_OPERATION_DESCRIPTORS, WireBodyClass, WireError};
 use salvo::prelude::*;
 
 use crate::content_encoding::is_canonical_json_request;
 use crate::error::{AppError, ErrorCode};
 
-fn canonical_body_size(raw: &[u8]) -> Option<usize> {
-    let value: serde_json::Value = serde_json::from_slice(raw).ok()?;
-    arkret_canonical::canonical_json_bytes(&value)
-        .ok()
-        .map(|bytes| bytes.len())
+fn operation_canonical_body_limit(method: &str, path: &str) -> Option<usize> {
+    SERVICE_OPERATION_DESCRIPTORS
+        .iter()
+        .find(|descriptor| {
+            descriptor.body_class == Some("non_streaming_json")
+                && descriptor.http_method == method
+                && http_path_matches(descriptor.http_path, path)
+        })
+        .and_then(|descriptor| descriptor.max_canonical_body_bytes)
+}
+
+fn http_path_matches(template: &str, actual: &str) -> bool {
+    let template_segments = template.trim_matches('/').split('/');
+    let actual_segments = actual.trim_matches('/').split('/');
+    template_segments
+        .zip(actual_segments)
+        .all(|(expected, found)| {
+            (expected.starts_with('{') && expected.ends_with('}')) || expected == found
+        })
+        && template.trim_matches('/').split('/').count()
+            == actual.trim_matches('/').split('/').count()
 }
 
 /// Reject a request whose wire body exceeds the transport limit.
@@ -77,10 +94,12 @@ impl Handler for RequestWireSizeLimitMiddleware {
     }
 }
 
-/// Reject a valid JSON body whose JCS form exceeds the operation-body limit.
+/// Admit a canonical JSON body under the operation's registered byte budget.
 ///
-/// Invalid JSON is deliberately passed through: operation handlers remain the
-/// authority for `bad_json` and schema-validation errors.
+/// Syntactically invalid JSON is deliberately passed through so operation
+/// handlers remain the authority for `bad_json`. Duplicate keys, excessive
+/// depth, forbidden canonical values and non-canonical spelling are valid JSON
+/// schema violations and are rejected here before typed decoding.
 #[derive(Clone)]
 pub struct CanonicalJsonBodyLimitMiddleware;
 
@@ -93,19 +112,46 @@ impl Handler for CanonicalJsonBodyLimitMiddleware {
         res: &mut Response,
         ctrl: &mut FlowCtrl,
     ) {
-        if is_canonical_json_request(req)
-            && let Ok(payload) = req.payload().await
-            && canonical_body_size(payload)
-                .is_some_and(|size| size > MAX_OPERATION_CANONICAL_BODY_BYTES)
-        {
-            let error = AppError::new(
-                ErrorCode::PayloadTooLarge,
-                "canonical JSON operation body exceeds 8 MiB",
-            )
-            .with_wire_code("payload_too_large");
-            error.write(req, depot, res).await;
-            ctrl.skip_rest();
-            return;
+        if is_canonical_json_request(req) {
+            let method = req.method().as_str().to_owned();
+            let path = req.uri().path().to_owned();
+            let Ok(payload) = req.payload().await else {
+                ctrl.call_next(req, depot, res).await;
+                return;
+            };
+            let class = WireBodyClass::NonStreamingJsonOperation {
+                max_canonical_body_bytes: operation_canonical_body_limit(&method, &path),
+            };
+            match class.admit_canonical(payload) {
+                Ok(_) => {}
+                Err(WireError::Canonical(CanonicalError::CanonicalJson(_))) => {
+                    // Preserve the handler's operation-specific `bad_json`
+                    // response for malformed syntax.
+                }
+                Err(
+                    WireError::BodyWireBytesExceeded { .. }
+                    | WireError::BodyCanonicalBytesExceeded { .. },
+                ) => {
+                    let error = AppError::new(
+                        ErrorCode::PayloadTooLarge,
+                        "canonical JSON operation body exceeds its registered byte limit",
+                    )
+                    .with_wire_code("payload_too_large");
+                    error.write(req, depot, res).await;
+                    ctrl.skip_rest();
+                    return;
+                }
+                Err(error) => {
+                    let error = AppError::new(
+                        ErrorCode::SchemaViolation,
+                        format!("canonical JSON operation body is invalid: {error}"),
+                    )
+                    .with_wire_code("schema_violation");
+                    error.write(req, depot, res).await;
+                    ctrl.skip_rest();
+                    return;
+                }
+            }
         }
         ctrl.call_next(req, depot, res).await;
     }
@@ -116,12 +162,30 @@ mod tests {
     use super::*;
 
     #[test]
-    fn canonical_size_ignores_json_whitespace() {
-        assert_eq!(canonical_body_size(br#"{ "b": 2, "a": 1 }"#), Some(13));
+    fn operation_registry_supplies_lower_signal_limits() {
+        assert_eq!(
+            operation_canonical_body_limit("POST", "/_arkret/self/signal"),
+            Some(65_536)
+        );
+        assert_eq!(
+            operation_canonical_body_limit("POST", "/_arkret/peer/signal"),
+            Some(1_048_576)
+        );
+        assert_eq!(
+            operation_canonical_body_limit("POST", "/_arkret/self/events"),
+            None
+        );
     }
 
     #[test]
-    fn malformed_json_is_left_for_the_handler() {
-        assert_eq!(canonical_body_size(b"{"), None);
+    fn path_matcher_supports_registered_parameters_without_prefix_matches() {
+        assert!(http_path_matches(
+            "/_arkret/self/events/{event_id}",
+            "/_arkret/self/events/ak:event:1"
+        ));
+        assert!(!http_path_matches(
+            "/_arkret/self/events/{event_id}",
+            "/_arkret/self/events"
+        ));
     }
 }

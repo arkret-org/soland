@@ -233,6 +233,65 @@ async fn pg_conn(pool: &PgPool) -> StoreResult<Object<AsyncPgConnection>> {
         .map_err(|error| StoreError::Backend(format!("database pool error: {error}")))
 }
 
+async fn mark_control_event_sealed_in_transaction(
+    conn: &mut AsyncPgConnection,
+    digest: &str,
+    seal_id: &str,
+    sealed_at: chrono::DateTime<chrono::Utc>,
+) -> Result<(), EventSealCommitError> {
+    let row = sql_query(
+        "SELECT proposal_receipt, proposal_decisions, sealed_by \
+         FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
+    )
+    .bind::<Text, _>(digest)
+    .get_result::<ControlProposalStateRow>(conn)
+    .await
+    .optional()
+    .map_err(diesel_to_store)?
+    .ok_or_else(|| StoreError::NotFound(format!("control Event {digest} not in store")))?;
+    if let Some(stored_seal) = row.sealed_by {
+        if stored_seal == seal_id {
+            return Ok(());
+        }
+        return Err(StoreError::Conflict(format!(
+            "control Event {digest} is already sealed by {stored_seal}"
+        ))
+        .into());
+    }
+    let decisions = serde_json::from_value::<Vec<ControlProposalDecision>>(row.proposal_decisions)
+        .map_err(serde_to_store)?;
+    if decisions.iter().any(ControlProposalDecision::is_reject) {
+        return Err(StoreError::Conflict(format!(
+            "signed-rejected control Event {digest} cannot be sealed"
+        ))
+        .into());
+    }
+    let mut overdue = false;
+    if let Some(receipt) = row.proposal_receipt {
+        let receipt =
+            serde_json::from_value::<ControlProposalReceipt>(receipt).map_err(serde_to_store)?;
+        let mut previous_due_at = receipt.decision_due_at;
+        for decision in &decisions {
+            overdue |= !decision.satisfied_current_deadline(previous_due_at);
+            previous_due_at = decision.decision_due_at();
+        }
+        overdue |= sealed_at > previous_due_at;
+    }
+    sql_query(
+        "UPDATE state_control_events \
+         SET sealed_by = $2, sealed_at = COALESCE(sealed_at, $4), \
+             decision_overdue = decision_overdue OR $3 \
+         WHERE event_digest = $1",
+    )
+    .bind::<Text, _>(digest)
+    .bind::<Text, _>(seal_id)
+    .bind::<Bool, _>(overdue)
+    .bind::<Timestamptz, _>(sealed_at)
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 fn run_blocking<F, T>(future: F) -> StoreResult<T>
 where
     F: Future<Output = StoreResult<T>> + Send + 'static,
@@ -532,59 +591,8 @@ impl ControlEventStore for PgControlEventStore {
         run_blocking(async move {
             let mut conn = pg_conn(&pool).await?;
             conn.transaction::<_, EventSealCommitError, _>(async move |conn| {
-                let row = sql_query(
-                    "SELECT proposal_receipt, proposal_decisions, sealed_by \
-                     FROM state_control_events WHERE event_digest = $1 FOR UPDATE",
-                )
-                .bind::<Text, _>(&digest)
-                .get_result::<ControlProposalStateRow>(conn)
-                .await
-                .optional()
-                .map_err(diesel_to_store)?
-                .ok_or_else(|| {
-                    StoreError::NotFound(format!("control Event {digest} not in store"))
-                })?;
-                if let Some(stored_seal) = row.sealed_by {
-                    if stored_seal == seal_id {
-                        return Ok(());
-                    }
-                    return Err(StoreError::Conflict(format!(
-                        "control Event {digest} is already sealed by {stored_seal}"
-                    ))
-                    .into());
-                }
-                let decisions =
-                    serde_json::from_value::<Vec<ControlProposalDecision>>(row.proposal_decisions)
-                        .map_err(serde_to_store)?;
-                if decisions.iter().any(ControlProposalDecision::is_reject) {
-                    return Err(StoreError::Conflict(format!(
-                        "signed-rejected control Event {digest} cannot be sealed"
-                    ))
-                    .into());
-                }
-                let mut overdue = false;
-                if let Some(receipt) = row.proposal_receipt {
-                    let receipt = serde_json::from_value::<ControlProposalReceipt>(receipt)
-                        .map_err(serde_to_store)?;
-                    let mut previous_due_at = receipt.decision_due_at;
-                    for decision in &decisions {
-                        overdue |= !decision.satisfied_current_deadline(previous_due_at);
-                        previous_due_at = decision.decision_due_at();
-                    }
-                    overdue |= sealed_at > previous_due_at;
-                }
-                sql_query(
-                    "UPDATE state_control_events \
-                     SET sealed_by = $2, sealed_at = COALESCE(sealed_at, $4), \
-                         decision_overdue = decision_overdue OR $3 \
-                     WHERE event_digest = $1",
-                )
-                .bind::<Text, _>(&digest)
-                .bind::<Text, _>(&seal_id)
-                .bind::<Bool, _>(overdue)
-                .bind::<Timestamptz, _>(sealed_at)
-                .execute(conn)
-                .await?;
+                mark_control_event_sealed_in_transaction(conn, &digest, &seal_id, sealed_at)
+                    .await?;
                 Ok(())
             })
             .await
@@ -1275,6 +1283,12 @@ impl EventSealCommitStore for PgEventSealCommitStore {
         let predecessor_refs = seal_predecessor_refs_json(seal);
         let seal_id = seal.id.as_str().to_owned();
         let realm_id = seal.realm_id.as_str().to_owned();
+        let delta = seal
+            .delta
+            .iter()
+            .map(|digest| digest.as_str().to_owned())
+            .collect::<Vec<_>>();
+        let sealed_at = seal.sealed_at;
         let declared_state_root = seal.state_root.clone();
         let is_genesis = seal.predecessor_refs.is_empty();
         let expected = expected_store_frontier
@@ -1407,6 +1421,20 @@ impl EventSealCommitStore for PgEventSealCommitStore {
                         "Event Seal state_root mismatch: declared {declared_state_root}, recomputed {recomputed}"
                     ))
                     .into());
+                }
+                // The frontier CAS is the durable acceptance boundary for the
+                // delta. Cell effects, Seal lineage, and each Event's sealed
+                // marker must commit in this same transaction; otherwise a
+                // covered Event remains visible in the pending queue and can
+                // be proposed repeatedly after a restart.
+                for digest in &delta {
+                    mark_control_event_sealed_in_transaction(
+                        conn,
+                        digest,
+                        &seal_id,
+                        sealed_at,
+                    )
+                    .await?;
                 }
                 insert_state_seal(
                     conn,

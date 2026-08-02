@@ -157,9 +157,7 @@ async fn issue_event_leases(
         })?;
         validate_event_envelope_with_context(state, session, &envelope, &bootstrap_contexts, None)
             .await
-            .map_err(|error| {
-                AppError::new(ErrorCode::PolicyViolation, error.message).with_status(error.status)
-            })?;
+            .map_err(event_validation_app_error)?;
     }
     let anchor_basis = context.map(|value| value.basis);
     let mut leases = Vec::with_capacity(events.len());
@@ -187,6 +185,19 @@ async fn issue_event_leases(
         )?);
     }
     Ok(leases)
+}
+
+/// Lease issuance runs the same pre-admission validator as Event submission.
+/// Preserve its canonical wire code and stable reason instead of flattening
+/// every refusal to `policy_violation`; clients use typed preconditions such as
+/// `mls_governance_binding_stale` to schedule the protocol-mandated repair.
+fn event_validation_app_error(error: EventValidationError) -> AppError {
+    let code = ErrorCode::from_wire(error.code).unwrap_or(ErrorCode::PolicyViolation);
+    let mut rendered = AppError::new(code, error.message).with_status(error.status);
+    if let Some(reason_code) = error.reason_code {
+        rendered = rendered.with_reason_code(reason_code);
+    }
+    rendered
 }
 
 async fn issue_intent_leases(
@@ -703,6 +714,26 @@ mod tests {
         assert_eq!(
             root.capability_action_registry_digest.as_str(),
             REGISTRY_DIGEST
+        );
+    }
+
+    #[test]
+    fn lease_pre_admission_preserves_typed_validation_failure() {
+        let error = event_validation_app_error(EventValidationError {
+            status: StatusCode::CONFLICT,
+            code: arkret_wire::ErrorCode::FAILED_PRECONDITION,
+            message: format!(
+                "{}: covered_seals_cell is stale",
+                arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE
+            ),
+            reason_code: Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE),
+        });
+
+        assert_eq!(error.code, ErrorCode::FailedPrecondition);
+        assert_eq!(error.status, Some(StatusCode::CONFLICT));
+        assert_eq!(
+            error.reason_code.as_deref(),
+            Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE)
         );
     }
 }

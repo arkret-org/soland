@@ -297,26 +297,25 @@ impl ProjectionState {
     }
 
     /// Identifies the registered Direct Conversation Realm role from the
-    /// immutable genesis object. Unknown, incomplete, or malformed role
-    /// declarations fail closed and never fall back to member-count or title
-    /// heuristics.
+    /// canonical Realm metadata cell seeded by the immutable genesis object.
+    ///
+    /// The registered `ak.component.realm.create.v1` ordered log intentionally
+    /// stores only the Realm id. Before the sealed cell is reloaded, the live
+    /// reducer also keeps a richer convenience entry there, but that shape is
+    /// not durable and MUST NOT be used for role discovery after restart.
+    /// Realm metadata is the canonical full-object cell; update patches merge
+    /// into it, so the genesis profile/discriminator and security fields stay
+    /// available for the shared typed validator.
+    ///
+    /// Unknown, incomplete, or malformed role declarations fail closed and
+    /// never fall back to member-count, title, category, or tag heuristics.
     pub fn realm_is_direct_conversation(&self, realm_id: &str) -> bool {
-        self.realm_create_log(realm_id)
-            .and_then(|entries| entries.last())
-            .and_then(|entry| {
-                // Live semantic projection stores the create-log entry as
-                // `{object: Realm, ...}`. Canonical cell-effect replay
-                // normalizes the same entry to `{issuer, issuer_seq,
-                // value: Realm + entry_id}`. Accept both deterministic
-                // representations while stripping only lattice metadata.
-                let mut object = entry
-                    .get("object")
-                    .or_else(|| entry.get("value"))?
-                    .clone();
-                object.as_object_mut()?.remove("entry_id");
-                serde_json::from_value::<arkret_models_collaboration::objects::realm::Realm>(
-                    object,
-                )
+        self.realm_metadata_cell_value(realm_id)
+            .cloned()
+            .and_then(|metadata| {
+                serde_json::from_value::<
+                    arkret_models_collaboration::objects::realm::Realm,
+                >(metadata)
                 .ok()
             })
             .is_some_and(|realm| arkret_models_collaboration::objects::direct_conversation::DirectConversationRealmRole::matches(&realm))

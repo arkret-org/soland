@@ -162,23 +162,20 @@ fn validate_formal_install_events(
                 ))
                 .with_wire_code("applet_install_plan_mismatch")
             })?;
-        let grant = payload.grant.ok_or_else(|| {
-            AppError::invalid_param("capability_grant_event must carry the complete grant object")
-                .with_wire_code("applet_install_plan_mismatch")
-        })?;
+        let grant = payload.grant;
         if payload.grant_id != grant.id
             || grant.issuer.as_str() != install_actor
             || grant.realm_id.as_ref() != Some(realm_id)
             || !matches!(
                 &grant.subject,
-                CapabilitySubject::Did(subject) if subject == &package.service_id
+                CapabilitySubject::Did(subject)
+                    if subject.as_str() == package.service_id.as_str()
             )
             || grant.resources.len() != 1
             || serde_json::to_value(&grant.resources[0]).ok().as_ref() != Some(&expected_resource)
-            || grant.proofs.is_empty()
         {
             return Err(AppError::invalid_param(
-                "capability grant issuer, subject, resource, proof, or id does not match the install",
+                "capability grant issuer, subject, resource, or id does not match the install",
             )
             .with_wire_code("applet_install_plan_mismatch"));
         }

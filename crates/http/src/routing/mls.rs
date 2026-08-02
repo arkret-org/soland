@@ -1483,7 +1483,7 @@ async fn claim_keypackages_for_request_inner(
             state,
             &local_claim_request_id,
             &request_digest,
-            "failed",
+            "claim_failed",
             None,
             body,
             outcome,
@@ -1590,7 +1590,7 @@ async fn claim_keypackages_for_request_inner(
         state,
         &local_claim_request_id,
         &request_digest,
-        "failed",
+        "claim_failed",
         None,
         body,
         outcome,
@@ -1631,9 +1631,15 @@ fn local_claim_ledger_record(
         outcome: Some(response),
         keypackage_id: keypackage.map(|keypackage| keypackage.id.clone()),
         claim_expires_at_unix_ms: Some(body.expires_at.timestamp_millis()),
-        // Protocol terminal outcomes remain replayable for the lifetime of
-        // this authority; expiry of the KeyPackage claim is a separate field.
-        expires_at: i64::MAX,
+        // Keep the byte-identical outcome through the protocol minimum
+        // retention window. Claim lifecycle is tracked independently by
+        // `claim_expires_at_unix_ms`; storage MUST NOT garbage-collect a
+        // still-live claim merely because this replay deadline has elapsed.
+        expires_at: body
+            .expires_at
+            .checked_add_signed(chrono::Duration::hours(24))
+            .unwrap_or(DateTime::<Utc>::MAX_UTC)
+            .timestamp(),
         updated_at: claimed_at,
     })
 }
@@ -1693,7 +1699,7 @@ fn replay_local_claim(
             .get("response")
             .cloned()
             .ok_or_else(|| AppError::internal("legacy local claim response is missing"))?
-    } else if matches!(record.state.as_str(), "claimed" | "failed") {
+    } else if matches!(record.state.as_str(), "claimed" | "claim_failed") {
         outcome
     } else {
         return Err(AppError::new(
@@ -1741,7 +1747,8 @@ async fn consume_keypackages(
         &consume_signing_input,
     )
     .await?;
-    validate_direct_keypackage_consume(state, &session, &body).await?;
+    let canonical_direct_consume =
+        validate_direct_keypackage_consume(state, &session, &body).await?;
     validate_sidecar_keypackage_consume(state, &session, &body).await?;
     let group_id = consume_group_ref(&body);
     let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
@@ -1756,10 +1763,22 @@ async fn consume_keypackages(
         {
             Ok(Some(record)) => record,
             Ok(None) => {
-                failures.push(keypackage_ref_failure(
-                    keypackage_ref,
-                    "already_consumed_or_missing",
-                ));
+                if missing_keypackage_consume_is_idempotent(canonical_direct_consume) {
+                    // A Direct Conversation consume request is bound to one accepted
+                    // Welcome, claim, recipient device and canonical Realm binding above.
+                    // Once that proof has passed, a missing terminal row is
+                    // indistinguishable from a successful consume whose response (or
+                    // terminal row in an ephemeral deployment) was lost.  Treat the
+                    // byte-identical recovery request as idempotent success; the
+                    // canonical Welcome checks prevent this path from consuming an
+                    // unrelated or fabricated KeyPackage.
+                    consumed.push(keypackage_ref);
+                } else {
+                    failures.push(keypackage_ref_failure(
+                        keypackage_ref,
+                        "already_consumed_or_missing",
+                    ));
+                }
                 continue;
             }
             Err(error) => {
@@ -1839,16 +1858,16 @@ async fn validate_direct_keypackage_consume(
     state: &AppState,
     session: &SessionRecord,
     body: &KeyPackagesConsumeRequestBody,
-) -> Result<(), AppError> {
+) -> Result<bool, AppError> {
     let Some(realm_id) = body.realm_id.as_ref().map(ToString::to_string) else {
-        return Ok(());
+        return Ok(false);
     };
     if !state
         .projections()
         .snapshot()
         .realm_is_direct_conversation(&realm_id)
     {
-        return Ok(());
+        return Ok(false);
     }
     if body.key_package_refs.len() != 1
         || body.claim_ids.len() != 1
@@ -1954,15 +1973,67 @@ async fn validate_direct_keypackage_consume(
         || welcome.recipient_device_id.as_str() != session.device_id
         || welcome.mls_group_id.as_str() != binding_payload.mls_group_id.as_str()
         || Some(welcome.epoch) != body.epoch
-        || welcome.claim_id.as_str() != claim_id
-        || !claim_id.starts_with(&format!("{key_package_id}:"))
+        || !direct_welcome_claim_matches_consume(
+            key_package_id,
+            claim_id,
+            &welcome.keypackage_ref,
+            welcome.claim_id.as_str(),
+        )
     {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "KeyPackage consume claim differs from the canonical direct Welcome",
         ));
     }
-    Ok(())
+    Ok(true)
+}
+
+fn direct_welcome_claim_matches_consume(
+    consumed_keypackage_ref: &str,
+    consumed_claim_id: &str,
+    welcome_keypackage_ref: &str,
+    welcome_claim_id: &str,
+) -> bool {
+    consumed_keypackage_ref == welcome_keypackage_ref && consumed_claim_id == welcome_claim_id
+}
+
+fn missing_keypackage_consume_is_idempotent(canonical_direct_consume: bool) -> bool {
+    canonical_direct_consume
+}
+
+#[cfg(test)]
+mod direct_consume_tests {
+    use super::{direct_welcome_claim_matches_consume, missing_keypackage_consume_is_idempotent};
+
+    #[test]
+    fn direct_consume_binds_the_wire_ref_without_assuming_claim_id_prefix() {
+        let keypackage_ref = format!("sha256:{}", "a".repeat(64));
+        let claim_id = "ak:mls:kp:01904100-0000-7000-8000-000000000001:claim-nonce";
+        assert!(direct_welcome_claim_matches_consume(
+            &keypackage_ref,
+            claim_id,
+            &keypackage_ref,
+            claim_id,
+        ));
+        assert!(!direct_welcome_claim_matches_consume(
+            &format!("sha256:{}", "b".repeat(64)),
+            claim_id,
+            &keypackage_ref,
+            claim_id,
+        ));
+        assert!(!direct_welcome_claim_matches_consume(
+            &keypackage_ref,
+            "different-claim",
+            &keypackage_ref,
+            claim_id,
+        ));
+    }
+
+    #[test]
+    fn missing_direct_keypackage_is_only_idempotent_after_canonical_welcome_validation() {
+        assert!(missing_keypackage_consume_is_idempotent(true));
+        assert!(!missing_keypackage_consume_is_idempotent(false));
+    }
 }
 
 async fn validate_sidecar_keypackage_consume(
@@ -3134,6 +3205,22 @@ mod trust_binding_tests {
         assert_eq!(
             conflict.wire_code_override.as_deref(),
             Some("duplicate_conflict")
+        );
+
+        let failed = PeerKeyPackageClaimLedgerRecord {
+            source_service_id: "did:web:local.example".to_owned(),
+            claim_request_id: "local-last-resort:failed-fixture".to_owned(),
+            request_digest: "sha256:failed".to_owned(),
+            state: "claim_failed".to_owned(),
+            outcome: Some(response.clone()),
+            keypackage_id: None,
+            claim_expires_at_unix_ms: Some(2_000),
+            expires_at: 86_402,
+            updated_at: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(replay_local_claim(failed, "sha256:failed").unwrap()).unwrap(),
+            response
         );
     }
 

@@ -95,6 +95,11 @@ pub(super) async fn submit_agent_runtime_key_request(
             "verification_method DID must match agent_id",
         ));
     }
+    if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
+        return Err(AppError::invalid_param(
+            "verification_method fragment must be the stable Agent endpoint device_id",
+        ));
+    }
     let agent_record = lookup_pairing_record(
         state,
         &body.pairing_request_id,
@@ -459,6 +464,34 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     )
     .await?;
 
+    // Durable storage is only the proposal half of an Agent authorization.
+    // Activation requires a portable state witness proving that the exact
+    // authorization Event is covered by the accepted, controller-signed PCR
+    // frontier. Until the client publishes that successor Seal, keep both the
+    // pairing handle and its account notification open.
+    let evidence_selector =
+        arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceQuerySelector {
+            agent_id: typed_agent_id,
+            verification_method: typed_verification_method,
+            agent_key_authorize_event_id: Some(EventId::new(accepted.event_id.clone()).map_err(
+                |error| {
+                    AppError::internal(format!(
+                        "accepted Agent authorization Event id is invalid: {error}"
+                    ))
+                },
+            )?),
+            event_accepted_frontier: None,
+        };
+    let authorization_status = super::evidence::build_evidence(state, &evidence_selector)
+        .await
+        .ok()
+        .flatten()
+        .map(|evidence| evidence.authorization.status);
+    let authorization_is_witnessed = authorization_status_allows_activation(authorization_status);
+    if !authorization_is_witnessed {
+        return Ok(agent_record);
+    }
+
     let terminal_notification = account_notification_context(&agent_record);
     let activation = soland_services::identity::ActivateAgentRuntimeCommand {
         agent_id: agent_id.clone(),
@@ -522,6 +555,15 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             ))
         })?
         .ok_or_else(|| AppError::internal("Agent disappeared after authorization reconciliation"))
+}
+
+fn authorization_status_allows_activation(
+    status: Option<arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus>,
+) -> bool {
+    status
+        == Some(
+            arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus::Active,
+        )
 }
 
 /// Pure decision core for the open runtime-key-request status poll.
@@ -648,7 +690,13 @@ pub(super) async fn agent_key_pair(
             "verification_method DID must match agent_id",
         ));
     }
+    if verification_method_agent_endpoint(&body.verification_method, agent_id).is_none() {
+        return Err(AppError::invalid_param(
+            "verification_method fragment must be the stable Agent endpoint device_id",
+        ));
+    }
     let agent_record = require_agent_controller(state, &session, agent_id).await?;
+    let agent_record = reconcile_accepted_agent_authorization(state, agent_record).await?;
     validate_requested_scope_disclosure(&body, &agent_record, state).await?;
     validate_agent_key_authorize_effects(&body.authorize_event.event)?;
     let paired_request_digest = agent_key_pair_request_digest(&body)?;
@@ -674,7 +722,8 @@ pub(super) async fn agent_key_pair(
         }
         return json_ok(AgentKeyPairOutcome {
             ok: true,
-            authorized_event_ref: body.authorize_event.event.event_id.clone(),
+            activation_state: AgentKeyPairActivationState::Active,
+            authorize_event_ref: body.authorize_event.event.event_id.clone(),
             signing_key_binding: body.signing_key_binding,
         });
     }
@@ -766,7 +815,6 @@ pub(super) async fn agent_key_pair(
     }
     let authorize_event_value = serde_json::to_value(&body.authorize_event.event)
         .map_err(|error| AppError::invalid_param(format!("authorize_event invalid: {error}")))?;
-    let authorized_at = chrono::Utc::now();
     // Development and production consume the exact controller-signed Event
     // supplied by the client. A server-generated substitute would break the
     // Agent-PCR authorship and idempotency contract.
@@ -783,52 +831,14 @@ pub(super) async fn agent_key_pair(
     .await?;
     let authorized_event_ref = EventId::new(event_id)
         .map_err(|err| AppError::internal(format!("authorize event id invalid: {err}")))?;
-    // Pairing semantics: a provisioned agent starts `pending_runtime_key`;
-    // flip to `active` ONLY after the durable key authorization has been
-    // accepted (a failed submit above propagates via `?` and MUST NOT leave
-    // the agent flipped to active).
-    let terminal_notification = account_notification_context(&agent_record);
-    let activation = soland_services::identity::ActivateAgentRuntimeCommand {
-        agent_id: agent_id.to_owned(),
-        approval_request_id: agent_record.approval_request_id.clone().ok_or_else(|| {
-            pairing_failed_precondition("agent pairing approval metadata is incomplete")
-        })?,
-        runtime_key_binding_digest: agent_record.runtime_key_binding_digest.clone().ok_or_else(
-            || pairing_failed_precondition("agent runtime key binding metadata is incomplete"),
-        )?,
-        pairing_request_id: body.pairing_request_id.clone(),
-        paired_request_digest,
-        authorized_event_ref: authorized_event_ref.as_str().to_owned(),
-        authorized_verification_method: body.verification_method.to_string(),
-        authorized_public_key_digest: runtime_public_key_digest.clone(),
-        authorized_signing_key_binding: body.signing_key_binding.clone(),
-        authorized_at,
-    };
-    // The compare-and-set below records the authorized binding fields for the
-    // open status poll and consumes this approval for the current pairing
-    // request atomically (including runtime replacement re-pairing, §3.6.1).
-    let activated = state
-        .agent_pairings()
-        .activate_runtime(&activation)
-        .await
-        .map_err(|err| AppError::internal(format!("agent state activation failed: {err}")))?;
-    if !activated {
-        return Err(pairing_failed_precondition(
-            "runtime approval was already consumed or changed",
-        ));
-    }
-    if let Some(context) = terminal_notification {
-        finalize_terminal_account_notification(
-            state,
-            agent_id,
-            context,
-            arkret_models_collaboration::sync_frames::account_sync::AgentRuntimeApprovalRemovalReason::Approved,
-        )
-        .await?;
-    }
+    // The Event is durable, but is intentionally not authorization state yet.
+    // The controller client must publish the successor managed-PCR Seal and
+    // retry this exact idempotent request. Reconciliation above performs the
+    // only pending->active transition after portable evidence materializes.
     json_ok(AgentKeyPairOutcome {
         ok: true,
-        authorized_event_ref,
+        activation_state: AgentKeyPairActivationState::AwaitingAcceptedFrontier,
+        authorize_event_ref: authorized_event_ref,
         signing_key_binding: body.signing_key_binding,
     })
 }
@@ -1882,6 +1892,22 @@ pub(super) fn agent_pairing_not_found() -> AppError {
 #[cfg(test)]
 mod requested_scope_tests {
     use super::*;
+
+    #[test]
+    fn pairing_activation_requires_active_portable_authorization_evidence() {
+        use arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus;
+
+        assert!(!authorization_status_allows_activation(None));
+        assert!(!authorization_status_allows_activation(Some(
+            AgentAuthorizationStatus::Revoked
+        )));
+        assert!(!authorization_status_allows_activation(Some(
+            AgentAuthorizationStatus::Conflicted
+        )));
+        assert!(authorization_status_allows_activation(Some(
+            AgentAuthorizationStatus::Active
+        )));
+    }
 
     fn agent_record(requested_scope: Option<Value>) -> AgentPrincipalRecord {
         let mut record = AgentPrincipalRecord::new(

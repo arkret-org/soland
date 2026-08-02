@@ -35,13 +35,14 @@ use arkret_identifiers::{
 };
 use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
-    AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentLifecycleOutcome,
-    AgentLifecycleState, AgentList, AgentPairingBootstrap, AgentPairingMode,
-    AgentPairingResolveRequestBody, AgentPauseRequestBody, AgentProjection, AgentProvisionOutcome,
-    AgentProvisionPcrRecovery, AgentProvisionRequestBody, AgentRenewPairingOutcome,
-    AgentRenewPairingRequestBody, AgentResumeRequestBody, AgentRuntimeApprovalOutcome,
-    AgentRuntimeApprovalRequestBody, AgentRuntimeApprovalStatusOutcome,
-    AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState, AgentView, KeyState,
+    AgentGrantDetachOutcome, AgentKeyPairActivationState, AgentKeyPairOutcome,
+    AgentKeyPairRequestBody, AgentLifecycleOutcome, AgentLifecycleState, AgentList,
+    AgentPairingBootstrap, AgentPairingMode, AgentPairingResolveRequestBody, AgentPauseRequestBody,
+    AgentProjection, AgentProvisionOutcome, AgentProvisionPcrRecovery, AgentProvisionRequestBody,
+    AgentRenewPairingOutcome, AgentRenewPairingRequestBody, AgentResumeRequestBody,
+    AgentRuntimeApprovalOutcome, AgentRuntimeApprovalRequestBody,
+    AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
+    AgentView, KeyState,
 };
 #[cfg(test)]
 use arkret_models_collaboration::agent_operations::{

@@ -350,6 +350,17 @@ pub(super) fn verification_method_principal(verification_method: &str) -> &str {
         .unwrap_or("")
 }
 
+pub(super) fn verification_method_agent_endpoint(
+    verification_method: &str,
+    agent_id: &str,
+) -> Option<arkret_identifiers::DeviceId> {
+    let (controller, fragment) = verification_method.split_once('#')?;
+    let fragment = fragment.split('?').next().unwrap_or("");
+    (controller == agent_id)
+        .then(|| arkret_identifiers::DeviceId::new(fragment.to_owned()).ok())
+        .flatten()
+}
+
 /// Mint a `did:webvh` principal DID for a server-provisioned agent.
 ///
 /// did:webvh-only red line: agent principals MUST NOT use `did:web` (no

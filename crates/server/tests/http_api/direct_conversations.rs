@@ -6,7 +6,7 @@ use arkret_identifiers::TypedTrustDomainId;
 use arkret_models_identity::{
     CrossSigningPublish, KeyFormat, PublishedKey, SubordinateSignedKey, SubordinateSignedKeyBinding,
 };
-use arkret_wire::{DidUrl, NonEmptyString, PayloadSigner as _};
+use arkret_wire::{DidUrl, NonEmptyString};
 use chrono::Utc;
 
 use super::common::*;
@@ -91,32 +91,7 @@ async fn submit_direct_event_drafts_batch(state: AppState, token: &str, drafts: 
     );
     let mut events = Vec::with_capacity(drafts.len());
     for draft in drafts {
-        let mut draft = (*draft).clone();
-        if draft["kind"] == arkret_wire::EventKind::CAPABILITY_GRANT {
-            let mut grant: arkret_models_collaboration::governance::grant_constraint::CapabilityGrant =
-                serde_json::from_value(draft["payload"]["grant"].clone()).unwrap();
-            grant.proofs = vec![
-                serde_json::from_value(serde_json::json!({
-                    "kind": arkret_wire::proof_kind::DETACHED_JWS,
-                    "alg": "EdDSA",
-                    "verification_method": verification_method,
-                    "payload_digest": format!("sha256:{}", "0".repeat(64)),
-                    "created_at": now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-                    "proof_purpose": "issuer_attestation",
-                    "jws": "pending"
-                }))
-                .unwrap(),
-            ];
-            grant.proofs[0].payload_digest = grant.payload_digest().unwrap();
-            let binding = grant
-                .canonical_proof_binding_bytes(&grant.proofs[0])
-                .unwrap();
-            let signature = signer.sign_payload(&binding).unwrap();
-            grant.proofs[0].alg = signature.alg;
-            grant.proofs[0].jws = signature.jws;
-            draft["payload"]["grant"] = serde_json::to_value(grant).unwrap();
-        }
-        let mut event: arkret_wire::Event = serde_json::from_value(draft).unwrap();
+        let mut event: arkret_wire::Event = serde_json::from_value((*draft).clone()).unwrap();
         event.actor_seq = actor_seq;
         event.prev_refs = previous_event_ids;
         event.proofs.clear();
@@ -754,7 +729,7 @@ async fn direct_resolve_rejects_pairwise_did_without_stable_identity_link() {
 
     assert_eq!(response.status_code.unwrap().as_u16(), 412);
     let body: Value = response.take_json().await.unwrap();
-    assert_eq!(body["error"]["code"], "peer_unresolvable");
+    assert_eq!(body["error"]["code"], "direct_conversation_unavailable");
     assert_eq!(state.test_direct_conversation_binding_count(), 0);
 }
 

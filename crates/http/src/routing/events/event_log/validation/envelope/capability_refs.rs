@@ -710,7 +710,7 @@ pub(super) fn data_event_covered_seals_failed_precondition(
     message: impl Into<String>,
 ) -> EventValidationError {
     let code = arkret_wire::ErrorCode::FailedPrecondition;
-    event_validation_error(
+    let mut error = event_validation_error(
         error_http_status(code),
         code.as_str(),
         format!(
@@ -718,7 +718,9 @@ pub(super) fn data_event_covered_seals_failed_precondition(
             arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE,
             message.into()
         ),
-    )
+    );
+    error.reason_code = Some(arkret_wire::ReasonCode::MLS_GOVERNANCE_BINDING_STALE);
+    error
 }
 
 pub(super) fn data_event_payload_is_mls_e2ee(object: &serde_json::Map<String, Value>) -> bool {

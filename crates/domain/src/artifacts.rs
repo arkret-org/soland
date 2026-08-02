@@ -1,6 +1,7 @@
 use std::collections::{BTreeSet, HashMap};
 use std::sync::OnceLock;
 
+use arkret_schema::ProtocolSchemaRegistry;
 use serde_json::{Value, json};
 
 /// Error raised when an embedded Arkret artifact fails to parse.
@@ -31,6 +32,7 @@ static SCHEMA_ENTRIES: OnceLock<Vec<SchemaRegistryEntry>> = OnceLock::new();
 static OPERATION_SURFACE_GROUPS: OnceLock<Vec<OperationSurfaceGroup>> = OnceLock::new();
 static OPERATION_IDS: OnceLock<BTreeSet<String>> = OnceLock::new();
 static ID_KIND_FORMS: OnceLock<HashMap<String, String>> = OnceLock::new();
+static PROTOCOL_SCHEMA_REGISTRY: OnceLock<Result<ProtocolSchemaRegistry, String>> = OnceLock::new();
 
 #[derive(Clone, Debug)]
 pub struct SchemaRegistryEntry {
@@ -384,7 +386,51 @@ pub fn validate_embedded_artifacts() -> Result<(), ArtifactError> {
             detail: error.to_string(),
         })?;
     }
+    protocol_schema_registry()?;
     Ok(())
+}
+
+/// The process-wide Draft 2020-12 protocol schema catalog.
+///
+/// The catalog is an immutable snapshot of the spec artifacts this process was
+/// started against, so it is built once and shared: rebuilding it per request
+/// would recompile every logical schema on the admission hot path. The live
+/// artifacts directory wins when it is configured; otherwise the SDK's embedded
+/// snapshot is authoritative, which is what a deployment without a spec
+/// checkout must use.
+///
+/// The whole catalog is compiled on first access. A residual or mutually
+/// inconsistent catalog therefore fails the startup gate with the offending
+/// schema ID instead of failing the first Event that happens to reach it.
+pub fn protocol_schema_registry() -> Result<&'static ProtocolSchemaRegistry, ArtifactError> {
+    PROTOCOL_SCHEMA_REGISTRY
+        .get_or_init(build_protocol_schema_registry)
+        .as_ref()
+        .map_err(|detail| ArtifactError {
+            label: "protocol schema catalog",
+            detail: detail.clone(),
+        })
+}
+
+fn build_protocol_schema_registry() -> Result<ProtocolSchemaRegistry, String> {
+    let registry = match arkret_schema::schema_registry_from_default_spec_artifacts() {
+        Ok(Some(registry)) => registry,
+        Ok(None) => arkret_schema::schema_registry_from_embedded_spec_artifacts()
+            .map_err(|error| format!("embedded spec artifacts are unusable: {error}"))?,
+        Err(error) => {
+            return Err(format!(
+                "spec artifacts directory is present but unusable: {error}"
+            ));
+        }
+    };
+    registry.ensure_all_schemas_compile().map_err(|error| {
+        let failed = registry
+            .validator_stats()
+            .last_failure_schema_id
+            .unwrap_or_else(|| "unknown".to_owned());
+        format!("schema catalog compilation failed at {failed}: {error}")
+    })?;
+    Ok(registry)
 }
 
 fn registry_version(registry: &Value) -> String {
@@ -402,6 +448,21 @@ mod tests {
     #[test]
     fn production_spec_artifacts_are_embedded() {
         validate_embedded_artifacts().expect("production spec artifacts must be embedded");
+    }
+
+    #[test]
+    fn startup_gate_compiles_the_whole_schema_catalog_once() {
+        let registry =
+            protocol_schema_registry().expect("the startup gate must compile every logical schema");
+        assert_eq!(registry.schema_ids().count(), schema_entries().len());
+        // The catalog is built once per process, so a second call must not
+        // recompile it; only the shared validator cache is consulted.
+        let compiled_before = registry.validator_stats().compiled_validators;
+        protocol_schema_registry().expect("catalog stays available");
+        assert_eq!(
+            registry.validator_stats().compiled_validators,
+            compiled_before
+        );
     }
 
     #[test]
