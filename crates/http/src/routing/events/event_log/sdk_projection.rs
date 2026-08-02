@@ -596,49 +596,20 @@ mod projection_operation_tests {
     }
 }
 
-/// AKP-0007 — resolve the canonical `effective_scope` for an Event
-/// Envelope on read. Returns `Some(circle_id)` when the envelope (or its
-/// payload) names a Circle scope, `Some("realm:<realm_id>")` when the
-/// scope is the Realm default, or `None` when neither can be derived.
+/// Resolve the Event's producer-signed `scope_ref` for read-path visibility.
 pub(crate) fn effective_scope_for_envelope(envelope: &Value) -> Option<String> {
-    let object = envelope.as_object()?;
-    // Server-stamped authoritative scope. For messages this is set at ingest
-    // from the message's Strand (see submit_event_value); it always wins.
-    if let Some(scope) = object.get("effective_scope").and_then(Value::as_object) {
-        return match scope.get("kind").and_then(Value::as_str) {
-            Some("circle") => scope
-                .get("circle_id")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned),
-            Some("realm") => scope
-                .get("realm_id")
-                .and_then(Value::as_str)
-                .map(|realm_id| format!("realm:{realm_id}")),
-            _ => None,
-        };
-    }
-    // Messages NEVER carry their own scope (spec: `scope_circle_id` is a Strand
-    // field, not a message field). A message's effective circle-scope is the
-    // server-stamped `effective_scope` above, derived from its Strand at ingest.
-    // There is deliberately no client-supplied fallback, so a message cannot
-    // spoof its own visibility scope.
-    if object.get("kind").and_then(Value::as_str) == Some(arkret_wire::EventKind::MESSAGE_CREATE) {
-        return None;
-    }
-    // Non-message events (e.g. ak.strand.create / ak.strand.update) legitimately
-    // carry the object's own `scope_circle_id`.
-    let payload = object.get("payload").and_then(Value::as_object)?;
-    if let Some(scope_circle_id) = payload.get("scope_circle_id").and_then(Value::as_str) {
-        return Some(scope_circle_id.to_owned());
-    }
-    if let Some(payload_object) = payload.get("object").and_then(Value::as_object)
-        && let Some(scope_circle_id) = payload_object
-            .get("scope_circle_id")
+    let scope = envelope.get("scope_ref")?.as_object()?;
+    match scope.get("kind").and_then(Value::as_str) {
+        Some("circle") => scope
+            .get("circle_id")
             .and_then(Value::as_str)
-    {
-        return Some(scope_circle_id.to_owned());
+            .map(ToOwned::to_owned),
+        Some("realm") => scope
+            .get("realm_id")
+            .and_then(Value::as_str)
+            .map(|realm_id| format!("realm:{realm_id}")),
+        _ => None,
     }
-    None
 }
 
 pub(crate) async fn event_view_for_state(
@@ -903,37 +874,15 @@ where
 }
 
 /// The Event's signed security scope.
-///
-/// `scope_ref` is a required, producer-signed member of the v1 envelope, so the
-/// stored bytes carry it. The payload-derived fallback exists only for rows
-/// stored before it became mandatory and resolves to the Realm-default scope,
-/// which is the narrowest safe answer: reading a Circle scope back out of a
-/// payload would be recomputing a signed field rather than reading it.
 fn sdk_scope_ref(record: &CanonicalEventRecord, realm_id: &RealmId) -> arkret_wire::ScopeRef {
-    if let Some(scope) = record
+    record
         .envelope
         .get("scope_ref")
         .cloned()
         .and_then(|value| serde_json::from_value(value).ok())
-    {
-        return scope;
-    }
-    match effective_scope_for_envelope(&record.envelope).as_deref() {
-        Some(scope) if scope.starts_with("ak:circle:") => {
-            match arkret_identifiers::CircleId::new(scope.to_owned()) {
-                Ok(circle_id) => arkret_wire::ScopeRef::Circle {
-                    realm_id: realm_id.clone(),
-                    circle_id,
-                },
-                Err(_) => arkret_wire::ScopeRef::Realm {
-                    realm_id: realm_id.clone(),
-                },
-            }
-        }
-        _ => arkret_wire::ScopeRef::Realm {
+        .unwrap_or_else(|| arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
-        },
-    }
+        })
 }
 
 fn synthetic_hlc(received_at: DateTime<Utc>) -> Hlc {

@@ -708,12 +708,11 @@ async fn materialize_realm_control_with_transported_seals(
         // v1 has no producer `effects[]`: whether a stored Event contributes
         // governance writes is decided by its registered contract, not by an
         // array on the envelope.
-        let projects_writes = arkret_schema::project_registered_cell_writes(
-            &event,
-            arkret_canonical::DigestSuite::Sha256,
-        )
-        .map(|writes| !writes.is_empty())
-        .unwrap_or(false);
+        let projects_writes = state
+            .projections()
+            .project_accepted_cell_writes(&event)
+            .map(|writes| !writes.is_empty())
+            .unwrap_or(false);
         if (!projects_writes
             && !identity_anchor_event_ids.contains(record.event_id.as_str())
             && !requires_invite_membership_validation)
@@ -960,7 +959,7 @@ fn materialize_managed_agent_realm_control(
         events.push(event);
     }
     let material = arkret_bootstrap::materialize_managed_agent_pcr_control(&events, &|event| {
-        state.projections().project_cell_writes(event)
+        state.projections().project_accepted_cell_writes(event)
     })
     .map_err(|error| {
         AppError::new(
@@ -1059,18 +1058,17 @@ async fn materialize_governance_proof(
             // The touched cells come from the registered contract, not from a
             // producer array; only the cell targets matter here, so the
             // unresolved projection is enough.
-            arkret_schema::project_registered_cell_writes(
-                event,
-                arkret_canonical::DigestSuite::Sha256,
-            )
-            .map(|writes| {
-                writes.iter().any(|write| {
-                    CellId::from_ref(&write.cell)
-                        .map(|cell| is_mls_membership_frontier_component(cell.component()))
-                        .unwrap_or(false)
+            state
+                .projections()
+                .project_accepted_cell_writes(event)
+                .map(|writes| {
+                    writes.iter().any(|write| {
+                        CellId::from_ref(&write.cell)
+                            .map(|cell| is_mls_membership_frontier_component(cell.component()))
+                            .unwrap_or(false)
+                    })
                 })
-            })
-            .unwrap_or(false)
+                .unwrap_or(false)
         })
         .collect::<Vec<_>>();
     frontier_events.sort_by(|left, right| left.event_id.as_str().cmp(right.event_id.as_str()));
@@ -1530,19 +1528,18 @@ fn canonical_event_sealed_ops(
 ) -> Result<Vec<(CellRef, SealedOp)>, AppError> {
     // v1 carries no producer `effects[]`: every write is derived from
     // `kind + payload` by the registered contract.
-    let projected = arkret_schema::project_registered_cell_writes(
-        event,
-        state.projections().realm_digest_suite(realm_id.as_str()),
-    )
-    .map_err(|error| {
-        AppError::new(
-            ErrorCode::StateMismatch,
-            format!(
-                "stored Event {} does not project its registered cell writes: {error}",
-                event.event_id
-            ),
-        )
-    })?;
+    let projected = state
+        .projections()
+        .project_accepted_cell_writes(event)
+        .map_err(|error| {
+            AppError::new(
+                ErrorCode::StateMismatch,
+                format!(
+                    "stored Event {} does not project its registered cell writes: {error}",
+                    event.event_id
+                ),
+            )
+        })?;
 
     let pre_state = frozen_governance_pre_state(state, realm_id, accumulated)?;
     let mut resolved: Vec<(CellRef, SealedOp)> = Vec::with_capacity(projected.len());

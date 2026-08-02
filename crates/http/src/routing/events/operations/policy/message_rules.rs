@@ -207,6 +207,13 @@ pub(super) async fn validate_applet_registration_authz(
     };
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()

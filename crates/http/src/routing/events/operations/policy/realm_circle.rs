@@ -34,10 +34,10 @@ pub(super) fn validate_realm_lifecycle_write_gate(
 }
 
 /// `morph.md` §4.1 S3 — the actor MUST hold the high-tier
-/// `ak.morph.schema_migrate` capability at the event frontier. Missing
-/// capability yields `capability_denied`. Realm ownership does not substitute
-/// for the grant. The opt-in profile gate and CAS are enforced by the
-/// state-aware preflight; this check is the capability conjunct only.
+/// `ak.morph.schema_migrate` capability at the event frontier. The effective
+/// Realm-owner aggregate is also a registered source for this Event kind.
+/// The opt-in profile gate and CAS are enforced by the state-aware preflight;
+/// this check is the capability conjunct only.
 pub(super) async fn validate_morph_schema_migrate_authz(
     state: &AppState,
     operation: &Operation,
@@ -46,6 +46,13 @@ pub(super) async fn validate_morph_schema_migrate_authz(
         return Err("capability_denied");
     };
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()
@@ -123,6 +130,13 @@ pub(super) async fn validate_circle_create_policy(
         return Ok(());
     };
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()
@@ -188,6 +202,13 @@ pub(super) async fn validate_circle_management_policy(
         return Err("sidecar_create_denied");
     }
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()

@@ -411,10 +411,22 @@ pub(super) async fn validate_aad_visibility_policy(
 /// gate: the aad_visibility ceiling governs **every** encrypted envelope this
 /// service ingests or fans out, not one kind family.
 fn encrypted_envelope_of(operation: &Operation) -> Option<&Value> {
-    operation
+    let envelope = operation
         .payload
         .get("encrypted_content")
-        .or_else(|| operation.payload.get("encrypted_payload"))
+        .or_else(|| operation.payload.get("encrypted_payload"))?;
+    // Account Data has a separate, closed AEAD envelope and AAD transcript
+    // (`models/account-data.md` section 3). It intentionally has no
+    // `aad_visibility_event_id`: that discriminator belongs to the canonical
+    // Realm E2EE content envelope from `encryption-and-audit.md` section 2.3.
+    // Treating both domains as the same envelope makes every valid encrypted
+    // Account Data value fail the Realm disclosure ceiling.
+    if envelope.get("schema").and_then(Value::as_str)
+        == Some("ak.schema.account_data_encrypted_value.v1")
+    {
+        return None;
+    }
+    Some(envelope)
 }
 
 /// SEC-08 — map the wire `aad_visibility_event_id` discriminator on an encrypted

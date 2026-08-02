@@ -238,7 +238,7 @@ async fn seed_verified_reset_recovery_session(
 async fn recovery_session_create_and_get_roundtrip() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[101u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_webvh_principal(&signing);
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -476,7 +476,7 @@ async fn recovery_session_get_enforces_principal_isolation() {
 async fn recovery_session_principal_signing_proof_verifies() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[105u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_webvh_principal(&signing);
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,

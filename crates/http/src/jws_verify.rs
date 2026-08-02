@@ -974,6 +974,17 @@ pub async fn resolve_did_document_async(
 /// "unavailable" for high-risk writes; degraded read-only relaxation does not
 /// apply here.
 pub async fn enforce_high_risk_did_freshness(state: &AppState, did: &Did) -> Result<(), String> {
+    // `did:key` is locally resolvable but has neither a version id nor a
+    // history head. `did-usage-and-verification.md` section 5.5 requires high
+    // risk authority paths to reject every non-pinned binding, including the
+    // otherwise legitimate `method_unsupported` terminal state. Persisting a
+    // synthetic document must not turn a bootstrap/test DID into a rotatable,
+    // history-pinned authority.
+    if did.method() == "key" {
+        return Err(format!(
+            "DID method did:key cannot satisfy high-risk history and version pinning: {did}"
+        ));
+    }
     let max_age = chrono::Duration::seconds(HIGH_RISK_DID_FRESHNESS_MAX_SECS);
     let record = state
         .dids()

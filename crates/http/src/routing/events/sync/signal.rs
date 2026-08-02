@@ -297,13 +297,13 @@ async fn admit_signal(
             state,
             realm_id,
             &session.actor,
-            arkret_wire::CapabilityActionId::MODERATION_DECISION,
+            arkret_wire::CapabilityActionId::CALL_MODERATE,
         )
         .await
     {
         return Err(AppError::new(
             ErrorCode::SignalClassNotPermitted,
-            "signal_class=moderation requires the ak.moderation.decision capability",
+            "signal_class=moderation requires the ak.call.moderate capability",
         ));
     }
 
@@ -455,7 +455,7 @@ pub(in crate::routing::events) async fn accept_peer_signal(
             state,
             envelope.realm_id.as_str(),
             envelope.sender_actor_id.as_str(),
-            arkret_wire::CapabilityActionId::MODERATION_DECISION,
+            arkret_wire::CapabilityActionId::CALL_MODERATE,
         )
         .await
     {

@@ -288,17 +288,22 @@ pub(in crate::routing::events::event_log) fn validate_data_event_capability_refs
     // registry basis, and whether the owner aggregate may author this Event
     // kind at all) is validated by `realm_authority_root` before this gate
     // runs; here it only replaces the per-cell grant search.
-    // `event-kind-registry.json` classes `ak.self.moderation.report` and its
-    // peers as `self_authored_proof`, whose definition is explicit that "no
-    // Realm capability grant is consulted" — the author's own proof is the
-    // admission. Searching for a covering grant here would demand a capability
-    // action the registry does not define, so such a kind could never be
-    // authored no matter what the Realm granted.
-    let self_authored = arkret_wire::EventKind::from(kind)
+    // The registry's non-capability admission classes are complete
+    // authorization regimes of their own. In particular, both branches of
+    // `ak.self.moderation.report` are independent of Realm grants: ordinary
+    // reports select `self_authored_proof`, while `provenance=mimi_facade`
+    // selects `service_attested`. Requiring a covering grant after either
+    // proof would make the closed conditional registry row impossible to
+    // satisfy because no capability action is registered for this kind.
+    let declared_admission = arkret_wire::EventKind::from(kind)
         .descriptor()
-        .and_then(|descriptor| descriptor.admission)
-        == Some("self_authored_proof");
-    if !realm_authority_root_authorized && !self_authored {
+        .and_then(|descriptor| descriptor.admission);
+    let independently_admitted = matches!(
+        declared_admission,
+        Some("self_authored_proof" | "service_attested" | "crypto_verifiable")
+    ) || (declared_admission == Some("conditional")
+        && kind == arkret_wire::EventKind::SELF_MODERATION_REPORT);
+    if !realm_authority_root_authorized && !independently_admitted {
         for cell in derived_cells {
             let covering_grant = effective_by_id
                 .values()

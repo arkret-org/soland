@@ -1303,7 +1303,20 @@ impl ProjectionState {
         // describe the same grant; the last one wins on attributes.
         let last = items.last()?;
         let body = last.get("value").unwrap_or(last);
-        engine_grant_from_cell_body(grant_id, body, revoked)
+        let mut grant = engine_grant_from_cell_body(grant_id, body, revoked)?;
+        // Sealed cells contain the registry-projected grant body. Authority
+        // depth/root audit fields are reducer-derived and therefore are not
+        // producer-authored members of that body. Re-derive them from the
+        // authoritative ref graph after a cell-store reload instead of
+        // treating their absence as an unresolved parent.
+        if (grant.authority_depth.is_none() || grant.authority_root_refs.is_empty())
+            && let Some((depth, roots)) = self.projected_authority_audit(grant_id)
+            && let Ok(authority_root_refs) = serde_json::from_value(Value::Array(roots))
+        {
+            grant.authority_depth = Some(depth);
+            grant.authority_root_refs = authority_root_refs;
+        }
+        Some(grant)
     }
 
     /// Resolve the current liveness of the authority chain behind `grant`.
@@ -1610,16 +1623,36 @@ impl ProjectionState {
     /// The materialized `(authority_depth, authority_root_refs)` of a grant
     /// already in the projection, or `None` when it has not landed yet.
     fn projected_authority_audit(&self, grant_id: &str) -> Option<(u64, Vec<Value>)> {
+        self.projected_authority_audit_inner(grant_id, &std::collections::BTreeSet::new())
+    }
+
+    fn projected_authority_audit_inner(
+        &self,
+        grant_id: &str,
+        visiting: &std::collections::BTreeSet<String>,
+    ) -> Option<(u64, Vec<Value>)> {
+        if visiting.len() >= MAX_AUTHORITY_WALK || visiting.contains(grant_id) {
+            return None;
+        }
+        let mut visiting = visiting.clone();
+        visiting.insert(grant_id.to_owned());
         let cell_ref = Self::capability_grant_cell_ref(grant_id)?;
         let items = self.capability_cell_items(&cell_ref);
         let last = items.last()?;
         let body = last.get("value").unwrap_or(last);
-        let depth = body.get("authority_depth").and_then(Value::as_u64)?;
-        let roots = body
+        let stored_depth = body.get("authority_depth").and_then(Value::as_u64);
+        let stored_roots = body
             .get("authority_root_refs")
             .and_then(Value::as_array)
-            .cloned()?;
-        Some((depth, roots))
+            .cloned();
+        if let (Some(depth), Some(roots)) = (stored_depth, stored_roots)
+            && !roots.is_empty()
+        {
+            return Some((depth, roots));
+        }
+        derive_authority_audit(grant_body(body), &|parent_grant_id| {
+            self.projected_authority_audit_inner(parent_grant_id, &visiting)
+        })
     }
 
     /// The grant ids a projected grant names as `kind="grant"` authority refs.
@@ -2864,6 +2897,61 @@ mod authority_cycle_tests {
             allowed,
             crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
         ));
+    }
+
+    #[test]
+    fn regrant_derives_parent_audit_after_sealed_cell_reload() {
+        let mut proj = ProjectionState::default();
+        seed_realm_owner(&mut proj);
+        assert!(matches!(
+            proj.apply_capability_grant(
+                &root_grant_op_with_constraints(
+                    G_A,
+                    "did:web:alice.example",
+                    "did:web:alice.example",
+                    json!([{ "constraint_kind": "authority_control", "max_authority_depth": 1 }]),
+                ),
+                chrono::Utc::now(),
+            ),
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+
+        // CellStore persists the registry-projected producer body; simulate
+        // the authoritative reload that replaces the live enriched cache.
+        let parent_cell = ProjectionState::capability_grant_cell_ref(G_A).unwrap();
+        let arkret_state::lattice::CellState::Value(serde_json::Value::Array(items)) =
+            proj.cells.get_mut(&parent_cell).unwrap()
+        else {
+            panic!("capability parent cell must be an or_set");
+        };
+        for item in items {
+            let body = if item.get("value").is_some() {
+                item.get_mut("value").unwrap()
+            } else {
+                item
+            };
+            body.as_object_mut().unwrap().remove("authority_depth");
+            body.as_object_mut().unwrap().remove("authority_root_refs");
+        }
+
+        let parent = proj.effective_engine_grant(G_A).unwrap();
+        assert_eq!(parent.authority_depth, Some(1));
+        assert_eq!(parent.authority_root_refs.len(), 1);
+        let child = proj.apply_capability_grant(
+            &regrant_op_with_constraints(
+                G_C,
+                G_A,
+                json!([{ "constraint_kind": "authority_control", "max_authority_depth": 0 }]),
+            ),
+            chrono::Utc::now(),
+        );
+        assert!(matches!(
+            child,
+            crate::reducer::ProjectionEffect::CapabilityGrantProjected { .. }
+        ));
+        let child = proj.effective_engine_grant(G_C).unwrap();
+        assert_eq!(child.authority_depth, Some(2));
+        assert_eq!(child.authority_root_refs.len(), 1);
     }
 
     #[test]

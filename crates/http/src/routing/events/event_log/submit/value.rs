@@ -455,6 +455,88 @@ fn with_ingress_receipt(
     response
 }
 
+async fn stored_control_proposal_receipt(
+    state: &AppState,
+    existing: &soland_services::events::CanonicalEventRecord,
+    digest: &Hash,
+) -> Result<arkret_wire::ControlProposalReceipt, SubmitOneError> {
+    if let Some(receipt) = state
+        .projections()
+        .control_proposal_receipt(digest)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("stored Control Proposal receipt unavailable: {error}"),
+            )
+        })?
+    {
+        return Ok(receipt);
+    }
+
+    let receipt = state
+        .event_queries()
+        .control_proposal_receipt_for_event(&existing.event_id)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("durable Control Proposal receipt unavailable: {error}"),
+            )
+        })?
+        .ok_or_else(|| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                "accepted Control Move is missing its proposal receipt",
+            )
+        })?;
+    let event: Event = serde_json::from_value(existing.envelope.clone()).map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("stored Control Move is not canonical wire: {error}"),
+        )
+    })?;
+    let recovered_digest = Hash::new(event.event_digest().map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("stored Control Move digest is invalid: {error}"),
+        )
+    })?)
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            format!("stored Control Move digest is invalid: {error}"),
+        )
+    })?;
+    if &recovered_digest != digest
+        || receipt.proposal_digest != *digest
+        || receipt.realm_id != event.realm_id
+    {
+        return Err(SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "durable Control Proposal receipt does not bind the accepted Control Move",
+        ));
+    }
+    state
+        .projections()
+        .put_pending_control_event_with_receipt(&event, &receipt)
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("accepted Control Move pending index recovery failed: {error}"),
+            )
+        })?;
+    state.wake_control_seal_coordinator();
+    Ok(receipt)
+}
+
 pub(super) async fn submit_event_value_with_context(
     state: &AppState,
     session: &SessionRecord,
@@ -577,23 +659,7 @@ pub(super) async fn submit_event_value_with_context(
                         format!("stored Control Move digest is invalid: {error}"),
                     )
                 })?;
-                let receipt = state
-                    .projections()
-                    .control_proposal_receipt(&digest)
-                    .map_err(|error| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            format!("stored Control Proposal receipt unavailable: {error}"),
-                        )
-                    })?
-                    .ok_or_else(|| {
-                        SubmitOneError::new(
-                            StatusCode::INTERNAL_SERVER_ERROR,
-                            "internal_error",
-                            "accepted Control Move is missing its proposal receipt",
-                        )
-                    })?;
+                let receipt = stored_control_proposal_receipt(state, &existing, &digest).await?;
                 response.outcome.control_proposal_receipts.push(receipt);
             }
             return Ok(response);
@@ -1267,53 +1333,6 @@ pub(super) async fn submit_event_value_with_context(
         }
     }
 
-    // AKP-0007: stamp the authoritative top-level `effective_scope` onto the
-    // stored envelope so read-path visibility gating
-    // (`effective_scope_for_envelope` → `circle_event_visible_to_session`)
-    // hides circle-scoped activity from realm members outside the Circle.
-    //
-    // Create events carry `scope_circle_id` in `payload.object` and the reader
-    // extracts it directly, so they need no stamp. But events whose payload
-    // does NOT carry the scope — a message (scope is a Strand field, never on
-    // the message) and Strand update / lifecycle (scope is create-locked, not
-    // re-sent) — would otherwise resolve to no scope and leak to non-members.
-    // Resolve the authoritative Strand scope from the durable projection
-    // (projection_strands.scope_circle_id survives restart) and stamp it.
-    let scope_strand_id: Option<String> = envelope
-        .get("payload")
-        .and_then(|payload| match parsed.kind.as_str() {
-            arkret_wire::EventKind::MESSAGE_CREATE
-            | arkret_wire::EventKind::STRAND_MOVE
-            | arkret_wire::EventKind::STRAND_REORDER => {
-                payload.get("strand_id").and_then(Value::as_str)
-            }
-            arkret_wire::EventKind::STRAND_UPDATE
-            | arkret_wire::EventKind::STRAND_ARCHIVE
-            | arkret_wire::EventKind::STRAND_RESTORE => {
-                payload.get("target_ref").and_then(Value::as_str)
-            }
-            _ => None,
-        })
-        .map(ToOwned::to_owned);
-    if let Some(scope_strand_id) = scope_strand_id {
-        let scope = {
-            let proj = state.projections().snapshot();
-            proj.strand_scope_circle_id(&scope_strand_id)
-        };
-        if let Some(scope) = scope
-            && let Some(object) = envelope.as_object_mut()
-        {
-            object.insert(
-                "effective_scope".to_owned(),
-                json!({
-                    "kind": "circle",
-                    "realm_id": parsed.realm_id,
-                    "circle_id": scope,
-                }),
-            );
-        }
-    }
-
     if session.agent_session.is_some() {
         let signer_id = envelope
             .get("executed_by")
@@ -1767,23 +1786,8 @@ pub(super) async fn submit_event_value_with_context(
                                     format!("stored Control Move digest is invalid: {error}"),
                                 )
                             })?;
-                        let receipt = state
-                            .projections()
-                            .control_proposal_receipt(&digest)
-                            .map_err(|error| {
-                                SubmitOneError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "internal_error",
-                                    format!("stored Control Proposal receipt unavailable: {error}"),
-                                )
-                            })?
-                            .ok_or_else(|| {
-                                SubmitOneError::new(
-                                    StatusCode::INTERNAL_SERVER_ERROR,
-                                    "internal_error",
-                                    "accepted Control Move is missing its proposal receipt",
-                                )
-                            })?;
+                        let receipt =
+                            stored_control_proposal_receipt(state, &existing, &digest).await?;
                         response.outcome.control_proposal_receipts.push(receipt);
                     }
                     return Ok(response);

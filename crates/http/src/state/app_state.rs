@@ -1510,6 +1510,19 @@ impl AppState {
         self.hlc()
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn test_effective_state_at(
+        &self,
+        leaves: &[arkret_identifiers::SealId],
+        realm_id: &arkret_identifiers::RealmId,
+    ) -> Result<
+        std::collections::BTreeMap<arkret_identifiers::CellRef, arkret_state::lattice::CellState>,
+        arkret_state::state::SealReject,
+    > {
+        self.projections.effective_state_at(leaves, realm_id)
+    }
+
     pub(crate) fn hlc(&self) -> &ServiceClock {
         self.projections.clock()
     }

@@ -53,6 +53,18 @@ pub trait EventStore: Send + Sync {
         &self,
         event_id: &str,
     ) -> PersistenceResult<Vec<EventBatchReceipt>>;
+    /// Proposal receipt committed in the same durable unit as `event_id`.
+    ///
+    /// This is the recovery source for adapters whose online control-event
+    /// index is rebuilt after an ambiguous post-commit failure. PostgreSQL's
+    /// control-event store is already the transactional source of truth, so
+    /// adapters that do not maintain a separate index may use the default.
+    async fn control_proposal_receipt_for_event(
+        &self,
+        _event_id: &str,
+    ) -> PersistenceResult<Option<arkret_wire::ControlProposalReceipt>> {
+        Ok(None)
+    }
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>>;
     async fn contains(&self, event_id: &str) -> PersistenceResult<bool>;
     async fn max_actor_seq(&self, actor_id: &str) -> PersistenceResult<Option<u64>>;

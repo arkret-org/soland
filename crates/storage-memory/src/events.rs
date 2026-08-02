@@ -72,6 +72,8 @@ impl MessageStore for MemoryMessageStore {
 }
 pub(crate) struct MemoryEventStore {
     pub(crate) data: Mutex<BTreeMap<String, CanonicalEventRecord>>,
+    pub(crate) control_proposal_receipts:
+        Mutex<BTreeMap<String, arkret_wire::ControlProposalReceipt>>,
     devices: Arc<Mutex<BTreeMap<(String, String), DeviceInventoryRecord>>>,
     receipts: Mutex<BTreeMap<String, EventBatchReceipt>>,
     publication_evidence: Arc<Mutex<BTreeMap<String, PublicationEvidenceRecord>>>,
@@ -88,6 +90,7 @@ impl MemoryEventStore {
     ) -> Self {
         Self {
             data: Mutex::new(BTreeMap::new()),
+            control_proposal_receipts: Mutex::new(BTreeMap::new()),
             devices,
             receipts: Mutex::new(BTreeMap::new()),
             publication_evidence,
@@ -119,6 +122,60 @@ fn stage_federation_outbox(
     }
     Ok(())
 }
+
+fn stage_control_proposal_receipts(
+    staged: &mut BTreeMap<String, arkret_wire::ControlProposalReceipt>,
+    records: &[CanonicalEventRecord],
+    proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+    receipts_required: bool,
+) -> PersistenceResult<()> {
+    if proposal_receipts.is_empty() && !receipts_required {
+        return Ok(());
+    }
+    if proposal_receipts.len() != records.len() {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: proposal receipt cardinality mismatch".to_owned(),
+        ));
+    }
+    let mut by_digest = BTreeMap::new();
+    for receipt in proposal_receipts {
+        receipt.validate_protocol_bounds().map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: invalid proposal receipt: {error}"
+            ))
+        })?;
+        if by_digest
+            .insert(receipt.proposal_digest.as_str().to_owned(), receipt)
+            .is_some()
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: duplicate proposal receipt".to_owned(),
+            ));
+        }
+    }
+    for record in records {
+        let receipt = by_digest.get(&record.canonical_digest).ok_or_else(|| {
+            PersistenceError::Conflict(
+                "schema_violation: accepted Control Move is missing proposal receipt".to_owned(),
+            )
+        })?;
+        if record.realm_id.as_deref() != Some(receipt.realm_id.as_str()) {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: proposal receipt does not bind Control Move".to_owned(),
+            ));
+        }
+        if let Some(existing) = staged.get(&record.event_id)
+            && existing != receipt
+        {
+            return Err(PersistenceError::Conflict(
+                "duplicate_conflict: Control Move has a different proposal receipt".to_owned(),
+            ));
+        }
+        staged.insert(record.event_id.clone(), receipt.clone());
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl EventStore for MemoryEventStore {
     async fn put(&self, record: CanonicalEventRecord) -> PersistenceResult<()> {
@@ -141,16 +198,25 @@ impl EventStore for MemoryEventStore {
     async fn put_realm_bootstrap_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
-        _proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<()> {
         let mut data = self.data.lock();
+        let mut stored_proposal_receipts = self.control_proposal_receipts.lock();
         let mut federation_outbox = self.federation_outbox.lock();
         let mut staged = data.clone();
+        let mut staged_proposal_receipts = stored_proposal_receipts.clone();
         let mut staged_outbox = federation_outbox.clone();
+        stage_control_proposal_receipts(
+            &mut staged_proposal_receipts,
+            &records,
+            proposal_receipts,
+            true,
+        )?;
         stage_identity_anchor_events(&mut staged, records)?;
         stage_federation_outbox(&mut staged_outbox, outbox)?;
         *data = staged;
+        *stored_proposal_receipts = staged_proposal_receipts;
         *federation_outbox = staged_outbox;
         Ok(())
     }
@@ -158,7 +224,7 @@ impl EventStore for MemoryEventStore {
     async fn put_identity_anchor_batch_atomic(
         &self,
         records: Vec<CanonicalEventRecord>,
-        _proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
+        proposal_receipts: Vec<arkret_wire::ControlProposalReceipt>,
         receipt: Option<EventBatchReceipt>,
         device: Option<DeviceInventoryRecord>,
         _frontier_cas: Option<IdentityAnchorFrontierCas>,
@@ -167,11 +233,13 @@ impl EventStore for MemoryEventStore {
         outbox: Vec<FederationOutboxRecord>,
     ) -> PersistenceResult<IdentityAnchorCommitOutcome> {
         let mut data = self.data.lock();
+        let mut stored_proposal_receipts = self.control_proposal_receipts.lock();
         let mut devices = self.devices.lock();
         let mut receipts = self.receipts.lock();
         let mut evidence = self.publication_evidence.lock();
         let mut federation_outbox = self.federation_outbox.lock();
         let mut staged_events = data.clone();
+        let mut staged_proposal_receipts = stored_proposal_receipts.clone();
         let mut staged_devices = devices.clone();
         let mut staged_receipts = receipts.clone();
         let mut staged_evidence = evidence.clone();
@@ -179,6 +247,21 @@ impl EventStore for MemoryEventStore {
         let reanchor_conflict = reanchor_slot
             .as_ref()
             .is_some_and(|slot| identity_anchor_slot_conflicts(staged_events.values(), slot));
+        if reanchor_conflict {
+            if !proposal_receipts.is_empty() {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: conflicting identity anchor cannot carry proposal receipts"
+                        .to_owned(),
+                ));
+            }
+        } else {
+            stage_control_proposal_receipts(
+                &mut staged_proposal_receipts,
+                &records,
+                proposal_receipts,
+                false,
+            )?;
+        }
         stage_identity_anchor_events(&mut staged_events, records)?;
         if !reanchor_conflict && let Some(device) = device {
             staged_devices.insert((device.actor.clone(), device.device_id.clone()), device);
@@ -197,6 +280,7 @@ impl EventStore for MemoryEventStore {
             stage_federation_outbox(&mut staged_outbox, outbox)?;
         }
         *data = staged_events;
+        *stored_proposal_receipts = staged_proposal_receipts;
         *devices = staged_devices;
         *receipts = staged_receipts;
         *evidence = staged_evidence;
@@ -215,6 +299,13 @@ impl EventStore for MemoryEventStore {
             .filter(|receipt| receipt_covers_event(receipt, event_id))
             .cloned()
             .collect())
+    }
+
+    async fn control_proposal_receipt_for_event(
+        &self,
+        event_id: &str,
+    ) -> PersistenceResult<Option<arkret_wire::ControlProposalReceipt>> {
+        Ok(self.control_proposal_receipts.lock().get(event_id).cloned())
     }
 
     async fn get(&self, event_id: &str) -> PersistenceResult<Option<CanonicalEventRecord>> {

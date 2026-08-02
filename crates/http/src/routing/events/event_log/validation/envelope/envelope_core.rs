@@ -811,15 +811,25 @@ fn enforce_registered_cell_contract(
     // "is the registered contract evaluable for this Event" — a row whose
     // projection cannot be derived fails the Event closed, and a row that is
     // not an active reducer input projects nothing and passes.
-    arkret_schema::validate_registered_cell_writes_in_context(&event, context).map_err(
-        |error| {
-            event_validation_error(
-                StatusCode::BAD_REQUEST,
-                error.reason_code(),
-                error.to_string(),
-            )
-        },
-    )?;
+    let contract_validation = if kind == arkret_wire::EventKind::INVITE_CANCEL {
+        // `ak.invite.cancel` is the one active contract whose validity depends
+        // on authoritative invite lifecycle fields. The submit admission lane
+        // freezes those fields while holding the per-Invite lock and calls
+        // `project_cell_writes_with_pre_state`; evaluating the full contract
+        // here with an empty placeholder would reject every valid direct
+        // invite before that atomic check can run. Plane validation remains
+        // mandatory at this shape-only stage.
+        arkret_schema::validate_registered_cell_plane_in_context(&event, context)
+    } else {
+        arkret_schema::validate_registered_cell_writes_in_context(&event, context)
+    };
+    contract_validation.map_err(|error| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            error.reason_code(),
+            error.to_string(),
+        )
+    })?;
     if kind == arkret_wire::EventKind::REALM_CREATE {
         // The canonical Realm-create genesis write set is likewise recomputed,
         // never compared against a submitted array. Only the *targets* are

@@ -413,6 +413,13 @@ async fn require_policy_manage(
     actor: &str,
     realm_id: &str,
 ) -> Result<(), AppError> {
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, chrono::Utc::now())
+    {
+        return Ok(());
+    }
     let (owner, members) =
         crate::routing::events::operations::realm_owner_and_members(state, realm_id).await;
     if state

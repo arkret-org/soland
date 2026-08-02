@@ -1147,7 +1147,6 @@ pub(crate) fn signed_message_event_envelope(
             && object.get("scheme").and_then(Value::as_str) == Some("mls_rfc9420")
         {
             object.insert("version".to_owned(), Value::String("1.0".to_owned()));
-            object.insert("group_id".to_owned(), Value::String("mls_test".to_owned()));
             object.insert(
                 "content_type".to_owned(),
                 Value::String("application/vnd.arkret.message+json".to_owned()),
@@ -1571,12 +1570,11 @@ pub(crate) async fn seed_verified_device_with_public_key(
 /// already covers `ak.message.create`; a second, explicit grant carries only
 /// the other actions instead of masking owner-message authorization with a
 /// duplicate.
-const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 10] = [
+const FIXTURE_DATA_PLANE_GRANT_ACTIONS: [&str; 9] = [
     "ak.morph.create",
     "ak.morph.update",
     "ak.relation.create",
     "ak.rsvp.set",
-    "ak.self.moderation.report",
     "ak.space.create",
     "ak.strand.create",
     // `non_event_surface` in the capability-action registry: it authorizes a
@@ -1798,6 +1796,40 @@ pub(crate) async fn seed_test_realm_basis_seal(
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)
         .unwrap();
+    // Keep the synthetic setup honest: the head Seal must reconstruct the
+    // grant cells it claims to cover through the same historical-state path
+    // production DataEvent admission uses. Merely filling the live authz
+    // index below would otherwise let a broken Seal fixture masquerade as a
+    // valid governance basis.
+    let historical_state = state
+        .test_effective_state_at(std::slice::from_ref(&basis.seal.id), &realm)
+        .expect("fixture basis historical state");
+    for expected in &basis.grants {
+        let cell = arkret_identifiers::CellRef::new(format!(
+            "ak:cell:ak.component.capability.grant.v1:{}",
+            expected.grant_id
+        ))
+        .expect("fixture capability cell");
+        let cell_state = historical_state.get(&cell).unwrap_or_else(|| {
+            panic!(
+                "fixture grant cell {cell} is absent at the head Seal; visible cells: {:?}",
+                historical_state.keys().collect::<Vec<_>>()
+            )
+        });
+        let projected = soland_domain::reducer::engine_grant_from_capability_cell_state(
+            &expected.grant_id,
+            cell_state,
+        )
+        .unwrap_or_else(|| {
+            panic!("fixture grant must be reconstructible at the head Seal: {cell_state:?}")
+        });
+        assert_eq!(projected.subject, subject);
+        assert_eq!(projected.realm_id, realm_id);
+        assert!(
+            !projected.actions.is_empty(),
+            "fixture grant must retain its registered actions"
+        );
+    }
     // Accepting a capability Event is what fills the authz index the
     // `authz/check` surface reads. Sealing the basis directly skips that, so
     // run the same refresh the accept path runs.

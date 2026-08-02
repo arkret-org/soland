@@ -806,7 +806,9 @@ async fn signal_moderation_class_requires_the_moderation_action() {
     add_test_realm_member(&state, DEMO_REALM_ID, bob);
     let (token, signing_key) =
         seed_signal_sender_device(&state, bob, bob_device, "Bob Phone").await;
-    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, bob).await;
+    // Keep Alice as the authority-root controller. Bob is only a member until
+    // the explicit call-moderation grant below is installed.
+    let seal_ref = seed_signal_basis_seal(&state, DEMO_REALM_ID, ALICE).await;
 
     let moderation = |class| {
         signed_signal_envelope(
@@ -860,7 +862,7 @@ async fn signal_moderation_class_requires_the_moderation_action() {
         bob.to_owned(),
         bob.to_owned(),
         DEMO_REALM_ID.to_owned(),
-        vec![arkret_wire::CapabilityActionId::MODERATION_DECISION.to_owned()],
+        vec![arkret_wire::CapabilityActionId::CALL_MODERATE.to_owned()],
         vec![],
     );
     let granted = post_signal(

@@ -18,6 +18,16 @@ pub(super) fn batch_contains_identity_anchor(envelopes: &[Value]) -> bool {
     })
 }
 
+fn event_digests(envelopes: &[Value]) -> Result<Vec<String>, anyhow::Error> {
+    envelopes
+        .iter()
+        .map(|envelope| {
+            let event = serde_json::from_value::<arkret_wire::Event>(envelope.clone())?;
+            Ok(event.event_digest()?)
+        })
+        .collect()
+}
+
 pub(super) async fn submit_identity_anchor_batch(
     state: &AppState,
     session: &SessionRecord,
@@ -68,17 +78,13 @@ pub(super) async fn submit_identity_anchor_batch(
     let _generation_guard = generation_lock.lock().await;
     if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
         if authorization_leases.is_some() {
-            let digests = envelopes
-                .iter()
-                .map(arkret_canonical::canonical_sha256)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::BAD_REQUEST,
-                        "schema_violation",
-                        format!("identity anchor digest failed: {error}"),
-                    )
-                })?;
+            let digests = event_digests(&envelopes).map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    format!("identity anchor digest failed: {error}"),
+                )
+            })?;
             let evidence = state
                 .event_queries()
                 .publication_evidence_for_digests(&digests)
@@ -505,17 +511,13 @@ pub(super) async fn submit_cross_signing_recovery_batch(
     let _generation_guard = generation_lock.lock().await;
 
     if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
-        let digests = envelopes
-            .iter()
-            .map(arkret_canonical::canonical_sha256)
-            .collect::<Result<Vec<_>, _>>()
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::BAD_REQUEST,
-                    "schema_violation",
-                    format!("recovery unit digest failed: {error}"),
-                )
-            })?;
+        let digests = event_digests(&envelopes).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                format!("recovery unit digest failed: {error}"),
+            )
+        })?;
         let evidence = state
             .event_queries()
             .publication_evidence_for_digests(&digests)

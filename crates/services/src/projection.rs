@@ -212,6 +212,10 @@ pub enum ProjectionEffectView {
     Rejected {
         reason: String,
     },
+    PendingReplayQueued {
+        target_ref: String,
+        reason: String,
+    },
     Ignored,
     RealmKeyShareProjected,
     ReadMarkerUpdated(ReadMarkerView),
@@ -267,6 +271,9 @@ impl From<ProjectionEffect> for ProjectionEffectView {
     fn from(effect: ProjectionEffect) -> Self {
         match effect {
             ProjectionEffect::Rejected { reason } => Self::Rejected { reason },
+            ProjectionEffect::PendingReplayQueued {
+                target_ref, reason, ..
+            } => Self::PendingReplayQueued { target_ref, reason },
             ProjectionEffect::Ignored => Self::Ignored,
             ProjectionEffect::RealmKeyShareProjected { .. } => Self::RealmKeyShareProjected,
             ProjectionEffect::ReadMarkerUpdated(marker) => Self::ReadMarkerUpdated(marker),
@@ -884,6 +891,45 @@ impl ProjectionService {
         .map_err(|error| error.to_string())
     }
 
+    /// Re-project a durably accepted Event after its pre-state admission gate
+    /// has already succeeded.
+    ///
+    /// `ak.invite.cancel` is the only active contract with
+    /// `pre_state_requirements`. Its signed `payload.invitee` is not
+    /// authoritative during admission, but after the lock-protected frozen
+    /// check and durable commit it is safe for downstream live reduction and
+    /// control-Seal construction to reuse that verified binding. Callers MUST
+    /// only pass Events loaded from the accepted-event lane; untrusted inbound
+    /// Events must use `project_cell_writes_with_pre_state` instead.
+    pub fn project_accepted_cell_writes(
+        &self,
+        event: &Event,
+    ) -> Result<Vec<ProjectedCellWrite>, String> {
+        if event.kind.as_str() != arkret_wire::EventKind::INVITE_CANCEL {
+            return self.project_cell_writes(event);
+        }
+        let invite_id = event
+            .payload
+            .get("invite_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "accepted ak.invite.cancel is missing invite_id".to_owned())?;
+        let invitee = event
+            .payload
+            .get("invitee")
+            .and_then(Value::as_str)
+            .ok_or_else(|| "accepted ak.invite.cancel is missing verified invitee".to_owned())?;
+        let lifecycle_cell = CellRef::new(format!(
+            "ak:cell:ak.component.invite.lifecycle.v1:{invite_id}"
+        ))
+        .map_err(|error| error.to_string())?;
+        let frozen_pre_state = arkret_schema::FrozenPreState::from([(
+            lifecycle_cell,
+            serde_json::json!({"invitee": invitee}),
+        )]);
+        self.project_cell_writes_with_pre_state(event, &frozen_pre_state)
+            .map_err(|error| error.to_string())
+    }
+
     /// Project registered writes against one caller-frozen pre-state.
     ///
     /// Security-barrier contracts such as `ak.invite.cancel` inspect durable
@@ -954,6 +1000,32 @@ impl ProjectionService {
         )
     }
 
+    /// Verify a Control Move already committed by the local accepted-event
+    /// admission lane. This retains proof, CBA-basis, state-resolution, and
+    /// lattice checks while using the accepted-event projection path for the
+    /// previously frozen `ak.invite.cancel` binding.
+    pub fn verify_accepted_control_move_in_context<F>(
+        &self,
+        event: &Event,
+        realm_id: &RealmId,
+        pre_state: &BTreeMap<CellRef, CellState>,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<Vec<arkret_wire::cba::ProjectionEffect>, ControlMoveReject>
+    where
+        F: Fn(&Event) -> Result<(), String>,
+    {
+        arkret_state::verify_control_move_in_context(
+            event,
+            realm_id,
+            pre_state,
+            self.cell_registry(),
+            verify_proofs,
+            |event| self.project_accepted_cell_writes(event),
+            context,
+        )
+    }
+
     pub fn verify_recovery_witness(
         &self,
         event: &Event,
@@ -1002,6 +1074,31 @@ impl ProjectionService {
             self.cell_registry(),
             verify_proofs,
             |event| self.project_cell_writes(event),
+            context,
+        )
+    }
+
+    /// Apply a locally constructed Seal whose delta contains only Events from
+    /// the durable accepted-event lane. Incoming peer Seals must continue to
+    /// use `apply_seal_in_context` and independently satisfy frozen pre-state
+    /// admission.
+    pub fn apply_accepted_seal_in_context<F>(
+        &self,
+        seal: &Seal,
+        verify_proofs: F,
+        context: arkret_wire::event_envelope::EventSubmitContext,
+    ) -> Result<SealEffect, SealReject>
+    where
+        F: Fn(&Event) -> Result<(), String> + Copy,
+    {
+        arkret_state::apply_seal_in_context(
+            seal,
+            self.control_event_store(),
+            self.seal_store(),
+            self.cell_store(),
+            self.cell_registry(),
+            verify_proofs,
+            |event| self.project_accepted_cell_writes(event),
             context,
         )
     }

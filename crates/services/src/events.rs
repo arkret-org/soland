@@ -788,6 +788,10 @@ pub trait EventReadPort: Send + Sync {
         &self,
         event_id: &str,
     ) -> ServiceResult<Vec<EventBatchReceipt>>;
+    async fn control_proposal_receipt_for_event(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<arkret_wire::ControlProposalReceipt>>;
     async fn realm_event_stats(&self, realm_id: &str) -> ServiceResult<RealmEventStats>;
     async fn peer_authz_state_records(&self) -> ServiceResult<Vec<CanonicalEventRecord>>;
     async fn peer_events_query_page(
@@ -1080,6 +1084,14 @@ impl EventQueryService {
     }
     pub async fn has_canonical_event(&self, event_id: &str) -> ServiceResult<bool> {
         self.events.has_canonical_event(event_id).await
+    }
+    pub async fn control_proposal_receipt_for_event(
+        &self,
+        event_id: &str,
+    ) -> ServiceResult<Option<arkret_wire::ControlProposalReceipt>> {
+        self.events
+            .control_proposal_receipt_for_event(event_id)
+            .await
     }
     pub async fn canonical_events(&self) -> ServiceResult<Vec<CanonicalEventRecord>> {
         self.events.canonical_events().await

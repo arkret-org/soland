@@ -78,6 +78,60 @@ fn sha256_json(value: &Value) -> String {
     format!("sha256:{}", hex::encode(Sha256::digest(&bytes)))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the helper mirrors the complete self KeyPackage claim transcript"
+)]
+fn signed_keypackage_claim_request(
+    authority_service_id: &str,
+    requester: &str,
+    requester_device: &str,
+    target_principal_id: &str,
+    target_device_ids: &[&str],
+    intended_realm_id: &str,
+    required_capabilities: &[&str],
+    claim_nonce: &[u8],
+    expires_at: chrono::DateTime<Utc>,
+    mls_group_id: &str,
+) -> arkret_models_crypto::KeyPackagesClaimRequestBody {
+    assert!(
+        claim_nonce.len() >= 16,
+        "self KeyPackage claim nonce must carry at least 128 bits"
+    );
+    let created_at = Utc::now();
+    let verification_method = format!("{requester}#{requester_device}");
+    let mut body: arkret_models_crypto::KeyPackagesClaimRequestBody =
+        serde_json::from_value(json!({
+            "target_principal_id": target_principal_id,
+            "target_device_ids": target_device_ids,
+            "intended_realm_id": intended_realm_id,
+            "requester": requester,
+            "required_capabilities": required_capabilities,
+            "claim_nonce": b64(claim_nonce),
+            "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
+            "mls_group_id": mls_group_id,
+            "proofs": [{
+                "kind": "detached_jws",
+                "verification_method": verification_method,
+                "alg": "EdDSA",
+                "payload_digest": format!("sha256:{}", "0".repeat(64)),
+                "created_at": arkret_canonical::format_timestamp_canonical(created_at),
+                "audience": authority_service_id,
+                "proof_purpose": "holder_acceptance",
+                "jws": "pending"
+            }]
+        }))
+        .expect("typed self KeyPackage claim request");
+    body.proofs[0].payload_digest = body.payload_digest().expect("claim payload digest");
+    let binding = body.proof_binding_bytes().expect("claim proof binding");
+    body.proofs[0].jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
+        SigningKey::from_bytes(&[21_u8; 32]),
+        verification_method,
+    )
+    .sign_detached_jws(&binding);
+    body
+}
+
 /// The Realm's accepted Seal frontier — the registered sourcing for a
 /// single-leaf Control Move `seal_basis` (`events.rs::events_frontier`).
 ///
@@ -390,22 +444,31 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 2a. atomic claim wins (W1C: ak.self.keys.keypackages.command.claim) ───
     let claim_url = "http://server/_arkret/self/keys/keypackages/claim".to_owned();
+    let claim_expires_at = Utc::now() + chrono::Duration::minutes(4);
+    let initial_claim = signed_keypackage_claim_request(
+        state.service_id(),
+        alice_did,
+        alice_device,
+        alice_did,
+        &[],
+        realm_id,
+        &["ak.mls.profile.full"],
+        b"claim-nonce-01-unique",
+        claim_expires_at,
+        "ak:mls_group:abc",
+    );
     let claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&json!({
-            "target_principal_id": alice_did,
-            "intended_realm_id": realm_id,
-            "requester": alice_did,
-            "required_capabilities": ["ak.mls.profile.full"],
-            "claim_nonce": b64(b"claim-nonce-01"),
-            "expires_at": "2100-01-01T00:00:00.000Z",
-            "mls_group_id": "ak:mls_group:abc"
-        }))
+        .json(&initial_claim)
         .send(&app_from_state(state.clone()))
         .await;
-    assert_eq!(claim_resp.status_code, Some(StatusCode::OK));
     let mut claim_resp = claim_resp;
     let claim_json: Value = claim_resp.take_json().await.unwrap();
+    assert_eq!(
+        claim_resp.status_code,
+        Some(StatusCode::OK),
+        "initial KeyPackage claim failed: {claim_json}"
+    );
     let claims = claim_json["claims"].as_array().expect("claims array");
     assert_eq!(claims.len(), 1);
     assert_eq!(claims[0]["keypackage_ref"], json!(uploaded_keypackage_ref));
@@ -415,17 +478,21 @@ async fn mls_lifecycle_end_to_end() {
     assert_eq!(claims[0]["ssk_generation"], json!(3));
     assert_eq!(claims[0]["device_signature"], device_signature);
     // ── 2b. a new request cannot re-claim the package for the same group ─
+    let same_group_claim = signed_keypackage_claim_request(
+        state.service_id(),
+        alice_did,
+        alice_device,
+        alice_did,
+        &[],
+        realm_id,
+        &["ak.mls.profile.full"],
+        b"claim-nonce-same-group",
+        claim_expires_at,
+        "ak:mls_group:abc",
+    );
     let same_group_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&json!({
-            "target_principal_id": alice_did,
-            "intended_realm_id": realm_id,
-            "requester": alice_did,
-            "required_capabilities": ["ak.mls.profile.full"],
-            "claim_nonce": b64(b"claim-nonce-same-group"),
-            "expires_at": "2100-01-01T00:00:00.000Z",
-            "mls_group_id": "ak:mls_group:abc"
-        }))
+        .json(&same_group_claim)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(same_group_claim_resp.status_code, Some(StatusCode::OK));
@@ -443,17 +510,21 @@ async fn mls_lifecycle_end_to_end() {
     );
 
     // ── 2c. another group cannot claim the same package ─
+    let rejected_claim = signed_keypackage_claim_request(
+        state.service_id(),
+        alice_did,
+        alice_device,
+        alice_did,
+        &[],
+        realm_id,
+        &["ak.mls.profile.full"],
+        b"claim-nonce-02-unique",
+        claim_expires_at,
+        "ak:mls_group:second",
+    );
     let rejected_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&json!({
-            "target_principal_id": alice_did,
-            "intended_realm_id": realm_id,
-            "requester": alice_did,
-            "required_capabilities": ["ak.mls.profile.full"],
-            "claim_nonce": b64(b"claim-nonce-02"),
-            "expires_at": "2100-01-01T00:00:00.000Z",
-            "mls_group_id": "ak:mls_group:second"
-        }))
+        .json(&rejected_claim)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(rejected_claim_resp.status_code, Some(StatusCode::OK));
@@ -487,230 +558,104 @@ async fn mls_lifecycle_end_to_end() {
     seed_cross_signing_generation(&state, bob_did, 3);
 
     let group_id = "ak:mls_group:abc";
-    let last_resort_keypackage_id = "ak:mls_keypackage:last-resort-bob";
-    let last_resort_keypackage_ref = "ak:mls:keypackage:last-resort-bob";
-    let last_resort_keypackage_bytes = b"opaque-last-resort-keypackage";
-    let last_resort_keypackage_digest =
-        arkret_canonical::sha256_digest(last_resort_keypackage_bytes);
-    let last_resort_created_at = Utc::now();
-    let last_resort_expires_at = last_resort_created_at + chrono::Duration::days(7);
-    let last_resort_claim_expires_at = last_resort_created_at + chrono::Duration::days(1);
-    let last_resort_capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
-    let last_resort_capabilities_digest = sha256_json(&last_resort_capabilities);
-    let last_resort_publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
+    let lifecycle_keypackage_id = "ak:mls_keypackage:lifecycle-bob";
+    let lifecycle_keypackage_ref = "ak:mls:keypackage:lifecycle-bob";
+    let lifecycle_keypackage_bytes = b"opaque-lifecycle-keypackage";
+    let lifecycle_keypackage_digest = arkret_canonical::sha256_digest(lifecycle_keypackage_bytes);
+    let lifecycle_created_at = Utc::now();
+    let lifecycle_expires_at = lifecycle_created_at + chrono::Duration::days(7);
+    let lifecycle_claim_expires_at = Utc::now() + chrono::Duration::minutes(4);
+    let lifecycle_capabilities = json!(["ak.mls.rfc9420", "ak.mls.profile.full"]);
+    let lifecycle_capabilities_digest = sha256_json(&lifecycle_capabilities);
+    let lifecycle_publish_unsigned: arkret_models_crypto::KeyPackagesUploadUnsignedRequest =
         serde_json::from_value(json!({
             "principal_id": bob_did,
             "device_id": bob_device,
             "key_packages": [{
-                "keypackage_id": last_resort_keypackage_id,
-                "keypackage_ref": last_resort_keypackage_ref,
-                "keypackage_digest": last_resort_keypackage_digest,
-                "key_package": b64(last_resort_keypackage_bytes),
+                "keypackage_id": lifecycle_keypackage_id,
+                "keypackage_ref": lifecycle_keypackage_ref,
+                "keypackage_digest": lifecycle_keypackage_digest,
+                "key_package": b64(lifecycle_keypackage_bytes),
                 "cipher_suites": ["MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519"],
-                "capabilities": last_resort_capabilities,
+                "capabilities": lifecycle_capabilities,
                 "expires_at": arkret_canonical::format_timestamp_canonical(
-                    last_resort_expires_at
+                    lifecycle_expires_at
                 ),
                 "created_at": arkret_canonical::format_timestamp_canonical(
-                    last_resort_created_at
-                ),
-                "last_resort": true
+                    lifecycle_created_at
+                )
             }]
         }))
         .unwrap();
-    let last_resort_publish_signature =
+    let lifecycle_publish_signature =
         arkret_signatures::keypackages::sign_keypackages_upload_request(
-            &last_resort_publish_unsigned,
+            &lifecycle_publish_unsigned,
             &format!("{bob_did}#{bob_device}"),
             &[21_u8; 32],
         )
         .unwrap();
-    let last_resort_publish_body =
-        last_resort_publish_unsigned.into_signed(last_resort_publish_signature);
-    let last_resort_publish_resp =
+    let lifecycle_publish_body =
+        lifecycle_publish_unsigned.into_signed(lifecycle_publish_signature);
+    let lifecycle_publish_resp =
         TestClient::post("http://server/_arkret/self/keys/keypackages/upload")
             .add_header("authorization", format!("Bearer {bob_token}"), true)
-            .json(&last_resort_publish_body)
+            .json(&lifecycle_publish_body)
             .send(&app_from_state(state.clone()))
             .await;
-    assert_eq!(last_resort_publish_resp.status_code, Some(StatusCode::OK));
+    assert_eq!(lifecycle_publish_resp.status_code, Some(StatusCode::OK));
 
-    let first_last_resort_nonce = b64(b"last-resort-claim-nonce-01");
-    let first_last_resort_claim_body = json!({
-        "target_principal_id": bob_did,
-        "target_device_ids": [bob_device],
-        "intended_realm_id": realm_id,
-        "requester": alice_did,
-        "required_capabilities": ["ak.mls.profile.full"],
-        "claim_nonce": first_last_resort_nonce,
-        "expires_at": arkret_canonical::format_timestamp_canonical(
-            last_resort_claim_expires_at
-        ),
-        "mls_group_id": group_id
-    });
-    let mut first_last_resort_claim_resp = TestClient::post(&claim_url)
+    let lifecycle_claim_body = signed_keypackage_claim_request(
+        state.service_id(),
+        alice_did,
+        alice_device,
+        bob_did,
+        &[bob_device],
+        realm_id,
+        &["ak.mls.profile.full"],
+        b"lifecycle-claim-nonce-01",
+        lifecycle_claim_expires_at,
+        group_id,
+    );
+    let mut lifecycle_claim_resp = TestClient::post(&claim_url)
         .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&first_last_resort_claim_body)
+        .json(&lifecycle_claim_body)
         .send(&app_from_state(state.clone()))
         .await;
+    assert_eq!(lifecycle_claim_resp.status_code, Some(StatusCode::OK));
+    let lifecycle_claim: Value = lifecycle_claim_resp.take_json().await.unwrap();
     assert_eq!(
-        first_last_resort_claim_resp.status_code,
-        Some(StatusCode::OK)
-    );
-    let first_last_resort_claim: Value = first_last_resort_claim_resp.take_json().await.unwrap();
-    assert_eq!(
-        first_last_resort_claim["claims"][0]["keypackage_ref"],
-        json!(last_resort_keypackage_ref)
+        lifecycle_claim["claims"][0]["keypackage_ref"],
+        json!(lifecycle_keypackage_ref)
     );
     assert_eq!(
-        first_last_resort_claim["claims"][0]["last_resort"],
-        json!(true)
+        lifecycle_claim["claims"][0]["capabilities_digest"],
+        json!(lifecycle_capabilities_digest)
     );
     assert_eq!(
-        first_last_resort_claim["claims"][0]["capabilities_digest"],
-        json!(last_resort_capabilities_digest)
-    );
-
-    let second_last_resort_nonce = b64(b"last-resort-claim-nonce-02");
-    let second_last_resort_claim_body = json!({
-        "target_principal_id": bob_did,
-        "target_device_ids": [bob_device],
-        "intended_realm_id": realm_id,
-        "requester": alice_did,
-        "required_capabilities": ["ak.mls.profile.full"],
-        "claim_nonce": second_last_resort_nonce,
-        "expires_at": arkret_canonical::format_timestamp_canonical(
-            last_resort_claim_expires_at
-        ),
-        "mls_group_id": "ak:mls_group:second"
-    });
-    let mut second_last_resort_claim_resp = TestClient::post(&claim_url)
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&second_last_resort_claim_body)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        second_last_resort_claim_resp.status_code,
-        Some(StatusCode::OK)
-    );
-    let second_last_resort_claim: Value = second_last_resort_claim_resp.take_json().await.unwrap();
-    assert_eq!(
-        second_last_resort_claim["claims"][0]["keypackage_ref"],
-        json!(last_resort_keypackage_ref)
-    );
-    assert_ne!(
-        first_last_resort_claim["claims"][0]["claim_id"],
-        second_last_resort_claim["claims"][0]["claim_id"]
-    );
-
-    let mut replayed_last_resort_claim_resp = TestClient::post(&claim_url)
-        .add_header("authorization", format!("Bearer {alice_token}"), true)
-        .json(&first_last_resort_claim_body)
-        .send(&app_from_state(state.clone()))
-        .await;
-    assert_eq!(
-        replayed_last_resort_claim_resp.status_code,
-        Some(StatusCode::OK)
-    );
-    let replayed_last_resort_claim: Value =
-        replayed_last_resort_claim_resp.take_json().await.unwrap();
-    assert_eq!(replayed_last_resort_claim, first_last_resort_claim);
-
-    let first_ledger_id = format!(
-        "local-last-resort:{}",
-        arkret_canonical::canonical_sha256(&json!({
-            "requester": alice_did,
-            "claim_nonce": first_last_resort_nonce,
-        }))
-        .unwrap()
-    );
-    let second_ledger_id = format!(
-        "local-last-resort:{}",
-        arkret_canonical::canonical_sha256(&json!({
-            "requester": alice_did,
-            "claim_nonce": second_last_resort_nonce,
-        }))
-        .unwrap()
-    );
-    let first_ledger = state
-        .test_persistence()
-        .mls_key_packages()
-        .get_peer_claim(state.service_id(), &first_ledger_id)
-        .await
-        .unwrap()
-        .expect("first last-resort claim ledger");
-    let second_ledger = state
-        .test_persistence()
-        .mls_key_packages()
-        .get_peer_claim(state.service_id(), &second_ledger_id)
-        .await
-        .unwrap()
-        .expect("second last-resort claim ledger");
-    assert_eq!(first_ledger.state, "last_resort_claimed");
-    assert_eq!(second_ledger.state, "last_resort_claimed");
-    assert_eq!(
-        first_ledger.outcome.as_ref().unwrap()["response"],
-        first_last_resort_claim
-    );
-    assert_eq!(
-        second_ledger.outcome.as_ref().unwrap()["response"],
-        second_last_resort_claim
-    );
-    assert_eq!(
-        first_ledger.outcome.as_ref().unwrap()["recipient_principal_id"],
-        json!(bob_did)
-    );
-    assert_eq!(
-        first_ledger.outcome.as_ref().unwrap()["recipient_device_id"],
-        json!(bob_device)
-    );
-    assert_eq!(
-        first_ledger.outcome.as_ref().unwrap()["mls_group_ref"],
-        json!(group_id)
-    );
-
-    let reusable_row = state
-        .test_persistence()
-        .mls_key_packages()
-        .get(last_resort_keypackage_id)
-        .await
-        .unwrap()
-        .expect("last-resort KeyPackage remains durable");
-    assert!(reusable_row.claimed_by_mls_group_id.is_none());
-    assert!(
-        state
-            .test_projection()
-            .lock()
-            .mls_key_packages
-            .get(last_resort_keypackage_id)
-            .unwrap()
-            .claimed_by
-            .is_none()
-    );
-    assert!(
         state
             .test_persistence()
             .mls_key_packages()
-            .list_claimed_by_group(group_id)
+            .get(lifecycle_keypackage_id)
             .await
             .unwrap()
-            .iter()
-            .all(|row| row.id != last_resort_keypackage_id)
+            .expect("claimed lifecycle KeyPackage remains durable")
+            .claimed_by_mls_group_id
+            .as_deref(),
+        Some(group_id)
     );
-
-    let claim_id = first_last_resort_claim["claims"][0]["claim_id"]
+    let claim_id = lifecycle_claim["claims"][0]["claim_id"]
         .as_str()
         .unwrap()
         .to_owned();
-    let claimed_keypackage_ref = first_last_resort_claim["claims"][0]["keypackage_ref"]
+    let claimed_keypackage_ref = lifecycle_claim["claims"][0]["keypackage_ref"]
         .as_str()
         .unwrap()
         .to_owned();
-    let claimed_keypackage_digest = first_last_resort_claim["claims"][0]["keypackage_digest"]
+    let claimed_keypackage_digest = lifecycle_claim["claims"][0]["keypackage_digest"]
         .as_str()
         .unwrap()
         .to_owned();
-    let claimed_capabilities_digest = first_last_resort_claim["claims"][0]["capabilities_digest"]
+    let claimed_capabilities_digest = lifecycle_claim["claims"][0]["capabilities_digest"]
         .as_str()
         .unwrap()
         .to_owned();

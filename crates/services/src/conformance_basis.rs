@@ -457,6 +457,13 @@ fn grant_body(
         "issuer": subject,
         "subject": subject,
         "actions": actions,
+        "issuer_authority_refs": [{
+            "kind": "realm_root",
+            "realm_id": realm_id,
+            "cell_ref": arkret_wire::REALM_AUTHORITY_ROOT_CELL,
+            "controller_epoch_at_issuance": 0,
+            "authority_generation": 0
+        }],
         "capability_action_registry_digest":
             arkret_policy::current_capability_action_registry_digest()
                 .map_err(|error| error.to_string())?
@@ -539,6 +546,10 @@ mod tests {
                     .expect("embedded registry digest")
                     .as_str()
             )
+        );
+        assert_eq!(
+            body["issuer_authority_refs"][0]["cell_ref"],
+            arkret_wire::REALM_AUTHORITY_ROOT_CELL
         );
 
         let state = CellState::Value(json!([{"value": body}]));

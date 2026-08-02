@@ -89,7 +89,8 @@ async fn did_recovery_backup_rejects_unverified_session_device() {
 async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[122u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_webvh_principal(&signing);
+    ingest_pinned_recovery_did_document(&state, &principal_id, &vm, &signing).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -103,7 +104,7 @@ async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
     let backup = did_recovery_backup_body(&principal_id, backup_id, &policy_id);
     put_key_backup(state.clone(), &token, backup_id, &backup, StatusCode::OK).await;
 
-    let body = delete_key_backup(state, &token, &signing, backup_id, StatusCode::OK).await;
+    let body = delete_key_backup(state, &token, &signing, &vm, backup_id, StatusCode::OK).await;
     assert_eq!(body["deleted"], true);
 }
 
@@ -111,7 +112,8 @@ async fn key_backup_delete_allows_active_did_recovery_tail_backup() {
 async fn key_backup_delete_allows_stale_did_recovery_backup() {
     let state = shared_recovery_state(Arc::new(SolandMemoryPersistenceStore::new()));
     let signing = SigningKey::from_bytes(&[123u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_webvh_principal(&signing);
+    ingest_pinned_recovery_did_document(&state, &principal_id, &vm, &signing).await;
     let token = dev_token_for_device(
         state.clone(),
         &principal_id,
@@ -127,7 +129,7 @@ async fn key_backup_delete_allows_stale_did_recovery_backup() {
 
     seed_recovery_policy(&state, &principal_id, &vm, 2, Some(&v1_policy_id)).await;
 
-    let body = delete_key_backup(state, &token, &signing, backup_id, StatusCode::OK).await;
+    let body = delete_key_backup(state, &token, &signing, &vm, backup_id, StatusCode::OK).await;
     assert_eq!(body["deleted"], true);
     assert_eq!(body["backup_id"], backup_id);
 }

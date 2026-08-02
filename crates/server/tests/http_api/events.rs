@@ -1176,85 +1176,148 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
 #[tokio::test]
 async fn canonical_control_event_materializes_verifiable_mls_governance_proof() {
     let state = soland_test_support::app_state(test_config());
-    let token = dev_token(state.clone()).await;
-    let realm_id = DEMO_REALM_ID.to_owned();
-    let typed_realm = RealmId::new(realm_id.clone()).unwrap();
-    let actor = Did::new("did:web:alice.example").unwrap();
-    // The signed security scope is now the envelope's own `scope_ref`; the
-    // separate reducer-managed `effective_scope` member the fixture used to
-    // stamp on top of it no longer exists on the v1 Event Envelope.
-    let mut event = arkret_wire::Event::new(
-        arkret_wire::EventKind::MEMBER_STATE,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: typed_realm.clone(),
-        },
-        actor,
-        1,
-        arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbccdd").unwrap(),
+    let control_seal_coordinator = soland_http::control_seal_coordinator::spawn(state.clone());
+    let actor = test_event_signer_did().to_owned();
+    let device_id = "ak:device:01904100-0000-7000-8000-a11ce0000001";
+    let token = dev_token_for_device(state.clone(), &actor, device_id, "Governance Founder").await;
+    let realm_id = new_prefixed_uuid7("ak:realm:");
+    let create_event_id = new_prefixed_uuid7("ak:event:");
+    let mut create = signed_canonical_event(
+        &create_event_id,
+        arkret_wire::EventKind::REALM_CREATE,
+        &actor,
+        device_id,
+        &realm_id,
+        0,
+        Vec::new(),
         serde_json::json!({
-            "actor_id": "did:web:alice.example",
-            "membership": "join"
+            "object": {
+                "id": realm_id,
+                "schema": "ak.schema.realm.v1",
+                "title": "Governance proof Realm",
+                "summary": "Real genesis for canonical MLS governance proof coverage",
+                "created_by": actor,
+                "trust_domain": "ak:trust_domain:soland.local",
+                "schema_refs": ["ak.schema.realm.v1"],
+                "default_discoverability": "listed",
+                "default_join_rule": "invite",
+                "history_visibility": "shared",
+                "encryption_profile": "none",
+                "security_class": "standard",
+                "federation_policy": "restricted",
+                "notary_profile": "single_did",
+                "digest_algorithm": "sha256",
+                "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
+                "notary": {
+                    "kind": "single_did",
+                    "did": state.service_id(),
+                    "recovery_members": ["did:web:recovery.soland.local"],
+                    "controller_organization": "did:web:organization.primary.soland.local",
+                    "recovery_controller_organizations": ["did:web:organization.recovery.soland.local"]
+                },
+                "created_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
+            }
         }),
-    )
-    .unwrap();
-    // A Control Move is an Event carrying `seal_basis`
-    // (`event-auth-state-resolution.md` §5); `ak.member.state` is a
-    // control-plane reducer input, so the fixture cites the Realm's accepted
-    // basis Seal rather than inventing one. It has to be the *uncovered* one:
-    // this test then makes the server materialize the Realm's first canonical
-    // Seal, and the notary refuses a Seal whose canonical coverage does not
-    // contain what the frontier already covers.
-    let basis_seal = test_realm_uncovered_basis_seal(&realm_id);
-    state.test_put_seal(&basis_seal).unwrap();
-    // The Realm still needs its canonical create and its notary: the
-    // governance-proof surface reads the Control Proposal decision policy from
-    // the create Event, and the service may only materialize the first
-    // canonical Seal when the Realm's notary profile names it. An uncovered
-    // basis Seal deliberately carries no genesis unit to supply either.
-    seed_realm_genesis_event(&state, &realm_id, "did:web:alice.example").await;
-    event.seal_basis = Some(basis_seal.seal_basis());
-    // The old fixture hand-wrote the member-state `effects[]` entry. v1 has no
-    // producer effect array: the write is whatever the registered contract
-    // projects from `kind + payload`, so restate the premise against the same
-    // evaluator the proof path itself runs (`governance_proof.rs`
-    // `materialize_governance_proof`).
+    );
+    make_realm_bootstrap_unit_member(&mut create);
+    let mut create_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&serde_json::json!({"events": [create]}))
+        .send(&app_from_state(state.clone()))
+        .await;
+    let create_status = create_response.status_code.expect("genesis status");
+    let create_body: Value = create_response.take_json().await.expect("genesis body");
+    assert!(
+        matches!(create_status, StatusCode::OK | StatusCode::CREATED),
+        "real Realm genesis failed with {create_status}: {create_body}"
+    );
+
+    let genesis_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let genesis_basis = loop {
+        let mut response = TestClient::get(format!(
+            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+        ))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+        if response.status_code == Some(StatusCode::OK) {
+            let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+                response.take_json().await.expect("typed genesis frontier");
+            let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+                frontier.frontier
+            else {
+                panic!("Realm-only selector returned the wrong frontier variant");
+            };
+            break frontier.seal_basis();
+        }
+        assert!(
+            tokio::time::Instant::now() < genesis_deadline,
+            "real Realm genesis was not sealed before the deadline"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
+
+    let event_id = new_prefixed_uuid7("ak:event:");
+    let mut envelope = signed_canonical_event(
+        &event_id,
+        arkret_wire::EventKind::MEMBER_STATE,
+        &actor,
+        device_id,
+        &realm_id,
+        1,
+        vec![&create_event_id],
+        serde_json::json!({
+            "realm_id": realm_id,
+            "actor_id": actor,
+            "membership": "join",
+            "delivery_status": "unroutable"
+        }),
+    );
+    envelope["seal_basis"] = serde_json::to_value(&genesis_basis).unwrap();
+    resign_canonical_event(&mut envelope);
     assert_eq!(
-        projected_cell_targets(&serde_json::to_value(&event).unwrap()),
-        std::collections::BTreeSet::from([
-            "ak:cell:ak.component.member.state.v1:did:web:alice.example".to_owned()
-        ]),
+        projected_cell_targets(&envelope),
+        std::collections::BTreeSet::from([format!("ak:cell:ak.component.member.state.v1:{actor}")]),
         "ak.member.state must derive exactly the subject's membership cell"
     );
-    let digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
-    event.proofs.push(arkret_wire::Proof {
-        proof_purpose: None,
-        kind: "detached_jws".to_owned(),
-        alg: "EdDSA".to_owned(),
-        verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-key").unwrap(),
-        event_digest: digest.clone(),
-        created_at: event.created_at,
-        domain: None,
-        audience: None,
-        jws: "AAAA.BBBB.CCCC".to_owned(),
-    });
-    let envelope = serde_json::to_value(&event).unwrap();
-    state
-        .test_persistence()
-        .events()
-        .put(soland_storage::CanonicalEventRecord {
-            event_id: event.event_id.to_string(),
-            actor_id: event.actor_id.to_string(),
-            actor_seq: event.actor_seq,
-            realm_id: Some(realm_id.clone()),
-            kind: event.kind.as_str().to_owned(),
-            schema_id: "ak.schema.event_envelope.v1".to_owned(),
-            canonical_digest: digest.to_string(),
-            canonical_bytes: arkret_canonical::canonical_json_bytes(&event).unwrap(),
-            envelope,
-            received_at: chrono::Utc::now(),
-        })
-        .await
-        .unwrap();
+    let mut event_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .json(&envelope)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let event_status = event_response.status_code.expect("Control Move status");
+    let event_body: Value = event_response.take_json().await.expect("Control Move body");
+    assert!(
+        matches!(event_status, StatusCode::OK | StatusCode::CREATED),
+        "real Control Move failed with {event_status}: {event_body}"
+    );
+
+    let seal_deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        let mut response = TestClient::get(format!(
+            "http://server/_arkret/self/events/frontier?realm_id={realm_id}"
+        ))
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .send(&app_from_state(state.clone()))
+        .await;
+        if response.status_code == Some(StatusCode::OK) {
+            let frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState =
+                response.take_json().await.expect("typed Control frontier");
+            let arkret_models_collaboration::event_sync::EventsFrontierView::RealmSeal(frontier) =
+                frontier.frontier
+            else {
+                panic!("Realm-only selector returned the wrong frontier variant");
+            };
+            if frontier.seal_basis().leaves != genesis_basis.leaves {
+                break;
+            }
+        }
+        assert!(
+            tokio::time::Instant::now() < seal_deadline,
+            "real Control Move was not sealed before the deadline"
+        );
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 
     let proof_request = serde_json::json!({
         "realm_id": realm_id,
@@ -1348,6 +1411,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         second_bundle.accepted_seal_id, bundle.accepted_seal_id,
         "unchanged Event coverage must reuse the accepted Seal"
     );
+    control_seal_coordinator.abort();
 }
 
 #[tokio::test]

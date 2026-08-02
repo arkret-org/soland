@@ -13,7 +13,7 @@ async fn recovery_policy_persistence_survives_state_restart_and_rejects_replays(
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
     let signing = SigningKey::from_bytes(&[71u8; 32]);
-    let (principal_id, vm) = did_key_principal(&signing);
+    let (principal_id, vm) = did_webvh_principal(&signing);
 
     seed_recovery_policy(&state, &principal_id, &vm, 1, None).await;
 
@@ -63,9 +63,8 @@ async fn recovery_policy_production_accepts_verified_payload() {
         shared_recovery_state_with_config(Arc::new(SolandMemoryPersistenceStore::new()), config);
     let token = "prod_recovery_token";
     let signing = SigningKey::from_bytes(&[77u8; 32]);
-    let (principal_id, verification_method) = did_key_principal(&signing);
+    let (principal_id, verification_method) = did_webvh_principal(&signing);
     seed_bearer_session(&state, token, &principal_id).await;
-    ingest_fresh_recovery_did_document(&state, &principal_id).await;
     let policy = signed_recovery_policy(
         &signing,
         &principal_id,
@@ -144,9 +143,8 @@ async fn recovery_policy_rejects_non_monotonic_supersedes_after_restart() {
     let persistence: Arc<dyn PersistenceStore> = Arc::new(SolandMemoryPersistenceStore::new());
     let state = shared_recovery_state(persistence.clone());
     let signing = SigningKey::from_bytes(&[76u8; 32]);
-    let (principal_id, verification_method) = did_key_principal(&signing);
+    let (principal_id, verification_method) = did_webvh_principal(&signing);
     let token = recovery_token_for_principal(state.clone(), &principal_id).await;
-    ingest_fresh_recovery_did_document(&state, &principal_id).await;
     let v1 = signed_recovery_policy(
         &signing,
         &principal_id,

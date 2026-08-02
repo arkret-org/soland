@@ -143,7 +143,7 @@ impl NotaryWorker {
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
                 for effect in state
                     .projections()
-                    .project_cell_writes(event)
+                    .project_accepted_cell_writes(event)
                     .map_err(|error| NotaryError::Construction(error.to_string()))?
                 {
                     for resolved in state
@@ -254,7 +254,7 @@ impl NotaryWorker {
                 .map_err(|error| NotaryError::Construction(error.to_string()))?;
                 for effect in state
                     .projections()
-                    .project_cell_writes(event)
+                    .project_accepted_cell_writes(event)
                     .map_err(|error| NotaryError::Construction(error.to_string()))?
                 {
                     for resolved in state
@@ -335,7 +335,7 @@ impl NotaryWorker {
             for (digest, event) in &pending {
                 for effect in state
                     .projections()
-                    .project_cell_writes(event)
+                    .project_accepted_cell_writes(event)
                     .map_err(|error| NotaryError::Construction(error.to_string()))?
                 {
                     for resolved in state
@@ -424,7 +424,7 @@ impl NotaryWorker {
                 rejected.push((digest, "Control Move carries no hlc".to_owned()));
                 continue;
             };
-            let writes = match state.projections().project_cell_writes(&event) {
+            let writes = match state.projections().project_accepted_cell_writes(&event) {
                 Ok(writes) => writes,
                 Err(reason) => {
                     rejected.push((digest, format!("reducer_projection_failed: {reason}")));
@@ -451,7 +451,7 @@ impl NotaryWorker {
             } else {
                 arkret_wire::event_envelope::EventSubmitContext::Standard
             };
-            match state.projections().verify_control_move_in_context(
+            match state.projections().verify_accepted_control_move_in_context(
                 &event,
                 realm_id,
                 if leaves.is_empty() {
@@ -593,7 +593,7 @@ impl NotaryWorker {
         // `Copy` bound apply_seal's `F: Copy` requires.
         let effect = state
             .projections()
-            .apply_seal_in_context(
+            .apply_accepted_seal_in_context(
                 &seal,
                 verifier,
                 if leaves.is_empty() {
@@ -754,7 +754,7 @@ impl NotaryWorker {
                 })?;
                 for write in state
                     .projections()
-                    .project_cell_writes(&event)
+                    .project_accepted_cell_writes(&event)
                     .map_err(|error| NotaryError::Construction(error.to_string()))?
                 {
                     for resolved in state

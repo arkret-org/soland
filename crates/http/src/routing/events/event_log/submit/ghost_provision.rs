@@ -170,21 +170,111 @@ async fn prepare_ghost_event(
     if let Some(operation) = operation.as_mut() {
         stamp_projection_operation_received_at(operation, received_at);
     }
+    let control_event_for_proposal = serde_json::from_value::<arkret_wire::Event>(envelope.clone())
+        .ok()
+        .filter(|event| event.seal_basis.is_some());
+    let control_proposal_receipt = if let Some(event) = control_event_for_proposal.as_ref() {
+        let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("validated Control Move Realm id is invalid: {error}"),
+            )
+        })?;
+        let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+        let (_, authority_set_ref) = worker
+            .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    format!("Control Proposal authority is unavailable: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    "current proposal authority profile is unavailable",
+                )
+            })?;
+        let proposal_digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("validated Control Move digest is invalid: {error}"),
+            )
+        })?;
+        let policy = crate::control_proposal::control_proposal_policy(
+            state,
+            &realm_id,
+            std::slice::from_ref(event),
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quorum_unreachable",
+                format!("Control Proposal policy is unavailable: {error}"),
+            )
+        })?;
+        worker
+            .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    format!("Control Proposal authority is unavailable: {error}"),
+                )
+            })?
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    "this service cannot issue the current authority set's proposal receipt",
+                )
+            })?;
+        Some(
+            crate::control_proposal::mint_control_proposal_receipt(
+                state,
+                realm_id,
+                proposal_digest,
+                authority_set_ref,
+                received_at,
+                policy,
+            )
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("Control Proposal receipt signing failed: {error}"),
+                )
+            })?,
+        )
+    } else {
+        None
+    };
     let projected_event = operation.as_ref().map(|operation| {
         crate::routing::events::projection::projection_event_from_operation(
             operation,
             Some(&parsed.actor_id),
         )
     });
-    let outbox = peer_event_fanout_records(state, &parsed, &envelope, None, &[])
-        .await
-        .map_err(|error| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "federation_fanout_unavailable",
-                format!("applet ghost federation delivery intent unavailable: {error}"),
-            )
-        })?;
+    let outbox = peer_event_fanout_records(
+        state,
+        &parsed,
+        &envelope,
+        control_proposal_receipt.as_ref(),
+        &[],
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "federation_fanout_unavailable",
+            format!("applet ghost federation delivery intent unavailable: {error}"),
+        )
+    })?;
     let command = soland_services::events::CommitAcceptedEventCommand {
         event: soland_services::events::AcceptedEvent {
             event_id: parsed.event_id,
@@ -198,7 +288,7 @@ async fn prepare_ghost_event(
             envelope,
             received_at,
         },
-        control_proposal_receipt: None,
+        control_proposal_receipt,
         projections: projected_event
             .iter()
             .map(|event| soland_services::events::ProjectedEvent {

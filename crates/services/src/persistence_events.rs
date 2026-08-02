@@ -267,6 +267,16 @@ impl crate::events::EventReadPort for PersistenceEventReader {
     ) -> crate::ServiceResult<Vec<arkret_wire::EventBatchReceipt>> {
         Ok(self.0.events().batch_receipts_for_event(event_id).await?)
     }
+    async fn control_proposal_receipt_for_event(
+        &self,
+        event_id: &str,
+    ) -> crate::ServiceResult<Option<arkret_wire::ControlProposalReceipt>> {
+        Ok(self
+            .0
+            .events()
+            .control_proposal_receipt_for_event(event_id)
+            .await?)
+    }
     async fn realm_event_stats(
         &self,
         realm_id: &str,

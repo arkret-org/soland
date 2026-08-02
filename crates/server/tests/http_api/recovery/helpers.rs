@@ -136,7 +136,7 @@ pub(crate) async fn open_recovery_session(
     principal_id: &str,
     vm: &str,
 ) -> Value {
-    ingest_fresh_recovery_did_document(&state, principal_id).await;
+    ingest_pinned_recovery_did_document(&state, principal_id, vm, signing).await;
     seed_recovery_policy(&state, principal_id, vm, 1, None).await;
     ensure_cross_signing(state.clone(), principal_id, vm, signing).await;
     let create_body = serde_json::json!({
@@ -542,6 +542,7 @@ pub(crate) async fn delete_key_backup(
     state: AppState,
     token: &str,
     signing: &SigningKey,
+    verification_method: &str,
     backup_id: &str,
     expected_status: StatusCode,
 ) -> Value {
@@ -551,7 +552,6 @@ pub(crate) async fn delete_key_backup(
         issue_key_backup_delete_challenge(state.clone(), token, backup_id, request_id.clone())
             .await;
 
-    let (_, verification_method) = did_key_principal(signing);
     let transcript = challenge.delete_intent_transcript(None);
     let canonical =
         arkret_canonical::canonical_json_bytes(&transcript).expect("canonical transcript");
@@ -560,7 +560,7 @@ pub(crate) async fn delete_key_backup(
         .expect("delete-intent digest");
     let proof = arkret_wire::PayloadProof {
         kind: "detached_jws".to_owned(),
-        verification_method: arkret_wire::DidUrl::new(verification_method)
+        verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
             .expect("fixture verification method is a DID URL"),
         alg: "EdDSA".to_owned(),
         payload_digest,
@@ -726,45 +726,6 @@ pub(crate) async fn recovery_token_for_principal(state: AppState, principal_id: 
     .await
 }
 
-pub(crate) async fn ingest_fresh_recovery_did_document(state: &AppState, did: &str) {
-    let now = chrono::Utc::now();
-    let did_document = if let Some(public_key_multibase) = did.strip_prefix("did:key:") {
-        let verification_method = arkret_wire::DidUrl::new(format!("{did}#{public_key_multibase}"))
-            .expect("fixture verification method is a DID URL");
-        serde_json::json!({
-            "id": did,
-            "verificationMethod": [{
-                "id": verification_method,
-                "type": "Multikey",
-                "controller": did,
-                "publicKeyMultibase": public_key_multibase,
-            }],
-            "authentication": [verification_method],
-            "assertionMethod": [verification_method],
-        })
-    } else {
-        serde_json::json!({
-            "id": did,
-            "verificationMethod": [],
-        })
-    };
-    state
-        .test_persistence()
-        .webvh()
-        .put_document(WebvhDocumentRecord {
-            did: did.to_owned(),
-            did_document,
-            key_log_head: Some("sha256:recovery-test-head".to_owned()),
-            seq: 1,
-            method_evidence: serde_json::json!({ "mode": "test" }),
-            fetched_at: now,
-            expires_at: now,
-            updated_at: now,
-        })
-        .await
-        .unwrap();
-}
-
 pub(crate) async fn seed_bearer_session(state: &AppState, token: &str, actor: &str) {
     seed_bearer_session_with_device_payload(state, token, actor, "verified", serde_json::json!({}))
         .await;
@@ -842,6 +803,60 @@ pub(crate) fn did_key_principal(signing: &SigningKey) -> (String, String) {
     let verification_method = arkret_wire::DidUrl::new(format!("{principal_id}#{multibase}"))
         .expect("fixture verification method is a DID URL");
     (principal_id, verification_method.as_str().to_owned())
+}
+
+pub(crate) fn did_webvh_principal(signing: &SigningKey) -> (String, String) {
+    let multibase = test_ed25519_multibase_public(signing);
+    let principal_id = format!("did:webvh:{multibase}:recovery.example");
+    let verification_method = arkret_wire::DidUrl::new(format!("{principal_id}#recovery"))
+        .expect("fixture verification method is a DID URL");
+    (principal_id, verification_method.as_str().to_owned())
+}
+
+pub(crate) async fn ingest_pinned_recovery_did_document(
+    state: &AppState,
+    did: &str,
+    verification_method: &str,
+    signing: &SigningKey,
+) {
+    let now = chrono::Utc::now();
+    let public_key_multibase = test_ed25519_multibase_public(signing);
+    let did_document = serde_json::json!({
+        "id": did,
+        "verificationMethod": [{
+            "id": verification_method,
+            "type": "Multikey",
+            "controller": did,
+            "publicKeyMultibase": public_key_multibase,
+        }],
+        "authentication": [verification_method],
+        "assertionMethod": [verification_method],
+    });
+    let key_log_head = arkret_canonical::canonical_sha256(&serde_json::json!({
+        "did": did,
+        "version_id": 1,
+        "verification_method": verification_method,
+        "public_key_multibase": public_key_multibase,
+    }))
+    .expect("fixture DID log head hashes");
+    state
+        .test_persistence()
+        .webvh()
+        .put_document(WebvhDocumentRecord {
+            did: did.to_owned(),
+            did_document,
+            key_log_head: Some(key_log_head),
+            seq: 1,
+            method_evidence: serde_json::json!({
+                "mode": "test",
+                "parameters": {"method": "did:webvh:1.0"}
+            }),
+            fetched_at: now,
+            expires_at: now + chrono::Duration::hours(1),
+            updated_at: now,
+        })
+        .await
+        .unwrap();
 }
 
 pub(crate) fn signed_recovery_policy(
@@ -941,7 +956,13 @@ pub(crate) async fn post_recovery_policy(
         |key| format!("{principal_id}#{key}"),
     ))
     .expect("fixture Event verification method is a DID URL");
-    ingest_fresh_recovery_did_document(&state, principal_id).await;
+    ingest_pinned_recovery_did_document(
+        &state,
+        principal_id,
+        event_verification_method.as_str(),
+        event_signing_key,
+    )
+    .await;
 
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
     let realm = RealmId::new(realm_id.clone()).unwrap();

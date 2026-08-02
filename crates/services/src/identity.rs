@@ -1217,10 +1217,20 @@ impl AgentPairingState {
                     self.authorized_signing_key_binding.clone().ok_or_else(|| {
                         "active Agent runtime binding is missing signing_key_binding".to_owned()
                     })?;
+                let binding_runtime_public_key_digest =
+                    arkret_signatures::agent_evidence::agent_signing_public_key_runtime_digest(
+                        &signing_key_binding.verification_method,
+                        &signing_key_binding.public_key,
+                    )
+                    .map_err(|reason| {
+                        format!(
+                            "active Agent signing_key_binding public key is invalid: {reason:?}"
+                        )
+                    })?;
                 if signing_key_binding.agent_id.as_str() != self.id
                     || signing_key_binding.agent_key_authorize_event_id != authorized_event_ref
                     || signing_key_binding.verification_method != verification_method
-                    || signing_key_binding.public_key_digest != public_key_digest
+                    || binding_runtime_public_key_digest != public_key_digest
                 {
                     return Err(
                         "active Agent runtime binding fields do not match signing_key_binding"

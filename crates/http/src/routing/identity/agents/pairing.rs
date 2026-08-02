@@ -960,31 +960,59 @@ async fn validate_agent_signing_key_binding_parts(
             "authorize_event.payload.signing_key_binding_digest must bind signing_key_binding",
         ));
     }
-    if binding.agent_id != *agent_id
-        || payload.get("key_id").and_then(Value::as_str) != Some(binding.agent_key_id.as_str())
-        || binding.verification_method != *verification_method
-        || binding.agent_key_authorize_event_id != authorize_event.event_id
-        || binding.public_key_digest.as_str() != runtime_public_key_digest
-        || binding.controller_id.as_str() != controller_id
-    {
-        return Err(AppError::invalid_param(
-            "signing_key_binding does not match the pairing request",
-        ));
+    for (matches, field) in [
+        (binding.agent_id == *agent_id, "agent_id"),
+        (
+            payload.get("key_id").and_then(Value::as_str) == Some(binding.agent_key_id.as_str()),
+            "agent_key_id",
+        ),
+        (
+            binding.verification_method == *verification_method,
+            "verification_method",
+        ),
+        (
+            binding.agent_key_authorize_event_id == authorize_event.event_id,
+            "agent_key_authorize_event_id",
+        ),
+        (
+            binding.controller_id.as_str() == controller_id,
+            "controller_id",
+        ),
+    ] {
+        if !matches {
+            return Err(AppError::invalid_param(format!(
+                "signing_key_binding {field} does not match the pairing request"
+            )));
+        }
     }
-    let reconstructed_public_key = serde_json::json!({
-        "kty": binding.public_key.kty,
-        "kid": verification_method,
-        "alg": binding.public_key.alg,
-        "key": binding.public_key.key,
-    });
-    let reconstructed_digest =
-        arkret_signatures::agent::agent_runtime_public_key_digest(&reconstructed_public_key)
-            .map_err(|error| {
-                AppError::invalid_param(format!("signing_key_binding public key invalid: {error}"))
-            })?;
-    if reconstructed_digest != binding.public_key_digest {
+    let binding_public_key_digest =
+        arkret_signatures::agent_evidence::agent_signing_public_key_digest(
+            verification_method,
+            &binding.public_key,
+        )
+        .map_err(|reason| {
+            AppError::invalid_param(format!(
+                "signing_key_binding public key invalid: {reason:?}"
+            ))
+        })?;
+    if binding_public_key_digest != binding.public_key_digest {
         return Err(AppError::invalid_param(
             "signing_key_binding public key digest mismatch",
+        ));
+    }
+    let runtime_public_key_digest_from_binding =
+        arkret_signatures::agent_evidence::agent_signing_public_key_runtime_digest(
+            verification_method,
+            &binding.public_key,
+        )
+        .map_err(|reason| {
+            AppError::invalid_param(format!(
+                "signing_key_binding public key invalid: {reason:?}"
+            ))
+        })?;
+    if runtime_public_key_digest_from_binding.as_str() != runtime_public_key_digest {
+        return Err(AppError::invalid_param(
+            "signing_key_binding public key does not match the pairing request",
         ));
     }
     let issued_at = payload

@@ -267,6 +267,13 @@ pub(super) async fn validate_set_default_strand_policy(
         return Ok(());
     };
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     // A grant of either the precise action or the broad realm-admin action
     // authorizes the write. `ak.realm.admin` aggregates Realm governance, so
@@ -387,6 +394,13 @@ pub(super) async fn validate_realm_organization_policy(
     };
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()
@@ -464,6 +478,13 @@ pub(super) async fn validate_moderation_event_policy(
     }
 
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if kind == arkret_wire::EventKind::MODERATION_APPEAL_SUBMIT
         && members.iter().any(|member| member == actor)
@@ -502,6 +523,13 @@ pub(super) async fn validate_realm_policy_server_policy(
         return Err("missing_capability");
     };
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor.as_str(), operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()
@@ -536,6 +564,13 @@ pub(super) async fn validate_call_recording_start_policy(
     };
     let actor = actor.as_str();
     let realm_id = operation.realm_id.as_str();
+    if state
+        .projections()
+        .snapshot()
+        .actor_holds_effective_realm_owner(realm_id, actor, operation.created_at)
+    {
+        return Ok(());
+    }
     let (owner, members) = realm_owner_and_members(state, realm_id).await;
     if state
         .authorization()

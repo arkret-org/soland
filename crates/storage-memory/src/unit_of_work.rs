@@ -8,6 +8,60 @@ use crate::SolandMemoryPersistenceStore;
 #[cfg(feature = "fault-injection")]
 use crate::{FaultPoint, FaultTiming};
 
+fn stage_control_proposal_receipt(
+    staged: &mut std::collections::BTreeMap<String, arkret_wire::ControlProposalReceipt>,
+    request: &EventCommitRequest,
+) -> PersistenceResult<()> {
+    let event: arkret_wire::Event = serde_json::from_value(request.event.envelope.clone())
+        .map_err(|error| {
+            PersistenceError::Conflict(format!(
+                "schema_violation: accepted Event envelope is not canonical wire: {error}"
+            ))
+        })?;
+    if event.seal_basis.is_none() {
+        if request.control_proposal_receipt.is_some() {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: DataEvent cannot carry a proposal receipt".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+    let event_digest = event.event_digest().map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: accepted Control Move digest failed: {error}"
+        ))
+    })?;
+    if event_digest != request.event.canonical_digest {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: canonical digest differs from Control Move digest".to_owned(),
+        ));
+    }
+    let receipt = request.control_proposal_receipt.as_ref().ok_or_else(|| {
+        PersistenceError::Conflict(
+            "schema_violation: accepted Control Move is missing proposal receipt".to_owned(),
+        )
+    })?;
+    receipt.validate_protocol_bounds().map_err(|error| {
+        PersistenceError::Conflict(format!(
+            "schema_violation: invalid proposal receipt: {error}"
+        ))
+    })?;
+    if receipt.proposal_digest.as_str() != event_digest || receipt.realm_id != event.realm_id {
+        return Err(PersistenceError::Conflict(
+            "schema_violation: proposal receipt does not bind Control Move".to_owned(),
+        ));
+    }
+    if let Some(existing) = staged.get(&request.event.event_id)
+        && existing != receipt
+    {
+        return Err(PersistenceError::Conflict(
+            "duplicate_conflict: Control Move has a different proposal receipt".to_owned(),
+        ));
+    }
+    staged.insert(request.event.event_id.clone(), receipt.clone());
+    Ok(())
+}
+
 #[async_trait]
 impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
     async fn commit_event(
@@ -18,11 +72,13 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         self.fault_injector
             .check(FaultPoint::EventCommit, FaultTiming::Before)?;
         let mut events = self.events.data.lock();
+        let mut control_proposal_receipts = self.events.control_proposal_receipts.lock();
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
         let mut outbox = self.federation_outbox.data.lock();
 
         let mut staged_events = events.clone();
+        let mut staged_control_proposal_receipts = control_proposal_receipts.clone();
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
         let mut staged_outbox = outbox.clone();
@@ -42,6 +98,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             ));
         }
         soland_storage::validate_actor_scope_commit(staged_events.values(), &request.event)?;
+        stage_control_proposal_receipt(&mut staged_control_proposal_receipts, &request)?;
         staged_events.insert(request.event.event_id.clone(), request.event);
 
         let mut projections_inserted = 0;
@@ -81,6 +138,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         *events = staged_events;
+        *control_proposal_receipts = staged_control_proposal_receipts;
         *projections = staged_projections;
         *idempotency = staged_idempotency;
         *outbox = staged_outbox;
@@ -109,12 +167,14 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
             ));
         }
         let mut events = self.events.data.lock();
+        let mut control_proposal_receipts = self.events.control_proposal_receipts.lock();
         let mut projections = self.projection_events.data.lock();
         let mut idempotency = self.idempotency_keys.data.lock();
         let mut outbox = self.federation_outbox.data.lock();
         let mut applets = self.applets.records.lock();
 
         let mut staged_events = events.clone();
+        let mut staged_control_proposal_receipts = control_proposal_receipts.clone();
         let mut staged_projections = projections.clone();
         let mut staged_idempotency = idempotency.clone();
         let mut staged_outbox = outbox.clone();
@@ -141,6 +201,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
                 staged_events.values(),
                 &event_request.event,
             )?;
+            stage_control_proposal_receipt(&mut staged_control_proposal_receipts, &event_request)?;
             staged_events.insert(event_request.event.event_id.clone(), event_request.event);
 
             for projection in event_request.projections {
@@ -211,6 +272,7 @@ impl EventCommitUnitOfWork for SolandMemoryPersistenceStore {
         }
 
         *events = staged_events;
+        *control_proposal_receipts = staged_control_proposal_receipts;
         *projections = staged_projections;
         *idempotency = staged_idempotency;
         *outbox = staged_outbox;

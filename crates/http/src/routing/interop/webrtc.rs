@@ -1493,29 +1493,21 @@ mod tests {
 // the truth source; the spec body and this server MUST use the `ak.`-prefixed
 // forms and MUST NOT accept the bare `call.*` names.
 
-/// Resolve the (owner, members) authorization principals for a realm so the
-/// shared [`SolandAuthzEngine`] default rules (owner ⇒ all actions; explicit
-/// grants override) evaluate consistently with the rest of the server. Mirrors
-/// `events::operations::realm_owner_and_members` / `circles::circle_authz_principals`.
+/// Resolve the (authority-root controller, members) authorization principals
+/// for a Realm so the shared [`SolandAuthzEngine`] evaluates owner aggregate
+/// actions from sealed protocol state. `RealmMetadata.owner` is only an audit
+/// mirror and must never be an authorization source.
 async fn call_authz_principals(state: &AppState, realm_id: &str) -> (Option<String>, Vec<String>) {
-    let owner = state
-        .realms()
-        .realm_metadata(realm_id)
-        .await
+    let projection = state.projections().snapshot();
+    let owner = projection
+        .realm_authority_root(realm_id)
+        .map(|root| root.controller_id.to_string());
+    let realms = state.realm_directory().snapshot();
+    let members = arkret_identifiers::RealmId::new(realm_id.to_owned())
         .ok()
-        .flatten()
-        .map(|meta| meta.owner);
-    let members = {
-        let realms = state.realm_directory().snapshot();
-        Some({
-            arkret_identifiers::RealmId::new(realm_id.to_owned())
-                .ok()
-                .and_then(|id| realms.get(&id))
-                .map(|realm| realm.members.iter().map(ToString::to_string).collect())
-                .unwrap_or_default()
-        })
-    }
-    .unwrap_or_default();
+        .and_then(|id| realms.get(&id))
+        .map(|realm| realm.members.iter().map(ToString::to_string).collect())
+        .unwrap_or_default();
     (owner, members)
 }
 
@@ -1530,6 +1522,19 @@ pub(crate) async fn actor_has_call_capability(
     action: &str,
 ) -> bool {
     let (owner, members) = call_authz_principals(state, realm_id).await;
+    let root_controller_holds_action = owner.as_deref() == Some(actor)
+        && arkret_schema::embedded_capability_action(arkret_wire::CapabilityActionId::REALM_OWNER)
+            .ok()
+            .flatten()
+            .is_some_and(|owner_action| {
+                owner_action
+                    .grant_authority_actions
+                    .iter()
+                    .any(|covered| covered == action)
+            });
+    if root_controller_holds_action {
+        return true;
+    }
     state
         .authorization()
         .check(soland_services::authorization::AuthorizationCheck {

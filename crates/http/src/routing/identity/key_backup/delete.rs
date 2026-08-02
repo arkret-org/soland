@@ -28,12 +28,13 @@ use arkret_models_crypto::{
     KeyBackupDeleteProof, KeyBackupDeleteQuorumSignature, KeysBackupsDeleteChallenge,
     KeysBackupsDeleteRequestBody, KeysBackupsIssueDeleteChallengeRequestBody,
 };
+use arkret_signatures::{Ed25519DetachedJwsVerifier, PublicKeyMaterial};
 use arkret_wire::{Base64UrlString, NonEmptyString, PayloadProof, ServiceOperationId};
 use chrono::{DateTime, Duration, Utc};
 use rand::RngExt as _;
 
 use super::*;
-use crate::routing::identity::cross_signing::{decode_ed25519_key, ed25519_verify};
+use crate::routing::identity::cross_signing::decode_ed25519_key;
 
 /// §7.8.1: "TTL 不超过 300 秒".
 pub(super) const DELETE_CHALLENGE_TTL_SECONDS: i64 = 300;
@@ -402,11 +403,7 @@ async fn verify_principal_signing_delete(
             "key backup delete proof key is not a current principal control key: {error}"
         ))
     })?;
-    if !ed25519_verify(
-        &resolved.public_key,
-        canonical,
-        detached_signature(&proof.jws),
-    ) {
+    if !verify_detached_jws(&resolved.public_key, canonical, &proof.jws) {
         return Err(AppError::capability_denied(
             "key backup delete proof signature is invalid",
         ));
@@ -491,7 +488,7 @@ async fn verify_device_quorum_delete(
                 "key backup delete quorum device key is invalid: {error}"
             ))
         })?;
-        if !ed25519_verify(&key, canonical, detached_signature(&contribution.proof.jws)) {
+        if !verify_detached_jws(&key, canonical, &contribution.proof.jws) {
             return Err(AppError::capability_denied(
                 "key backup delete quorum signature is invalid",
             ));
@@ -588,7 +585,7 @@ async fn verify_trusted_recovery_service_delete(
                     "key backup delete service key could not be resolved: {error}"
                 ))
             })?;
-    if !ed25519_verify(&key, canonical, detached_signature(&proof.jws)) {
+    if !verify_detached_jws(&key, canonical, &proof.jws) {
         return Err(AppError::capability_denied(
             "key backup delete service proof signature is invalid",
         ));
@@ -596,9 +593,13 @@ async fn verify_trusted_recovery_service_delete(
     Ok(())
 }
 
-/// The base64url signature of a compact detached JWS.
-fn detached_signature(jws: &str) -> &str {
-    jws.rsplit('.').next().unwrap_or_default()
+fn verify_detached_jws(key: &ed25519_dalek::VerifyingKey, canonical: &[u8], jws: &str) -> bool {
+    let material = PublicKeyMaterial::Ed25519Raw {
+        bytes: key.to_bytes().to_vec(),
+    };
+    Ed25519DetachedJwsVerifier::new()
+        .verify_detached_jws(jws, canonical, &material)
+        .is_ok()
 }
 
 async fn current_recovery_policy(

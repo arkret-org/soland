@@ -78,9 +78,8 @@ fn recovery_policy_publish_outcome(
 }
 
 fn recovery_policy_frontier_unavailable(message: impl Into<String>) -> AppError {
-    AppError::new(ErrorCode::FailedPrecondition, message.into())
+    AppError::new(ErrorCode::FrontierUnavailable, message.into())
         .with_status(StatusCode::PRECONDITION_FAILED)
-        .with_wire_code("frontier_unavailable")
 }
 
 pub(super) fn recovery_policy_acceptance_basis(

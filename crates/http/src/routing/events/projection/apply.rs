@@ -86,7 +86,7 @@ fn accepted_operation_cell_writes(
             return Vec::new();
         }
     };
-    match state.projections().project_cell_writes(&event) {
+    match state.projections().project_accepted_cell_writes(&event) {
         Ok(writes) => writes,
         Err(error) => {
             tracing::error!(
@@ -555,6 +555,24 @@ async fn project_accepted_operations_inner(
                 None
             };
         if let Some(effect) = reducer_effect {
+            if let ProjectionEffectView::Rejected { reason } = &effect {
+                tracing::error!(
+                    operation_id = %operation.operation_id,
+                    kind = %kinds::canonical_kind_string(operation),
+                    %reason,
+                    "invariant violation: durably accepted Event was rejected by the live reducer"
+                );
+            }
+            if kinds::canonical_kind_string(operation) == arkret_wire::EventKind::CAPABILITY_GRANT
+                && let ProjectionEffectView::PendingReplayQueued { target_ref, reason } = &effect
+            {
+                tracing::warn!(
+                    operation_id = %operation.operation_id,
+                    %target_ref,
+                    %reason,
+                    "durably accepted capability grant is waiting on an unresolved projection dependency"
+                );
+            }
             if kinds::canonical_kind_string(operation)
                 == arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES
                 && let ProjectionEffectView::Rejected { reason } = &effect
