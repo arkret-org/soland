@@ -259,28 +259,18 @@ pub fn cross_signing_reset_replay_check(
     Ok(())
 }
 
-/// Validate a `ak.realm.policy_bundle` payload. Spec T09 + T12 + SEC-03.
+/// Validate a `ak.realm.policy_bundle` payload. Spec T09 + T12.
 ///
 /// Checks (in order):
 /// 1. `relaxed_window_max_ms <= 300_000` (T09 hard ceiling)
 /// 2. `ak.profile.e2ee_relaxed.v1` not active with any audit compliance profile (T09 mutex)
-/// 3. When `media_service_decrypts=true`, all governance bindings are present (T12).
-/// 4. SEC-03 — when `media_service_decrypts=true`, independently recompute the
-///    `discussion_metadata_digest` from the §10.5.1 rule 1–3 policy cell value
-///    (`media_service_decrypts` + the authorised `plaintext_visible_services`) and fail closed with
-///    `mls_governance_binding_stale` when it disagrees with the digest the projected governance
-///    binding covers. This is the server-side mirror of `media-service-binding.md` §8.2 rule 5 /
-///    negative vector `ak.vector.webrtc.media_plaintext_downgrade.v1` case (d): the fact that media
-///    is service-decryptable MUST be derivable from member-visible metadata, not asserted out of
-///    band. `binding_discussion_metadata_digest` is the digest the current epoch governance binding
-///    covers, as projected from the realm's MLS cell; `None` means the binding carried no digest,
-///    in which case only the policy_root coverage gate (check 3) applies.
+/// 3. When `media_service_decrypts=true`, the service is explicitly authorized for the
+///    `media_plaintext` data class (T12). The MLS security-frontier projector binds this accepted
+///    policy state into the next Commit.
 pub fn realm_policy_bundle_check(
     payload: &Value,
     active_profiles: &[String],
     media_plaintext_service_present: bool,
-    mls_governance_binding_covers_policy_root: bool,
-    binding_discussion_metadata_digest: Option<&str>,
 ) -> Result<(), (ErrorCode, String)> {
     if let Some(join_policy) = payload.get("join_policy") {
         soland_services::operation_semantics::validate_join_policy_payload(join_policy).map_err(
@@ -349,100 +339,6 @@ pub fn realm_policy_bundle_check(
                     .to_owned(),
             ));
         }
-        if !mls_governance_binding_covers_policy_root {
-            return Err((
-                ErrorCode::FailedPrecondition,
-                "media_service_decrypts=true requires the current MLS epoch \
-                 governance binding's policy_root to cover the active media \
-                 plaintext policy"
-                    .to_owned(),
-            ));
-        }
-        // (4) SEC-03 — independently recompute the discussion_metadata_digest
-        // from the §10.5.1 rule 1–3 policy cell value and reject when it
-        // disagrees with what the governance binding covers. We only have a
-        // digest to compare against when the projected binding actually carried
-        // one; absent it, check (3) above is the strongest server-side gate.
-        if let Some(covered_digest) = binding_discussion_metadata_digest {
-            let recomputed = recompute_media_decrypt_metadata_digest(payload).ok_or((
-                ErrorCode::FailedPrecondition,
-                "media_service_decrypts=true policy cell could not be canonicalised \
-                 for discussion_metadata_digest recomputation"
-                    .to_owned(),
-            ))?;
-            let covered =
-                arkret_identifiers::Hash::new(covered_digest.to_owned()).map_err(|_| {
-                    (
-                        ErrorCode::FailedPrecondition,
-                        "governance binding discussion_metadata_digest is not a valid \
-                     sha256 hash"
-                            .to_owned(),
-                    )
-                })?;
-            if arkret_models_crypto::verify_media_decrypt_metadata(&covered, &recomputed).is_err() {
-                return Err((
-                    ErrorCode::FailedPrecondition,
-                    "media_service_decrypts=true fact recomputed from the policy \
-                     cell value does not match the governance binding's \
-                     discussion_metadata_digest (media-service-binding.md §8.2 rule 5)"
-                        .to_owned(),
-                ));
-            }
-        }
     }
     Ok(())
-}
-
-/// SEC-03 — build a `arkret_models_crypto::MediaDecryptPolicyValue`
-/// from a `ak.realm.policy_bundle` payload and derive its canonical
-/// `discussion_metadata_digest`. Returns `None` only when the SDK's canonical
-/// digest derivation fails (it never does for well-formed input), so callers
-/// treat that as a fail-closed mismatch.
-///
-/// The recomputed value mirrors §10.5.1 rule 1 (`media_service_decrypts`) and
-/// rule 2 (service DIDs whose `data_classes[]` contains `media_plaintext` in
-/// `plaintext_visible_services[]`). Free-text purposes do not grant authority
-/// and are excluded from the digest input.
-fn recompute_media_decrypt_metadata_digest(payload: &Value) -> Option<arkret_identifiers::Hash> {
-    use arkret_models_crypto::{
-        MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
-    };
-
-    let media_service_decrypts = payload
-        .get("media_service_decrypts")
-        .and_then(Value::as_bool)
-        .unwrap_or(false);
-
-    let mut plaintext_visible_services = Vec::new();
-    if let Some(services) = payload
-        .pointer("/plaintext_visible_services")
-        .and_then(Value::as_array)
-    {
-        for service in services {
-            let did_str = service.as_object().and_then(|object| {
-                let authorizes_media = object
-                    .get("data_classes")
-                    .and_then(Value::as_array)
-                    .is_some_and(|classes| {
-                        classes
-                            .iter()
-                            .any(|class| class.as_str() == Some("media_plaintext"))
-                    });
-                authorizes_media
-                    .then(|| object.get("service_id").and_then(Value::as_str))
-                    .flatten()
-            });
-            if let Some(did_str) = did_str
-                && let Ok(service_id) = arkret_identifiers::Did::new(did_str.to_owned())
-            {
-                plaintext_visible_services.push(MediaPlaintextService { service_id });
-            }
-        }
-    }
-
-    let value = MediaDecryptPolicyValue {
-        media_service_decrypts,
-        plaintext_visible_services,
-    };
-    derive_media_decrypt_metadata_digest(&value).ok()
 }

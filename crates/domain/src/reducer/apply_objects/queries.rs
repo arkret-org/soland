@@ -5,6 +5,23 @@
 
 use super::*;
 
+fn is_policy_frontier_component(component: &str) -> bool {
+    (component.starts_with("ak.component.realm.")
+        && (component.contains("policy")
+            || matches!(
+                component,
+                "ak.component.realm.join_rule.v1"
+                    | "ak.component.realm.history_visibility.v1"
+                    | "ak.component.realm.media_service.v1"
+                    | "ak.component.realm.policy_bundle.v1"
+                    | "ak.component.realm.plaintext_visible_services.v1"
+            )))
+        || (component.starts_with("ak.component.circle.")
+            && ["policy", "history", "encryption", "lifecycle"]
+                .iter()
+                .any(|marker| component.contains(marker)))
+}
+
 impl ProjectionState {
     pub(crate) fn message_by_target_ref(&self, target_ref: &str) -> Option<&MessageState> {
         if target_ref.starts_with("ak:message:") {
@@ -811,8 +828,7 @@ impl ProjectionState {
         )
     }
 
-    /// The Realm's non-`⊥` policy control cells, as the map
-    /// [`arkret_state::mls_governance_proof::derive_mls_policy_root`] filters.
+    /// The Realm's non-`⊥` policy control cells.
     ///
     /// `authz/policy-server.md` §5 defines `policy_frontier_digest` as a
     /// *filtered state root* over exactly these cells, reusing the governance
@@ -865,10 +881,16 @@ impl ProjectionState {
     /// issuer-local and would fail the cross-issuer structured comparison the
     /// section requires.
     pub fn realm_policy_frontier_digest(&self, realm_id: &str) -> Option<arkret_wire::Hash> {
-        arkret_state::mls_governance_proof::derive_mls_policy_root(
-            &self.realm_policy_control_cells(realm_id),
-        )
-        .ok()
+        let cells = self
+            .realm_policy_control_cells(realm_id)
+            .into_iter()
+            .filter(|(cell, _)| {
+                arkret_wire::cell::CellId::from_ref(cell)
+                    .map(|cell| is_policy_frontier_component(cell.component()))
+                    .unwrap_or(false)
+            })
+            .collect::<BTreeMap<_, _>>();
+        arkret_state::compute_state_root(&cells).ok()
     }
 
     pub fn realm_digest_algorithm(&self, realm_id: &str) -> Option<String> {

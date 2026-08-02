@@ -2,10 +2,7 @@ use super::super::*;
 use super::account_status::validate_account_status_service_binding;
 use super::audit::{validate_audit_accessed_payload, validate_strand_watch_audit_pair};
 use super::enrollment::validate_device_enrollment_authority_binding;
-use super::mls_governance::{
-    projected_media_plaintext_service_present, projected_mls_governance_binding_covers_policy_root,
-    projected_mls_governance_binding_metadata_digest,
-};
+use super::mls_governance::projected_media_plaintext_service_present;
 use super::payload_shape::{
     validate_event_audience_fields, validate_pre_schema_wire_shape,
     validate_realm_create_policy_constraints, validate_space_container_lifecycle_payload,
@@ -101,7 +98,6 @@ mod realm_authority_root;
 use applet::*;
 pub(in crate::routing::events::event_log) use capability_refs::validate_data_event_capability_refs;
 use capability_refs::*;
-pub(in crate::routing::events::event_log) use control_move::validate_mls_covered_seal_refs_visibility;
 use control_move::*;
 #[cfg(test)]
 pub(crate) use envelope_core::validate_event_envelope;

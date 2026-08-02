@@ -414,9 +414,7 @@ impl MlsCommitEpochKey {
 /// Each successful `apply_commit_epoch` bumps `epoch` by exactly +1
 /// from `expected_prev_epoch`; out-of-order or stale commits leave the
 /// row untouched and the reducer returns `Rejected { reason:
-/// "mls_epoch_skew" }`. `covered_seals` is the or-set style
-/// accumulator for governance Seal ids / tags attested by accepted
-/// commits for this group.
+/// "mls_epoch_skew" }`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MlsCommitEpoch {
     /// MLS group id (`ak:mls_group:<...>`).
@@ -433,18 +431,12 @@ pub struct MlsCommitEpoch {
     pub creator_device_id: String,
     /// Accepted genesis Event/control ref.
     pub genesis_event_ref: String,
-    pub covered_seals: Vec<String>,
     pub committed_at: i64,
     /// Full governance binding accepted for the current epoch.
     pub governance_binding: Value,
-    /// `governance_binding.policy_root` the genesis bound this MLS group to.
-    /// Every later commit's binding MUST carry the same `policy_root`; a
-    /// mismatch is rejected with `governance_binding_mismatch`
-    /// (encryption-and-audit.md §2.5.1).
-    pub policy_root: String,
     /// `commit_digest` of the commit that advanced the group into the current
     /// epoch. A *different* commit that attests the same base epoch
-    /// (`accepted_from_epoch`) drives the group's `covered_frontier_cell` to
+    /// (`accepted_from_epoch`) drives the group's active generation to
     /// `⊥` (encryption-and-audit.md §2.5.2). `None` at genesis (no commit yet).
     pub accepted_commit_digest: Option<String>,
     /// Accepted Commit Event/control ref for the current epoch.
@@ -453,7 +445,7 @@ pub struct MlsCommitEpoch {
     /// tell a *concurrent* commit at that same base (⊥ contention) apart from a
     /// plain stale / out-of-order replay (`mls_epoch_skew`). `None` at genesis.
     pub accepted_from_epoch: Option<u64>,
-    /// `true` once concurrent commits resolved the frontier to `⊥`. While
+    /// `true` once concurrent commits contested the generation. While
     /// contested, sends / decrypts on this epoch fail closed as
     /// `decryption_pending` until a resolving commit advances the epoch.
     pub frontier_contested: bool,

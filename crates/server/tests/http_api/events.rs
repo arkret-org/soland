@@ -1142,14 +1142,50 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         vec![event["event_id"].as_str().unwrap()],
         "the genesis create is the bootstrap Realm's only key-access frontier Event"
     );
-    let expected_frontier_digest =
-        arkret_identifiers::Hash::new(format!("sha256:{}", "aa".repeat(32))).unwrap();
+    let request = arkret_models_crypto::MlsGovernanceProofRequestBodyBody {
+        realm_id: arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
+        effective_scope: arkret_wire::ScopeRef::Realm {
+            realm_id: arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
+        },
+        mls_group_id: "YXJrcmV0LW1scy1wcm9vZi10ZXN0".to_owned(),
+        previous_epoch: 0,
+        next_epoch: 1,
+        binding_profile: "ak.profile.mls_governance_binding.full.v1".to_owned(),
+        reducer_profile: "ak.reducer.v1".to_owned(),
+        trusted_anchor_seal_id: bundle.trusted_anchor_seal_id.clone(),
+        chunk_index: 0,
+        expected_bundle_digest: None,
+    };
+    let leaves = vec![arkret_models_crypto::MlsSecurityFrontierLeaf {
+        leaf_index: 0,
+        principal_id: arkret_identifiers::Did::new(actor.clone()).unwrap(),
+        credential_ref: arkret_wire::NonEmptyString::new(format!(
+            "{actor}#ak:device:01904100-0000-7000-8000-a11ce0000001"
+        ))
+        .unwrap(),
+    }];
+    let materialized =
+        arkret_state::mls_governance_proof::verify_mls_governance_proof_materialization::<
+            arkret_wire::WireError,
+            _,
+            _,
+            _,
+        >(
+            &bundle,
+            &request,
+            &bundle.trusted_anchor_seal_id,
+            |_| Ok(()),
+            |_| Ok(()),
+            proof_project_cells,
+            &leaves,
+        )
+        .expect("a basis-exempt genesis frontier materializes");
     let expected_binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
         arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
         "YXJrcmV0LW1scy1wcm9vZi10ZXN0",
         0,
         1,
-        expected_frontier_digest.clone(),
+        materialized.security_frontier_digest,
         "ak.profile.mls_governance_binding.full.v1",
         "ak.reducer.v1",
     )
@@ -1172,7 +1208,6 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         _,
         _,
         _,
-        _,
     >(
         &bundle,
         &expected_binding,
@@ -1180,7 +1215,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         |_| Ok(()),
         |_| Ok(()),
         proof_project_cells,
-        move |_, _, _| Ok(expected_frontier_digest.clone()),
+        &leaves,
     )
     .expect("a basis-exempt genesis frontier Event verifies");
 }
@@ -1342,21 +1377,45 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
     });
     let (proof_chunks, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
-    let expected_frontier_digest =
-        arkret_identifiers::Hash::new(format!("sha256:{}", "aa".repeat(32))).unwrap();
+    let mut valid_request_value = proof_request.clone();
+    valid_request_value["trusted_anchor_seal_id"] =
+        Value::String(bundle.trusted_anchor_seal_id.to_string());
+    valid_request_value["chunk_index"] = Value::from(0);
+    let valid_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
+        serde_json::from_value(valid_request_value).expect("typed proof request");
+    let leaves = vec![arkret_models_crypto::MlsSecurityFrontierLeaf {
+        leaf_index: 0,
+        principal_id: arkret_identifiers::Did::new(actor.clone()).unwrap(),
+        credential_ref: arkret_wire::NonEmptyString::new(format!("{actor}#{device_id}")).unwrap(),
+    }];
+    let materialized =
+        arkret_state::mls_governance_proof::verify_mls_governance_proof_materialization::<
+            arkret_wire::WireError,
+            _,
+            _,
+            _,
+        >(
+            &bundle,
+            &valid_request,
+            &bundle.trusted_anchor_seal_id,
+            |_| Ok(()),
+            |_| Ok(()),
+            proof_project_cells,
+            &leaves,
+        )
+        .expect("server proof materializes with SDK");
     let expected_binding = arkret_models_crypto::MlsGovernanceBindingPayload::realm(
         arkret_identifiers::RealmId::new(realm_id.clone()).unwrap(),
         "YXJrcmV0LW1scy1wcm9vZi10ZXN0",
         0,
         1,
-        expected_frontier_digest.clone(),
+        materialized.security_frontier_digest,
         "ak.profile.mls_governance_binding.full.v1",
         "ak.reducer.v1",
     )
     .unwrap();
     let verified = arkret_state::mls_governance_proof::verify_mls_governance_proof_bundle::<
         arkret_wire::WireError,
-        _,
         _,
         _,
         _,
@@ -1367,17 +1426,10 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         |_| Ok(()),
         |_| Ok(()),
         proof_project_cells,
-        move |_, _, _| Ok(expected_frontier_digest.clone()),
+        &leaves,
     )
     .expect("server proof verifies with SDK");
     assert_eq!(verified.accepted_seal_id, bundle.accepted_seal_id);
-
-    let mut valid_request_value = proof_request.clone();
-    valid_request_value["trusted_anchor_seal_id"] =
-        Value::String(bundle.trusted_anchor_seal_id.to_string());
-    valid_request_value["chunk_index"] = Value::from(0);
-    let valid_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
-        serde_json::from_value(valid_request_value).expect("typed proof request");
 
     let mut unreachable_request = valid_request.clone();
     unreachable_request.trusted_anchor_seal_id =

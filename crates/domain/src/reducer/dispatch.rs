@@ -1343,7 +1343,7 @@ pub fn default_apply_registry() -> std::collections::HashMap<&'static str, Apply
     );
     // G3.S1: MLS lifecycle. KeyPackage publish/claim (atomic CAS),
     // Welcome to-device persistence, commit monotonic-epoch bump, and
-    // governance covered_seals accumulation.
+    // governance binding projection.
     // Canonical event kinds — the publish/claim distinction lives at the
     // HTTP operation_id layer and is conveyed inside the kind's payload
     // via `action ∈ {"publish","claim"}`; the event log itself stores

@@ -5,7 +5,6 @@ pub(crate) mod audit;
 mod cells;
 mod collection;
 mod control;
-mod covered_seals;
 mod delivery_binding;
 mod handles;
 mod introspect;
@@ -207,8 +206,6 @@ pub fn admin_router() -> Router {
             Router::with_path("realms/{realm_id}/delivery-binding/handovers")
                 .get(delivery_binding::admin_list_delivery_binding_handovers),
         )
-        // B5 — operator covered-seals (MLS lag) surface.
-        .push(covered_seals::router())
         // B2 — operator handle cluster (list / get / audit / revoke / reassign).
         .push(handles::router())
         .push(actors::router())

@@ -191,14 +191,12 @@ pub enum MlsProjectionEffect {
         effective_scope: Value,
         creator_actor_id: String,
         creator_device_id: String,
-        covered_seals: Vec<String>,
     },
     CommitEpochAdvanced {
         group_id: String,
         effective_scope: Value,
         previous_epoch: u64,
         leader_actor_id: String,
-        covered_seals: Vec<String>,
     },
     CommitFrontierContested {
         group_id: String,
@@ -311,28 +309,24 @@ impl From<ProjectionEffect> for ProjectionEffectView {
                     effective_scope,
                     creator_actor_id,
                     creator_device_id,
-                    covered_seals,
                     ..
                 } => MlsProjectionEffect::GroupGenesis {
                     group_id,
                     effective_scope,
                     creator_actor_id,
                     creator_device_id,
-                    covered_seals,
                 },
                 soland_domain::reducer::MlsEffect::CommitEpochAdvanced {
                     group_id,
                     effective_scope,
                     previous_epoch,
                     leader_actor_id,
-                    covered_seals,
                     ..
                 } => MlsProjectionEffect::CommitEpochAdvanced {
                     group_id,
                     effective_scope,
                     previous_epoch,
                     leader_actor_id,
-                    covered_seals,
                 },
                 soland_domain::reducer::MlsEffect::CommitFrontierContested {
                     group_id,
@@ -842,26 +836,9 @@ impl ProjectionService {
     /// The Seals visible from `leaves`: the leaves themselves plus their whole
     /// predecessor closure.
     ///
-    /// `encryption-and-audit.md` §2.5.1 bounds a commit's `covered_seal_refs`
-    /// to exactly this set.
+    /// Used by consumers that need the accepted Seal predecessor closure.
     pub fn seal_closure(&self, leaves: &[SealId]) -> Result<BTreeSet<SealId>, SealReject> {
         arkret_state::predecessor_seal_closure(leaves, self.seal_store())
-    }
-
-    /// `encryption-and-audit.md` §2.5.2 — `M`, the governance Seal set an E2EE
-    /// application DataEvent resolving at `seal_id` depends on.
-    pub fn required_governance_seals_at(
-        &self,
-        seal_id: &SealId,
-        realm_id: &RealmId,
-    ) -> Result<BTreeSet<SealId>, SealReject> {
-        arkret_state::mls_move::required_governance_seals_at(
-            std::slice::from_ref(seal_id),
-            realm_id,
-            self.seal_store(),
-            self.cell_store(),
-            self.cell_registry(),
-        )
     }
 
     /// The Realm's effective digest suite
@@ -2028,33 +2005,6 @@ impl ProjectionService {
         if let Some(row) = self.state.lock().mls_key_packages.get_mut(keypackage_id) {
             row.consumed_at = Some(consumed_at);
         }
-    }
-
-    pub fn fold_realm_governance_seals(
-        &self,
-        realm_id: &str,
-        governance_seals: &[String],
-    ) -> Option<u64> {
-        let mut state = self.state.lock();
-        let row = state
-            .mls_commit_epochs
-            .values_mut()
-            .filter(|row| {
-                row.effective_scope.get("realm_id").and_then(Value::as_str) == Some(realm_id)
-            })
-            .max_by_key(|row| row.epoch)?;
-        for seal in governance_seals {
-            if !row.covered_seals.contains(seal) {
-                row.covered_seals.push(seal.clone());
-            }
-        }
-        row.covered_seals.sort();
-        Some(
-            governance_seals
-                .iter()
-                .filter(|seal| !row.covered_seals.contains(*seal))
-                .count() as u64,
-        )
     }
 
     pub fn observe_message_read_for_expiry(

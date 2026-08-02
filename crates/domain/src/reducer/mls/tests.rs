@@ -46,7 +46,6 @@ fn governance_binding_for_scope(
     effective_scope: Value,
 ) -> Value {
     let realm_id = "ak:realm:0196419b-0000-7000-8000-000000000000";
-    let frontier = format!("ak:event:0196419b-0000-7000-8000-{previous_epoch:012x}");
     let mut binding = json!({
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
@@ -55,10 +54,7 @@ fn governance_binding_for_scope(
         "mls_group_id": group_id,
         "previous_epoch": previous_epoch,
         "next_epoch": previous_epoch + 1,
-        "membership_frontier": [
-            frontier
-        ],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -129,10 +125,7 @@ fn genesis_binding(group_id: &str, effective_scope: Value) -> Value {
         "mls_group_id": group_id,
         "previous_epoch": 0,
         "next_epoch": 0,
-        "membership_frontier": [
-            "ak:event:0196419b-0000-7000-8000-000000000000"
-        ],
-        "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+        "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
         "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
         "reducer_profile": CORE_REDUCER_PROFILE
     });
@@ -753,15 +746,10 @@ fn commit_epoch_in_order_succeeds() {
         ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced {
             previous_epoch,
             new_epoch,
-            ref covered_seals,
             ..
         }) => {
             assert_eq!(previous_epoch, 0);
             assert_eq!(new_epoch, 1);
-            assert_eq!(
-                covered_seals,
-                &vec!["ak:event:0196419b-0000-7000-8000-000000000000".to_owned()]
-            );
         }
         other => panic!("expected CommitEpochAdvanced, got {other:?}"),
     }
@@ -796,14 +784,8 @@ fn commit_epoch_in_order_succeeds() {
             leader_actor_id: "did:web:alice.example".to_owned(),
             creator_device_id: "ak:device:alice-desktop".to_owned(),
             genesis_event_ref: "ak:operation:0196419b-0000-7000-8000-000000000001".to_owned(),
-            covered_seals: vec![
-                "ak:event:0196419b-0000-7000-8000-000000000000".to_owned(),
-                "ak:event:0196419b-0000-7000-8000-000000000001".to_owned()
-            ],
             committed_at: 501,
             governance_binding: governance_binding(1),
-            policy_root: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
-                .to_owned(),
             accepted_commit_digest: Some(b64(b"opaque-commit-2")),
             accepted_commit_ref: Some(
                 "ak:operation:0196419b-0000-7000-8000-000000000001".to_owned(),
@@ -812,66 +794,6 @@ fn commit_epoch_in_order_succeeds() {
             frontier_contested: false,
         }
     );
-}
-
-#[test]
-fn pending_device_revoke_requires_remove_commit_frontier() {
-    let mut state = ProjectionState::default();
-    initialize_genesis(&mut state);
-    let revoke_event = "ak:event:0196419b-0000-7000-8000-00000000d002";
-    let proposal_ref = "ak:event:0196419b-0000-7000-8000-00000000d003";
-    state.pending_mls_removals.push(MlsRemoveObligation {
-        realm_id: "ak:realm:0196419b-0000-7000-8000-000000000000".to_owned(),
-        circle_id: None,
-        mls_group_ref: Some("ak:mls_group:abc".to_owned()),
-        actor_id: "did:web:alice.example".to_owned(),
-        device_id: Some("ak:device:lost".to_owned()),
-        membership_frontier: vec![revoke_event.to_owned()],
-        trigger_membership: "device_revoke".to_owned(),
-        triggered_at: Utc.timestamp_opt(500, 0).single().unwrap(),
-    });
-    assert!(matches!(
-        apply_remove_proposal(
-            &mut state,
-            &op_at(
-                500,
-                "ak.mls.proposal",
-                json!({
-                    "event_id": proposal_ref,
-                    "mls_group_id": "ak:mls_group:abc",
-                    "base_epoch": 0,
-                    "proposal_type": "remove",
-                    "proposal_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-                    "target_principal_id": "did:web:alice.example",
-                    "target_device_id": "ak:device:lost",
-                }),
-            )
-        ),
-        ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded { .. })
-    ));
-
-    let effect = apply_commit_epoch(
-        &mut state,
-        &op_at(
-            501,
-            "ak.mls.commit",
-            json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
-                "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
-                "commit_digest": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                "proposal_refs": [proposal_ref],
-                "governance_binding": governance_binding(0),
-            }),
-        ),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason }
-            if reason == REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER
-    ));
-    assert_eq!(state.pending_mls_removals.len(), 1);
 }
 
 #[test]
@@ -909,9 +831,6 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
         ),
         ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded { .. })
     ));
-    let mut binding = governance_binding(0);
-    binding["membership_frontier"] = json!([revoke_event]);
-
     let effect = apply_commit_epoch(
         &mut state,
         &op_at(
@@ -924,7 +843,7 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
                 "leader_actor_id": "did:web:alice.example",
                 "commit_digest": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
                 "proposal_refs": [proposal_ref],
-                "governance_binding": binding,
+                "governance_binding": governance_binding(0),
             }),
         ),
     );
@@ -938,7 +857,6 @@ fn remove_commit_covering_device_revoke_advances_and_clears_obligation() {
         .get(&mls_epoch_key(&realm_scope(), "ak:mls_group:abc").unwrap())
         .unwrap();
     assert_eq!(row.epoch, 1);
-    assert!(row.covered_seals.iter().any(|seal| seal == revoke_event));
 }
 
 #[test]
@@ -986,9 +904,6 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
             ProjectionEffect::Mls(MlsEffect::RemoveProposalRecorded { .. })
         ));
     }
-    let mut binding = governance_binding(0);
-    binding["membership_frontier"] = json!([frontier]);
-
     let effect = apply_commit_epoch(
         &mut state,
         &op_at(
@@ -1001,7 +916,7 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
                 "leader_actor_id": "did:web:alice.example",
                 "commit_digest": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 "proposal_refs": targets.map(|(_, proposal_ref)| proposal_ref),
-                "governance_binding": binding,
+                "governance_binding": governance_binding(0),
             }),
         ),
     );
@@ -1011,45 +926,6 @@ fn realm_remove_commit_covers_all_pending_principals_in_one_rotation() {
         ProjectionEffect::Mls(MlsEffect::CommitEpochAdvanced { new_epoch: 1, .. })
     ));
     assert!(state.pending_mls_removals.is_empty());
-}
-
-#[test]
-fn commit_epoch_requires_covered_seals() {
-    let mut state = ProjectionState::default();
-    let effect = apply_commit_epoch(
-        &mut state,
-        &op_at(
-            500,
-            "ak.mls.commit",
-            json!({
-                "group_id": "ak:mls_group:abc",
-                "expected_prev_epoch": 0,
-                "next_epoch": 1,
-                "leader_actor_id": "did:web:alice.example",
-                "commit_bytes_b64": b64(b"opaque-commit-1"),
-                "governance_binding": {
-                    "binding_version": 1,
-                    "encoding_profile": "cbor-deterministic-rfc8949-v1",
-                    "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000",
-                    "effective_scope": {
-                        "kind": "realm",
-                        "realm_id": "ak:realm:0196419b-0000-7000-8000-000000000000"
-                    },
-                    "mls_group_id": "ak:mls_group:abc",
-                    "previous_epoch": 0,
-                    "next_epoch": 1,
-                    "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
-                    "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
-                    "reducer_profile": CORE_REDUCER_PROFILE
-                },
-            }),
-        ),
-    );
-    assert!(matches!(
-        effect,
-        ProjectionEffect::Rejected { reason } if reason == "mls_governance_binding_membership_frontier_missing"
-    ));
-    assert!(state.mls_commit_epochs.is_empty());
 }
 
 #[test]
@@ -1191,11 +1067,9 @@ fn commit_op(secs: i64, label: &[u8], extra: Value) -> Operation {
 }
 
 #[test]
-fn commit_rejects_policy_root_mismatch() {
+fn commit_rejects_retired_binding_fields() {
     let mut state = ProjectionState::default();
     initialize_genesis(&mut state);
-    // A commit whose governance_binding.policy_root differs from the
-    // genesis-locked root is rejected with governance_binding_mismatch.
     let mut binding = governance_binding(0);
     binding["policy_root"] =
         json!("sha256:9999999999999999999999999999999999999999999999999999999999999999");
@@ -1209,11 +1083,10 @@ fn commit_rejects_policy_root_mismatch() {
     );
     match effect {
         ProjectionEffect::Rejected { reason } => {
-            assert_eq!(reason, arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
+            assert_eq!(reason, "mls_governance_binding_invalid");
         }
-        other => panic!("expected governance_binding_mismatch, got {other:?}"),
+        other => panic!("expected mls_governance_binding_invalid, got {other:?}"),
     }
-    // The epoch is untouched.
     assert_eq!(
         state
             .mls_commit_epochs
@@ -1237,7 +1110,7 @@ fn concurrent_commits_contend_then_resolve() {
     ));
 
     // A racing commit that explicitly forks base epoch 0 with different
-    // material drives covered_frontier_cell to ⊥ (CommitFrontierContested).
+    // material marks the active generation as contested.
     // The effect reports the group's current (untouched) stored epoch — 1,
     // set by commit-a — because the contested-frontier mirror locates the
     // durable epoch row by that value; the contention does not rewind it to

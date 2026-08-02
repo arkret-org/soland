@@ -20,11 +20,8 @@ pub(super) use envelope::{
     event_requirements_schema_id, validate_data_event_capability_refs,
     validate_event_critical_features, validate_event_proofs, validate_event_schema_and_payload,
     validate_event_time_fields, validate_member_identity_proof,
-    validate_mls_covered_seal_refs_visibility,
 };
 #[cfg(test)]
 pub(crate) use mls_governance::payload_declares_media_plaintext_service;
 #[cfg(test)]
-pub(super) use mls_governance::{
-    projected_media_plaintext_service_present, projected_mls_governance_binding_covers_policy_root,
-};
+pub(super) use mls_governance::projected_media_plaintext_service_present;

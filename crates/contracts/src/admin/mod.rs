@@ -1,5 +1,4 @@
 pub mod account_localparts;
-pub mod covered_seals;
 pub mod delivery_binding;
 pub mod device_signing_directory;
 pub mod handles;

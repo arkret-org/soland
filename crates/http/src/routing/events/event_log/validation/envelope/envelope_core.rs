@@ -413,7 +413,6 @@ async fn validate_event_envelope_with_ingress(
         object,
         is_realm_bootstrap_followup || is_identity_anchor_authorize,
     )?;
-    validate_mls_covered_seal_refs_visibility(state, object)?;
     if kind == arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE {
         validate_member_identity_proof(state, object.get("payload").unwrap_or(&Value::Null))
             .await?;
@@ -473,16 +472,10 @@ async fn validate_event_envelope_with_ingress(
         }
         let media_plaintext_service_present =
             projected_media_plaintext_service_present(state, &realm_id, policy_bundle).await;
-        let mls_governance_binding_covers_policy_root =
-            projected_mls_governance_binding_covers_policy_root(state, &realm_id, policy_bundle);
-        let binding_discussion_metadata_digest =
-            projected_mls_governance_binding_metadata_digest(state, &realm_id);
         if let Err((code, reason)) = realm_policy_bundle_check(
             policy_bundle,
             &active_profiles,
             media_plaintext_service_present,
-            mls_governance_binding_covers_policy_root,
-            binding_discussion_metadata_digest.as_deref(),
         ) {
             return Err(event_validation_error(
                 error_http_status(code),

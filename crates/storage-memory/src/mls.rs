@@ -356,7 +356,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             leader_actor_id,
             creator_device_id,
             genesis_event_ref,
-            covered_seals,
             governance_binding,
             committed_at,
         } = genesis;
@@ -365,9 +364,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         if rows.contains_key(&key) {
             return Ok(None);
         }
-        let mut covered_seals = covered_seals.to_vec();
-        covered_seals.sort();
-        covered_seals.dedup();
         let record = MlsCommitEpochRecord {
             id: Uuid::now_v7(),
             group_id: group_id.to_owned(),
@@ -376,7 +372,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             leader_actor_id: leader_actor_id.to_owned(),
             creator_device_id: creator_device_id.to_owned(),
             genesis_event_ref: genesis_event_ref.to_owned(),
-            covered_seals,
             governance_binding: governance_binding.clone(),
             accepted_commit_ref: None,
             committed_at,
@@ -400,10 +395,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
         if expected_prev_epoch != current {
             return Ok(None);
         }
-        let mut merged_frontier = current_record.covered_seals.clone();
-        merged_frontier.extend(advance.covered_seals.iter().cloned());
-        merged_frontier.sort();
-        merged_frontier.dedup();
         let new_record = MlsCommitEpochRecord {
             id: current_record.id,
             group_id: advance.group_id.to_owned(),
@@ -412,7 +403,6 @@ impl MlsCommitStore for MemoryMlsCommitStore {
             leader_actor_id: advance.leader_actor_id.to_owned(),
             creator_device_id: current_record.creator_device_id.clone(),
             genesis_event_ref: current_record.genesis_event_ref.clone(),
-            covered_seals: merged_frontier,
             governance_binding: advance.governance_binding.clone(),
             accepted_commit_ref: Some(advance.accepted_commit_ref.to_owned()),
             committed_at: advance.committed_at,

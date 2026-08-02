@@ -17,7 +17,7 @@ use arkret_identifiers::{CellRef, RealmId};
 pub use arkret_lattice_registry::{
     AccountStatus, AgentKey, AgentStatus, CallState, CallSummary, CapabilityDerived,
     CapabilityGrant, CircleCreate, CircleMember, CircleTombstone, ConsentGrant, ContactFactLog,
-    CoveredSeals, CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate,
+    CrossSigningPublish, CrossSigningReset, DeviceAuthorized, DeviceListUpdate,
     DirectConversationBinding, KeyBackupActiveSeries, MemberIdentityLattice as MemberIdentity,
     MemberState, MimiRoomBinding, MlsEpoch, MorphStage, NotaryCell, PolicyRule, ProfileCreate,
     RealmArchive, RealmAssetPrivacyPolicy, RealmCreate, RealmDeliveryBindingPolicy, RealmDestroy,

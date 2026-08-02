@@ -143,17 +143,7 @@ pub(super) fn enforce_mimi_submit_binding(
         &room_binding.realm_id,
         binding_group_id,
         epoch,
-        binding_payload
-            .get("policy_root")
-            .and_then(Value::as_str)
-            .filter(|value| !value.trim().is_empty()),
     )?;
-    if !mimi_submit_has_covered_seals_cell(binding_payload, body, message, governance_binding) {
-        return Err(AppError::invalid_param(
-            "MIMI submit_message lacks covered_seals_cell evidence",
-        )
-        .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISSING));
-    }
     Ok(())
 }
 
@@ -288,107 +278,32 @@ pub(super) fn validate_mimi_submit_governance_binding(
     realm_id: &str,
     group_id: &str,
     epoch: u64,
-    expected_policy_root: Option<&str>,
 ) -> Result<(), AppError> {
     let error = |reason: &'static str| {
         AppError::invalid_param("MIMI submit_message governance_binding is not valid")
             .with_wire_code(arkret_wire::ReasonCode::MIMI_GOVERNANCE_BINDING_MISMATCH)
             .with_reason_detail(reason)
     };
-    if binding.get("binding_version").and_then(Value::as_u64) != Some(1) {
-        return Err(error("mls_governance_binding_version_invalid"));
+    let binding: arkret_models_crypto::MlsGovernanceBindingPayload =
+        serde_json::from_value(binding.clone())
+            .map_err(|_| error("mls_governance_binding_invalid"))?;
+    binding
+        .validate()
+        .map_err(|_| error("mls_governance_binding_invalid"))?;
+    if binding.mls_group_id() != group_id || binding.next_epoch() != epoch {
+        return Err(error("mls_governance_binding_generation_mismatch"));
     }
-    if binding.get("encoding_profile").and_then(Value::as_str)
-        != Some("cbor-deterministic-rfc8949-v1")
+    if binding.realm_id().as_str() != realm_id
+        || binding.effective_scope().realm_id().as_str() != realm_id
     {
-        return Err(error("mls_governance_binding_encoding_profile_invalid"));
+        return Err(error("mls_governance_binding_scope_mismatch"));
     }
-    if binding.get("binding_profile").and_then(Value::as_str)
-        != Some(ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1)
+    if binding.binding_profile() != ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1
+        || binding.reducer_profile() != CORE_REDUCER_PROFILE
     {
         return Err(error("mls_governance_binding_profile_invalid"));
     }
-    if binding.get("reducer_profile").and_then(Value::as_str) != Some(CORE_REDUCER_PROFILE) {
-        return Err(error("mls_governance_binding_reducer_profile_invalid"));
-    }
-    if binding.get("mls_group_id").and_then(Value::as_str) != Some(group_id) {
-        return Err(error("mls_governance_binding_group_mismatch"));
-    }
-    if binding.get("next_epoch").and_then(Value::as_u64) != Some(epoch) {
-        return Err(error("mls_governance_binding_next_epoch_mismatch"));
-    }
-    if binding.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-        return Err(error("mls_governance_binding_realm_mismatch"));
-    }
-    let Some(scope) = binding.get("effective_scope").and_then(Value::as_object) else {
-        return Err(error("mls_governance_binding_scope_missing"));
-    };
-    if scope.get("realm_id").and_then(Value::as_str) != Some(realm_id) {
-        return Err(error("mls_governance_binding_scope_mismatch"));
-    }
-    match scope.get("kind").and_then(Value::as_str) {
-        Some("realm") => {
-            if binding.get("circle_id").is_some() {
-                return Err(error("mls_governance_binding_scope_mismatch"));
-            }
-        }
-        Some("circle") => {
-            let Some(circle_id) = scope.get("circle_id").and_then(Value::as_str) else {
-                return Err(error("mls_governance_binding_scope_mismatch"));
-            };
-            if binding.get("circle_id").and_then(Value::as_str) != Some(circle_id) {
-                return Err(error("mls_governance_binding_scope_mismatch"));
-            }
-        }
-        _ => return Err(error("mls_governance_binding_scope_missing")),
-    }
-    let Some(frontier) = binding.get("membership_frontier").and_then(Value::as_array) else {
-        return Err(error("mls_governance_binding_membership_frontier_missing"));
-    };
-    if frontier.is_empty()
-        || frontier
-            .iter()
-            .any(|value| value.as_str().is_none_or(str::is_empty))
-    {
-        return Err(error("mls_governance_binding_membership_frontier_missing"));
-    }
-    let Some(policy_root) = binding
-        .get("policy_root")
-        .and_then(Value::as_str)
-        .filter(|value| value.starts_with("sha256:"))
-    else {
-        return Err(error("mls_governance_binding_policy_root_missing"));
-    };
-    if let Some(expected_policy_root) = expected_policy_root
-        && policy_root != expected_policy_root
-    {
-        return Err(error("mls_governance_binding_policy_root_mismatch"));
-    }
     Ok(())
-}
-
-pub(super) fn mimi_submit_has_covered_seals_cell(
-    binding_payload: &Value,
-    body: &Value,
-    message: &Value,
-    governance_binding: &Value,
-) -> bool {
-    let null = Value::Null;
-    [
-        governance_binding,
-        message,
-        body.get("associated_data").unwrap_or(&null),
-        body.get("ciphertext").unwrap_or(&null),
-        body,
-        binding_payload,
-    ]
-    .into_iter()
-    .any(|value| {
-        value
-            .get("covered_seals_cell")
-            .or_else(|| value.get("covered_seals"))
-            .is_some_and(non_empty_json_value)
-    })
 }
 
 pub(super) fn non_empty_json_value(value: &Value) -> bool {
@@ -484,7 +399,6 @@ pub(super) fn mimi_room_projection(state: &AppState, room_id: &str, realm_id: &s
         "hub_provider": state.service_id().clone(),
         "local_provider_role": "hub",
         "mls_group_id": format!("mls:{}", room_id),
-        "policy_root": arkret_canonical::sha256_digest(format!("{realm_id}:{room_id}:policy").as_bytes()),
         "status": "accepted",
         "canonical_truth": "arkret_signed_event_reducer"
     })

@@ -349,12 +349,10 @@ pub struct MlsCommitEpochRecord {
     pub leader_actor_id: String,
     pub creator_device_id: String,
     pub genesis_event_ref: String,
-    pub covered_seals: Vec<String>,
     pub governance_binding: Value,
     pub accepted_commit_ref: Option<String>,
     pub committed_at: i64,
-    /// `true` once concurrent commits resolved the group's
-    /// `covered_frontier_cell` to `⊥` (encryption-and-audit.md §2.5.2). Cleared
+    /// `true` once concurrent commits contest the active generation. Cleared
     /// when a resolving commit advances the epoch via `try_bump`.
     pub frontier_contested: bool,
 }
@@ -430,7 +428,6 @@ pub struct MlsCommitEpochAdvance<'a> {
     pub effective_scope: &'a Value,
     pub group_id: &'a str,
     pub leader_actor_id: &'a str,
-    pub covered_seals: &'a [String],
     pub governance_binding: &'a Value,
     pub accepted_commit_ref: &'a str,
     pub committed_at: i64,
@@ -442,7 +439,6 @@ pub struct MlsCommitGenesis<'a> {
     pub leader_actor_id: &'a str,
     pub creator_device_id: &'a str,
     pub genesis_event_ref: &'a str,
-    pub covered_seals: &'a [String],
     pub governance_binding: &'a Value,
     pub committed_at: i64,
 }

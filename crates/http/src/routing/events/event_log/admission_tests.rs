@@ -109,7 +109,7 @@ fn cross_signing_reset_replay_passes_when_matched() {
 #[test]
 fn realm_policy_bundle_relaxed_window_ceiling() {
     let payload = json!({"e2ee_relaxed": {"relaxed_window_max_ms": 300_001 }});
-    let err = realm_policy_bundle_check(&payload, &[], false, false, None).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, &[], false).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
@@ -120,67 +120,17 @@ fn realm_policy_bundle_e2ee_relaxed_compliance_mutex() {
         &payload,
         &["ak.profile.attested_audit.e2ee.v1".to_owned()],
         false,
-        false,
-        None,
     )
     .unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
 }
 
 #[test]
-fn realm_policy_bundle_media_plaintext_triple_binding() {
+fn realm_policy_bundle_media_plaintext_authorization() {
     let payload = json!({"media_service_decrypts": true});
-    let err = realm_policy_bundle_check(&payload, &[], false, true, None).unwrap_err();
+    let err = realm_policy_bundle_check(&payload, &[], false).unwrap_err();
     assert_eq!(err.0, ErrorCode::FailedPrecondition);
-    let err2 = realm_policy_bundle_check(&payload, &[], true, false, None).unwrap_err();
-    assert_eq!(err2.0, ErrorCode::FailedPrecondition);
-    // No binding digest projected → only the policy_root coverage gate runs.
-    realm_policy_bundle_check(&payload, &[], true, true, None).unwrap();
-}
-
-#[test]
-fn realm_policy_bundle_media_decrypt_digest_recompute_gate() {
-    // SEC-03 — `media_service_decrypts=true` with an authorised plaintext
-    // service: the digest the governance binding covers MUST equal the
-    // digest recomputed from the policy cell value, else fail closed with
-    // `mls_governance_binding_stale` (media-service-binding.md §8.2 rule 5).
-    use arkret_models_crypto::{
-        MediaDecryptPolicyValue, MediaPlaintextService, derive_media_decrypt_metadata_digest,
-    };
-
-    let service_id = "did:web:sfu.example";
-    let payload = json!({
-        "media_service_decrypts": true,
-        "plaintext_visible_services": [
-            {
-                "service_id": service_id,
-                "data_classes": ["media_plaintext"],
-                "purposes": ["conference media processing"]
-            }
-        ]
-    });
-
-    // Honest digest derived from the same policy cell value the server sees.
-    let honest = derive_media_decrypt_metadata_digest(&MediaDecryptPolicyValue {
-        media_service_decrypts: true,
-        plaintext_visible_services: vec![MediaPlaintextService {
-            service_id: arkret_identifiers::Did::new(service_id.to_owned()).unwrap(),
-        }],
-    })
-    .unwrap();
-
-    // Matching digest → accepted.
-    realm_policy_bundle_check(&payload, &[], true, true, Some(honest.as_str())).unwrap();
-
-    // Mismatching digest (attacker asserts decrypt fact not covered by the
-    // member-visible metadata) → rejected, fail closed.
-    let stale = format!("sha256:{}", "c".repeat(64));
-    let err = realm_policy_bundle_check(&payload, &[], true, true, Some(&stale)).unwrap_err();
-    assert_eq!(err.0, ErrorCode::FailedPrecondition);
-
-    // A malformed covered digest is also rejected (cannot be trusted).
-    let err = realm_policy_bundle_check(&payload, &[], true, true, Some("not-a-hash")).unwrap_err();
-    assert_eq!(err.0, ErrorCode::FailedPrecondition);
+    realm_policy_bundle_check(&payload, &[], true).unwrap();
 }
 
 #[test]

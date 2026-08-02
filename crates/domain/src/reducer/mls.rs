@@ -11,13 +11,11 @@
 //!    appended to a per-`(recipient_actor_id, recipient_device_id)` binding projection while the
 //!    standard durable device-message stream carries delivery.
 //!
-//! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group and
-//!    initializes its covered_seals accumulator.
+//! 3. **group genesis** — `apply_group_genesis`. Installs epoch 0 for a new MLS group.
 //!
 //! 4. **commit_epoch increment** — `apply_commit_epoch`. The reducer only accepts a commit whose
 //!    `expected_prev_epoch` matches the group's current stored epoch (0 for a brand-new group).
-//!    Stale / out-of-order commits are rejected with `mls_epoch_skew`. Accepted commits merge the
-//!    attested governance Seal set into the group's covered_seals accumulator.
+//!    Stale / out-of-order commits are rejected with `mls_epoch_skew`.
 //!
 //! Deferred (TODO(G3.S1-followup) markers below + in `routing/mls.rs`):
 //!   - decryption_pending (deferred-decryption queue + retry)
@@ -51,21 +49,11 @@ const REASON_COMMIT_EPOCH_SKEW: &str = "mls_epoch_skew";
 const REASON_WELCOME_METADATA_LEAK: &str = "mls_welcome_metadata_leak";
 /// Reject code for MLS Welcome payloads whose KeyPackage claim transcript
 /// is missing or does not bind the Welcome bytes to the recipient realm.
-/// Reject code for commits whose governance binding does not name an
-/// attested governance Seal set to add into the covered_seals accumulator.
-const REASON_COMMIT_COVERED_SEALS_MISSING: &str = "mls_covered_seals_missing";
 /// Reject code for a second genesis against an already initialized group.
 const REASON_GENESIS_ALREADY_EXISTS: &str = "mls_genesis_already_exists";
-/// Reject code for a commit whose `governance_binding.policy_root` does not
-/// match the policy root the MLS group's epoch chain was genesis-locked to
-/// (encryption-and-audit.md §2.5.1). On a federation push the ingest pipeline
-/// maps it to a 412 whole-batch reject.
-/// Reject code emitted while a group's `covered_frontier_cell` is `⊥`
-/// (concurrent commits, encryption-and-audit.md §2.5.2). Sends / decrypts on
+/// Reject code emitted while a group's active generation is contested.
+/// Sends / decrypts on
 /// the contested epoch stay fail-closed until a resolving commit advances it.
-/// Reject code for a Remove commit whose governance binding does not cover the
-/// event frontier that created the pending remove obligation.
-const REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER: &str = "mls_remove_missing_governance_frontier";
 /// Reject code for a commit that advances while a remove obligation is pending
 /// but does not reference a matching `ak.mls.proposal{proposal_type="remove"}`.
 const REASON_REMOVE_PROPOSAL_MISSING: &str = "mls_remove_proposal_missing";
@@ -434,8 +422,8 @@ pub fn apply_welcome_enqueue(state: &mut ProjectionState, op: &Operation) -> Pro
 /// G3.S1 — initialize a new MLS group at epoch 0.
 ///
 /// The canonical payload is `mls_genesis_payload` from the spec
-/// registry. The reducer stores the epoch and covered_seals summary
-/// only; opaque GroupInfo / ratchet tree material remains in the
+/// registry. The reducer stores the epoch and accepted governance binding;
+/// opaque GroupInfo / ratchet tree material remains in the
 /// durable event payload and object store references.
 /// Record a `ak.mls.proposal{proposal_type="remove"}` so a later commit can
 /// prove it is consuming a pending remove obligation.
@@ -552,8 +540,6 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
     if state.mls_commit_epochs.contains_key(&epoch_key) {
         return reject(REASON_GENESIS_ALREADY_EXISTS);
     }
-    let covered_seals = extract_covered_seals(payload).unwrap_or_default();
-    let policy_root = binding_policy_root(payload).unwrap_or_default();
     state.mls_commit_epochs.insert(
         epoch_key,
         MlsCommitEpoch {
@@ -563,10 +549,8 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
             leader_actor_id: creator_actor_id.to_owned(),
             creator_device_id: creator_device_id.to_owned(),
             genesis_event_ref,
-            covered_seals: covered_seals.clone(),
             committed_at: op.created_at.timestamp(),
             governance_binding,
-            policy_root,
             accepted_commit_digest: None,
             accepted_commit_ref: None,
             accepted_from_epoch: None,
@@ -580,7 +564,6 @@ pub fn apply_group_genesis(state: &mut ProjectionState, op: &Operation) -> Proje
         epoch: 0,
         creator_actor_id: creator_actor_id.to_owned(),
         creator_device_id: creator_device_id.to_owned(),
-        covered_seals,
     })
 }
 
@@ -649,10 +632,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         Ok(key) => key,
         Err(reason) => return reject(reason),
     };
-    let covered_delta = match extract_covered_seals(payload) {
-        Some(frontier) => frontier,
-        None => return reject(REASON_COMMIT_COVERED_SEALS_MISSING),
-    };
     let commit_digest = match commit_digest_value(payload) {
         Some(digest) => digest,
         None => return reject("mls_commit_bytes_missing"),
@@ -662,7 +641,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         return reject("mls_genesis_missing");
     };
     let current = existing.epoch;
-    let locked_policy_root = existing.policy_root.clone();
     let governance_binding = payload
         .get("governance_binding")
         .or_else(|| payload.get("mls_governance_binding"))
@@ -673,18 +651,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
     let genesis_event_ref = existing.genesis_event_ref.clone();
     let accepted_from_epoch = existing.accepted_from_epoch;
     let prior_contested = existing.frontier_contested;
-    let mut covered_seals = existing.covered_seals.clone();
-
-    // §2.5.1 — the commit binding MUST stay bound to the policy_root the
-    // group's epoch chain was genesis-locked to. A forged / stale binding is
-    // rejected with `governance_binding_mismatch` (and, on a federation push,
-    // bubbles up as the whole-batch reject the ingest pipeline maps to 412).
-    if !locked_policy_root.is_empty() {
-        let commit_policy_root = binding_policy_root(payload).unwrap_or_default();
-        if commit_policy_root != locked_policy_root {
-            return reject(arkret_wire::ReasonCode::GOVERNANCE_BINDING_MISMATCH);
-        }
-    }
 
     // §2.5.2 — concurrent commit detection. Two commits attesting the *same*
     // base epoch with *different* commit material drive `covered_frontier_cell`
@@ -727,18 +693,9 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         return reject(REASON_COMMIT_EPOCH_SKEW);
     }
 
-    let binding_membership_frontier = binding_membership_frontier(payload);
     let proposal_refs = string_array(payload.get("proposal_refs"));
     let pending_removals = matching_pending_remove_obligations(state, &effective_scope, group_id);
     if !pending_removals.is_empty() {
-        if pending_removals.iter().any(|obligation| {
-            !frontier_covers_all(
-                &binding_membership_frontier,
-                &obligation.membership_frontier,
-            )
-        }) {
-            return reject(REASON_REMOVE_MISSING_GOVERNANCE_FRONTIER);
-        }
         if pending_removals.iter().any(|obligation| {
             !commit_references_matching_remove_proposal(
                 state,
@@ -764,7 +721,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         .and_then(Value::as_str)
         .unwrap_or_else(|| op.operation_id.as_str())
         .to_owned();
-    merge_frontier(&mut covered_seals, &covered_delta);
     state.mls_commit_epochs.insert(
         epoch_key,
         MlsCommitEpoch {
@@ -774,10 +730,8 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
             leader_actor_id: leader_actor_id.to_owned(),
             creator_device_id,
             genesis_event_ref,
-            covered_seals: covered_seals.clone(),
             committed_at,
             governance_binding,
-            policy_root: locked_policy_root,
             accepted_commit_digest: Some(commit_digest),
             accepted_commit_ref: Some(accepted_commit_ref.clone()),
             accepted_from_epoch: Some(expected_prev_epoch),
@@ -797,7 +751,6 @@ pub fn apply_commit_epoch(state: &mut ProjectionState, op: &Operation) -> Projec
         previous_epoch: current,
         new_epoch,
         leader_actor_id: leader_actor_id.to_owned(),
-        covered_seals,
     })
 }
 
@@ -880,21 +833,6 @@ fn proposal_effective_scope(
     Ok(row.effective_scope.clone())
 }
 
-fn binding_membership_frontier(payload: &Value) -> Vec<String> {
-    payload
-        .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
-        .and_then(|binding| binding.get("membership_frontier"))
-        .map(|frontier| {
-            let mut values = Vec::new();
-            push_frontier_values(Some(frontier), &mut values);
-            values.sort();
-            values.dedup();
-            values
-        })
-        .unwrap_or_default()
-}
-
 fn matching_pending_remove_obligations(
     state: &ProjectionState,
     effective_scope: &Value,
@@ -929,12 +867,6 @@ fn effective_scope_parts(effective_scope: &Value) -> Option<(String, Option<Stri
         )),
         _ => None,
     }
-}
-
-fn frontier_covers_all(frontier: &[String], required: &[String]) -> bool {
-    required
-        .iter()
-        .all(|needed| frontier.iter().any(|seen| seen == needed))
 }
 
 fn commit_references_matching_remove_proposal(
@@ -1049,24 +981,13 @@ fn validate_binding_scope(binding: &Value, effective_scope: &Value) -> Result<()
 }
 
 fn validate_binding_frontier_and_policy(binding: &Value) -> Result<(), &'static str> {
-    let Some(frontier) = binding.get("membership_frontier").and_then(Value::as_array) else {
-        return Err("mls_governance_binding_membership_frontier_missing");
-    };
-    if frontier.is_empty()
-        || frontier
-            .iter()
-            .any(|value| value.as_str().is_none_or(str::is_empty))
-    {
-        return Err("mls_governance_binding_membership_frontier_missing");
-    }
-    if binding
-        .get("policy_root")
-        .and_then(Value::as_str)
-        .is_none_or(|value| !value.starts_with("sha256:"))
-    {
-        return Err("mls_governance_binding_policy_root_missing");
-    }
-    Ok(())
+    let parsed = serde_json::from_value::<arkret_models_crypto::MlsGovernanceBindingPayload>(
+        binding.clone(),
+    )
+    .map_err(|_| "mls_governance_binding_invalid")?;
+    parsed
+        .validate()
+        .map_err(|_| "mls_governance_binding_invalid")
 }
 
 fn validate_binding_profiles(binding: &Value) -> Result<(), &'static str> {
@@ -1472,41 +1393,6 @@ fn metadata_object_contains_forbidden_key(object: &Map<String, Value>) -> bool {
         .any(|key| WELCOME_FORBIDDEN_METADATA_KEYS.contains(&key.as_str()))
 }
 
-fn extract_covered_seals(payload: &Value) -> Option<Vec<String>> {
-    let binding = payload
-        .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))?;
-
-    let mut frontier = Vec::new();
-    push_frontier_values(binding.get("membership_frontier"), &mut frontier);
-    push_frontier_values(binding.get("covered_seals"), &mut frontier);
-    push_frontier_values(
-        binding.get("covered_seals_cell").and_then(|cell| {
-            cell.get("values")
-                .or_else(|| cell.get("members"))
-                .or_else(|| cell.get("seals"))
-        }),
-        &mut frontier,
-    );
-    push_frontier_values(payload.get("covered_seals"), &mut frontier);
-    frontier.sort();
-    frontier.dedup();
-    (!frontier.is_empty()).then_some(frontier)
-}
-
-/// Read `governance_binding.policy_root` from a genesis / commit payload. The
-/// genesis locks this value onto the group; later commits MUST match it.
-fn binding_policy_root(payload: &Value) -> Option<String> {
-    payload
-        .get("governance_binding")
-        .or_else(|| payload.get("mls_governance_binding"))
-        .and_then(|binding| binding.get("policy_root"))
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToOwned::to_owned)
-}
-
 /// Read the opaque commit material identity used to detect concurrent commits
 /// at the same base epoch. Accepts the canonical `commit_digest`, or falls back
 /// to the opaque `commit_bytes_b64` / `commit_message_ref` the presence check
@@ -1520,28 +1406,6 @@ fn commit_digest_value(payload: &Value) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(ToOwned::to_owned)
-}
-
-fn push_frontier_values(value: Option<&Value>, out: &mut Vec<String>) {
-    match value {
-        Some(Value::String(value)) if !value.trim().is_empty() => {
-            out.push(value.to_owned());
-        }
-        Some(Value::Array(values)) => {
-            for value in values {
-                if let Some(value) = value.as_str().filter(|value| !value.trim().is_empty()) {
-                    out.push(value.to_owned());
-                }
-            }
-        }
-        _ => {}
-    }
-}
-
-fn merge_frontier(existing: &mut Vec<String>, delta: &[String]) {
-    existing.extend(delta.iter().cloned());
-    existing.sort();
-    existing.dedup();
 }
 
 /// Best-effort base64url-loose decode. Accepts both `URL_SAFE_NO_PAD`

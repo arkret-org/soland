@@ -168,15 +168,12 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
             leader_actor_id: ALICE.to_owned(),
             creator_device_id: "ak:device:alice-desktop".to_owned(),
             genesis_event_ref: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
-            covered_seals: Vec::new(),
             committed_at: base.timestamp(),
             governance_binding: serde_json::json!({
                 "realm_id": REALM,
                 "mls_group_id": group_id,
                 "effective_scope": {"kind": "realm", "realm_id": REALM},
             }),
-            policy_root: "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-                .to_owned(),
             accepted_commit_digest: None,
             accepted_commit_ref: None,
             accepted_from_epoch: None,

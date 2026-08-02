@@ -402,18 +402,15 @@ pub enum MlsEffect {
         epoch: u64,
         creator_actor_id: String,
         creator_device_id: String,
-        covered_seals: Vec<String>,
     },
     /// `apply_commit_epoch` — the group's epoch was bumped from
-    /// `previous_epoch` to `new_epoch` and the attested governance
-    /// Seal set was merged into the group's covered_seals accumulator.
+    /// `previous_epoch` to `new_epoch`.
     CommitEpochAdvanced {
         group_id: String,
         effective_scope: Value,
         previous_epoch: u64,
         new_epoch: u64,
         leader_actor_id: String,
-        covered_seals: Vec<String>,
     },
     /// `apply_commit_epoch` — a second commit attested the same base epoch with
     /// different commit material, resolving the group's `covered_frontier_cell`

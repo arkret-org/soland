@@ -2101,7 +2101,9 @@ mod membership_hydration_tests {
             .expect("put retired keypackage");
 
         let effective_scope = serde_json::json!({ "kind": "realm", "realm_id": realm_id });
-        let governance_binding = serde_json::json!({ "policy_root": "sha256:locked-root" });
+        let governance_binding = serde_json::json!({
+            "security_frontier_digest": format!("sha256:{}", "1".repeat(64))
+        });
         store
             .mls_commits()
             .initialize_genesis(soland_storage::MlsCommitGenesis {
@@ -2110,7 +2112,6 @@ mod membership_hydration_tests {
                 leader_actor_id: "did:web:alice.example",
                 creator_device_id: "ak:device:alice-1",
                 genesis_event_ref: "ak:event:genesis",
-                covered_seals: &[],
                 governance_binding: &governance_binding,
                 committed_at: 1,
             })
@@ -2139,8 +2140,7 @@ mod membership_hydration_tests {
         assert!(retired.claim_expires_at_unix_ms.is_none());
         assert!(retired.consumed_at.is_none());
 
-        // Commit-epoch projection is rebuilt with the genesis-locked policy_root
-        // → the add-member commit's governance binding check passes.
+        // Commit-epoch projection is rebuilt with the durable governance binding.
         let key = soland_domain::reducer::MlsCommitEpochKey::new(
             soland_domain::reducer::mls::effective_scope_key(&effective_scope).unwrap(),
             group_id.to_owned(),
@@ -2150,7 +2150,6 @@ mod membership_hydration_tests {
             .get(&key)
             .expect("commit epoch rehydrated");
         assert_eq!(epoch.epoch, 0);
-        assert_eq!(epoch.policy_root, "sha256:locked-root");
         assert_eq!(epoch.creator_device_id, "ak:device:alice-1");
         assert_eq!(epoch.genesis_event_ref, "ak:event:genesis");
         assert_eq!(epoch.governance_binding, governance_binding);

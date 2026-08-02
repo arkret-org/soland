@@ -75,17 +75,15 @@ pub const RELATION_KIND_CONFIDENTIAL_DISCUSSION_OF: &str = "confidential_discuss
 //     `payload.expected_prev_epoch`). The "epoch" semantics live in the payload, not in the kind
 //     suffix.
 //   - `ak.mls.proposal`      — MLS proposal (Remove proposals are indexed for commit validation).
-//   - `ak.mls.genesis`       — MLS group genesis (initializes epoch 0 and the covered_seals
-//     accumulator).
+//   - `ak.mls.genesis`       — MLS group genesis (initializes epoch 0).
 //   - `ak.mls.commit_failed` — diagnostic of a failed commit / Welcome processing path (wire-only;
 //     no reducer projection yet).
 //
 // TODO(G3.S1-followup): decryption_pending — deferred-decryption queue +
 // retry path for messages that arrived before the key material; today the
 // recipient silently drops them.
-// MLS commits now require a governance binding with an attested
-// membership / covered_seals evidence; the soland reducer accumulates that
-// frontier in `MlsCommitEpoch.covered_seals`. Welcome envelopes are
+// MLS commits require the canonical security-frontier governance binding;
+// the reducer stores that active generation binding. Welcome envelopes are
 // accepted only in minimal routing form: opaque Welcome bytes plus the
 // recipient delivery tuple.
 // Audit model migration (spec @ 2026-06-04): the standing-audit-member
@@ -225,24 +223,13 @@ pub fn validate_mls_governance_binding(payload: &Value) -> Result<(), &'static s
         }
         _ => return Err("mls_governance_binding_scope_missing"),
     }
-    let Some(frontier) = binding.get("membership_frontier").and_then(Value::as_array) else {
-        return Err("mls_governance_binding_membership_frontier_missing");
-    };
-    if frontier.is_empty()
-        || frontier
-            .iter()
-            .any(|value| value.as_str().is_none_or(str::is_empty))
-    {
-        return Err("mls_governance_binding_membership_frontier_missing");
-    }
-    if binding
-        .get("policy_root")
-        .and_then(Value::as_str)
-        .is_none_or(|value| !value.starts_with("sha256:"))
-    {
-        return Err("mls_governance_binding_policy_root_missing");
-    }
-    Ok(())
+    let parsed = serde_json::from_value::<arkret_models_crypto::MlsGovernanceBindingPayload>(
+        binding.clone(),
+    )
+    .map_err(|_| "mls_governance_binding_invalid")?;
+    parsed
+        .validate()
+        .map_err(|_| "mls_governance_binding_invalid")
 }
 
 pub fn canonical_kind_for_operation(operation: &Operation) -> Option<&str> {
@@ -417,8 +404,7 @@ mod tests {
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
                 "next_epoch": 8,
-                "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
-                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
                 "reducer_profile": CORE_REDUCER_PROFILE
             }
@@ -444,8 +430,7 @@ mod tests {
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 6,
                 "next_epoch": 8,
-                "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
-                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
                 "reducer_profile": CORE_REDUCER_PROFILE
             }
@@ -470,8 +455,7 @@ mod tests {
                 "mls_group_id": "mls-group-a",
                 "previous_epoch": 7,
                 "next_epoch": 8,
-                "membership_frontier": ["ak:event:0196419b-0000-7000-8000-000000000001"],
-                "policy_root": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+                "security_frontier_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
                 "binding_profile": ProfileId::MLS_GOVERNANCE_BINDING_FULL_V1,
                 "reducer_profile": CORE_REDUCER_PROFILE
             }

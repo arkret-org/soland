@@ -663,7 +663,6 @@ diesel::table! {
         leader_actor_id -> Text,
         creator_device_id -> Text,
         genesis_event_ref -> Text,
-        covered_seals -> Jsonb,
         governance_binding -> Jsonb,
         accepted_commit_ref -> Nullable<Text>,
         committed_at -> Int8,

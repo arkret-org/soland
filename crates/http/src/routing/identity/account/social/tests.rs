@@ -43,7 +43,7 @@ fn install_active_direct_binding_fixture(
 #[test]
 fn legacy_direct_commit_detection_requires_exact_epoch_cas_precondition() {
     let group_id = "ak:mls_group:019fbba2-0000-7000-8000-000000000001";
-    let epoch_cell = arkret_state::mls_move::mls_epoch_cell_id(group_id).unwrap();
+    let epoch_cell = arkret_state::mls_cells::mls_epoch_cell_id(group_id).unwrap();
     let envelope = |preconditions: Value| {
         json!({
             "kind": arkret_wire::EventKind::MLS_COMMIT,

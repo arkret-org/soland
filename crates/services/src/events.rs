@@ -1347,7 +1347,6 @@ pub struct InitializeMlsGroupCommand {
     pub leader_actor_id: String,
     pub creator_device_id: String,
     pub genesis_event_ref: String,
-    pub covered_seals: Vec<String>,
     pub governance_binding: Value,
     pub committed_at: i64,
 }
@@ -1358,7 +1357,6 @@ pub struct AdvanceMlsEpochCommand {
     pub effective_scope: Value,
     pub group_id: String,
     pub leader_actor_id: String,
-    pub covered_seals: Vec<String>,
     pub governance_binding: Value,
     pub accepted_commit_ref: String,
     pub committed_at: i64,

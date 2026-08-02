@@ -1071,7 +1071,7 @@ pub(super) fn legacy_direct_commit_missing_epoch_precondition(
     else {
         return false;
     };
-    let Ok(epoch_cell) = arkret_state::mls_move::mls_epoch_cell_id(mls_group_id) else {
+    let Ok(epoch_cell) = arkret_state::mls_cells::mls_epoch_cell_id(mls_group_id) else {
         return false;
     };
     !envelope

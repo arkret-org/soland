@@ -816,7 +816,6 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
                 leader_actor_id: &command.leader_actor_id,
                 creator_device_id: &command.creator_device_id,
                 genesis_event_ref: &command.genesis_event_ref,
-                covered_seals: &command.covered_seals,
                 governance_binding: &command.governance_binding,
                 committed_at: command.committed_at,
             })
@@ -837,7 +836,6 @@ impl crate::events::MlsCommitReadPort for PersistenceMlsCommitReader {
                     effective_scope: &command.effective_scope,
                     group_id: &command.group_id,
                     leader_actor_id: &command.leader_actor_id,
-                    covered_seals: &command.covered_seals,
                     governance_binding: &command.governance_binding,
                     accepted_commit_ref: &command.accepted_commit_ref,
                     committed_at: command.committed_at,

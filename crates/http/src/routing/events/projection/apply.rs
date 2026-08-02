@@ -197,7 +197,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             effective_scope,
             creator_actor_id,
             creator_device_id,
-            covered_seals,
             ..
         } => {
             let binding = operation
@@ -219,7 +218,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                         .and_then(Value::as_str)
                         .unwrap_or_else(|| operation.operation_id.as_str())
                         .to_owned(),
-                    covered_seals: covered_seals.clone(),
                     governance_binding: binding,
                     committed_at: operation.created_at.timestamp(),
                 })
@@ -234,7 +232,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
             effective_scope,
             previous_epoch,
             leader_actor_id,
-            covered_seals,
             ..
         } => {
             let binding = operation
@@ -250,7 +247,6 @@ pub(crate) async fn mirror_mls_effect_to_persistence(
                     effective_scope: effective_scope.clone(),
                     group_id: group_id.clone(),
                     leader_actor_id: leader_actor_id.clone(),
-                    covered_seals: covered_seals.clone(),
                     governance_binding: binding,
                     accepted_commit_ref: operation
                         .payload

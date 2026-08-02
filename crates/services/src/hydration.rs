@@ -966,7 +966,7 @@ pub async fn hydrate_projections_from_persistence(
     // `accepted_from_epoch` are ⊥-contention bookkeeping not persisted to the
     // durable row; defaulting them to `None` only loses contention detection
     // against a commit that raced the exact restart boundary (vanishingly rare),
-    // never the epoch / policy_root the genesis locked.
+    // never the durable epoch and governance binding.
     if let Ok(records) = persistence.mls_commits().snapshot_all().await {
         for record in records {
             let Ok(scope_key) =
@@ -978,12 +978,6 @@ pub async fn hydrate_projections_from_persistence(
                 );
                 continue;
             };
-            let policy_root = record
-                .governance_binding
-                .get("policy_root")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_owned();
             proj.mls_commit_epochs.insert(
                 MlsCommitEpochKey::new(scope_key, record.group_id.clone()),
                 MlsCommitEpoch {
@@ -993,10 +987,8 @@ pub async fn hydrate_projections_from_persistence(
                     leader_actor_id: record.leader_actor_id,
                     creator_device_id: record.creator_device_id,
                     genesis_event_ref: record.genesis_event_ref,
-                    covered_seals: record.covered_seals,
                     committed_at: record.committed_at,
                     governance_binding: record.governance_binding,
-                    policy_root,
                     accepted_commit_digest: None,
                     accepted_commit_ref: record.accepted_commit_ref.clone(),
                     accepted_from_epoch: None,
