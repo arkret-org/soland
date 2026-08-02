@@ -25,7 +25,7 @@ arkret-models-identity.workspace = true
 arkret-models-integration.workspace = true
 arkret-policy.workspace = true
 arkret-schema = { workspace = true, features = ["embedded-artifacts"] }
-arkret-signatures = { workspace = true, features = ["signer"] }
+arkret-signatures = { workspace = true, features = ["collaboration", "signer"] }
 arkret-state.workspace = true
 arkret-wire.workspace = true
 async-trait.workspace = true

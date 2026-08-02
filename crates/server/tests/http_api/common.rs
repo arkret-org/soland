@@ -154,7 +154,7 @@ pub(crate) async fn prepare_standard_initial_submissions(
                 .expect("canonical Control Proposal receipt");
         let submission = arkret_wire::EventInitialSubmission {
             event,
-            authorization_lease,
+            authorization_lease: Some(authorization_lease),
             cba_proof_bundles: Vec::new(),
             control_proposal_receipt: Some(control_proposal_receipt),
         };
@@ -1608,30 +1608,11 @@ pub(crate) type TestRealmBasis = soland_services::conformance_basis::Conformance
 ///    ([`soland_services::conformance_basis::OWNER_BOOTSTRAP_GRANT_ACTIONS`]) — `issuer ==
 ///    subject`, one Realm-wide resource selector, a typed `realm_root` authority ref, and the
 ///    embedded `capability-action-registry.json` digest;
-/// 3. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`];
-/// 4. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
-///    MLS-backed DataEvent clears the governance-binding gate.
+/// 3. the explicit content grant that carries [`FIXTURE_DATA_PLANE_GRANT_ACTIONS`].
 ///
-/// (1)-(3) and (4) land in **two** Seals, `S0` then `S1`: (4)'s or-set element
-/// value is the Seal ref that (1)-(3) were admitted under, and no Move can name
-/// the Seal that admits it (`encryption-and-audit.md` §2.5.1 `covered_seal_refs`
-/// visibility, and content addressing — `S.id` transitively commits every Move
-/// in `covered_set(S)`). Both in one Seal, with (4) naming that Seal's own id,
-/// is a state no reducer can produce.
-///
-/// Keying by subject rather than by Realm is what keeps both Seals
-/// self-consistent: `S0.predecessor_refs` is empty so its
-/// `control_event_set_root` is exactly its `delta`'s root, `S1` declares the
-/// cumulative root over `covered_set(S0) ∪ {(4)}`, and both `state_root`s are
-/// the genuine [`arkret_state::compute_state_root`] of every op the Seal covers.
-/// A single per-Realm Seal would have to grow its covered set every time a new
-/// actor appeared, and every such growth invalidates both roots.
-///
-/// Historical note — the member that used to be excluded from `state_root` is
-/// (4): its or-set element
-/// value is the enclosing Seal's own id, which does not exist until the body —
-/// `state_root` included — has been hashed. See the report note on
-/// `capability_refs.rs::validate_data_event_covered_seals`.
+/// The basis deliberately has no `covered_seals` MLS accumulator. That retired
+/// gate duplicated general governance progress; current MLS admission uses its
+/// separate key-affecting security frontier.
 /// Cached per-(realm, subject, notary) genesis basis shared by the fixtures.
 type TestRealmBasisCache =
     std::sync::Mutex<std::collections::BTreeMap<(String, String, String), TestRealmBasis>>;
@@ -1655,7 +1636,6 @@ fn test_realm_basis(realm_id: &str, subject: &str, notary: &str) -> TestRealmBas
                 soland_services::conformance_basis::RealmBasisFixtureOptions {
                     notary_authority: Some(notary),
                     data_plane_actions: &actions,
-                    mls_group_id: FIXTURE_MLS_GROUP_ID,
                     fixture_id_domain: "soland:http_api:realm-basis:",
                 },
             )
@@ -1786,12 +1766,6 @@ pub(crate) async fn seed_test_realm_basis_seal(
 ) -> arkret_wire::SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let basis = test_realm_basis(realm_id, subject, state.service_id().as_str());
-    // Governance unit first: the head Seal's `covered_seals_cell` write names
-    // it, so it has to be in the store before the head is.
-    state.test_put_seal(&basis.governance_seal).unwrap();
-    state
-        .test_append_sealed_effects(&realm, &basis.governance_seal.id, &basis.governance_ops)
-        .unwrap();
     state.test_put_seal(&basis.seal).unwrap();
     state
         .test_append_sealed_effects(&realm, &basis.seal.id, &basis.ops)

@@ -22,28 +22,12 @@
 //!    one Realm-wide resource selector, a typed `realm_root` authority ref, and the embedded
 //!    `capability-action-registry.json` digest;
 //! 3. an explicit content grant carrying only requested data-plane actions not already covered by
-//!    the owner bootstrap grant;
-//! 4. the `ak.component.covered_seals.v1` accumulator of `encryption-and-audit.md` §2.5.2, so an
-//!    MLS-backed DataEvent clears the governance-binding gate.
+//!    the owner bootstrap grant.
 //!
-//! (1)-(3) and (4) land in **two** Seals, `S0` then `S1`, because one Seal
-//! cannot hold both: (4)'s or-set element value is the Seal ref that (1)-(3)
-//! were admitted under, and §2.5.1's `covered_seal_refs` visibility constraint
-//! (plus plain content addressing — `S.id` transitively commits every Move in
-//! `covered_set(S)`) means no Move can ever name the Seal that admits it. The
-//! basis used to put all four in one Seal with (4) naming that Seal's own id: a
-//! state no reducer can produce, whose `state_root` had to be computed with (4)
-//! excluded. Every E2EE fixture then cleared the §2.5.2 gate on evidence a live
-//! Realm can never present.
-//!
-//! The basis is keyed by `(realm_id, subject, data-plane actions)`, and that is
-//! what keeps both Seals self-consistent: `S0.predecessor_refs` stays empty so
-//! its `control_event_set_root` is exactly its `delta`'s root, `S1` declares the
-//! cumulative root over `covered_set(S0) ∪ {(4)}`, and both `state_root`s are
-//! the genuine `compute_state_root` of every op the Seal covers — (4)
-//! included, now that its value is fixed before `S1` is hashed. A single
-//! per-Realm Seal would have to grow its covered set every time a new actor
-//! appeared, and every such growth invalidates both roots.
+//! The retired `covered_seals` MLS governance accumulator is deliberately not
+//! reproduced here. MLS admission consumes its separate key-affecting
+//! security frontier; this helper builds only the general Event authority
+//! basis and therefore needs exactly one Seal.
 
 use std::collections::BTreeMap;
 use std::sync::{LazyLock, Mutex};
@@ -57,17 +41,10 @@ use crate::AppStateTestExt as _;
 /// The notary key every fixture basis Seal is signed with.
 const FIXTURE_BASIS_HLC: &str = "0196419b0000-0000-51c0a1ed";
 const FIXTURE_BASIS_ID_DOMAIN: &str = "soland:test-support:realm-basis:";
-/// The MLS group id the fixture Realm basis seeds `covered_seals_cell` under.
-/// The cell is keyed by the group id (the registered `payload.mls_group_id`
-/// subject) — never by the Realm id — so E2EE fixture ciphertexts consuming
-/// this basis MUST carry this value in `encrypted_content.group_id`.
+/// Stable MLS group id used by E2EE fixture payloads.
 pub const FIXTURE_MLS_GROUP_ID: &str = "fixtureMlsGroup01";
 
-/// One fixture Realm's accepted governance basis for one subject.
-///
-/// Two Seals, because one cannot express this state: the accumulator write of
-/// (4) names the Seal that carries (1)-(3), and a Move can only name a Seal that
-/// already existed when it was authored.
+/// One fixture Realm's accepted authorization basis for one subject.
 type RealmBasis = soland_services::conformance_basis::ConformanceRealmBasis;
 
 type BasisKey = (String, String, String, Vec<String>);
@@ -105,7 +82,6 @@ fn realm_basis(
                 soland_services::conformance_basis::RealmBasisFixtureOptions {
                     notary_authority: Some(notary),
                     data_plane_actions: &actions,
-                    mls_group_id: FIXTURE_MLS_GROUP_ID,
                     fixture_id_domain: FIXTURE_BASIS_ID_DOMAIN,
                 },
             )
@@ -158,12 +134,6 @@ pub async fn seed_realm_basis(
 ) -> SealId {
     let realm = RealmId::new(realm_id.to_owned()).expect("fixture Realm id");
     let basis = realm_basis(realm_id, subject, state.service_id(), data_plane_actions);
-    state
-        .test_put_seal(&basis.governance_seal)
-        .expect("fixture governance basis Seal");
-    state
-        .test_append_sealed_effects(&realm, &basis.governance_seal.id, &basis.governance_ops)
-        .expect("fixture governance basis sealed effects");
     state
         .test_put_seal(&basis.seal)
         .expect("fixture basis Seal");

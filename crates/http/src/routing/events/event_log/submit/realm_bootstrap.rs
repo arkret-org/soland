@@ -30,7 +30,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
     session: &SessionRecord,
     envelopes: Vec<Value>,
     internal_admissions: Option<&[InternalEventAdmission]>,
-    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+    authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if internal_admissions.is_some_and(|admissions| admissions.len() != envelopes.len()) {
         return Err(SubmitOneError::new(
@@ -83,7 +83,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
 
     let actor_lock = actor_submit_lock(&unit.realm_id, &unit.actor_id);
     let _guard = actor_lock.lock().await;
-    if authorization_leases.is_none()
+    if authorization_leases.is_none_or(|leases| leases.iter().all(Option::is_none))
         && let Some(outcome) = identical_historical_retry(state, &envelopes).await?
     {
         return Ok(outcome);
@@ -113,7 +113,18 @@ pub(super) async fn submit_realm_bootstrap_batch(
     let received_at = now();
     let mut ingress_receipts = Vec::new();
     if let Some(leases) = authorization_leases {
-        for (parsed, lease) in validated.iter().zip(leases) {
+        if leases.iter().any(Option::is_some) && leases.iter().any(Option::is_none) {
+            return Err(SubmitOneError::new(
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "Realm bootstrap cannot mix online and delayed submissions",
+            ));
+        }
+        for (parsed, lease) in validated
+            .iter()
+            .zip(leases)
+            .filter_map(|(parsed, lease)| lease.as_ref().map(|lease| (parsed, lease)))
+        {
             ingress_receipts
                 .push(mint_and_store_ingress_receipt(state, parsed, lease, received_at).await?);
         }
@@ -240,6 +251,7 @@ pub(super) async fn submit_realm_bootstrap_batch(
         received_at,
         authorization_leases
             .and_then(|leases| leases.first())
+            .and_then(Option::as_ref)
             .map(|lease| &lease.authority_set_ref),
     )
     .await

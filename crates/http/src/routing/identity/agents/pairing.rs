@@ -849,10 +849,13 @@ pub(super) fn service_pairing_controller_device_id(
 ) -> Result<String, AppError> {
     let submission = &body.authorize_event;
     if submission.event.actor_id != body.agent_id
-        || submission.authorization_lease.actor_id != body.agent_id
+        || submission
+            .authorization_lease
+            .as_ref()
+            .is_some_and(|lease| lease.actor_id != body.agent_id)
     {
         return Err(AppError::capability_denied(
-            "delegated pairing Event and authorization lease must name the managed Agent",
+            "delegated pairing Event and any delayed authorization lease must name the managed Agent",
         ));
     }
     if submission.event.executed_by.as_ref().map(Did::as_str) != Some(controller_id) {
@@ -861,8 +864,6 @@ pub(super) fn service_pairing_controller_device_id(
         ));
     }
 
-    let device_id = submission.authorization_lease.device_id.as_str();
-    let expected_verification_method = format!("{controller_id}#{device_id}");
     let verification_method = submission
         .event
         .proofs
@@ -873,9 +874,25 @@ pub(super) fn service_pairing_controller_device_id(
                 "delegated pairing Event must carry a controller device proof",
             )
         })?;
-    if verification_method != expected_verification_method {
+    let device_id = verification_method
+        .strip_prefix(&format!("{controller_id}#"))
+        .ok_or_else(|| {
+            AppError::capability_denied(
+                "delegated pairing Event proof must use a controller verification method",
+            )
+        })?;
+    arkret_wire::DeviceId::new(device_id.to_owned()).map_err(|_| {
+        AppError::capability_denied(
+            "delegated pairing Event proof must name a typed controller device",
+        )
+    })?;
+    if submission
+        .authorization_lease
+        .as_ref()
+        .is_some_and(|lease| lease.device_id.as_str() != device_id)
+    {
         return Err(AppError::capability_denied(
-            "delegated pairing Event proof does not match the authorization lease device",
+            "delayed authorization lease device does not match the controller proof",
         ));
     }
     Ok(device_id.to_owned())

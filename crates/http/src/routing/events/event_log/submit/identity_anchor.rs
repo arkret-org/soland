@@ -32,7 +32,7 @@ pub(super) async fn submit_identity_anchor_batch(
     state: &AppState,
     session: &SessionRecord,
     envelopes: Vec<Value>,
-    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+    authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
@@ -77,7 +77,7 @@ pub(super) async fn submit_identity_anchor_batch(
         crate::routing::identity::device_generation::device_generation_admission_lock(&lock_actor);
     let _generation_guard = generation_lock.lock().await;
     if let Some(mut outcome) = identical_historical_retry(state, &envelopes).await? {
-        if authorization_leases.is_some() {
+        if authorization_leases.is_some_and(|leases| leases.iter().any(Option::is_some)) {
             let digests = event_digests(&envelopes).map_err(|error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
@@ -220,6 +220,7 @@ pub(super) async fn submit_identity_anchor_batch(
             .then(|| {
                 authorization_leases
                     .and_then(|leases| leases.first())
+                    .and_then(Option::as_ref)
                     .map(|lease| &lease.authority_set_ref)
             })
             .flatten();
@@ -241,7 +242,19 @@ pub(super) async fn submit_identity_anchor_batch(
             )
         })?
     };
-    let publication_evidence = if let Some(leases) = authorization_leases {
+    let complete_leases = authorization_leases
+        .filter(|leases| leases.iter().any(Option::is_some))
+        .map(|leases| {
+            leases
+                .iter()
+                .cloned()
+                .collect::<Option<Vec<_>>>()
+                .ok_or_else(|| {
+                    unit_error("identity anchor cannot mix online and delayed submissions")
+                })
+        })
+        .transpose()?;
+    let publication_evidence = if let Some(leases) = complete_leases.as_deref() {
         vec![
             build_ingress_receipt_record(state, &first, &leases[0], received_at)?,
             build_ingress_receipt_record(state, &second, &leases[1], received_at)?,
@@ -624,13 +637,17 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         build_ingress_receipt_record(
             state,
             &first,
-            &submissions[0].authorization_lease,
+            submissions[0].authorization_lease.as_ref().ok_or_else(|| {
+                unit_error("cross-signing recovery requires an explicit authorization lease")
+            })?,
             received_at,
         )?,
         build_ingress_receipt_record(
             state,
             &second,
-            &submissions[1].authorization_lease,
+            submissions[1].authorization_lease.as_ref().ok_or_else(|| {
+                unit_error("cross-signing recovery requires an explicit authorization lease")
+            })?,
             received_at,
         )?,
     ];

@@ -170,16 +170,13 @@ fn federation_cba_proof_bundles(
         .collect()
 }
 
-/// Pair each transported Event with the publication evidence it was admitted
-/// under (`offline-publication.md` §2.1).
+/// Pair delayed Events with the publication evidence they were admitted under
+/// and transport online Events without offline publication evidence
+/// (`offline-publication.md` §2.1).
 ///
-/// An Event with no stored evidence cannot be federated: a federation
-/// submission structurally requires a lease bound to the Event plus at least
-/// one ingress receipt covering that exact digest, and this service must never
-/// mint a replacement receipt for an Event it did not itself receipt — that
-/// would re-stamp `received_at` and silently widen a fixed revocation window.
-/// That is a hard construction failure, not something to drop quietly: the
-/// caller turns it into a rejected admission.
+/// Stored evidence exists only for an explicitly delayed publication. This
+/// service must never mint replacement evidence: that would re-stamp
+/// `received_at` and silently widen a fixed revocation window.
 async fn federation_submissions(
     state: &AppState,
     events: &[Event],
@@ -213,12 +210,7 @@ async fn federation_submissions(
         .collect::<BTreeMap<_, _>>();
     let mut submissions = Vec::with_capacity(events.len());
     for (event, digest) in events.iter().zip(digests) {
-        let record = by_digest.get(&digest).ok_or_else(|| {
-            format!(
-                "Event {} has no stored publication evidence and cannot be federated",
-                event.event_id
-            )
-        })?;
+        let record = by_digest.get(&digest);
         let control_proposal_receipt = if event.seal_basis.is_some() {
             let proposal_digest =
                 arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
@@ -256,8 +248,10 @@ async fn federation_submissions(
         };
         submissions.push(arkret_wire::EventFederationSubmission {
             event: event.clone(),
-            authorization_lease: record.authorization_lease.clone(),
-            ingress_receipts: vec![record.ingress_receipt.clone()],
+            authorization_lease: record.map(|record| record.authorization_lease.clone()),
+            ingress_receipts: record
+                .map(|record| vec![record.ingress_receipt.clone()])
+                .unwrap_or_default(),
             control_proposal_receipt,
         });
     }

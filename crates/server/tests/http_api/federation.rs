@@ -305,6 +305,44 @@ async fn peer_events_submit_verifies_digest_against_the_received_wire_body() {
 }
 
 #[tokio::test]
+async fn peer_events_submit_accepts_online_event_without_offline_evidence() {
+    let state = soland_test_support::app_state(test_config());
+    seed_peer_delivery_binding(&state).await;
+    let event = signed_event_envelope(
+        "ak:event:01904100-0000-7000-8000-fede00000004",
+        0,
+        Vec::new(),
+    );
+    let mut body = peer_submit_body(&event);
+    body["events"][0]
+        .as_object_mut()
+        .expect("federation submission")
+        .remove("authorization_lease");
+    body["events"][0]["ingress_receipts"] = serde_json::json!([]);
+
+    let target = "http://server/_arkret/peer/events";
+    let mut submit = TestClient::post(target).json(&body);
+    for (name, value) in signed_federation_push_headers(
+        PEER_SOURCE_DID,
+        SERVICE_ID,
+        DESTINATION_TRUST_DOMAIN,
+        target,
+        &body,
+    ) {
+        submit = submit.add_header(name, value, true);
+    }
+    let outcome: Value = submit
+        .send(&app_from_state(state))
+        .await
+        .take_json()
+        .await
+        .unwrap();
+
+    assert_eq!(outcome["status"], "accepted", "{outcome:?}");
+    assert_eq!(outcome["accepted"][0], event["event_id"]);
+}
+
+#[tokio::test]
 async fn peer_events_frontier_exposes_current_sibling_heads() {
     let state = soland_test_support::app_state(test_config());
     seed_peer_read_authorization(&state, PEER_SOURCE_DID, "did:web:alice.example").await;
@@ -789,7 +827,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
     });
     arkret_wire::EventFederationSubmission {
         event,
-        authorization_lease: lease,
+        authorization_lease: Some(lease),
         ingress_receipts: vec![receipt],
         control_proposal_receipt,
     }

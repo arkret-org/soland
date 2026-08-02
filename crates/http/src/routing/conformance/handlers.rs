@@ -418,13 +418,7 @@ pub async fn realm_basis(
         &body.data_plane_actions,
     )
     .map_err(|error| AppError::internal(format!("build conformance Realm basis: {error}")))?;
-    // The governance unit first, then the head Seal that attests it: the
-    // `covered_seals_cell` write names the governance Seal, so it can only be
-    // stored after that Seal exists.
-    for (seal, ops) in [
-        (&basis.governance_seal, &basis.governance_ops),
-        (&basis.seal, &basis.ops),
-    ] {
+    for (seal, ops) in [(&basis.seal, &basis.ops)] {
         state
             .projections()
             .conformance_put_seal(seal)

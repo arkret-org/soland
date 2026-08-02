@@ -2042,7 +2042,7 @@ async fn continue_submit_reanchor_unit(
     }
     let authorize_submission = arkret_wire::EventInitialSubmission {
         event: authorized_event,
-        authorization_lease: authority_outcome.authorization_lease,
+        authorization_lease: Some(authority_outcome.authorization_lease),
         cba_proof_bundles: authority_outcome.cba_proof_bundles,
         control_proposal_receipt: None,
     };

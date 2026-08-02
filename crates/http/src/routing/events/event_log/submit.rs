@@ -754,13 +754,10 @@ pub(in crate::routing) async fn submit_initial_event_batch_outcome(
         };
     for submission in submissions {
         validate_initial_submission_in_context(&submission, submit_context)?;
-        validate_authorization_lease_for_event(
-            state,
-            Some(session),
-            &submission.event,
-            &submission.authorization_lease,
-        )
-        .await?;
+        if let Some(lease) = &submission.authorization_lease {
+            validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
+                .await?;
+        }
         let arkret_wire::EventInitialSubmission {
             event: _,
             authorization_lease,
@@ -770,8 +767,21 @@ pub(in crate::routing) async fn submit_initial_event_batch_outcome(
         leases.push(authorization_lease);
         proposal_receipts.push(control_proposal_receipt);
     }
-    if submit_context == arkret_wire::EventSubmitContext::AnchorUnit {
-        arkret_wire::validate_anchor_unit_lease_bindings(&typed_events, &leases).map_err(
+    if submit_context == arkret_wire::EventSubmitContext::AnchorUnit
+        && leases.iter().any(Option::is_some)
+    {
+        let complete_leases = leases
+            .iter()
+            .cloned()
+            .collect::<Option<Vec<_>>>()
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    "schema_violation",
+                    "an anchor unit cannot mix online and delayed submissions",
+                )
+            })?;
+        arkret_wire::validate_anchor_unit_lease_bindings(&typed_events, &complete_leases).map_err(
             |error| {
                 SubmitOneError::new(
                     StatusCode::BAD_REQUEST,
@@ -795,7 +805,7 @@ async fn submit_event_batch_outcome_with_leases(
     state: &AppState,
     session: &SessionRecord,
     envelopes: Vec<Value>,
-    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+    authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
     control_proposal_receipts: Option<&[Option<arkret_wire::ControlProposalReceipt>]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
@@ -875,7 +885,9 @@ async fn submit_event_batch_outcome_with_leases(
             &realm_bootstrap_contexts,
             None,
             None,
-            authorization_leases.and_then(|leases| leases.get(index)),
+            authorization_leases
+                .and_then(|leases| leases.get(index))
+                .and_then(Option::as_ref),
             control_proposal_receipts
                 .and_then(|receipts| receipts.get(index))
                 .and_then(Option::as_ref),
@@ -1281,7 +1293,7 @@ pub(crate) async fn submit_federation_events(
                 InboundPublicationEvidence {
                     event_digest,
                     realm_id: submission.event.realm_id.as_str().to_owned(),
-                    authorization_lease: submission.authorization_lease.clone(),
+                    authorization_lease: submission.authorization_lease.clone()?,
                     ingress_receipts: submission.ingress_receipts.clone(),
                 },
             ))
@@ -1307,9 +1319,20 @@ pub(crate) async fn submit_federation_events(
     {
         let leases = submissions
             .iter()
-            .map(|submission| submission.authorization_lease.clone())
+            .filter_map(|submission| submission.authorization_lease.clone())
             .collect::<Vec<_>>();
-        if let Err(error) = arkret_wire::validate_anchor_unit_lease_bindings(&events, &leases) {
+        if !leases.is_empty() && leases.len() != submissions.len() {
+            render_error(
+                res,
+                StatusCode::BAD_REQUEST,
+                "schema_violation",
+                "a federated anchor unit cannot mix online and delayed submissions",
+            );
+            return;
+        }
+        if !leases.is_empty()
+            && let Err(error) = arkret_wire::validate_anchor_unit_lease_bindings(&events, &leases)
+        {
             render_error(
                 res,
                 StatusCode::BAD_REQUEST,
@@ -1320,16 +1343,13 @@ pub(crate) async fn submit_federation_events(
         }
     }
     for submission in &submissions {
-        if let Err(error) = validate_authorization_lease_for_event(
-            state,
-            None,
-            &submission.event,
-            &submission.authorization_lease,
-        )
-        .await
-        {
-            render_error(res, error.status, &error.code, &error.message);
-            return;
+        if let Some(lease) = &submission.authorization_lease {
+            if let Err(error) =
+                validate_authorization_lease_for_event(state, None, &submission.event, lease).await
+            {
+                render_error(res, error.status, &error.code, &error.message);
+                return;
+            }
         }
         if let Err(error) =
             validate_ingress_receipt_proofs(state, &submission.ingress_receipts).await

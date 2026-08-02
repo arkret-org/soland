@@ -169,7 +169,7 @@ async fn submit_ordinary_realm_genesis(
     state: &AppState,
     session: &SessionRecord,
     envelope: Value,
-    authorization_leases: Option<&[arkret_wire::AuthorizationLease]>,
+    authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     let event_id = event_string_field_from_value(&envelope, "event_id").unwrap_or_default();
     let outcome = super::realm_bootstrap::submit_realm_bootstrap_batch(
@@ -258,13 +258,10 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
     validate_initial_submission(&submission)?;
-    validate_authorization_lease_for_event(
-        state,
-        Some(session),
-        &submission.event,
-        &submission.authorization_lease,
-    )
-    .await?;
+    if let Some(lease) = &submission.authorization_lease {
+        validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
+            .await?;
+    }
     let arkret_wire::EventInitialSubmission {
         event,
         authorization_lease,
@@ -298,7 +295,7 @@ pub(in crate::routing) async fn submit_initial_event_submission(
         &[],
         None,
         None,
-        Some(&authorization_lease),
+        authorization_lease.as_ref(),
         control_proposal_receipt.as_ref(),
     )
     .await

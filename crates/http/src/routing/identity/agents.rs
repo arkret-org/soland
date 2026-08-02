@@ -271,7 +271,7 @@ mod tests {
         };
         let issued_at = event.created_at;
         arkret_wire::EventInitialSubmission {
-            authorization_lease: AuthorizationLease {
+            authorization_lease: Some(AuthorizationLease {
                 authorization_lease_id: AuthorizationLeaseId::new(
                     "ak:authorization_lease:01904100-0000-7000-8000-aaaaaaaaaaaa",
                 )
@@ -293,7 +293,7 @@ mod tests {
                 },
                 authority_set_policy: policy,
                 proofs: Vec::new(),
-            },
+            }),
             event,
             cba_proof_bundles: Vec::new(),
             control_proposal_receipt: None,
@@ -542,7 +542,13 @@ mod tests {
         body: &mut AgentKeyPairRequestBody,
         controller_id: &str,
     ) {
-        let device_id = body.authorize_event.authorization_lease.device_id.as_str();
+        let device_id = body
+            .authorize_event
+            .authorization_lease
+            .as_ref()
+            .expect("pairing fixture uses a delayed authorization lease")
+            .device_id
+            .as_str();
         let mut proof = body.requested_scope_disclosure.proofs[0].clone();
         proof.verification_method =
             arkret_wire::DidUrl::new(format!("{controller_id}#{device_id}")).unwrap();
@@ -566,7 +572,12 @@ mod tests {
 
         assert_eq!(
             device_id,
-            body.authorize_event.authorization_lease.device_id.as_str()
+            body.authorize_event
+                .authorization_lease
+                .as_ref()
+                .expect("pairing fixture uses a delayed authorization lease")
+                .device_id
+                .as_str()
         );
     }
 
