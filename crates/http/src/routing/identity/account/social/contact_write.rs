@@ -1,5 +1,3 @@
-use super::*;
-
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
     ContactTombstonedPayload,
@@ -16,6 +14,8 @@ use arkret_wire::{
 };
 use ed25519_dalek::Signature;
 use serde::de::DeserializeOwned;
+
+use super::*;
 
 const CONTACT_RESERVATION_TTL_MINUTES: i64 = 10;
 const CONTACT_OUTCOME_TTL_HOURS: i64 = 24;

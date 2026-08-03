@@ -1,5 +1,6 @@
-use super::*;
 use arkret_models_collaboration::protocol_journey::ParticipationBits;
+
+use super::*;
 
 // ── AKP-0016 — agent participation ceiling (admission validate + projection write) ──
 
@@ -160,9 +161,7 @@ pub async fn validate_agent_participation_ceiling(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
-    use arkret_models_collaboration::governance::agent_participation::{
-        validate_agent_participation_tightens,
-    };
+    use arkret_models_collaboration::governance::agent_participation::validate_agent_participation_tightens;
     use arkret_models_collaboration::protocol_journey::ParticipationBits;
     for operation in operations {
         let Some((scope_kind, _scope_key, child, parent_keys)) =
@@ -242,10 +241,7 @@ fn autonomous_participation_mode(
     }
 }
 
-fn ap_effective_for_mode(
-    mode: AgentParticipationMode,
-    effective: ParticipationBits,
-) -> bool {
+fn ap_effective_for_mode(mode: AgentParticipationMode, effective: ParticipationBits) -> bool {
     match mode {
         AgentParticipationMode::ReplyMessage => effective.reply_message,
         AgentParticipationMode::ReactionAdd => effective.reaction_add,

@@ -88,9 +88,7 @@ pub(crate) fn scope_keys_for_scope(
     scope: &ParticipationScope,
 ) -> Option<Vec<String>> {
     match scope {
-        ParticipationScope::Realm { realm_id } => {
-            Some(vec![realm_scope_key(realm_id.as_str())])
-        }
+        ParticipationScope::Realm { realm_id } => Some(vec![realm_scope_key(realm_id.as_str())]),
         ParticipationScope::Circle {
             realm_id,
             circle_id,

@@ -1,3 +1,5 @@
+use diesel::sql_types::BigInt;
+
 use super::{
     Array, BTreeSet, ConsentCellKey, ConsentCellRecord, ConsentCellStore, ContactRecord,
     ContactStore, DirectConversationBindingRecord, DirectConversationBindingStore,
@@ -5,7 +7,6 @@ use super::{
     PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid,
     Value, async_trait, decode_grant_dots, encode_grant_dots, ids, pg_conn, sql_query,
 };
-use diesel::sql_types::BigInt;
 // ── Pg-backed contact projection store ───────────────────────────────────
 // Durable backing for the holder↔peer `ContactStore`. Mirrors the
 // `MemoryContactStore` query shape onto the `contacts` table. Column order

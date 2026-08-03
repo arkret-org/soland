@@ -1,7 +1,6 @@
-use arkret_wire::{DidUrl, NonEmptyString};
-
 #[cfg(test)]
 use arkret_wire::CapabilityActionId;
+use arkret_wire::{DidUrl, NonEmptyString};
 
 use super::*;
 
