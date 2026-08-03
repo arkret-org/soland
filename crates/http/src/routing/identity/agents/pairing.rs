@@ -1122,7 +1122,6 @@ async fn validate_requested_scope_disclosure(
         &agent_id,
         &controller_id,
         &stored_scope,
-        requested_scope_participation_ceiling(&stored_scope),
     )
     .map_err(|error| {
         AppError::internal(format!(

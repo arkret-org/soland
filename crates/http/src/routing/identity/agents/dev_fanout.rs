@@ -318,53 +318,8 @@ pub(super) async fn fanout_provision_subevents(
     Ok((accountability_event, selector_event))
 }
 
-async fn materialize_grant(
-    state: &AppState,
-    session: &SessionRecord,
-    realm_id: &str,
-    grant_payload: Value,
-) -> Result<String, AppError> {
-    submit_agent_fanout_event(
-        state,
-        session,
-        realm_id,
-        "ak.capability.grant",
-        grant_payload,
-    )
-    .await
-}
-
-/// Submit the exact controller-supplied, signed Capability Grant under the
-/// canonical `{grant_id, grant}` Event payload wrapper.
-pub(super) async fn attach_agent_grant_event(
-    state: &AppState,
-    session: &SessionRecord,
-    agent_id: &str,
-    supplied_grant: &arkret_models_collaboration::governance::grant_constraint::CapabilityGrant,
-) -> Result<String, AppError> {
-    let realm_id = supplied_grant
-        .realm_id
-        .as_ref()
-        .ok_or_else(|| AppError::invalid_param("grant.realm_id is required"))?;
-    if supplied_grant.issuer.as_str() != session.actor {
-        return Err(AppError::capability_denied(
-            "grant.issuer must match the authenticated controller",
-        ));
-    }
-    let grant = serde_json::to_value(supplied_grant)
-        .map_err(|error| AppError::invalid_param(format!("grant is invalid: {error}")))?;
-    if grant.get("subject").and_then(Value::as_str) != Some(agent_id) {
-        return Err(AppError::capability_denied(
-            "grant.subject must match the managed Agent principal",
-        ));
-    }
-    let payload = json!({ "grant_id": supplied_grant.id, "grant": grant });
-    materialize_grant(state, session, realm_id.as_str(), payload).await
-}
-
-/// AKP-0016 — revoke a previously materialised participation grant
-/// (idempotent; `ak.capability.revoke` is a no-op when the grant_id was
-/// never granted).
+/// Revoke an ordinary capability grant during Agent lifecycle teardown.
+/// `ak.capability.revoke` is idempotent when the grant was never accepted.
 pub(super) async fn revoke_capability_grant(
     state: &AppState,
     session: &SessionRecord,

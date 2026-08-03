@@ -1826,7 +1826,11 @@ impl SecurityTransactionService {
 
 #[async_trait]
 pub trait AgentParticipationPort: Send + Sync {
-    async fn store_selection(&self, selection: Value) -> ServiceResult<()>;
+    async fn compare_and_swap_selection(
+        &self,
+        selection: Value,
+        expected_version: u64,
+    ) -> ServiceResult<bool>;
     async fn selections(&self, agent_id: &str) -> ServiceResult<Vec<Value>>;
     async fn ceilings(&self, scope_keys: &[String]) -> ServiceResult<Vec<Value>>;
     async fn store_ceiling(&self, ceiling: Value) -> ServiceResult<()>;
@@ -1842,8 +1846,14 @@ impl AgentParticipationService {
         Self { participation }
     }
 
-    pub async fn store_selection(&self, selection: Value) -> ServiceResult<()> {
-        self.participation.store_selection(selection).await
+    pub async fn compare_and_swap_selection(
+        &self,
+        selection: Value,
+        expected_version: u64,
+    ) -> ServiceResult<bool> {
+        self.participation
+            .compare_and_swap_selection(selection, expected_version)
+            .await
     }
 
     pub async fn selections(&self, agent_id: &str) -> ServiceResult<Vec<Value>> {

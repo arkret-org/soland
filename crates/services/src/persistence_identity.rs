@@ -1253,12 +1253,16 @@ impl crate::identity::SidecarPort for PersistenceSidecars {
 
 #[async_trait::async_trait]
 impl crate::identity::AgentParticipationPort for PersistenceAgentParticipation {
-    async fn store_selection(&self, selection: serde_json::Value) -> crate::ServiceResult<()> {
-        self.0
+    async fn compare_and_swap_selection(
+        &self,
+        selection: serde_json::Value,
+        expected_version: u64,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
             .agent_participation()
-            .put_selection(selection)
-            .await?;
-        Ok(())
+            .compare_and_swap_selection(selection, expected_version)
+            .await?)
     }
 
     async fn selections(&self, agent_id: &str) -> crate::ServiceResult<Vec<serde_json::Value>> {

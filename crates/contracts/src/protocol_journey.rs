@@ -7,12 +7,9 @@
 pub use arkret_models_collaboration::protocol_journey::{
     CausalIngressReceipt, ContactAcceptRequestBody, ContactOperationOutcome,
     ContactOperationRequestBody, ContactRejectRequestBody, ContactScopeUpdateRequestBody,
-    ContactTombstoneRequestBody, DeploymentCeilingCompletenessCore, DeploymentCeilingCore,
-    DeploymentCeilingForkRepair, DeploymentCeilingSignedHead, DirectConversationResolveOutcome,
+    ContactTombstoneRequestBody, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, HistoryShareContract, KeypackageTerminalCommand,
-    ParticipationBits, ParticipationReplaceReceipt, ParticipationReplaceRelayRequestBody,
-    ParticipationReplacementBatch, ParticipationScopeEvidenceChallenge,
-    ParticipationScopeEvidencePrepareRequestBody, PeerContactSubmitOutcome,
+    ParticipationBits, ParticipationReplaceRequestBody, PeerContactSubmitOutcome,
     PeerContactSubmitRequestBody, SidecarEnsureOutcome, SidecarEnsureRequestBody,
 };
 pub use arkret_wire::{

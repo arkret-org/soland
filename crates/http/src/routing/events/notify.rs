@@ -713,22 +713,28 @@ mod tests {
         agent: &str,
         accept_third_party_mention: bool,
     ) {
-        state
-            .agent_participations()
-            .store_selection(json!({
-                "agent_id": agent,
-                "scope_kind": "realm",
-                "scope_key": format!("realm:{}", uuid_tail(realm_id)),
-                "realm_id": realm_id,
-                "scope": { "kind": "realm", "realm_id": realm_id },
-                "reply_message": true,
-                "reaction_add": false,
-                "reaction_remove": false,
-                "accept_third_party_mention": accept_third_party_mention,
-                "act_on_behalf": false,
-            }))
-            .await
-            .expect("agent participation selection");
+        assert!(
+            state
+                .agent_participations()
+                .compare_and_swap_selection(
+                    json!({
+                        "agent_id": agent,
+                        "scope_kind": "realm",
+                        "scope_key": format!("realm:{}", uuid_tail(realm_id)),
+                        "realm_id": realm_id,
+                        "scope": { "kind": "realm", "realm_id": realm_id },
+                        "version": 1,
+                        "reply_message": true,
+                        "reaction_add": false,
+                        "reaction_remove": false,
+                        "accept_third_party_mention": accept_third_party_mention,
+                        "act_on_behalf": false,
+                    }),
+                    0
+                )
+                .await
+                .expect("agent participation selection")
+        );
     }
 
     async fn set_circle_selection(
@@ -738,25 +744,31 @@ mod tests {
         agent: &str,
         accept_third_party_mention: bool,
     ) {
-        state
-            .agent_participations()
-            .store_selection(json!({
-                "agent_id": agent,
-                "scope_kind": "circle",
-                "scope_key": crate::routing::agent_participation::circle_scope_key(
-                    realm_id,
-                    circle_id,
-                ),
-                "realm_id": realm_id,
-                "scope": { "kind": "circle", "realm_id": realm_id, "circle_id": circle_id },
-                "reply_message": true,
-                "reaction_add": false,
-                "reaction_remove": false,
-                "accept_third_party_mention": accept_third_party_mention,
-                "act_on_behalf": false,
-            }))
-            .await
-            .expect("agent participation circle selection");
+        assert!(
+            state
+                .agent_participations()
+                .compare_and_swap_selection(
+                    json!({
+                        "agent_id": agent,
+                        "scope_kind": "circle",
+                        "scope_key": crate::routing::agent_participation::circle_scope_key(
+                            realm_id,
+                            circle_id,
+                        ),
+                        "realm_id": realm_id,
+                        "scope": { "kind": "circle", "realm_id": realm_id, "circle_id": circle_id },
+                        "version": 1,
+                        "reply_message": true,
+                        "reaction_add": false,
+                        "reaction_remove": false,
+                        "accept_third_party_mention": accept_third_party_mention,
+                        "act_on_behalf": false,
+                    }),
+                    0
+                )
+                .await
+                .expect("agent participation circle selection")
+        );
     }
 
     async fn put_circle_ceiling(

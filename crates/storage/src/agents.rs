@@ -3,15 +3,18 @@ use arkret_wire::OpaqueLocalId;
 use super::{AgentPrincipalRecord, PersistenceResult, Value, async_trait};
 /// AKP-0010 — agent participation policy persistence. Controller
 /// selections (`ak.agent.participation.v1`) and the governance ceiling
-/// projection are stored as JSON records mirroring the
-/// closed participation wire shape (keys: agent_id, scope, scope_kind,
-/// scope_key, realm_id, version, reply_message, reaction_add,
-/// reaction_remove, accept_third_party_mention, act_on_behalf, basis,
-/// batch_digest, scope_evidence_digest).
+/// projection are stored as JSON records. A selection record contains only
+/// its agent/scope identity, CAS version and five independent selection bits;
+/// governance policy is evaluated separately at action time.
 #[async_trait]
 pub trait AgentParticipationStore: Send + Sync {
-    /// Upsert a controller selection keyed by (agent_id, scope_key).
-    async fn put_selection(&self, record: Value) -> PersistenceResult<()>;
+    /// Atomically replace a controller selection when the stored version
+    /// equals `expected_version`. Returns false without writing on mismatch.
+    async fn compare_and_swap_selection(
+        &self,
+        record: Value,
+        expected_version: u64,
+    ) -> PersistenceResult<bool>;
     /// All selections for one agent.
     async fn list_selections(&self, agent_id: &str) -> PersistenceResult<Vec<Value>>;
     /// Ceiling rows whose scope_key is in `scope_keys`.

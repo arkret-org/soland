@@ -18,12 +18,36 @@ impl MemoryAgentParticipationStore {
 }
 #[async_trait]
 impl AgentParticipationStore for MemoryAgentParticipationStore {
-    async fn put_selection(&self, record: Value) -> PersistenceResult<()> {
+    async fn compare_and_swap_selection(
+        &self,
+        record: Value,
+        expected_version: u64,
+    ) -> PersistenceResult<bool> {
         let target = agent_participation_record_key(&record);
         let mut guard = self.selections.lock();
-        guard.retain(|existing| agent_participation_record_key(existing) != target);
-        guard.push(record);
-        Ok(())
+        let current = guard
+            .iter()
+            .position(|existing| agent_participation_record_key(existing) == target);
+        let current_version = current
+            .and_then(|index| guard[index].get("version").and_then(Value::as_u64))
+            .unwrap_or(0);
+        if current_version != expected_version {
+            return Ok(false);
+        }
+        let accepted_version = expected_version.checked_add(1).ok_or_else(|| {
+            PersistenceError::Internal("agent participation version overflow".to_owned())
+        })?;
+        if record.get("version").and_then(Value::as_u64) != Some(accepted_version) {
+            return Err(PersistenceError::Internal(
+                "agent participation record has invalid next version".to_owned(),
+            ));
+        }
+        if let Some(index) = current {
+            guard[index] = record;
+        } else {
+            guard.push(record);
+        }
+        Ok(true)
     }
 
     async fn list_selections(&self, agent_id: &str) -> PersistenceResult<Vec<Value>> {
@@ -336,6 +360,50 @@ mod tests {
         record.approval_request_id = Some(OpaqueLocalId::new("approval-1").unwrap());
         record.runtime_key_binding_digest = Some("sha256:binding".to_owned());
         record
+    }
+
+    #[tokio::test]
+    async fn participation_selection_compare_and_swap_is_atomic() {
+        let store = MemoryAgentParticipationStore::new();
+        let record = |version| {
+            serde_json::json!({
+                "agent_id": "did:web:agent.example",
+                "scope_key": "realm:01904100-0000-7000-8000-000000000001",
+                "version": version
+            })
+        };
+
+        assert!(
+            store
+                .compare_and_swap_selection(record(1), 0)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .compare_and_swap_selection(record(1), 0)
+                .await
+                .unwrap()
+        );
+        assert!(
+            store
+                .compare_and_swap_selection(record(2), 1)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .compare_and_swap_selection(record(3), 1)
+                .await
+                .unwrap()
+        );
+
+        let rows = store
+            .list_selections("did:web:agent.example")
+            .await
+            .unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["version"], 2);
     }
 
     #[tokio::test]

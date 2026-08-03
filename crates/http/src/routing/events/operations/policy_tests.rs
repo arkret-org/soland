@@ -813,18 +813,19 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     let ceiling =
         crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope).await;
     assert!(!ceiling.accept_third_party_mention);
-    let selection =
-        arkret_models_collaboration::protocol_journey::ParticipationBits {
-            reply_message: true,
-            reaction_add: true,
-            reaction_remove: false,
-            accept_third_party_mention: true,
-            act_on_behalf: false,
-        };
-    assert!(matches!(
-        arkret_models_collaboration::governance::agent_participation::validate_selection_within_ceiling(ceiling, selection),
-        Err(arkret_models_collaboration::governance::agent_participation::AgentParticipationError::ExceedsCeiling { .. })
-    ));
+    let selection = arkret_models_collaboration::protocol_journey::ParticipationBits {
+        reply_message: true,
+        reaction_add: true,
+        reaction_remove: false,
+        accept_third_party_mention: true,
+        act_on_behalf: false,
+    };
+    let effective =
+        arkret_models_collaboration::governance::agent_participation::effective_participation(
+            ceiling, selection,
+        );
+    assert!(selection.accept_third_party_mention);
+    assert!(!effective.accept_third_party_mention);
 }
 
 async fn register_agent_selection(
@@ -853,22 +854,28 @@ async fn register_agent_selection(
         .as_str()
         .strip_prefix("ak:realm:")
         .expect("realm id prefix");
-    state
-        .agent_participations()
-        .store_selection(json!({
-            "agent_id": agent_id,
-            "scope_kind": "realm",
-            "scope_key": format!("realm:{realm_uuid}"),
-            "realm_id": realm_id.as_str(),
-            "scope": { "kind": "realm", "realm_id": realm_id.as_str() },
-            "reply_message": reply,
-            "reaction_add": false,
-            "reaction_remove": false,
-            "accept_third_party_mention": false,
-            "act_on_behalf": act_on_behalf,
-        }))
-        .await
-        .expect("agent participation selection");
+    assert!(
+        state
+            .agent_participations()
+            .compare_and_swap_selection(
+                json!({
+                    "agent_id": agent_id,
+                    "scope_kind": "realm",
+                    "scope_key": format!("realm:{realm_uuid}"),
+                    "realm_id": realm_id.as_str(),
+                    "scope": { "kind": "realm", "realm_id": realm_id.as_str() },
+                    "version": 1,
+                    "reply_message": reply,
+                    "reaction_add": false,
+                    "reaction_remove": false,
+                    "accept_third_party_mention": false,
+                    "act_on_behalf": act_on_behalf,
+                }),
+                0
+            )
+            .await
+            .expect("agent participation selection")
+    );
 }
 
 async fn register_native_agent_membership_context(

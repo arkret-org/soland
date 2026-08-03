@@ -1,10 +1,10 @@
 # Agent 子系统设计(soland)
 
-> 勘察快照,截至 d28714b。本文「现状基线」描述以该 commit 为准,后续实现演进可能使其失真。
+本文记录 Soland 当前 Agent participation、治理策略和通知子系统的实现边界。规范真源是
+`arkret-spec/spec/v1`；本文只说明服务端内部结构。
 
-支撑 AKP-0016(agent 参与策略)落地所需、当前缺失或 stub 的四个 soland 子系统的完整设计。真源协议见 `arkret-spec/spec/v1/proposals/0016-agent-participation-policy.md` 与 AKP-0008/0009。
-
-设计原则:复用现有事件管线与 reducer/cell 投影模型,不另起并行栈;字段顺序与 spec 一致;直接改现有 SQL;无兼容层。
+设计原则：controller selection、Realm/Circle/Strand policy、capability 与生命周期是四个独立权威；
+在执行动作时求交并逐项校验，不互相复制或物化。数据库直接采用当前 schema，不保留兼容层。
 
 现状基线(已勘察):
 - 事件提交:`routing/events/event_log.rs::submit_event_value` → `store.put(CanonicalEventRecord)` → `routing/events/projection.rs::project_accepted_operations_from_device` → `reducer.rs::ProjectionState::apply` 经 `APPLY_REGISTRY`(`kind → apply_*`)分发。
@@ -16,94 +16,36 @@
 
 ---
 
-## S0(共享底座)— 服务端内部 durable event 发射器
+## S0 — Controller selection
 
-S1、S2 都需要服务端"主动"写入 durable event(controller 调 `participation.set` 时由服务端编排出 `ak.capability.grant`)。当前 `submit_event_value` 是 client-driven(需 actor proof + actor_seq 单调)。新增一个 server-originated 旁路:
+`PUT /_arkret/self/agents/{agent_id}/participation` 是 controller-only Account Authority 写入口。
+请求体固定为 `{target_scope, selection, expected_version}`：首次写入使用 `expected_version=0`，
+成功后该 agent/scope slot 的 version 加一；版本不一致返回 `cas_conflict`。
 
-```rust
-// routing/events/server_emit.rs (新文件)
-/// 服务端编排发射一条 durable event:构造 envelope(service_id 作为 actor / proof),
-/// 持久化到 event store,并投影。复用 submit_event_value 的 store.put + project 两步,
-/// 但跳过 client actor_seq 单调与 actor proof 校验(由服务端信任边界保证)。
-pub(crate) async fn emit_server_event(
-    state: &AppState,
-    realm_id: &str,
-    kind: &str,
-    payload: Value,
-) -> Result<String /*event_id*/, AppError>;
-```
+服务端以 bearer + DPoP session 证明 controller 身份，只保存 scope、version 与五个 selection bit。
+该写入不创建 Event、不签发 receipt、不生成 capability，也不复制当前 Realm/Circle/Strand policy。
+GET 返回每个 slot 的 `{target_scope, selection, version}`，供客户端诚实执行后续 CAS。
 
-要点:
-- envelope `actor_id = state.config.service_id`,`actor_kind="service"`,`event_id = ids::generate("event")`,`created_at = now()`,proof 为 service 签名(复用 notary/signer 已有 service key)。
-- 写入走 `state.persistence.events().put(CanonicalEventRecord{..})`,再 `projection::project_accepted_operations_from_device(state, service_id, service_device, &[operation])`。
-- 幂等:server-emit 的 event_id 由内容确定性派生(对 grant:`hash(subject, scope_key, actions)`)以避免重复编排产生孤儿。
-- 该 helper 是 S1/S2 唯一被允许绕过 client 提交校验的入口;其它路径不得直接 `store.put`。
+## S1 — Governance policy projection
 
-实现位置:`routing/events/mod.rs` 暴露 `pub(crate) mod server_emit;`。
+Realm、Circle 与 Strand 的 `agent_participation.native_agent` 是 reducer 管理的治理策略。子级只能相对父级
+tighten；放宽返回 `agent_participation_ceiling_widen`。投影层把当前策略写入
+`agent_participation_ceiling`，读侧按目标 scope 求出当前最内层有效 policy。
 
----
+治理 policy 与 controller selection 互不覆盖：policy 收紧不会改写 selection，后续放宽也不需要 controller
+重新提交。执行时使用 `effective = selection ∩ current_target_policy`。
 
-## S1 — Capability grant 物化(`ak.capability.grant` / `ak.capability.revoke`)
+## S2 — Action-time authorization
 
-**目标**:`participation.set` 中 `reply`/`act_on_behalf` effective 为真 → 发射 `ak.capability.grant`(agent 为 subject,scope 为 resource);为假 → `ak.capability.revoke`。读侧(authz `grants_for_realm` 读 grant cell)已存在,只补写侧。
+每次 Agent 动作依次检查：
 
-### 事件与 reducer
-- 事件 kind 直接使用 SDK 常量:`arkret_sdk::events::kinds::{CAPABILITY_GRANT, CAPABILITY_REVOKE}`;soland 不再新增或 re-export 旧别名。
-- `reducer.rs`:`APPLY_REGISTRY` 注册 `apply_capability_grant_dispatch` / `apply_capability_revoke_dispatch`,镜像 `apply_capability_derived` 的 cell 写法。
+1. Agent lifecycle、membership 与 session/runtime key 状态；
+2. 独立 capability/grant 是否允许该 action 与 resource；
+3. 对应 participation bit 是否在 `selection ∩ current_target_policy` 中启用。
 
-```rust
-fn apply_capability_grant(&mut self, op: &Operation) -> ProjectionEffect {
-    // payload: { capability_id, issuer, subject, actions[], resources[], constraints[], expires_at }
-    let cap_id = op.payload.get("capability_id").and_then(Value::as_str)...; // reject if missing
-    let cell = CellRef::new(format!("ak:cell:ak.component.capability.grant.v1:{cap_id}"))?;
-    // 校验:issuer 有 ak.capability.grant 授权(已有 authz 引擎);subject/resources 格式;
-    //       resources 的 realm_id == op.realm_id。
-    self.cells.insert(cell, CellState::Value(grant_value));      // 与现有 grant 读侧同 schema
-    ProjectionEffect::CapabilityGrantProjected { capability_id, action: "granted" }
-}
-fn apply_capability_revoke(&mut self, op: &Operation) -> ProjectionEffect {
-    // payload: { capability_id }。把 grant cell 的 value 标记 revoked=true(grant_snapshot_from_value 已读该字段)。
-}
-```
-
-### participation.set 编排(替换当前 TODO)
-`routing/identity/agents.rs::set_agent_participation` 在落库后:
-1. 由 effective(已算)推导目标 grant:
-   - `reply=true` → actions `["ak.message.create","ak.reaction.add"]`,resource selector = scope(realm/circle/strand,复用 `arkret_sdk::authz::ResourceSelector`)。
-   - `act_on_behalf=true` → 追加 AKP-0008 §4.10 act-on-behalf grant(constraints:`approval_required`/`controller_approval_required`)。
-2. capability_id 确定性派生:`ak:capability:` + `hash(agent_id, scope_key, "reply"|"aob")` → 同 scope 同 bit 复用一条 grant,幂等。
-3. effective bit=true 且 grant 不存在/已 revoked → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_GRANT, payload)`;bit=false 且 grant active → `emit_server_event(.., arkret_sdk::events::kinds::CAPABILITY_REVOKE, {capability_id})`。
-4. 与 `put_selection` 同一 handler 内顺序执行;任一步失败返回 `AppError::internal`,不留半物化(grant 发射放在 selection 落库之后,失败时记录 audit 供重试)。
-
-`grant.attach`/`grant.detach`/`agent.deactivate` 的同类 TODO 用同一 `emit_server_event` 收敛。
-
-### 验收
-- `participation.set reply=true` 后 `grants_for_realm` 能查到该 agent 的 `ak.message.create` grant;`reply=false` 后该 grant `revoked=true`。
-- agent 以自身 actor 提交 `ak.message.create` 到该 scope,authz 通过;无 grant 时 fail closed。
-
----
-
-## S2 — Agent participation ceiling 写入 reducer
-
-**目标**:把 `agent_participation` ceiling 写进 reducer 与 `agent_participation_ceiling` 表(participation.set 的 `resolve_effective_ceiling` 读侧已就绪)。
-
-### Realm ceiling(`ak.realm.policy_bundle` 的 `agent_participation` 组件)
-扩展 `apply_realm_policy_bundle`(reducer.rs):
-- payload 含 `agent_participation.native_agent.{reply,accept_third_party_mention,act_on_behalf}` 时:
-  - tighten-only 校验:与 deployment 默认 ceiling 比较(`AgentParticipation::ALL` 为 dev 默认;部署可经 sovereign profile 收紧),用 `arkret_sdk::models::validate_agent_participation_tightens(parent, child)`;违反 → `ProjectionEffect::Rejected { reason: "agent_participation_ceiling_widen" }`(已注册 error code)。
-  - 写 cell `ak:cell:ak.component.realm.policy_bundle.v1:<realm_id>`(已存在,合并字段)。
-  - **投影到 ceiling 表**:`ProjectionEffect` 触发把 `{scope_kind:"realm", scope_key:"realm:<uuid>", realm_id, bits}` UPSERT 进 `agent_participation_ceiling`(经 S2 的 ceiling store 写方法,见下)。
-
-### Circle / Strand ceiling
-- `apply_circle_update` / `apply_strand_update`:patch 含 `agent_participation` 时,读父级 ceiling(Circle 的父=Realm ceiling;Strand 的父=其 `scope_circle_id` 指向的 Circle ceiling,否则 Realm)→ `validate_agent_participation_tightens(parent, child)` → 写对象字段 + UPSERT ceiling 表行(`scope_key = circle:<r>:<c>` / `strand:<r>:<f>`)。
-- 复用现有 tighten-only 框架(与 `content_encryption_floor` 同处校验)。
-
-### ceiling store 写方法
-`persistence.rs::AgentParticipationStore` 增 `put_ceiling(record: Value)`(UPSERT `agent_participation_ceiling`,key=scope_key);内存实现写 `ceilings` Vec(去重 scope_key);Pg 实现 UPSERT。reducer 投影阶段调用(reducer 是同步纯函数 → 经 `ProjectionEffect::AgentParticipationCeilingProjected` 在 `project_accepted_operations_from_device` 的 effect 处理段异步落库,与现有 effect→persistence 落库范式一致)。
-
-### 验收
-- realm admin 写 `policy_bundle{agent_participation.native_agent.reply=true, accept_third_party_mention=false}`;controller 对某 strand `participation.set accept_third_party_mention=true` → `agent_participation_exceeds_ceiling` 被拒。
-- Circle ceiling 试图放宽父 Realm → `agent_participation_ceiling_widen` 被拒。
+任何一项失败都拒绝动作。Participation 只是附加执行门，不签发、撤销或替代 capability。通知 fanout、
+消息/Reaction 写入和 act-on-behalf 路径都复用同一 action-time resolver，不能信任客户端 session overlay
+中复制的 effective 值。
 
 ---
 

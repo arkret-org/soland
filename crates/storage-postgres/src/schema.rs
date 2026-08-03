@@ -69,9 +69,6 @@ diesel::table! {
         reaction_remove -> Bool,
         accept_third_party_mention -> Bool,
         act_on_behalf -> Bool,
-        basis -> Jsonb,
-        batch_digest -> Text,
-        scope_evidence_digest -> Text,
         updated_at -> Timestamptz,
     }
 }

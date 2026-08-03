@@ -1,4 +1,7 @@
-use arkret_wire::{CapabilityActionId, DidUrl, NonEmptyString};
+use arkret_wire::{DidUrl, NonEmptyString};
+
+#[cfg(test)]
+use arkret_wire::CapabilityActionId;
 
 use super::*;
 
@@ -265,86 +268,6 @@ pub(crate) fn agent_grant_within_requested_scope(
     })
 }
 
-/// Project the provision-time action ceiling onto the participation bits.
-/// Third-party mention delivery requires read authority; replying requires
-/// both actions in the materialized reply grant. Acting on behalf additionally
-/// requires the explicit controller-approval constraint that distinguishes it
-/// from ordinary `ak.message.create` authority.
-pub(super) fn agent_requested_participation_ceiling(
-    record: &AgentPrincipalRecord,
-) -> ParticipationBits {
-    let scope = record
-        .requested_scope
-        .clone()
-        .and_then(|value| serde_json::from_value::<AgentKeyScope>(value).ok());
-    scope
-        .as_ref()
-        .map(requested_scope_participation_ceiling)
-        .unwrap_or_default()
-}
-
-pub(crate) fn requested_scope_participation_ceiling(scope: &AgentKeyScope) -> ParticipationBits {
-    let value = serde_json::to_value(scope).unwrap_or(Value::Null);
-    let actions = value
-        .get("actions")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .collect::<BTreeSet<_>>();
-    let message_create = actions.contains(CapabilityActionId::MESSAGE_CREATE);
-    let approval_required = value
-        .get("constraints")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .any(|constraint| {
-            if constraint.get("constraint_kind").and_then(Value::as_str) != Some("claim_based") {
-                return false;
-            }
-            let controller_requirement =
-                match constraint.get("constraint_subkind").and_then(Value::as_str) {
-                    Some("approval") => {
-                        constraint
-                            .get("approval_required")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                            && (constraint.get("approval_relation").and_then(Value::as_str)
-                                == Some("controller")
-                                || constraint
-                                    .get("controller_approval_required")
-                                    .and_then(Value::as_bool)
-                                    .unwrap_or(false))
-                    }
-                    Some("accountability") => {
-                        constraint
-                            .get("accountability_required")
-                            .and_then(Value::as_bool)
-                            .unwrap_or(false)
-                            && constraint.get("approval_relation").and_then(Value::as_str)
-                                == Some("controller")
-                    }
-                    _ => false,
-                };
-            let applies_to_message_create = constraint
-                .get("applies_to_actions")
-                .and_then(Value::as_array)
-                .is_none_or(|values| {
-                    values
-                        .iter()
-                        .any(|value| value.as_str() == Some(CapabilityActionId::MESSAGE_CREATE))
-                });
-            controller_requirement && applies_to_message_create
-        });
-    ParticipationBits {
-        reply_message: message_create,
-        reaction_add: actions.contains(CapabilityActionId::REACTION_ADD),
-        reaction_remove: actions.contains(CapabilityActionId::REACTION_REMOVE),
-        accept_third_party_mention: actions.contains(CapabilityActionId::EVENT_READ),
-        act_on_behalf: message_create && approval_required,
-    }
-}
-
 pub(super) fn verification_method_principal(verification_method: &str) -> &str {
     verification_method
         .split('#')
@@ -561,59 +484,6 @@ mod requested_scope_tests {
             &[]
         ));
     }
-
-    #[test]
-    fn participation_is_intersected_with_provision_ceiling() {
-        let record = record_with_scope(json!({
-            "actions": [CapabilityActionId::EVENT_READ, CapabilityActionId::MESSAGE_CREATE, CapabilityActionId::REACTION_ADD],
-            "constraints": [{
-                "constraint_kind": "claim_based",
-                "constraint_subkind": "accountability",
-                "effect": "allow",
-                "applies_to_actions": [CapabilityActionId::MESSAGE_CREATE],
-                "accountability_required": true,
-                "approval_relation": "controller"
-            }]
-        }));
-
-        assert_eq!(
-            agent_requested_participation_ceiling(&record),
-            ParticipationBits {
-                reply_message: true,
-                reaction_add: true,
-                reaction_remove: false,
-                accept_third_party_mention: true,
-                act_on_behalf: true,
-            }
-        );
-
-        let record = record_with_scope(json!({
-            "actions": [CapabilityActionId::MESSAGE_CREATE]
-        }));
-        assert_eq!(
-            agent_requested_participation_ceiling(&record),
-            ParticipationBits {
-                reply_message: false,
-                reaction_add: false,
-                reaction_remove: false,
-                accept_third_party_mention: false,
-                act_on_behalf: false,
-            }
-        );
-
-        let wrong_action = record_with_scope(json!({
-            "actions": [CapabilityActionId::MESSAGE_CREATE, CapabilityActionId::REACTION_ADD],
-            "constraints": [{
-                "constraint_kind": "claim_based",
-                "constraint_subkind": "approval",
-                "effect": "require_review",
-                "approval_required": true,
-                "approval_relation": "controller",
-                "applies_to_actions": [CapabilityActionId::REACTION_ADD]
-            }]
-        }));
-        assert!(!agent_requested_participation_ceiling(&wrong_action).act_on_behalf);
-    }
 }
 
 /// Project a persisted agent_principal JSON record into the spec
@@ -787,7 +657,6 @@ pub(super) fn agent_key_state_from_record(
         &agent_id,
         &controller_id,
         &requested_scope,
-        requested_scope_participation_ceiling(&requested_scope),
     )
     .map_err(|error| {
         AppError::internal(format!("persisted Agent ceiling digest failed: {error}"))

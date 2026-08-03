@@ -48,11 +48,10 @@ use arkret_models_collaboration::agent_operations::{
 use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
-    AgentParticipationEntry, AgentParticipationOutcome, effective_participation,
+    AgentParticipationEntry, AgentParticipationOutcome,
 };
 use arkret_models_collaboration::protocol_journey::{
-    ParticipationBits, ParticipationReplaceReceipt, ParticipationReplacementBatch,
-    ParticipationScope, ParticipationScopeEvidence, ProtocolSignature,
+    ParticipationBits, ParticipationReplaceRequestBody, ParticipationScope,
 };
 use arkret_models_identity::validate_agent_slug;
 use base64::Engine as _;
@@ -89,7 +88,6 @@ mod pairing;
 mod participation;
 pub(crate) mod sidecar;
 
-pub(crate) use common::requested_scope_participation_ceiling;
 use common::*;
 use lifecycle::*;
 use pairing::*;
@@ -446,7 +444,6 @@ mod tests {
             &agent_id,
             &controller_id,
             &requested_scope,
-            requested_scope_participation_ceiling(&requested_scope),
         )
         .unwrap();
         let requested_scope_disclosure = serde_json::from_value(json!({

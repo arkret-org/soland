@@ -1166,13 +1166,10 @@ fn validate_agent_did_document_binding(
     let controller_did = Did::new(controller_id.to_owned()).map_err(|error| {
         schema_error(format!("managed Agent controller DID is invalid: {error}"))
     })?;
-    let expected_digest = agent_requested_scope_digest(
-        &agent_did,
-        &controller_did,
-        &requested_scope,
-        super::agents::requested_scope_participation_ceiling(&requested_scope),
-    )
-    .map_err(|error| schema_error(format!("managed Agent ceiling digest failed: {error}")))?;
+    let expected_digest =
+        agent_requested_scope_digest(&agent_did, &controller_did, &requested_scope).map_err(
+            |error| schema_error(format!("managed Agent ceiling digest failed: {error}")),
+        )?;
     if endpoint
         .get("requested_scope_digest")
         .and_then(Value::as_str)
@@ -1229,13 +1226,8 @@ pub(crate) fn requested_scope_digest_for_record(
     let controller_id = Did::new(record.controller_id.clone()).map_err(|error| {
         schema_error(format!("managed Agent controller DID is invalid: {error}"))
     })?;
-    agent_requested_scope_digest(
-        &agent_id,
-        &controller_id,
-        &requested_scope,
-        super::agents::requested_scope_participation_ceiling(&requested_scope),
-    )
-    .map_err(|error| schema_error(format!("managed Agent ceiling digest failed: {error}")))
+    agent_requested_scope_digest(&agent_id, &controller_id, &requested_scope)
+        .map_err(|error| schema_error(format!("managed Agent ceiling digest failed: {error}")))
 }
 
 async fn validate_current_recovery_recipient(
@@ -1360,7 +1352,6 @@ mod tests {
             &Did::new(AGENT).unwrap(),
             &Did::new(CONTROLLER).unwrap(),
             &typed_scope,
-            crate::routing::identity::agents::requested_scope_participation_ceiling(&typed_scope),
         )
         .unwrap();
         json!({

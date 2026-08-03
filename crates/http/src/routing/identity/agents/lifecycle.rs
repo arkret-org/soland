@@ -218,7 +218,6 @@ pub(super) async fn provision_agent(
             &Did::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
             &requested_scope_typed,
-            requested_scope_participation_ceiling(&requested_scope_typed),
         )
         .map_err(|error| AppError::internal(format!("requested_scope digest failed: {error}")))?;
         let pairing_request_id = record.pairing_request_id.clone().ok_or_else(|| {
@@ -282,7 +281,6 @@ pub(super) async fn provision_agent(
                     AppError::internal(format!("controller DID invalid: {error}"))
                 })?,
                 &requested_scope_typed,
-                requested_scope_participation_ceiling(&requested_scope_typed),
             )
             .map_err(|error| {
                 AppError::internal(format!("requested_scope digest failed: {error}"))
@@ -349,7 +347,6 @@ pub(super) async fn provision_agent(
         &agent_principal_did,
         &controller_did,
         &requested_scope_typed,
-        requested_scope_participation_ceiling(&requested_scope_typed),
     )
     .map_err(|err| AppError::internal(format!("requested_scope digest failed: {err}")))?;
     let controller_authorization_ref =
