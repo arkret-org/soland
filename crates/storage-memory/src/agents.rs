@@ -208,6 +208,8 @@ impl AgentStore for MemoryAgentStore {
                 .is_none_or(|intent| {
                     intent.request_digest != activation.paired_request_digest
                         || intent.authorize_event_id != activation.authorized_event_ref
+                        || intent.signing_key_binding.as_ref()
+                            != Some(&activation.authorized_signing_key_binding)
                 })
         {
             return Ok(false);
@@ -261,6 +263,8 @@ impl AgentStore for MemoryAgentStore {
                 .is_some_and(|existing| {
                     existing.request_digest != intent.request_digest
                         || existing.authorize_event_id != intent.authorize_event_id
+                        || existing.signing_key_binding.as_ref()
+                            != Some(&intent.signing_key_binding)
                 })
         {
             return Ok(None);
@@ -268,6 +272,7 @@ impl AgentStore for MemoryAgentStore {
         record.pending_pairing_commit_intent = Some(PendingAgentPairingCommitIntent {
             request_digest: intent.request_digest.clone(),
             authorize_event_id: intent.authorize_event_id.clone(),
+            signing_key_binding: Some(intent.signing_key_binding.clone()),
         });
         record.updated_at = Utc::now();
         Ok(Some(record.clone()))
@@ -362,6 +367,32 @@ mod tests {
         record
     }
 
+    fn signing_key_binding()
+    -> arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding {
+        serde_json::from_value(serde_json::json!({
+            "schema": "ak.schema.agent_signing_key_binding.v1",
+            "agent_id": "did:web:agent.example",
+            "agent_key_id": "runtime-1",
+            "verification_method": "did:web:agent.example#key-1",
+            "public_key": {
+                "kty": "OKP",
+                "alg": "Ed25519",
+                "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+            },
+            "public_key_digest": format!("sha256:{}", "00".repeat(32)),
+            "agent_key_authorize_event_id":
+                "ak:event:01904100-0000-7000-8000-000000000001",
+            "issued_at": "2026-07-27T00:00:00.000Z",
+            "controller_id": "did:web:controller.example",
+            "controller_proof": {
+                "kind": "controller_signature",
+                "verification_method": "did:web:controller.example#key-1",
+                "jws": "proof"
+            }
+        }))
+        .unwrap()
+    }
+
     #[tokio::test]
     async fn participation_selection_compare_and_swap_is_atomic() {
         let store = MemoryAgentParticipationStore::new();
@@ -417,6 +448,7 @@ mod tests {
             pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
             request_digest: "sha256:request-a".to_owned(),
             authorize_event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            signing_key_binding: signing_key_binding(),
         };
 
         assert!(
@@ -437,7 +469,7 @@ mod tests {
         let conflicting = AgentPairingCommitIntent {
             request_digest: "sha256:request-b".to_owned(),
             authorize_event_id: "ak:event:01904100-0000-7000-8000-000000000002".to_owned(),
-            ..intent
+            ..intent.clone()
         };
         assert!(
             store
@@ -458,6 +490,10 @@ mod tests {
             stored.authorize_event_id,
             "ak:event:01904100-0000-7000-8000-000000000001"
         );
+        assert_eq!(
+            stored.signing_key_binding.as_ref(),
+            Some(&intent.signing_key_binding)
+        );
     }
 
     #[tokio::test]
@@ -473,28 +509,7 @@ mod tests {
             authorized_event_ref: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
             authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
             authorized_public_key_digest: format!("sha256:{}", "00".repeat(32)),
-            authorized_signing_key_binding: serde_json::from_value(serde_json::json!({
-                "schema": "ak.schema.agent_signing_key_binding.v1",
-                "agent_id": "did:web:agent.example",
-                "agent_key_id": "runtime-1",
-                "verification_method": "did:web:agent.example#key-1",
-                "public_key": {
-                    "kty": "OKP",
-                    "alg": "Ed25519",
-                    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
-                },
-                "public_key_digest": format!("sha256:{}", "00".repeat(32)),
-                "agent_key_authorize_event_id":
-                    "ak:event:01904100-0000-7000-8000-000000000001",
-                "issued_at": "2026-07-27T00:00:00.000Z",
-                "controller_id": "did:web:controller.example",
-                "controller_proof": {
-                    "kind": "controller_signature",
-                    "verification_method": "did:web:controller.example#key-1",
-                    "jws": "proof"
-                }
-            }))
-            .unwrap(),
+            authorized_signing_key_binding: signing_key_binding(),
             authorized_at: Utc::now(),
         };
 
@@ -512,6 +527,7 @@ mod tests {
                 pairing_request_id: activation.pairing_request_id.clone(),
                 request_digest: activation.paired_request_digest.clone(),
                 authorize_event_id: activation.authorized_event_ref.clone(),
+                signing_key_binding: activation.authorized_signing_key_binding.clone(),
             })
             .await
             .unwrap()

@@ -903,6 +903,7 @@ impl crate::identity::AgentPairingPort for PersistenceAgentPairing {
             pairing_request_id: command.pairing_request_id.clone(),
             request_digest: command.request_digest.clone(),
             authorize_event_id: command.authorize_event_id.clone(),
+            signing_key_binding: command.signing_key_binding.clone(),
         };
         Ok(self
             .0
@@ -1055,6 +1056,7 @@ fn application_agent_pairing(
             crate::identity::AgentPairingCommitIntentState {
                 request_digest: intent.request_digest,
                 authorize_event_id: intent.authorize_event_id,
+                signing_key_binding: intent.signing_key_binding,
             }
         }),
         pairing_code: record.pairing_code,
@@ -1100,6 +1102,7 @@ fn persistence_agent_pairing(
             soland_storage::PendingAgentPairingCommitIntent {
                 request_digest: intent.request_digest,
                 authorize_event_id: intent.authorize_event_id,
+                signing_key_binding: intent.signing_key_binding,
             }
         }),
         pairing_code: record.pairing_code,

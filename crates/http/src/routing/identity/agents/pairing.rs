@@ -362,6 +362,11 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     };
     let paired_request_digest = pending_commit_intent.request_digest;
     let pending_authorize_event_id = pending_commit_intent.authorize_event_id;
+    let signing_key_binding = pending_commit_intent.signing_key_binding.ok_or_else(|| {
+        pairing_failed_precondition(
+            "pending pairing commit intent is missing its controller signing-key binding",
+        )
+    })?;
     let expected_realm_id = agent_record.principal_control_realm_id.clone();
     let expected_authorization_ref = agent_record.controller_authorization_ref.clone();
     let expected_request_digest = pairing_request_binding_digest(
@@ -425,24 +430,6 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     let Some(accepted) = accepted else {
         return Ok(agent_record);
     };
-    let signing_key_binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding =
-        accepted
-            .envelope
-            .get("unsigned")
-            .and_then(|unsigned| unsigned.get("agent_signing_key_binding"))
-            .cloned()
-            .ok_or_else(|| {
-                pairing_failed_precondition(
-                    "accepted authorization is missing its controller signing-key binding",
-                )
-            })
-            .and_then(|value| {
-                serde_json::from_value(value).map_err(|_| {
-                    pairing_failed_precondition(
-                        "accepted authorization signing-key binding is invalid",
-                    )
-                })
-            })?;
     let authorize_event: arkret_wire::Event = serde_json::from_value(accepted.envelope.clone())
         .map_err(|error| {
             AppError::internal(format!(
@@ -758,6 +745,7 @@ pub(super) async fn agent_key_pair(
         pairing_request_id: body.pairing_request_id.clone(),
         request_digest: paired_request_digest.clone(),
         authorize_event_id: event_id.to_owned(),
+        signing_key_binding: body.signing_key_binding.clone(),
     };
     let committed = state
         .agent_pairings()
@@ -785,6 +773,7 @@ pub(super) async fn agent_key_pair(
                 .is_some_and(|intent| {
                     intent.request_digest != paired_request_digest
                         || intent.authorize_event_id != event_id
+                        || intent.signing_key_binding.as_ref() != Some(&body.signing_key_binding)
                 })
         }) {
             return Err(AppError::conflict(

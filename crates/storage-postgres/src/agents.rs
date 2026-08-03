@@ -373,10 +373,16 @@ impl AgentStore for PgAgentStore {
                     "encode typed Agent signing-key binding: {error}"
                 ))
             })?;
-        let pending_intent = serde_json::json!({
-            "request_digest": activation.paired_request_digest,
-            "authorize_event_id": activation.authorized_event_ref,
-        });
+        let pending_intent = serde_json::to_value(PendingAgentPairingCommitIntent {
+            request_digest: activation.paired_request_digest.clone(),
+            authorize_event_id: activation.authorized_event_ref.clone(),
+            signing_key_binding: Some(activation.authorized_signing_key_binding.clone()),
+        })
+        .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "encode pending Agent pairing commit intent: {error}"
+            ))
+        })?;
         diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&activation.agent_id))
@@ -427,10 +433,16 @@ impl AgentStore for PgAgentStore {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        let intent_value = serde_json::json!({
-            "request_digest": intent.request_digest,
-            "authorize_event_id": intent.authorize_event_id,
-        });
+        let intent_value = serde_json::to_value(PendingAgentPairingCommitIntent {
+            request_digest: intent.request_digest.clone(),
+            authorize_event_id: intent.authorize_event_id.clone(),
+            signing_key_binding: Some(intent.signing_key_binding.clone()),
+        })
+        .map_err(|error| {
+            PersistenceError::Internal(format!(
+                "encode pending Agent pairing commit intent: {error}"
+            ))
+        })?;
         let record = diesel::update(
             agent_principals::table
                 .filter(agent_principals::id.eq(&intent.agent_id))

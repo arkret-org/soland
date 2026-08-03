@@ -11,6 +11,8 @@ use uuid::Uuid;
 pub struct PendingAgentPairingCommitIntent {
     pub request_digest: String,
     pub authorize_event_id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub signing_key_binding: Option<AgentSigningKeyBinding>,
 }
 
 /// Durable projection of a managed Agent principal.

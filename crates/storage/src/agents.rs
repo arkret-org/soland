@@ -63,6 +63,8 @@ pub struct AgentPairingCommitIntent {
     pub pairing_request_id: OpaqueLocalId,
     pub request_digest: String,
     pub authorize_event_id: String,
+    pub signing_key_binding:
+        arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
 }
 #[derive(Clone, Debug)]
 pub struct AgentRuntimeApprovalWrite {
