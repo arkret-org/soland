@@ -214,25 +214,7 @@ pub(in crate::routing) async fn submit_event_value(
     // carries no `seal_basis`, so it needs the bootstrap CBA context. Only a
     // create that `batch_is_managed_agent_pcr_create` already materialized as
     // that unit reaches this point.
-    let bootstrap_contexts = if event_string_field_from_value(&envelope, "kind").as_deref()
-        == Some(arkret_wire::EventKind::REALM_CREATE)
-    {
-        match (
-            event_string_field_from_value(&envelope, "realm_id"),
-            event_string_field_from_value(&envelope, "actor_id"),
-        ) {
-            (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
-                realm_id,
-                actor_id,
-                identity_anchor_event_id: None,
-                self_principal_pcr_bootstrap: false,
-                authority_root: None,
-            }],
-            _ => Vec::new(),
-        }
-    } else {
-        Vec::new()
-    };
+    let bootstrap_contexts = single_realm_create_bootstrap_context(&envelope);
     submit_event_value_with_context(
         state,
         session,
@@ -245,6 +227,28 @@ pub(in crate::routing) async fn submit_event_value(
         None,
     )
     .await
+}
+
+fn single_realm_create_bootstrap_context(envelope: &Value) -> Vec<RealmBootstrapBatchContext> {
+    if event_string_field_from_value(envelope, "kind").as_deref()
+        == Some(arkret_wire::EventKind::REALM_CREATE)
+    {
+        match (
+            event_string_field_from_value(envelope, "realm_id"),
+            event_string_field_from_value(envelope, "actor_id"),
+        ) {
+            (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
+                realm_id,
+                actor_id,
+                identity_anchor_event_id: None,
+                self_principal_pcr_bootstrap: false,
+                authority_root: None,
+            }],
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    }
 }
 
 /// First durable publication of one Event with its authorization lease
@@ -295,11 +299,12 @@ pub(in crate::routing) async fn submit_initial_event_submission(
             "identity-root anchor Events are accepted only in their protocol-defined atomic batch",
         ));
     }
+    let bootstrap_contexts = single_realm_create_bootstrap_context(&envelope);
     submit_event_value_with_context(
         state,
         session,
         envelope,
-        &[],
+        &bootstrap_contexts,
         None,
         None,
         authorization_lease.as_ref(),
