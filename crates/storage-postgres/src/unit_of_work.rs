@@ -104,6 +104,9 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     "schema_violation: accepted Event envelope is not canonical wire: {error}"
                 ))
             })?;
+            // Control/Data routing is defined by the typed Event plane. A
+            // closed genesis anchor is a basis-free Control Move; a DataEvent
+            // instead carries `seal_ref` plus `auth_context`.
             let is_control_move = typed_event.kind.is_reducer_input()
                 && typed_event.seal_ref.is_none()
                 && typed_event.auth_context.is_none();

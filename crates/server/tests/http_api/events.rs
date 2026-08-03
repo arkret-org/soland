@@ -112,11 +112,14 @@ async fn fetch_chunked_mls_governance_proof(
     object.remove("expected_bundle_digest");
     let base_request: arkret_models_crypto::MlsGovernanceProofRequestBodyBody =
         serde_json::from_value(request_value).expect("typed chunk-0 proof request");
+    let base_request_body = arkret_canonical::canonical_json_bytes(&base_request)
+        .expect("canonical chunk-0 proof request");
 
     let mut first_response =
         TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
             .add_header("authorization", format!("Bearer {token}"), true)
-            .json(&base_request)
+            .add_header("content-type", "application/json", true)
+            .body(base_request_body)
             .send(&app_from_state(state.clone()))
             .await;
     let first_status = first_response.status_code.expect("proof status");
@@ -129,10 +132,13 @@ async fn fetch_chunked_mls_governance_proof(
         let mut request = base_request.clone();
         request.chunk_index = chunk_index;
         request.expected_bundle_digest = Some(first.bundle_digest.clone());
+        let request_body = arkret_canonical::canonical_json_bytes(&request)
+            .expect("canonical proof chunk request");
         let mut response =
             TestClient::post("http://server/_arkret/self/events/mls-governance-proof")
                 .add_header("authorization", format!("Bearer {token}"), true)
-                .json(&request)
+                .add_header("content-type", "application/json", true)
+                .body(request_body)
                 .send(&app_from_state(state.clone()))
                 .await;
         let status = response.status_code.expect("proof chunk status");
@@ -1582,6 +1588,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "federation_policy": "restricted",
                 "notary_profile": "single_did",
                 "digest_algorithm": "sha256",
+                "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                 "created_at": arkret_canonical::format_timestamp_canonical(created_at),
                 "fields": {"purpose": "principal_control"},
                 "content_encryption_floor": "e2ee_required",
@@ -1613,6 +1620,18 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         arkret_wire::AuthorizationRef::new(agent_record.controller_authorization_ref.as_str())
             .unwrap(),
     );
+    let provision_event_id = agent_record
+        .provision_event_refs
+        .as_ref()
+        .and_then(|refs| refs.get("provision_event_id"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .expect("managed Agent record must retain its provision Event id");
+    create
+        .refs
+        .push(arkret_bootstrap::managed_agent_provision_ref(
+            arkret_identifiers::EventId::new(provision_event_id).unwrap(),
+        ));
     // `arkret_bootstrap::realm_create_effects` is gone with the producer effect
     // array. The genesis write set is now derived by the receiver, and the only
     // thing a producer can still get wrong is a payload whose registered
@@ -1645,9 +1664,44 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         },
     )
     .unwrap();
+    let genesis_authority =
+        arkret_bootstrap::ManagedAgentPcrGenesisAuthority::from_delegated_create(
+            &create,
+            &super::agents::genesis_projector,
+        )
+        .expect("managed Agent PCR candidate genesis authority");
+    let proposal_policy = arkret_wire::ControlProposalDecisionPolicy::default();
+    let proposal_digest = arkret_wire::Hash::new(create.event_digest().unwrap()).unwrap();
+    let proposal_member = arkret_wire::ProposalMemberReceipt::issue_with_signer(
+        create.realm_id.clone(),
+        proposal_digest,
+        genesis_authority.authority_set_ref().clone(),
+        chrono::Utc::now(),
+        proposal_policy,
+        &signer,
+    )
+    .expect("delegated-controller genesis proposal member receipt");
+    let proposal_receipt = arkret_wire::ControlProposalReceipt::from_member_receipts(
+        vec![proposal_member],
+        proposal_policy,
+    )
+    .expect("managed Agent PCR genesis proposal receipt");
+    let create_submission = arkret_wire::EventInitialSubmission {
+        event: create.clone(),
+        authorization_lease: None,
+        cba_proof_bundles: Vec::new(),
+        control_proposal_receipt: Some(proposal_receipt),
+        membership_compensation_evidence: None,
+    };
+    create_submission
+        .validate_structural_in_context(arkret_wire::EventSubmitContext::AnchorUnit)
+        .expect("managed Agent PCR genesis initial submission");
+    let create_submission_body = arkret_canonical::canonical_json_bytes(&create_submission)
+        .expect("canonical managed Agent PCR genesis submission");
     let mut create_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&create)
+        .add_header("content-type", "application/json", true)
+        .body(create_submission_body)
         .send(&app_from_state(state.clone()))
         .await;
     let event_status = create_response.status_code.expect("create Event status");
@@ -1680,9 +1734,12 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         &super::agents::genesis_projector,
     )
     .unwrap();
+    let seal_body_bytes =
+        arkret_canonical::canonical_json_bytes(&seal).expect("canonical managed Agent PCR Seal");
     let mut seal_response = TestClient::post("http://server/_arkret/self/events/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&seal)
+        .add_header("content-type", "application/json", true)
+        .body(seal_body_bytes)
         .send(&app_from_state(state.clone()))
         .await;
     let seal_status = seal_response.status_code.expect("Seal submit status");
@@ -1836,9 +1893,12 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         &super::agents::genesis_projector,
     )
     .unwrap();
+    let successor_body_bytes = arkret_canonical::canonical_json_bytes(&successor)
+        .expect("canonical managed Agent PCR successor Seal");
     let mut successor_response = TestClient::post("http://server/_arkret/self/events/seals")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&successor)
+        .add_header("content-type", "application/json", true)
+        .body(successor_body_bytes)
         .send(&app_from_state(state.clone()))
         .await;
     assert_eq!(successor_response.status_code, Some(StatusCode::OK));

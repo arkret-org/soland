@@ -474,6 +474,7 @@ async fn stored_control_proposal_receipt(
     state: &AppState,
     existing: &soland_services::events::CanonicalEventRecord,
     digest: &Hash,
+    submitted: Option<&arkret_wire::ControlProposalReceipt>,
 ) -> Result<arkret_wire::ControlProposalReceipt, SubmitOneError> {
     if let Some(receipt) = state
         .projections()
@@ -489,7 +490,7 @@ async fn stored_control_proposal_receipt(
         return Ok(receipt);
     }
 
-    let receipt = state
+    let durable_receipt = state
         .event_queries()
         .control_proposal_receipt_for_event(&existing.event_id)
         .await
@@ -499,14 +500,22 @@ async fn stored_control_proposal_receipt(
                 "internal_error",
                 format!("durable Control Proposal receipt unavailable: {error}"),
             )
-        })?
-        .ok_or_else(|| {
-            SubmitOneError::new(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "internal_error",
-                "accepted Control Move is missing its proposal receipt",
-            )
         })?;
+    if let Some(receipt) = durable_receipt {
+        return Ok(receipt);
+    }
+
+    // Migration repair for an exact, still-unsealed Event accepted by an
+    // older build before closed managed-PCR anchors participated in the
+    // proposal protocol. A byte-identical retry may attach the first valid
+    // receipt and rebuild the pending index; it may never replace one.
+    let submitted = submitted.ok_or_else(|| {
+        SubmitOneError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "internal_error",
+            "accepted Control Move is missing its proposal receipt",
+        )
+    })?;
     let event: Event = serde_json::from_value(existing.envelope.clone()).map_err(|error| {
         SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -529,8 +538,8 @@ async fn stored_control_proposal_receipt(
         )
     })?;
     if &recovered_digest != digest
-        || receipt.proposal_digest != *digest
-        || receipt.realm_id != event.realm_id
+        || submitted.proposal_digest != *digest
+        || submitted.realm_id != event.realm_id
     {
         return Err(SubmitOneError::new(
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -538,9 +547,31 @@ async fn stored_control_proposal_receipt(
             "durable Control Proposal receipt does not bind the accepted Control Move",
         ));
     }
+    let policy = crate::control_proposal::control_proposal_policy(
+        state,
+        &event.realm_id,
+        std::slice::from_ref(&event),
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quorum_unreachable",
+            format!("Control Proposal policy is unavailable: {error}"),
+        )
+    })?;
+    crate::control_proposal::verify_control_proposal_receipt(state, &event, submitted, policy)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                format!("submitted Control Proposal receipt is invalid: {error}"),
+            )
+        })?;
     state
         .projections()
-        .put_pending_control_event_with_receipt(&event, &receipt)
+        .put_pending_control_event_with_receipt(&event, submitted)
         .map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -549,7 +580,7 @@ async fn stored_control_proposal_receipt(
             )
         })?;
     state.wake_control_seal_coordinator();
-    Ok(receipt)
+    Ok(submitted.clone())
 }
 
 pub(super) async fn submit_event_value_with_context(
@@ -565,6 +596,38 @@ pub(super) async fn submit_event_value_with_context(
         &arkret_wire::MembershipCompensationSubmissionEvidence,
     >,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
+    let managed_agent_pcr_genesis =
+        batch_is_managed_agent_pcr_create(std::slice::from_ref(&envelope));
+    if managed_agent_pcr_genesis && submitted_control_proposal_receipt.is_none() {
+        return Err(SubmitOneError::new(
+            StatusCode::PRECONDITION_FAILED,
+            "failed_precondition",
+            "managed Agent PCR genesis requires a delegated-controller proposal receipt",
+        ));
+    }
+    let managed_bootstrap_contexts = if managed_agent_pcr_genesis {
+        match (
+            event_string_field_from_value(&envelope, "realm_id"),
+            event_string_field_from_value(&envelope, "actor_id"),
+        ) {
+            (Some(realm_id), Some(actor_id)) => vec![RealmBootstrapBatchContext {
+                realm_id,
+                actor_id,
+                identity_anchor_event_id: None,
+                self_principal_pcr_bootstrap: false,
+                authority_root: None,
+            }],
+            _ => Vec::new(),
+        }
+    } else {
+        Vec::new()
+    };
+    let realm_bootstrap_contexts =
+        if managed_agent_pcr_genesis && realm_bootstrap_contexts.is_empty() {
+            managed_bootstrap_contexts.as_slice()
+        } else {
+            realm_bootstrap_contexts
+        };
     let raw_bytes = serde_json::to_vec(&envelope).map_err(|_| {
         SubmitOneError::new(
             StatusCode::BAD_REQUEST,
@@ -711,7 +774,7 @@ pub(super) async fn submit_event_value_with_context(
                 .await,
                 ingress_receipt.as_ref(),
             );
-            if envelope.get("seal_basis").is_some() {
+            if envelope.get("seal_basis").is_some() || managed_agent_pcr_genesis {
                 let digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -719,7 +782,13 @@ pub(super) async fn submit_event_value_with_context(
                         format!("stored Control Move digest is invalid: {error}"),
                     )
                 })?;
-                let receipt = stored_control_proposal_receipt(state, &existing, &digest).await?;
+                let receipt = stored_control_proposal_receipt(
+                    state,
+                    &existing,
+                    &digest,
+                    submitted_control_proposal_receipt,
+                )
+                .await?;
                 response.outcome.control_proposal_receipts.push(receipt);
             }
             return Ok(response);
@@ -1808,8 +1877,13 @@ pub(super) async fn submit_event_value_with_context(
                                     format!("stored Control Move digest is invalid: {error}"),
                                 )
                             })?;
-                        let receipt =
-                            stored_control_proposal_receipt(state, &existing, &digest).await?;
+                        let receipt = stored_control_proposal_receipt(
+                            state,
+                            &existing,
+                            &digest,
+                            submitted_control_proposal_receipt,
+                        )
+                        .await?;
                         response.outcome.control_proposal_receipts.push(receipt);
                     }
                     return Ok(response);

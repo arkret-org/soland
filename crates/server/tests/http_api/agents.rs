@@ -1,5 +1,6 @@
 //! Integration tests - personal-agent HTTP surfaces.
 
+use arkret_state::lattice::CellState;
 use arkret_wire::PayloadSigner as _;
 
 use super::common::*;
@@ -365,6 +366,20 @@ pub(crate) async fn seed_agent_provision_prerequisites(state: &AppState, control
         )
         .await
         .unwrap();
+    state
+        .test_projection()
+        .lock()
+        .realm_null_subject_cells
+        .insert(
+            (
+                realm_id,
+                format!(
+                    "ak:cell:{}:null",
+                    arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+                ),
+            ),
+            CellState::Value(Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned())),
+        );
 }
 
 pub(super) async fn provision_agent_with_sdk_events(

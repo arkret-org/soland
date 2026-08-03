@@ -103,11 +103,14 @@ pub(crate) async fn prepare_standard_initial_submissions(
         events: events.clone(),
         intents: Vec::new(),
     };
+    let lease_request_body = arkret_canonical::canonical_json_bytes(&lease_request)
+        .expect("canonical authorization lease request");
     let request_key = new_prefixed_uuid7("lease-");
     let mut lease_response = TestClient::post("http://server/_arkret/self/authorization-leases")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("Idempotency-Key", request_key, true)
-        .json(&lease_request)
+        .add_header("content-type", "application/json", true)
+        .body(lease_request_body)
         .send(&app_from_state(state.clone()))
         .await;
     let lease_status = lease_response.status_code;

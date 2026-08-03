@@ -79,6 +79,113 @@ async fn postgres_adapter_satisfies_shared_event_commit_contract_when_configured
 }
 
 #[tokio::test]
+async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured() {
+    use diesel::sql_types::Text;
+    use diesel::{QueryableByName, sql_query};
+    use diesel_async::RunQueryDsl;
+    use soland_storage::{CanonicalEventRecord, EventCommitRequest, EventCommitUnitOfWork};
+
+    #[derive(QueryableByName)]
+    struct CountRow {
+        #[diesel(sql_type = diesel::sql_types::BigInt)]
+        value: i64,
+    }
+
+    let Some(pool) = test_pool().await else {
+        return;
+    };
+    let _db_guard = DB_GUARD.lock().await;
+    let now = chrono::Utc::now();
+    let event_id =
+        arkret_identifiers::EventId::new(format!("ak:event:{}", uuid::Uuid::now_v7())).unwrap();
+    let realm_id =
+        arkret_identifiers::RealmId::new(format!("ak:realm:{}", uuid::Uuid::now_v7())).unwrap();
+    let actor_id = arkret_identifiers::Did::new(format!(
+        "did:web:managed-anchor-{}.example",
+        uuid::Uuid::now_v7()
+    ))
+    .unwrap();
+    let event = arkret_wire::Event::new_with_id_at(
+        event_id.clone(),
+        arkret_wire::EventKind::REALM_CREATE,
+        arkret_wire::ScopeRef::Realm {
+            realm_id: realm_id.clone(),
+        },
+        actor_id,
+        0,
+        arkret_identifiers::Hlc::new("019c00000000-0000-aabbccdd").unwrap(),
+        serde_json::json!({"object": {"fields": {"purpose": "principal_control"}}}),
+        now,
+    )
+    .unwrap();
+    assert!(event.seal_basis.is_none());
+    let proposal_digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
+    let authority_set_ref =
+        arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64))).unwrap();
+    let member = arkret_wire::ProposalMemberReceipt {
+        realm_id: realm_id.clone(),
+        proposal_digest: proposal_digest.clone(),
+        received_at: now,
+        decision_due_at: now + chrono::Duration::hours(1),
+        absolute_due_at: now + chrono::Duration::hours(2),
+        authority_set_ref: authority_set_ref.clone(),
+        signature: arkret_wire::PayloadSignature {
+            alg: "EdDSA".to_owned(),
+            verification_method: arkret_wire::DidUrl::new(
+                "did:web:controller.example#device-1".to_owned(),
+            )
+            .unwrap(),
+            payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "b".repeat(64)))
+                .unwrap(),
+            created_at: now,
+            jws: "eyJhbGciOiJFZERTQSJ9..AQ".to_owned(),
+            extra: Default::default(),
+        },
+    };
+    let receipt = arkret_wire::ControlProposalReceipt::from_member_receipts(
+        vec![member],
+        arkret_wire::ControlProposalDecisionPolicy::default(),
+    )
+    .unwrap();
+    let envelope = serde_json::to_value(&event).unwrap();
+    let canonical_bytes = arkret_canonical::canonical_json_bytes(&envelope).unwrap();
+    PgEventCommitUnitOfWork::new(pool.clone())
+        .commit_event(EventCommitRequest {
+            event: CanonicalEventRecord {
+                event_id: event_id.to_string(),
+                actor_id: event.actor_id.to_string(),
+                actor_seq: 0,
+                realm_id: Some(realm_id.to_string()),
+                kind: arkret_wire::EventKind::REALM_CREATE.to_owned(),
+                schema_id: "ak.schema.realm.v1".to_owned(),
+                canonical_digest: proposal_digest.to_string(),
+                canonical_bytes,
+                envelope,
+                received_at: now,
+            },
+            control_proposal_receipt: Some(receipt),
+            projections: Vec::new(),
+            idempotency: None,
+            outbox: Vec::new(),
+        })
+        .await
+        .expect("commit basis-free Control anchor with its receipt");
+
+    let mut conn = pool.get().await.unwrap();
+    let count =
+        sql_query("SELECT COUNT(*) AS value FROM state_control_events WHERE event_digest = $1")
+            .bind::<Text, _>(proposal_digest.as_str())
+            .get_result::<CountRow>(&mut *conn)
+            .await
+            .unwrap()
+            .value;
+    assert_eq!(
+        count, 1,
+        "basis-free Control anchor must enter pending index"
+    );
+}
+
+#[tokio::test]
 async fn postgres_adapter_rolls_atomic_batches_back_with_their_outbox_when_configured() {
     let Some(pool) = test_pool().await else {
         return;

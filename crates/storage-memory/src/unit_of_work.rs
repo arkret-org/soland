@@ -18,6 +18,10 @@ fn stage_control_proposal_receipt(
                 "schema_violation: accepted Event envelope is not canonical wire: {error}"
             ))
         })?;
+    // Control/Data routing is defined by the typed Event plane. In particular,
+    // a closed genesis anchor is a basis-free Control Move, while a DataEvent
+    // carries the data-plane seal/auth context. Do not infer the plane from
+    // `seal_basis` or from the presence of a receipt.
     let is_control_move =
         event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
     if !is_control_move {
