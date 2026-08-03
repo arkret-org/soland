@@ -517,11 +517,10 @@ async fn validate_direct_binding_event_refs(
                 authorization_kinds.insert(accepted.kind);
             }
             let expected = BTreeSet::from([
-                arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT.to_owned(),
-                arkret_wire::EventKind::AGENT_SELECTOR_CLAIM.to_owned(),
+                arkret_wire::EventKind::AGENT_PROVISION.to_owned(),
                 arkret_wire::EventKind::AGENT_KEY_AUTHORIZE.to_owned(),
             ]);
-            if payload.authorization_basis.event_refs.len() != 3 || authorization_kinds != expected
+            if payload.authorization_basis.event_refs.len() != 2 || authorization_kinds != expected
             {
                 return Err("managed_agent_authorization_refs");
             }
@@ -540,10 +539,7 @@ async fn validate_direct_binding_event_refs(
                 .ok_or("direct_conversation_binding_invalid")?;
             let expected_refs = [
                 provision_refs
-                    .get("accountability_grant_event_id")
-                    .and_then(Value::as_str),
-                provision_refs
-                    .get("selector_claim_event_id")
+                    .get("provision_event_id")
                     .and_then(Value::as_str),
                 record.authorized_event_ref.as_deref(),
             ]

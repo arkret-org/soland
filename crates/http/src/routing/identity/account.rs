@@ -681,10 +681,7 @@ fn managed_agent_direct_authorization_basis_from_record(
     let provision_refs = record.provision_event_refs.as_ref()?;
     let refs = [
         provision_refs
-            .get("accountability_grant_event_id")
-            .and_then(Value::as_str),
-        provision_refs
-            .get("selector_claim_event_id")
+            .get("provision_event_id")
             .and_then(Value::as_str),
         record.authorized_event_ref.as_deref(),
     ];
@@ -1623,8 +1620,7 @@ mod tests {
             created_at,
         );
         record.provision_event_refs = Some(json!({
-            "accountability_grant_event_id": "ak:event:019f0000-0000-7000-8000-000000000003",
-            "selector_claim_event_id": "ak:event:019f0000-0000-7000-8000-000000000004"
+            "provision_event_id": "ak:event:019f0000-0000-7000-8000-000000000003"
         }));
         record.authorized_event_ref =
             Some("ak:event:019f0000-0000-7000-8000-000000000005".to_owned());
@@ -1642,7 +1638,6 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![
                 "ak:event:019f0000-0000-7000-8000-000000000003",
-                "ak:event:019f0000-0000-7000-8000-000000000004",
                 "ak:event:019f0000-0000-7000-8000-000000000005",
             ]
         );

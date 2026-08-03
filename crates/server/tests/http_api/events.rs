@@ -1508,7 +1508,6 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         &state,
         token,
         controller_id,
-        "Governance recovery Agent",
         "governance-recovery",
         serde_json::json!({
             "actions": [

@@ -386,20 +386,12 @@ pub(super) async fn provision_agent_with_sdk_events(
     state: &AppState,
     token: &str,
     controller: &str,
-    display_name: &str,
     slug: &str,
     requested_scope: Value,
 ) -> (StatusCode, Value) {
-    let (status, body, commit_body) = provision_agent_sdk_commit_attempt(
-        state,
-        token,
-        controller,
-        display_name,
-        slug,
-        requested_scope,
-        None,
-    )
-    .await;
+    let (status, body, commit_body) =
+        provision_agent_sdk_commit_attempt(state, token, controller, slug, requested_scope, None)
+            .await;
     if status == StatusCode::CREATED {
         let app = app_from_state(state.clone());
         let mut retried = TestClient::post("http://server/_arkret/self/agents")
@@ -417,7 +409,6 @@ async fn provision_agent_sdk_commit_attempt(
     state: &AppState,
     token: &str,
     controller: &str,
-    _display_name: &str,
     slug: &str,
     requested_scope: Value,
     fault: Option<(
@@ -426,17 +417,30 @@ async fn provision_agent_sdk_commit_attempt(
     )>,
 ) -> (StatusCode, Value, Value) {
     let app = app_from_state(state.clone());
-    let operation_id = format!("ak:operation:{}", uuid::Uuid::now_v7().simple());
-    let idempotency_key = uuid::Uuid::now_v7().simple().to_string();
+    let operation_id = arkret_wire::ProtocolOperationId::new(format!(
+        "ak:operation:{}",
+        uuid::Uuid::now_v7().simple()
+    ))
+    .unwrap();
+    let idempotency_key =
+        arkret_wire::ProtocolOpaqueId::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+    let scope = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
+    >(requested_scope.clone())
+    .unwrap();
+    let prepare_body = serde_json::to_value(
+        arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Prepare {
+            operation_id: operation_id.clone(),
+            idempotency_key: idempotency_key.clone(),
+            slug: slug.to_owned(),
+            requested_scope: scope.clone(),
+            pairing_ttl_ms: None,
+        },
+    )
+    .unwrap();
     let mut prepared = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "phase": "prepare",
-            "operation_id": operation_id,
-            "idempotency_key": idempotency_key,
-            "slug": slug,
-            "requested_scope": requested_scope,
-        }))
+        .json(&prepare_body)
         .send(&app)
         .await;
     let prepare_status = prepared.status_code.expect("prepare status");
@@ -444,38 +448,25 @@ async fn provision_agent_sdk_commit_attempt(
     if prepare_status != StatusCode::OK {
         return (prepare_status, preparation, Value::Null);
     }
-    assert_eq!(preparation["status"], "awaiting_controller_event");
-
     let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
-    let agent_id =
-        serde_json::from_value::<arkret_identifiers::Did>(preparation["agent_id"].clone()).unwrap();
-    let controller_realm_id = serde_json::from_value::<arkret_identifiers::RealmId>(
-        preparation["controller_realm_id"].clone(),
-    )
+    let preparation = serde_json::from_value::<
+        arkret_models_collaboration::agent_operations::AgentProvisionOutcome,
+    >(preparation)
     .unwrap();
-    let principal_control_realm_id = serde_json::from_value::<arkret_identifiers::RealmId>(
-        preparation["principal_control_realm_id"].clone(),
-    )
-    .unwrap();
-    let allocation_handle = serde_json::from_value::<arkret_wire::ProtocolOpaqueId>(
-        preparation["allocation_handle"].clone(),
-    )
-    .unwrap();
-    let controller_authorization_ref = serde_json::from_value::<arkret_wire::DidUrl>(
-        preparation["controller_authorization_ref"].clone(),
-    )
-    .unwrap();
-    let scope = serde_json::from_value::<
-        arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
-    >(requested_scope.clone())
-    .unwrap();
+    let arkret_models_collaboration::agent_operations::AgentProvisionOutcome::AwaitingControllerEvent {
+        agent_id,
+        principal_control_realm_id,
+        controller_realm_id,
+        allocation_handle,
+        controller_authorization_ref,
+        requested_scope_digest,
+    } = preparation else {
+        panic!("prepare must await the controller-authored provision Event");
+    };
     let expected_scope_digest =
         arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
             .unwrap();
-    assert_eq!(
-        preparation["requested_scope_digest"],
-        expected_scope_digest.as_str()
-    );
+    assert_eq!(requested_scope_digest, expected_scope_digest);
     let actor_frontier: arkret_models_collaboration::event_sync::EventsFrontierAccountClientState = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?actor_id={controller}&realm_id={controller_realm_id}"
     ))
@@ -560,8 +551,8 @@ async fn provision_agent_sdk_commit_attempt(
         .expect("single provision submission");
     let commit_body = serde_json::to_value(
         arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Commit {
-            operation_id: arkret_wire::ProtocolOperationId::new(operation_id).unwrap(),
-            idempotency_key: arkret_wire::ProtocolOpaqueId::new(idempotency_key).unwrap(),
+            operation_id,
+            idempotency_key,
             agent_id,
             principal_control_realm_id,
             allocation_handle,
@@ -600,7 +591,6 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         &state,
         token,
         controller,
-        "Production Agent",
         "production-agent",
         serde_json::json!({
                 "actions": [
@@ -646,15 +636,10 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         .as_array()
         .unwrap()
         .iter()
-        .filter(|event| {
-            matches!(
-                event["kind"].as_str(),
-                Some("ak.identity.accountability_grant" | "ak.agent.selector_claim")
-            )
-        })
+        .filter(|event| matches!(event["kind"].as_str(), Some("ak.agent.provision")))
         .cloned()
         .collect::<Vec<_>>();
-    assert_eq!(provision_events.len(), 2, "{replay}");
+    assert_eq!(provision_events.len(), 1, "{replay}");
     let public_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
         bytes: SigningKey::from_bytes(&CONTROLLER_DEVICE_SIGNING_SEED)
             .verifying_key()
@@ -663,6 +648,10 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
     };
     for replayed in provision_events {
         let event: arkret_wire::Event = serde_json::from_value(replayed).unwrap();
+        arkret_models_collaboration::events_payloads::agent::AgentProvisionPayload::try_from(
+            &event,
+        )
+        .unwrap();
         event.validate_proof_bindings().unwrap();
         assert_eq!(event.proofs.len(), 1);
         let canonical_bytes =
@@ -687,8 +676,6 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
     let plans = [
         FaultPlan::new(FaultPoint::EventCommit, FaultTiming::Before, 1),
         FaultPlan::new(FaultPoint::EventCommit, FaultTiming::After, 1),
-        FaultPlan::new(FaultPoint::EventCommit, FaultTiming::Before, 2),
-        FaultPlan::new(FaultPoint::EventCommit, FaultTiming::After, 2),
         FaultPlan::new(FaultPoint::WebvhLogCommit, FaultTiming::Before, 1),
         FaultPlan::new(FaultPoint::WebvhLogCommit, FaultTiming::After, 1),
         FaultPlan::new(FaultPoint::AgentPut, FaultTiming::Before, 1),
@@ -724,7 +711,6 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
             &state,
             &token,
             controller,
-            "Fault Recovery Agent",
             &slug,
             requested_scope,
             Some((&injector, plan)),
@@ -760,16 +746,9 @@ async fn agent_provision_recovers_from_each_durable_commit_boundary() {
         assert_eq!(replayed.take_json::<Value>().await.unwrap(), recovered_body);
 
         let agent_id = commit_body["agent_id"].as_str().unwrap();
-        // Each `provision_events` member is an `EventInitialSubmission`, so the
-        // Event id sits under its `event`, not at the submission root.
-        let event_ids = [
-            commit_body["provision_events"]["accountability_grant"]["event"]["event_id"]
-                .as_str()
-                .unwrap(),
-            commit_body["provision_events"]["selector_claim"]["event"]["event_id"]
-                .as_str()
-                .unwrap(),
-        ];
+        let event_ids = [commit_body["provision_event"]["event"]["event_id"]
+            .as_str()
+            .unwrap()];
         let stored_events = persistence.events().snapshot_all().await.unwrap();
         for event_id in event_ids {
             assert_eq!(
@@ -827,8 +806,8 @@ async fn agent_provision_commit_requires_its_server_allocation() {
     let hlc =
         arkret_identifiers::Hlc::new(format!("{:012x}-0000-a13f9c2e", now.timestamp_millis()))
             .unwrap();
-    let accountability = arkret_wire::Event::new(
-        arkret_wire::EventKind::IDENTITY_ACCOUNTABILITY_GRANT,
+    let provision_event = arkret_wire::Event::new(
+        arkret_wire::EventKind::AGENT_PROVISION,
         arkret_wire::ScopeRef::Realm {
             realm_id: controller_realm_id.clone(),
         },
@@ -838,90 +817,51 @@ async fn agent_provision_commit_requires_its_server_allocation() {
         serde_json::json!({}),
     )
     .unwrap();
-    let selector = arkret_wire::Event::new(
-        arkret_wire::EventKind::AGENT_SELECTOR_CLAIM,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: controller_realm_id,
+    let requested_scope = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
+    >(serde_json::json!({
+        "actions": ["ak.self.events.stream.subscribe"],
+        "resources": [{
+            "kind": "operation",
+            "operation": "ak.self.events.stream.subscribe"
+        }],
+        "constraints": []
+    }))
+    .unwrap();
+    // This negative vector deliberately uses a schema-valid public SDK request
+    // with no matching private server allocation. Admission must fail before
+    // interpreting the intentionally incomplete Event payload.
+    let commit_body = serde_json::to_value(
+        arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Commit {
+            operation_id: arkret_wire::ProtocolOperationId::new(
+                "ak:operation:01904100000070008000000000000011",
+            )
+            .unwrap(),
+            idempotency_key: arkret_wire::ProtocolOpaqueId::new("unallocated-commit-001").unwrap(),
+            agent_id: arkret_identifiers::Did::new("did:web:unallocated-agent.example").unwrap(),
+            principal_control_realm_id: arkret_identifiers::RealmId::new(
+                "ak:realm:01904100-0000-7000-8000-000000000001",
+            )
+            .unwrap(),
+            allocation_handle: arkret_wire::ProtocolOpaqueId::new("unallocated.fixture.signature")
+                .unwrap(),
+            slug: "unallocated-agent".to_owned(),
+            requested_scope,
+            provision_event: Box::new(arkret_wire::EventInitialSubmission {
+                event: provision_event,
+                authorization_lease: None,
+                cba_proof_bundles: Vec::new(),
+                control_proposal_receipt: None,
+                membership_compensation_evidence: None,
+            }),
+            pairing_ttl_ms: None,
         },
-        controller_id,
-        2,
-        hlc,
-        serde_json::json!({}),
     )
     .unwrap();
-    // The commit body only has to be schema-valid to reach the allocation
-    // precondition this test is about; the lease is structural evidence, and
-    // this Agent has no server allocation to publish against in the first place.
-    let authorization_lease = serde_json::json!({
-        "authorization_lease_id": "ak:authorization_lease:01904100-0000-7000-8000-a9e07ea5e001",
-        "basis_ref": format!("ak:seal:sha256:{}", "0".repeat(64)),
-        "actor_id": accountability.actor_id,
-        "device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001",
-        "scope_ref": accountability.scope_ref,
-        "action": "ak.identity.accountability_grant",
-        "authorization_rule_id": "realm_admission",
-        "risk_tier": "low",
-        "issued_at": arkret_canonical::format_timestamp_canonical(now),
-        "expires_at": arkret_canonical::format_timestamp_canonical(
-            now + chrono::Duration::hours(4),
-        ),
-        "authority_set_ref": {
-            "authority_set_id": "ak.authority_set.realm_admission.v1",
-            "authority_set_digest": format!("sha256:{}", "0".repeat(64))
-        },
-        "authority_set_policy": {
-            "schema": arkret_wire::SchemaId::AUTHORITY_SET_POLICY_V1,
-            "authority_set_id": "ak.authority_set.realm_admission.v1",
-            "policy_kind": "realm_admission",
-            "scope_ref": accountability.scope_ref,
-            "source": {
-                "source_kind": "realm_control",
-                "source_ref": format!("ak:seal:sha256:{}", "0".repeat(64)),
-                "source_digest": format!("sha256:{}", "0".repeat(64)),
-                "generation_ref": "1"
-            },
-            "authorization_rules": [{
-                "rule_id": "realm_admission",
-                "issuer_role": "realm_admission",
-                "allowed_actions": ["ak.identity.accountability_grant"],
-                "issuers": [{
-                    "verification_method": "did:web:alice.example#device-key"
-                }],
-                "threshold": 1
-            }]
-        },
-        "proofs": []
-    });
     let app = app_from_state(state.clone());
     let mut response = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "phase": "commit",
-            "agent_id": "did:web:unallocated-agent.example",
-            "principal_control_realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
-            "slug": "unallocated-agent",
-            "requested_scope": {
-                "actions": ["ak.self.events.stream.subscribe"],
-                "resources": [{
-                    "kind": "operation",
-                    "operation": "ak.self.events.stream.subscribe"
-                }],
-                "constraints": []
-            },
-            // `agent_provision_events` carries `EventInitialSubmission`
-            // members, not bare Events: the Event is the signed fact and the
-            // lease is its separately verified publication evidence.
-            "provision_events": {
-                "accountability_grant": {
-                    "event": accountability,
-                    "authorization_lease": authorization_lease.clone()
-                },
-                "selector_claim": {
-                    "event": selector,
-                    "authorization_lease": authorization_lease
-                }
-            }
-        }))
+        .json(&commit_body)
         .send(&app)
         .await;
 
@@ -987,9 +927,8 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         &state,
         token,
         controller,
-        "Summary Assistant",
         "summary",
-        requested_scope,
+        requested_scope.clone(),
     )
     .await;
 
@@ -1005,37 +944,51 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         .await;
 
     assert_eq!(listed.status_code.unwrap(), StatusCode::OK);
-    let list_body: Value = listed.take_json().await.unwrap();
-    assert_eq!(list_body["has_more"], false, "{list_body}");
-    let agents = list_body["agents"].as_array().expect("agents list shape");
-    assert_eq!(agents.len(), 1, "{list_body}");
-    assert_eq!(agents[0]["agent_id"], agent_id);
-    assert_eq!(agents[0]["display_name"], "Summary Assistant");
-    assert_eq!(agents[0]["slug"], "summary");
-    // Two orthogonal axes (key-management.md §3.6.1): a freshly provisioned
-    // agent's lifecycle intent is active; its derived runtime_state is
-    // pending_runtime_key until first pairing completes.
-    assert_eq!(agents[0]["status"], "active");
-    assert_eq!(agents[0]["runtime_state"], "pending_runtime_key");
+    let list_body: arkret_models_collaboration::agent_operations::AgentList =
+        listed.take_json().await.unwrap();
+    assert!(!list_body.has_more);
+    assert_eq!(list_body.agents.len(), 1);
+    let listed_agent = &list_body.agents[0];
+    assert_eq!(listed_agent.agent_id.as_str(), agent_id);
+    assert_eq!(listed_agent.display_name, None);
+    assert_eq!(listed_agent.slug, "summary");
+    assert_eq!(
+        listed_agent.lifecycle,
+        arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
+    );
+    assert_eq!(
+        listed_agent.readiness.state,
+        arkret_models_collaboration::agent_operations::AgentReadinessState::NotReady
+    );
+    assert_eq!(
+        listed_agent.readiness.blockers,
+        vec![
+            arkret_models_collaboration::agent_operations::AgentReadinessBlocker::RuntimeKeyMissing
+        ]
+    );
 
     let mut service_view = TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))
         .add_header("authorization", "Bearer agent-lifecycle-s2s", true)
         .send(&app)
         .await;
     assert_eq!(service_view.status_code.unwrap(), StatusCode::OK);
-    let service_body: Value = service_view.take_json().await.unwrap();
-    assert_eq!(service_body["status"], "active");
-    assert_eq!(service_body["runtime_state"], "pending_runtime_key");
-    assert_eq!(service_body["key_state"]["status"], "active");
+    let service_body: arkret_models_collaboration::agent_operations::AgentView =
+        service_view.take_json().await.unwrap();
     assert_eq!(
-        service_body["key_state"]["runtime_state"],
-        "pending_runtime_key"
+        service_body.agent.lifecycle,
+        arkret_models_collaboration::agent_operations::AgentLifecycleState::Active
     );
+    let key_state = service_body
+        .key_state
+        .expect("service Agent view key state");
     assert_eq!(
-        service_body["key_state"]["pairing_request_id"],
-        created_body["pairing_request_id"]
+        key_state
+            .pairing_request_id
+            .as_ref()
+            .map(arkret_wire::OpaqueLocalId::as_str),
+        created_body["pairing_request_id"].as_str()
     );
-    assert!(service_body["key_state"].get("pairing_code").is_none());
+    assert_eq!(key_state.pairing_code, None);
 
     let denied_service_view =
         TestClient::get(format!("http://server/_arkret/self/agents/{agent_id}"))
@@ -1047,21 +1000,27 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
         StatusCode::UNAUTHORIZED
     );
 
+    let duplicate_scope = serde_json::from_value(requested_scope).unwrap();
+    let duplicate_body = serde_json::to_value(
+        arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Prepare {
+            operation_id: arkret_wire::ProtocolOperationId::new(format!(
+                "ak:operation:{}",
+                uuid::Uuid::now_v7().simple()
+            ))
+            .unwrap(),
+            idempotency_key: arkret_wire::ProtocolOpaqueId::new(
+                uuid::Uuid::now_v7().simple().to_string(),
+            )
+            .unwrap(),
+            slug: "summary".to_owned(),
+            requested_scope: duplicate_scope,
+            pairing_ttl_ms: None,
+        },
+    )
+    .unwrap();
     let mut duplicate = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
-        .json(&serde_json::json!({
-            "phase": "prepare",
-            "display_name": "Duplicate Summary",
-            "slug": "summary",
-            "requested_scope": {
-                "actions": ["ak.self.events.stream.subscribe"],
-                "resources": [{
-                    "kind": "operation",
-                    "operation": "ak.self.events.stream.subscribe"
-                }],
-                "constraints": []
-            }
-        }))
+        .json(&duplicate_body)
         .send(&app)
         .await;
 
@@ -1092,7 +1051,6 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
         &state,
         token,
         controller,
-        "Generation-bound Agent",
         "generation-bound",
         serde_json::json!({
                 "actions": ["ak.self.events.stream.subscribe"],
@@ -1106,7 +1064,7 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
 
-    let accountability_ref = state
+    let provision_ref = state
         .test_persistence()
         .agents()
         .list_for_controller(controller)
@@ -1114,18 +1072,18 @@ async fn provisioned_agent_fanout_uses_the_active_controller_device_generation()
         .unwrap()[0]
         .provision_event_refs
         .as_ref()
-        .and_then(|refs| refs["accountability_grant_event_id"].as_str())
+        .and_then(|refs| refs["provision_event_id"].as_str())
         .unwrap()
         .to_owned();
-    let accountability = state
+    let provision = state
         .test_persistence()
         .events()
-        .get(&accountability_ref)
+        .get(&provision_ref)
         .await
         .unwrap()
         .unwrap();
     assert_eq!(
-        accountability.envelope["proofs"][0]["verification_method"],
+        provision.envelope["proofs"][0]["verification_method"],
         format!("{controller}#{CONTROLLER_DEVICE_ID}")
     );
 }
