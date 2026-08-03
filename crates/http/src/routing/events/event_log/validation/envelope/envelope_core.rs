@@ -858,18 +858,7 @@ fn enforce_registered_cell_contract(
                 error.to_string(),
             )
         })?;
-        let expected: std::collections::BTreeSet<String> = [
-            arkret_wire::REALM_METADATA_CELL.to_owned(),
-            format!(
-                "ak:cell:ak.component.member.state.v1:{}",
-                event.actor_id.as_str()
-            ),
-            arkret_wire::REALM_CREATE_CELL.to_owned(),
-            arkret_wire::REALM_NOTARY_CELL.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-        ]
-        .into_iter()
-        .collect();
+        let expected = arkret_bootstrap::expected_realm_create_cells(&event);
         let actual: std::collections::BTreeSet<String> = derived
             .iter()
             .map(|write| write.cell.as_str().to_owned())
@@ -878,7 +867,7 @@ fn enforce_registered_cell_contract(
             return Err(event_validation_error(
                 StatusCode::BAD_REQUEST,
                 "reducer_projection_failed",
-                "Realm create does not derive the canonical five genesis cells",
+                "Realm create does not derive the canonical registered genesis cells",
             ));
         }
     }

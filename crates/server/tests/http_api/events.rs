@@ -771,23 +771,17 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
     // v1 carries no producer `effects[]` and no producer `preconditions` on a
     // genesis anchor: `event-auth-state-resolution.md` §5 makes the
     // `ak.realm.create` unit carry no CBA basis field at all, and
-    // `event-and-patch.md` §2.4.2 makes the five genesis cell writes a pure
+    // `event-and-patch.md` §2.4.2 makes the genesis cell writes a pure
     // function of `kind + payload`. Restate the old hand-written effect array as
     // the receiver's own projection — the identical check
     // `crates/http/.../envelope/envelope_core.rs` runs before admission.
     make_realm_bootstrap_unit_member(&mut event);
     assert_eq!(
         projected_cell_targets(&event),
-        vec![
-            format!("ak:cell:ak.component.member.state.v1:{actor}"),
-            arkret_wire::REALM_NOTARY_CELL.to_owned(),
-            arkret_wire::REALM_CREATE_CELL.to_owned(),
-            arkret_wire::REALM_METADATA_CELL.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-        ]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>(),
-        "ak.realm.create must derive exactly the five canonical genesis cells"
+        arkret_bootstrap::expected_realm_create_cells(
+            &serde_json::from_value(event.clone()).unwrap()
+        ),
+        "ak.realm.create must derive exactly the canonical registered genesis cells"
     );
     // A create that cannot establish an authority root is not a Realm anybody
     // could govern, so `realm-and-space.md` §2.5 makes the whole atomic unit
@@ -1622,21 +1616,13 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     // `arkret_bootstrap::realm_create_effects` is gone with the producer effect
     // array. The genesis write set is now derived by the receiver, and the only
     // thing a producer can still get wrong is a payload whose registered
-    // contract lands somewhere other than the five canonical genesis cells —
+    // contract lands somewhere other than the canonical registered genesis cells —
     // which is exactly what `arkret_bootstrap` and soland's admission both
     // assert. Restate the old assignment as that check.
     assert_eq!(
         projected_cell_targets(&serde_json::to_value(&create).unwrap()),
-        [
-            format!("ak:cell:ak.component.member.state.v1:{agent_id}"),
-            arkret_wire::REALM_NOTARY_CELL.to_owned(),
-            arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
-            arkret_wire::REALM_CREATE_CELL.to_owned(),
-            arkret_wire::REALM_METADATA_CELL.to_owned(),
-        ]
-        .into_iter()
-        .collect::<std::collections::BTreeSet<_>>(),
-        "managed Agent PCR create must derive the canonical five genesis cells"
+        arkret_bootstrap::expected_realm_create_cells(&create),
+        "managed Agent PCR create must derive the canonical registered genesis cells"
     );
     let signer = ControllerSealSigner {
         did: Did::new(controller_id).unwrap(),

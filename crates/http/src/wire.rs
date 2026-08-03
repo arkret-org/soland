@@ -1303,7 +1303,12 @@ pub fn describe(
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
         last_materialized_at: None,
-        extensions: Default::default(),
+        extensions: std::collections::BTreeMap::from([(
+            "x_arkret_build_identity".to_owned(),
+            json!({
+                "event_kind_registry_sha256": arkret_wire::EVENT_KIND_REGISTRY_SHA256,
+            }),
+        )]),
     }
 }
 
