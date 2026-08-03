@@ -2273,22 +2273,42 @@ mod managed_agent_pcr_batch_tests {
         let realm_id =
             RealmId::new("ak:realm:01999999-0000-7000-8000-00000000cafe".to_owned()).unwrap();
         let agent_id = arkret_identifiers::Did::new("did:web:agent.example".to_owned()).unwrap();
+        let mut realm = arkret_models_collaboration::objects::realm::Realm::new(
+            realm_id.clone(),
+            "Managed Agent principal control",
+            agent_id.clone(),
+            arkret_identifiers::TypedTrustDomainId::new(
+                "ak:trust_domain:managed-agent-pcr".to_owned(),
+            )
+            .unwrap(),
+            arkret_wire::CORE_REDUCER_PROFILE,
+            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+            arkret_wire::notary::NotaryValue::single_did(agent_id.clone()),
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
+        );
+        realm.fields.insert(
+            "purpose".to_owned(),
+            Value::String("principal_control".to_owned()),
+        );
+        realm.schema_refs = vec!["ak.profile.principal_control_realm.v1".to_owned()];
+        realm.history_visibility =
+            arkret_models_collaboration::protocol_journey::HistoryVisibility::Restricted;
+        realm.encryption_profile = arkret_wire::EncryptionProfile::MlsRfc9420;
+        realm.content_encryption_floor =
+            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
+        realm.metadata_encryption_floor =
+            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
+        realm.security_class = Some(arkret_wire::SecurityClass::HighAssurance);
+        let payload = arkret_models_collaboration::events_payloads::RealmCreatePayload::new(realm)
+            .to_value()
+            .unwrap();
         let mut event = arkret_wire::Event::new(
             arkret_wire::EventKind::REALM_CREATE,
             arkret_wire::ScopeRef::Realm { realm_id },
             agent_id,
             0,
             arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce1".to_owned()).unwrap(),
-            json!({
-                "object": {
-                    "id": "ak:realm:01999999-0000-7000-8000-00000000cafe",
-                    "created_by": "did:web:agent.example",
-                    "capability_action_registry_digest":
-                        arkret_policy::current_capability_action_registry_digest().unwrap(),
-                    "fields": {"purpose": "principal_control"},
-                    "notary": {"kind": "single_did", "did": "did:web:agent.example"},
-                }
-            }),
+            payload,
         )
         .unwrap();
         event.executed_by =

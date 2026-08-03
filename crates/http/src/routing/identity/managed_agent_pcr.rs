@@ -1393,20 +1393,35 @@ mod tests {
     }
 
     fn pcr_genesis() -> Value {
-        json!({
-            "id": PCR,
-            "created_by": AGENT,
-            "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
-            "fields": { "purpose": "principal_control" },
-            "schema_refs": ["ak.profile.principal_control_realm.v1"],
-            "history_visibility": "restricted",
-            "encryption_profile": "mls_rfc9420",
-            "content_encryption_floor": "e2ee_required",
-            "metadata_encryption_floor": "e2ee_required",
-            "notary_profile": "single_did",
-            "notary": AGENT,
-            "security_class": "high_assurance",
-        })
+        let realm_id = RealmId::new(PCR).unwrap();
+        let agent_id = Did::new(AGENT).unwrap();
+        let mut realm = arkret_models_collaboration::objects::realm::Realm::new(
+            realm_id,
+            "Managed Agent principal control",
+            agent_id.clone(),
+            arkret_identifiers::TypedTrustDomainId::new(
+                "ak:trust_domain:managed-agent-pcr".to_owned(),
+            )
+            .unwrap(),
+            arkret_wire::CORE_REDUCER_PROFILE,
+            arkret_models_collaboration::objects::realm::NotaryProfile::SingleDid,
+            arkret_wire::notary::NotaryValue::single_did(agent_id),
+            arkret_policy::current_capability_action_registry_digest().unwrap(),
+        );
+        realm.fields.insert(
+            "purpose".to_owned(),
+            Value::String("principal_control".to_owned()),
+        );
+        realm.schema_refs = vec!["ak.profile.principal_control_realm.v1".to_owned()];
+        realm.history_visibility =
+            arkret_models_collaboration::protocol_journey::HistoryVisibility::Restricted;
+        realm.encryption_profile = arkret_wire::EncryptionProfile::MlsRfc9420;
+        realm.content_encryption_floor =
+            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
+        realm.metadata_encryption_floor =
+            Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);
+        realm.security_class = Some(arkret_wire::SecurityClass::HighAssurance);
+        serde_json::to_value(realm).unwrap()
     }
 
     #[test]
