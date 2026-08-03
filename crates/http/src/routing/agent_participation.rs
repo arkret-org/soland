@@ -1,13 +1,12 @@
-use arkret_models_collaboration::governance::agent_participation::{
-    AgentParticipation, AgentParticipationScope, effective_participation,
-};
+use arkret_models_collaboration::governance::agent_participation::effective_participation;
+use arkret_models_collaboration::protocol_journey::{ParticipationBits, ParticipationScope};
 use serde_json::Value;
 
 use crate::state::AppState;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) struct ResolvedAgentParticipation {
-    pub(crate) effective: AgentParticipation,
+    pub(crate) effective: ParticipationBits,
 }
 
 pub(crate) fn uuid_tail(typed_id: &str) -> &str {
@@ -26,10 +25,18 @@ pub(crate) fn strand_scope_key(realm_id: &str, strand_id: &str) -> String {
     format!("strand:{}:{}", uuid_tail(realm_id), uuid_tail(strand_id))
 }
 
-pub(crate) fn participation_from_value(row: &Value) -> AgentParticipation {
-    AgentParticipation {
-        reply: row
+pub(crate) fn participation_from_value(row: &Value) -> ParticipationBits {
+    ParticipationBits {
+        reply_message: row
             .get("reply_message")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reaction_add: row
+            .get("reaction_add")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reaction_remove: row
+            .get("reaction_remove")
             .and_then(Value::as_bool)
             .unwrap_or(false),
         accept_third_party_mention: row
@@ -78,20 +85,20 @@ pub(crate) fn scope_keys_for_message(
 
 pub(crate) fn scope_keys_for_scope(
     state: &AppState,
-    scope: &AgentParticipationScope,
+    scope: &ParticipationScope,
 ) -> Option<Vec<String>> {
     match scope {
-        AgentParticipationScope::Realm { realm_id } => {
+        ParticipationScope::Realm { realm_id } => {
             Some(vec![realm_scope_key(realm_id.as_str())])
         }
-        AgentParticipationScope::Circle {
+        ParticipationScope::Circle {
             realm_id,
             circle_id,
         } => Some(vec![
             realm_scope_key(realm_id.as_str()),
             circle_scope_key(realm_id.as_str(), circle_id.as_str()),
         ]),
-        AgentParticipationScope::Strand {
+        ParticipationScope::Strand {
             realm_id,
             strand_id,
         } => scope_keys_for_message(state, realm_id.as_str(), Some(strand_id.as_str())),
@@ -101,21 +108,21 @@ pub(crate) fn scope_keys_for_scope(
 pub(crate) async fn resolve_effective_ceiling_for_scope_keys(
     state: &AppState,
     scope_keys: &[String],
-) -> AgentParticipation {
+) -> ParticipationBits {
     let Ok(rows) = state.agent_participations().ceilings(scope_keys).await else {
-        return AgentParticipation::NONE;
+        return ParticipationBits::NONE;
     };
     rows.iter()
         .map(participation_from_value)
-        .fold(AgentParticipation::ALL, |acc, row| acc.intersect(row))
+        .fold(ParticipationBits::ALL, |acc, row| acc.intersect(row))
 }
 
 pub(crate) async fn resolve_effective_ceiling(
     state: &AppState,
-    scope: &AgentParticipationScope,
-) -> AgentParticipation {
+    scope: &ParticipationScope,
+) -> ParticipationBits {
     let Some(scope_keys) = scope_keys_for_scope(state, scope) else {
-        return AgentParticipation::NONE;
+        return ParticipationBits::NONE;
     };
     resolve_effective_ceiling_for_scope_keys(state, &scope_keys).await
 }

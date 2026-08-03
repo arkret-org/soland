@@ -1,4 +1,5 @@
 use super::*;
+use arkret_models_collaboration::protocol_journey::ParticipationBits;
 
 // ── AKP-0016 — agent participation ceiling (admission validate + projection write) ──
 
@@ -19,10 +20,10 @@ pub(super) fn agent_participation_ceiling_change(
 ) -> Option<(
     &'static str,
     String,
-    arkret_models_collaboration::governance::agent_participation::AgentParticipation,
+    arkret_models_collaboration::protocol_journey::ParticipationBits,
     Vec<String>,
 )> {
-    use arkret_models_collaboration::governance::agent_participation::AgentParticipation;
+    use arkret_models_collaboration::protocol_journey::ParticipationBits;
     let payload = &operation.payload;
     let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
     let find = || -> Option<Value> {
@@ -45,8 +46,10 @@ pub(super) fn agent_participation_ceiling_change(
             })?;
         base.get("native_agent").cloned()
     };
-    let to_part = |value: &Value| AgentParticipation {
-        reply: ap_bool(value, "reply"),
+    let to_part = |value: &Value| ParticipationBits {
+        reply_message: ap_bool(value, "reply_message"),
+        reaction_add: ap_bool(value, "reaction_add"),
+        reaction_remove: ap_bool(value, "reaction_remove"),
         accept_third_party_mention: ap_bool(value, "accept_third_party_mention"),
         act_on_behalf: ap_bool(value, "act_on_behalf"),
     };
@@ -158,8 +161,9 @@ pub async fn validate_agent_participation_ceiling(
     operations: &[Operation],
 ) -> Result<(), &'static str> {
     use arkret_models_collaboration::governance::agent_participation::{
-        AgentParticipation, validate_agent_participation_tightens,
+        validate_agent_participation_tightens,
     };
+    use arkret_models_collaboration::protocol_journey::ParticipationBits;
     for operation in operations {
         let Some((scope_kind, _scope_key, child, parent_keys)) =
             agent_participation_ceiling_change(operation)
@@ -168,7 +172,7 @@ pub async fn validate_agent_participation_ceiling(
         };
         let parent_keys =
             agent_participation_parent_scope_keys(state, operation, scope_kind, parent_keys);
-        let mut parent = AgentParticipation::ALL;
+        let mut parent = ParticipationBits::ALL;
         if !parent_keys.is_empty() {
             let rows = state
                 .agent_participations()
@@ -176,8 +180,10 @@ pub async fn validate_agent_participation_ceiling(
                 .await
                 .unwrap_or_default();
             for row in &rows {
-                parent = parent.intersect(AgentParticipation {
-                    reply: ap_bool(row, "reply_message"),
+                parent = parent.intersect(ParticipationBits {
+                    reply_message: ap_bool(row, "reply_message"),
+                    reaction_add: ap_bool(row, "reaction_add"),
+                    reaction_remove: ap_bool(row, "reaction_remove"),
                     accept_third_party_mention: ap_bool(row, "accept_third_party_mention"),
                     act_on_behalf: ap_bool(row, "act_on_behalf"),
                 });
@@ -198,9 +204,9 @@ pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Optio
         "scope_kind": scope_kind,
         "scope_key": scope_key,
         "realm_id": operation.realm_id.as_str(),
-        "reply_message": child.reply,
-        "reaction_add": false,
-        "reaction_remove": false,
+        "reply_message": child.reply_message,
+        "reaction_add": child.reaction_add,
+        "reaction_remove": child.reaction_remove,
         "accept_third_party_mention": child.accept_third_party_mention,
         "act_on_behalf": child.act_on_behalf,
     }))
@@ -208,25 +214,42 @@ pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Optio
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum AgentParticipationMode {
-    Reply,
+    ReplyMessage,
+    ReactionAdd,
+    ReactionRemove,
     ActOnBehalf,
 }
 
 impl AgentParticipationMode {
     fn rejection_reason(self) -> &'static str {
         match self {
-            Self::Reply => "agent_reply_not_permitted",
+            Self::ReplyMessage => "agent_reply_not_permitted",
+            Self::ReactionAdd => "agent_reaction_add_not_permitted",
+            Self::ReactionRemove => "agent_reaction_remove_not_permitted",
             Self::ActOnBehalf => "agent_act_on_behalf_not_permitted",
         }
     }
 }
 
+fn autonomous_participation_mode(
+    operation: &Operation,
+) -> Result<AgentParticipationMode, &'static str> {
+    match agent_participation_action(operation) {
+        Some(arkret_wire::EventKind::MESSAGE_CREATE) => Ok(AgentParticipationMode::ReplyMessage),
+        Some(arkret_wire::EventKind::REACTION_ADD) => Ok(AgentParticipationMode::ReactionAdd),
+        Some(arkret_wire::EventKind::REACTION_REMOVE) => Ok(AgentParticipationMode::ReactionRemove),
+        _ => Err("agent_participation_action_unknown"),
+    }
+}
+
 fn ap_effective_for_mode(
     mode: AgentParticipationMode,
-    effective: arkret_models_collaboration::governance::agent_participation::AgentParticipation,
+    effective: ParticipationBits,
 ) -> bool {
     match mode {
-        AgentParticipationMode::Reply => effective.reply,
+        AgentParticipationMode::ReplyMessage => effective.reply_message,
+        AgentParticipationMode::ReactionAdd => effective.reaction_add,
+        AgentParticipationMode::ReactionRemove => effective.reaction_remove,
         AgentParticipationMode::ActOnBehalf => effective.act_on_behalf,
     }
 }
@@ -496,7 +519,7 @@ async fn operation_agent_write_context(
         let mode = if operation_executed_by(operation).is_some() {
             AgentParticipationMode::ActOnBehalf
         } else {
-            AgentParticipationMode::Reply
+            autonomous_participation_mode(operation)?
         };
         return Ok(Some((agent_id.to_owned(), mode)));
     }
@@ -508,14 +531,17 @@ async fn operation_agent_write_context(
         let mode = if operation_executed_by(operation).is_some() {
             AgentParticipationMode::ActOnBehalf
         } else {
-            AgentParticipationMode::Reply
+            autonomous_participation_mode(operation)?
         };
         return Ok(Some((agent_id, mode)));
     }
     if let Some(sender) = policy_operation_sender(operation)
         && native_agent_exists(state, sender).await?
     {
-        return Ok(Some((sender.to_owned(), AgentParticipationMode::Reply)));
+        return Ok(Some((
+            sender.to_owned(),
+            autonomous_participation_mode(operation)?,
+        )));
     }
     Ok(None)
 }

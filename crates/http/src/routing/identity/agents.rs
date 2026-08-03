@@ -48,8 +48,7 @@ use arkret_models_collaboration::agent_operations::{
 use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
-    AgentParticipation, AgentParticipationEntry, AgentParticipationOutcome,
-    AgentParticipationScope, effective_participation,
+    AgentParticipationEntry, AgentParticipationOutcome, effective_participation,
 };
 use arkret_models_collaboration::protocol_journey::{
     ParticipationBits, ParticipationReplaceReceipt, ParticipationReplacementBatch,
