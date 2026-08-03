@@ -78,6 +78,7 @@ impl ContactReservationBranch {
 #[serde(deny_unknown_fields)]
 struct ContactReservation {
     operation_id: ProtocolOperationId,
+    idempotency_key: ProtocolOpaqueId,
     reservation_handle: ProtocolOpaqueId,
     holder: ContactPeer,
     branch: ContactReservationBranch,
@@ -88,6 +89,10 @@ struct ContactReservation {
 
 fn contact_reservation_key(handle: &ProtocolOpaqueId) -> String {
     format!("contact-reservation:{}", handle.as_str())
+}
+
+fn contact_phase_idempotency_key(phase: &str, key: &ProtocolOpaqueId) -> String {
+    format!("contact-{phase}:{}", key.as_str())
 }
 
 fn contact_hash<T: Serialize>(label: &str, value: &T) -> Result<Hash, AppError> {
@@ -339,6 +344,7 @@ fn new_unsigned_contact_event(
     realm_id: RealmId,
     actor_seq: u64,
     prev_refs: Vec<EventId>,
+    seal_basis: arkret_wire::SealBasis,
     created_at: chrono::DateTime<chrono::Utc>,
     payload: Value,
 ) -> Result<Event, AppError> {
@@ -348,7 +354,7 @@ fn new_unsigned_contact_event(
         .ok_or_else(|| AppError::internal("Contact Event payload must be an object"))?
         .into_iter()
         .collect();
-    Ok(Event {
+    let event = Event {
         event_id,
         kind: arkret_wire::EventKind::from_wire(kind),
         realm_id: realm_id.clone(),
@@ -368,13 +374,17 @@ fn new_unsigned_contact_event(
         preconditions: Vec::new(),
         seal_ref: None,
         auth_context: None,
-        seal_basis: None,
+        seal_basis: Some(seal_basis),
         payload,
         redacts: None,
         unsigned: BTreeMap::new(),
         proofs: Vec::new(),
         requirements: arkret_wire::EventRequirements::default(),
-    })
+    };
+    event
+        .validate_for_authoring_structural()
+        .map_err(|error| AppError::internal(format!("Contact Event draft invalid: {error}")))?;
+    Ok(event)
 }
 
 fn contact_event_draft(event: &Event) -> Result<ContactPreparedEventDraft, AppError> {
@@ -442,7 +452,7 @@ fn prepared_outcome(reservation: &ContactReservation) -> ContactOperationOutcome
 async fn store_prepare(
     state: &AppState,
     principal: &str,
-    idempotency_key: &str,
+    idempotency_key: &ProtocolOpaqueId,
     request_hash: &str,
     reservation: &ContactReservation,
 ) -> Result<(), AppError> {
@@ -450,7 +460,7 @@ async fn store_prepare(
     let outcome = prepared_outcome(reservation);
     for (key, body) in [
         (
-            idempotency_key.to_owned(),
+            contact_phase_idempotency_key("prepare", idempotency_key),
             serde_json::to_value(&outcome)
                 .map_err(|error| AppError::internal(format!("Contact outcome encode: {error}")))?,
         ),
@@ -551,7 +561,7 @@ async fn prepare(
     if let Some(outcome) = replay::<ContactOperationOutcome>(
         state,
         &session.actor,
-        idempotency_key.as_str(),
+        &contact_phase_idempotency_key("prepare", &idempotency_key),
         &request_hash,
     )
     .await?
@@ -568,6 +578,17 @@ async fn prepare(
         holder.subject_id().clone(),
     )
     .await?;
+    let seal_view =
+        crate::routing::events::event_log::governance_proof::materialize_realm_event_seal(
+            state, &realm_id,
+        )
+        .await?;
+    let accepted_seal = seal_view.accepted_seal;
+    let seal_basis = arkret_wire::SealBasis {
+        leaves: vec![accepted_seal.id],
+        control_event_set_root: accepted_seal.control_event_set_root,
+        state_root: accepted_seal.state_root,
+    };
     let created_at = now();
     let event = new_unsigned_contact_event(
         &holder,
@@ -576,11 +597,13 @@ async fn prepare(
         realm_id,
         frontier.next_actor_seq,
         frontier.frontier_event_ids,
+        seal_basis,
         created_at,
         payload,
     )?;
     let reservation = ContactReservation {
         operation_id,
+        idempotency_key: idempotency_key.clone(),
         reservation_handle: ProtocolOpaqueId::new(crate::ids::generate("reservation"))
             .map_err(AppError::internal)?,
         holder,
@@ -591,7 +614,7 @@ async fn prepare(
     store_prepare(
         state,
         &session.actor,
-        idempotency_key.as_str(),
+        &idempotency_key,
         &request_hash,
         &reservation,
     )
@@ -652,6 +675,7 @@ async fn reservation_for_commit(
     let reservation: ContactReservation = serde_json::from_value(record.response_body)
         .map_err(|error| AppError::internal(format!("stored Contact reservation: {error}")))?;
     if reservation.operation_id != body.operation_id
+        || reservation.idempotency_key != body.idempotency_key
         || reservation.reservation_handle != body.reservation_handle
     {
         return Err(AppError::conflict("Contact reservation binding mismatch"));
@@ -800,7 +824,7 @@ async fn commit(
     if let Some(outcome) = replay::<ContactOperationOutcome>(
         state,
         &session.actor,
-        body.idempotency_key.as_str(),
+        &contact_phase_idempotency_key("commit", &body.idempotency_key),
         &request_hash,
     )
     .await?
@@ -855,7 +879,7 @@ async fn commit(
     persist_final(
         state,
         &session.actor,
-        body.idempotency_key.as_str(),
+        &contact_phase_idempotency_key("commit", &body.idempotency_key),
         &request_hash,
         &outcome,
     )

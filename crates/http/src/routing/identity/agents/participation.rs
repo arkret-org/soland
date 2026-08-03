@@ -3,16 +3,16 @@ use salvo::oapi::endpoint;
 
 use super::*;
 
-pub(super) fn participation_scope_kind(scope: &AgentParticipationScope) -> &'static str {
+pub(super) fn participation_scope_kind(scope: &ParticipationScope) -> &'static str {
     match scope {
-        AgentParticipationScope::Realm { .. } => "realm",
-        AgentParticipationScope::Circle { .. } => "circle",
-        AgentParticipationScope::Strand { .. } => "strand",
+        ParticipationScope::Realm { .. } => "realm",
+        ParticipationScope::Circle { .. } => "circle",
+        ParticipationScope::Strand { .. } => "strand",
     }
 }
 
-pub(super) fn participation_from_value(row: &Value) -> AgentParticipation {
-    AgentParticipation {
+pub(super) fn participation_from_value(row: &Value) -> ParticipationBits {
+    ParticipationBits {
         reply_message: row
             .get("reply_message")
             .and_then(Value::as_bool)
@@ -43,8 +43,8 @@ pub(super) fn participation_from_value(row: &Value) -> AgentParticipation {
 /// (AKP-0010 §4.4, fail-closed by intersection).
 pub(super) async fn resolve_effective_ceiling(
     state: &AppState,
-    scope: &AgentParticipationScope,
-) -> AgentParticipation {
+    scope: &ParticipationScope,
+) -> ParticipationBits {
     crate::routing::agent_participation::resolve_effective_ceiling(state, scope).await
 }
 
@@ -109,8 +109,8 @@ pub(super) async fn set_agent_participation(
     let provision_ceiling = agent_requested_participation_ceiling(&record);
     let ceiling = ParticipationBits {
         reply_message: provision_ceiling.reply_message,
-        reaction_add: false,
-        reaction_remove: false,
+        reaction_add: provision_ceiling.reaction_add,
+        reaction_remove: provision_ceiling.reaction_remove,
         accept_third_party_mention: provision_ceiling.accept_third_party_mention,
         act_on_behalf: provision_ceiling.act_on_behalf,
     };
@@ -366,7 +366,7 @@ pub(super) async fn get_agent_participation(
         let Some(scope_value) = row.get("scope") else {
             continue;
         };
-        let Ok(scope) = serde_json::from_value::<AgentParticipationScope>(scope_value.clone())
+        let Ok(scope) = serde_json::from_value::<ParticipationScope>(scope_value.clone())
         else {
             continue;
         };

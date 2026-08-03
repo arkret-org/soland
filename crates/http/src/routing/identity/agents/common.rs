@@ -272,22 +272,15 @@ pub(crate) fn agent_grant_within_requested_scope(
 /// from ordinary `ak.message.create` authority.
 pub(super) fn agent_requested_participation_ceiling(
     record: &AgentPrincipalRecord,
-) -> AgentParticipation {
+) -> ParticipationBits {
     let scope = record
         .requested_scope
         .clone()
         .and_then(|value| serde_json::from_value::<AgentKeyScope>(value).ok());
-    let bits = scope
+    scope
         .as_ref()
         .map(requested_scope_participation_ceiling)
-        .unwrap_or_default();
-    AgentParticipation {
-        reply_message: bits.reply_message,
-        reaction_add: bits.reaction_add,
-        reaction_remove: bits.reaction_remove,
-        accept_third_party_mention: bits.accept_third_party_mention,
-        act_on_behalf: bits.act_on_behalf,
-    }
+        .unwrap_or_default()
 }
 
 pub(crate) fn requested_scope_participation_ceiling(scope: &AgentKeyScope) -> ParticipationBits {
@@ -344,7 +337,7 @@ pub(crate) fn requested_scope_participation_ceiling(scope: &AgentKeyScope) -> Pa
             controller_requirement && applies_to_message_create
         });
     ParticipationBits {
-        reply_message: message_create && actions.contains(CapabilityActionId::REACTION_ADD),
+        reply_message: message_create,
         reaction_add: actions.contains(CapabilityActionId::REACTION_ADD),
         reaction_remove: actions.contains(CapabilityActionId::REACTION_REMOVE),
         accept_third_party_mention: actions.contains(CapabilityActionId::EVENT_READ),
@@ -585,7 +578,7 @@ mod requested_scope_tests {
 
         assert_eq!(
             agent_requested_participation_ceiling(&record),
-            AgentParticipation {
+            ParticipationBits {
                 reply_message: true,
                 reaction_add: true,
                 reaction_remove: false,
@@ -599,7 +592,7 @@ mod requested_scope_tests {
         }));
         assert_eq!(
             agent_requested_participation_ceiling(&record),
-            AgentParticipation {
+            ParticipationBits {
                 reply_message: false,
                 reaction_add: false,
                 reaction_remove: false,
