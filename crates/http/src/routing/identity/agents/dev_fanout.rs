@@ -6,6 +6,7 @@
 //! controller or writing a development-only proof shape into durable history.
 
 use arkret_wire::Event;
+#[cfg(test)]
 use chrono::Utc;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
@@ -135,6 +136,7 @@ fn reconcile_self_realm_owner_projection(
 /// `did-usage-and-verification.md` §2.2: a proof `verification_method` MUST be
 /// a DID URL with a `#fragment` rooted in `root`. A bare `root` DID names no
 /// concrete verification method and is rejected.
+#[cfg(test)]
 fn verification_method_rooted_in(verification_method: &str, root: &str) -> bool {
     verification_method.starts_with(&format!("{root}#"))
 }
