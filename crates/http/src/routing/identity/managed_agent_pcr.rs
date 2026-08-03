@@ -761,7 +761,7 @@ async fn validate_active_agent_accountability(
     let accountability_event_id = agent_record
         .provision_event_refs
         .as_ref()
-        .and_then(|refs| refs.get("accountability_grant_event_id"))
+        .and_then(|refs| refs.get("provision_event_id"))
         .and_then(Value::as_str)
         .ok_or_else(|| {
             failed_precondition(
@@ -856,7 +856,18 @@ pub(crate) async fn validate_delegated_agent_envelope(
                     "managed Agent PCR binding contains an invalid Realm id: {error}"
                 ))
             })?;
-        validate_agent_pcr_genesis_effect(envelope, &realm_id)?;
+        let provision_event_id = record
+            .provision_event_refs
+            .as_ref()
+            .and_then(|refs| refs.get("provision_event_id"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                failed_precondition(
+                    "managed Agent provision Event reference is missing",
+                    arkret_wire::ReasonCode::ACCOUNTABILITY_GRANT_MISSING,
+                )
+            })?;
+        validate_agent_pcr_genesis_effect(envelope, &realm_id, provision_event_id)?;
     }
     validate_agent_controller_binding(state, &record, Utc::now()).await
 }
@@ -879,6 +890,7 @@ fn managed_agent_envelope_uses_root_anchor(envelope: &serde_json::Map<String, Va
 fn validate_agent_pcr_genesis_effect(
     envelope: &serde_json::Map<String, Value>,
     realm_id: &RealmId,
+    provision_event_id: &str,
 ) -> Result<(), AppError> {
     let event = serde_json::from_value::<arkret_wire::Event>(Value::Object(envelope.clone()))
         .map_err(|error| {
@@ -889,6 +901,31 @@ fn validate_agent_pcr_genesis_effect(
     if &event.realm_id != realm_id {
         return Err(schema_error(
             "managed Agent PCR genesis Realm differs from its account binding",
+        ));
+    }
+    let matching_provision_refs = event
+        .refs
+        .iter()
+        .filter(|event_ref| {
+            event_ref.critical
+                && event_ref.role == arkret_bootstrap::AGENT_PROVISION_REF_ROLE
+                && event_ref.id == provision_event_id
+        })
+        .count();
+    let has_conflicting_genesis_ref = event.refs.iter().any(|event_ref| {
+        event_ref.critical && event_ref.role == arkret_bootstrap::DID_INCEPTION_REF_ROLE
+    });
+    if matching_provision_refs != 1
+        || has_conflicting_genesis_ref
+        || event.refs.iter().any(|event_ref| {
+            event_ref.critical
+                && event_ref.role == arkret_bootstrap::AGENT_PROVISION_REF_ROLE
+                && event_ref.id != provision_event_id
+        })
+    {
+        return Err(failed_precondition(
+            "managed Agent PCR genesis must reference its accepted provision Event exactly once",
+            "managed_agent_provision_ref_mismatch",
         ));
     }
     // v1 carries no producer `effects[]`: the canonical genesis writes
@@ -1464,7 +1501,7 @@ mod tests {
     #[test]
     fn agent_pcr_genesis_requires_the_canonical_four_genesis_cells() {
         let realm_id = RealmId::new(PCR).unwrap();
-        let event = arkret_wire::Event::new(
+        let mut event = arkret_wire::Event::new(
             arkret_wire::EventKind::REALM_CREATE,
             arkret_wire::ScopeRef::Realm {
                 realm_id: realm_id.clone(),
@@ -1475,9 +1512,17 @@ mod tests {
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
+        let provision_event_id = "ak:event:01980b44-0000-7000-8000-000000000001";
+        event.refs = vec![arkret_bootstrap::managed_agent_provision_ref(
+            arkret_wire::EventId::new(provision_event_id).unwrap(),
+        )];
         let envelope = serde_json::to_value(&event).unwrap();
-        validate_agent_pcr_genesis_effect(envelope.as_object().unwrap(), &realm_id)
-            .expect("canonical managed Agent PCR create must derive its genesis cells");
+        validate_agent_pcr_genesis_effect(
+            envelope.as_object().unwrap(),
+            &realm_id,
+            provision_event_id,
+        )
+        .expect("canonical managed Agent PCR create must derive its genesis cells");
         // The create-log target is the wire singleton, never a per-Realm
         // subject (`realm-and-space.md` §2.8.3).
         let derived = arkret_schema::project_registered_cell_writes(
@@ -1497,8 +1542,12 @@ mod tests {
         let mut unprojectable = envelope;
         unprojectable["payload"] = json!({});
         assert!(
-            validate_agent_pcr_genesis_effect(unprojectable.as_object().unwrap(), &realm_id)
-                .is_err()
+            validate_agent_pcr_genesis_effect(
+                unprojectable.as_object().unwrap(),
+                &realm_id,
+                provision_event_id,
+            )
+            .is_err()
         );
     }
 

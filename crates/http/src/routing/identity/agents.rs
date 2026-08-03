@@ -75,8 +75,8 @@ use crate::state::AppState;
 
 mod dev_fanout;
 use dev_fanout::{
-    fanout_provision_subevents, require_controller_principal_control_realm,
-    revoke_capability_grant, submit_durable_agent_lifecycle, submit_signed_agent_event,
+    require_controller_principal_control_realm, revoke_capability_grant,
+    submit_durable_agent_lifecycle, submit_provision_event, submit_signed_agent_event,
     validate_durable_agent_lifecycle,
 };
 

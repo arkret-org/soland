@@ -402,7 +402,7 @@ async fn provision_agent_sdk_commit_attempt(
     state: &AppState,
     token: &str,
     controller: &str,
-    display_name: &str,
+    _display_name: &str,
     slug: &str,
     requested_scope: Value,
     fault: Option<(
@@ -411,11 +411,14 @@ async fn provision_agent_sdk_commit_attempt(
     )>,
 ) -> (StatusCode, Value, Value) {
     let app = app_from_state(state.clone());
+    let operation_id = format!("ak:operation:{}", uuid::Uuid::now_v7().simple());
+    let idempotency_key = uuid::Uuid::now_v7().simple().to_string();
     let mut prepared = TestClient::post("http://server/_arkret/self/agents")
         .add_header("authorization", format!("Bearer {token}"), true)
         .json(&serde_json::json!({
             "phase": "prepare",
-            "display_name": display_name,
+            "operation_id": operation_id,
+            "idempotency_key": idempotency_key,
             "slug": slug,
             "requested_scope": requested_scope,
         }))
@@ -426,7 +429,7 @@ async fn provision_agent_sdk_commit_attempt(
     if prepare_status != StatusCode::OK {
         return (prepare_status, preparation, Value::Null);
     }
-    assert_eq!(preparation["status"], "awaiting_controller_events");
+    assert_eq!(preparation["status"], "awaiting_controller_event");
 
     let controller_id = arkret_identifiers::Did::new(controller.to_owned()).unwrap();
     let agent_id =
@@ -437,6 +440,14 @@ async fn provision_agent_sdk_commit_attempt(
     .unwrap();
     let principal_control_realm_id = serde_json::from_value::<arkret_identifiers::RealmId>(
         preparation["principal_control_realm_id"].clone(),
+    )
+    .unwrap();
+    let allocation_handle = serde_json::from_value::<arkret_wire::ProtocolOpaqueId>(
+        preparation["allocation_handle"].clone(),
+    )
+    .unwrap();
+    let controller_authorization_ref = serde_json::from_value::<arkret_wire::DidUrl>(
+        preparation["controller_authorization_ref"].clone(),
     )
     .unwrap();
     let scope = serde_json::from_value::<
@@ -478,27 +489,6 @@ async fn provision_agent_sdk_commit_attempt(
         controller_id,
         verification_method.clone(),
     );
-    let mut events = arkret_bootstrap::build_agent_provision_event_drafts(
-        signer.signer_did(),
-        &controller_realm_id,
-        &agent_id,
-        slug,
-        arkret_bootstrap::AgentProvisionEventDraftOptions {
-            created_at: now,
-            accountability_actor_seq: next_actor_seq,
-            accountability_hlc: arkret_identifiers::Hlc::new(format!(
-                "{timestamp_hex}-0001-a13f9c2e"
-            ))
-            .unwrap(),
-            selector_actor_seq: next_actor_seq + 1,
-            selector_hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0002-a13f9c2e"))
-                .unwrap(),
-        },
-        &signer,
-    )
-    .unwrap();
-    events.accountability_grant.prev_refs = actor_frontier.frontier_event_ids;
-    events.selector_claim.prev_refs = vec![events.accountability_grant.event_id.clone()];
     let mut frontier_response = TestClient::get(format!(
         "http://server/_arkret/self/events/frontier?realm_id={controller_realm_id}"
     ))
@@ -522,41 +512,47 @@ async fn provision_agent_sdk_commit_attempt(
     else {
         panic!("controller Realm frontier must materialize a Seal view");
     };
-    for event in [&mut events.accountability_grant, &mut events.selector_claim] {
-        event.seal_basis = Some(frontier.seal_basis());
-        arkret_signatures::sign_event(
-            event,
-            &signer,
-            &verification_method,
-            arkret_signatures::SignEventOptions::new().with_created_at(now),
-        )
-        .unwrap();
-    }
-    let mut submissions = prepare_standard_initial_submissions(
-        state,
-        token,
-        vec![events.accountability_grant, events.selector_claim],
-        &signer,
+    let mut event = arkret_bootstrap::build_agent_provision_event_draft(
+        signer.signer_did(),
+        &controller_realm_id,
+        &agent_id,
+        &principal_control_realm_id,
+        &controller_authorization_ref,
+        slug,
+        &expected_scope_digest,
+        arkret_models_identity::handle::HandleVisibility::Private,
+        None,
+        arkret_bootstrap::AgentProvisionEventDraftOptions {
+            created_at: now,
+            actor_seq: next_actor_seq,
+            hlc: arkret_identifiers::Hlc::new(format!("{timestamp_hex}-0001-a13f9c2e")).unwrap(),
+            prev_refs: actor_frontier.frontier_event_ids,
+            seal_basis: Some(frontier.seal_basis()),
+        },
     )
-    .await
-    .into_iter();
-    let provision_events = arkret_models_collaboration::agent_operations::AgentProvisionEvents {
-        accountability_grant: submissions.next().unwrap(),
-        selector_claim: submissions.next().unwrap(),
-    };
-    assert!(
-        submissions.next().is_none(),
-        "agent provision submission cardinality"
-    );
+    .unwrap();
+    arkret_signatures::sign_event(
+        &mut event,
+        &signer,
+        &verification_method,
+        arkret_signatures::SignEventOptions::new().with_created_at(now),
+    )
+    .unwrap();
+    let provision_event = prepare_standard_initial_submissions(state, token, vec![event], &signer)
+        .await
+        .into_iter()
+        .next()
+        .expect("single provision submission");
     let commit_body = serde_json::to_value(
         arkret_models_collaboration::agent_operations::AgentProvisionRequestBody::Commit {
+            operation_id: arkret_wire::ProtocolOperationId::new(operation_id).unwrap(),
+            idempotency_key: arkret_wire::ProtocolOpaqueId::new(idempotency_key).unwrap(),
             agent_id,
             principal_control_realm_id,
-            display_name: Some(display_name.to_owned()),
+            allocation_handle,
             slug: slug.to_owned(),
-            avatar_blob_ref: None,
             requested_scope: scope,
-            provision_events: Box::new(provision_events),
+            provision_event: Box::new(provision_event),
             pairing_ttl_ms: None,
         },
     )

@@ -3,6 +3,9 @@ use std::sync::Arc;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{Did, RealmId};
+use arkret_models_collaboration::events_payloads::agent::{
+    AgentProvisionAccountabilityScope, AgentProvisionPayload,
+};
 use arkret_models_collaboration::governance::accountability::{
     AccountabilityGrantPayload, AccountabilityScopeKind,
 };
@@ -904,6 +907,22 @@ fn active_agent_accountability(
         .envelope
         .get("payload")
         .unwrap_or(&original_event.envelope);
+    if original_event.kind == arkret_wire::EventKind::AGENT_PROVISION {
+        let Ok(provision) =
+            serde_json::from_value::<AgentProvisionPayload>(original_payload.clone())
+        else {
+            return false;
+        };
+        return provision.validate().is_ok()
+            && original_event.received_at <= query.accepted_at
+            && original_event.actor_id == query.controller_id
+            && provision.controller_id.as_str() == query.controller_id
+            && provision.agent_id.as_str() == query.agent_id
+            && matches!(
+                provision.accountability_scope,
+                AgentProvisionAccountabilityScope::AgentOperator
+            );
+    }
     let Ok(original_grant) =
         serde_json::from_value::<AccountabilityGrantPayload>(original_payload.clone())
     else {
