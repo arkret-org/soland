@@ -2203,10 +2203,8 @@ mod preflight;
 mod value;
 
 use delivery_binding::*;
+pub(in crate::routing) use ingress_receipt::validate_authorization_lease_for_event;
 use ingress_receipt::*;
-pub(in crate::routing) use ingress_receipt::{
-    validate_authorization_lease_for_event, validate_initial_submission,
-};
 pub(super) use outcome::events_submit_outcome;
 use outcome::*;
 use post_commit::*;
