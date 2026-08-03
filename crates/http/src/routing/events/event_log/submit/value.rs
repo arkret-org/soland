@@ -1391,7 +1391,11 @@ pub(super) async fn submit_event_value_with_context(
     let control_event_for_proposal =
         serde_json::from_value::<arkret_wire::Event>(envelope_for_bootstrap.clone())
             .ok()
-            .filter(|event| event.seal_basis.is_some());
+            .filter(|event| {
+                event.kind.is_reducer_input()
+                    && event.seal_ref.is_none()
+                    && event.auth_context.is_none()
+            });
     let control_proposal_receipt = if let Some(event) = control_event_for_proposal.as_ref() {
         let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
             SubmitOneError::new(
@@ -1400,23 +1404,6 @@ pub(super) async fn submit_event_value_with_context(
                 format!("validated Control Move Realm id is invalid: {error}"),
             )
         })?;
-        let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
-        let (_, authority_set_ref) = worker
-            .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
-            .map_err(|error| {
-                SubmitOneError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
-                    format!("Control Proposal authority is unavailable: {error}"),
-                )
-            })?
-            .ok_or_else(|| {
-                SubmitOneError::new(
-                    StatusCode::SERVICE_UNAVAILABLE,
-                    "quorum_unreachable",
-                    "current proposal authority profile is unavailable",
-                )
-            })?;
         let proposal_digest = Hash::new(parsed.canonical_digest.clone()).map_err(|error| {
             SubmitOneError::new(
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1438,6 +1425,23 @@ pub(super) async fn submit_event_value_with_context(
             )
         })?;
         if let Some(receipt) = submitted_control_proposal_receipt {
+            let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+            let (_, authority_set_ref) = worker
+                .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        format!("Control Proposal authority is unavailable: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        "current proposal authority profile is unavailable",
+                    )
+                })?;
             if receipt.realm_id != realm_id
                 || receipt.proposal_digest != proposal_digest
                 || receipt.authority_set_ref != authority_set_ref
@@ -1458,7 +1462,51 @@ pub(super) async fn submit_event_value_with_context(
                     )
                 })?;
             Some(receipt.clone())
+        } else if event.seal_basis.is_none() {
+            let bootstrap_authority = authorization_lease
+                .map(|lease| &lease.authority_set_ref)
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        "basis-less Control Move requires an anchor-unit authorization lease",
+                    )
+                })?;
+            crate::control_proposal::mint_control_proposal_receipts(
+                state,
+                &realm_id,
+                std::slice::from_ref(event),
+                received_at,
+                Some(bootstrap_authority),
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "quorum_unreachable",
+                    format!("Control Proposal receipt signing failed: {error}"),
+                )
+            })?
+            .into_iter()
+            .next()
         } else {
+            let worker = crate::notary::NotaryWorker::for_service(state.service_id().clone());
+            let (_, authority_set_ref) = worker
+                .current_notary_profile_for_events(state, &realm_id, std::slice::from_ref(event))
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        format!("Control Proposal authority is unavailable: {error}"),
+                    )
+                })?
+                .ok_or_else(|| {
+                    SubmitOneError::new(
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        "quorum_unreachable",
+                        "current proposal authority profile is unavailable",
+                    )
+                })?;
             worker
                 .authority_set_ref_for_events(state, &realm_id, std::slice::from_ref(event))
                 .map_err(|error| {

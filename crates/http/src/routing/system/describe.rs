@@ -549,6 +549,17 @@ pub(crate) fn apply_claim_level_partition(
             .supported_features
             .retain(|feature| !JOIN_FEATURES.contains(&feature.as_str()));
     }
+    let advertised_profile_ids = description
+        .supported_profiles
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let profile_requirements =
+        arkret_policy::collect_profile_semantic_requirements(&advertised_profile_ids)
+            .expect("advertised profiles must exist in SDK-generated profile requirements");
+    description
+        .supported_features
+        .extend(profile_requirements.required_features);
     description.supported_profiles.sort();
     description.supported_profiles.dedup();
     description.supported_operations.sort();
@@ -942,5 +953,31 @@ mod tests {
                 .iter()
                 .any(|operation| operation.contains("join_application"))
         );
+    }
+
+    #[test]
+    fn advertised_profiles_include_sdk_generated_discovery_requirements() {
+        let mut description = ServiceDescribe::development(
+            Did::new("did:web:soland.example".to_owned()).unwrap(),
+            TypedTrustDomainId::new("ak:trust_domain:example.net").unwrap(),
+            ServiceKind::PrincipalServer,
+        );
+        description
+            .supported_profiles
+            .push("ak.profile.chat_mvp.v1".to_owned());
+        apply_claim_level_partition(&mut description, &[], false);
+        for feature in [
+            "discussion_history_visibility",
+            "supported_event_kinds",
+            "supported_sync_profiles",
+        ] {
+            assert!(
+                description
+                    .supported_features
+                    .iter()
+                    .any(|supported| supported == feature),
+                "profile discovery requirement {feature} was not advertised"
+            );
+        }
     }
 }
