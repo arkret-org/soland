@@ -456,7 +456,21 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     // authorization Event is covered by the accepted, controller-signed PCR
     // frontier. Until the client publishes that successor Seal, keep both the
     // pairing handle and its account notification open.
-    let authorization_status = None;
+    // This projection is updated only by accepted Seal application. Matching
+    // both the SDK key id and Event id prevents a durable pending Event row or
+    // a different active authorization from satisfying the witness gate.
+    let authorization_status = state
+        .projections()
+        .snapshot()
+        .active_agent_key_authorizations(&agent_id)
+        .into_iter()
+        .any(|(key_id, authorized_event_id)| {
+            key_id == signing_key_binding.agent_key_id.as_str()
+                && authorized_event_id == accepted.event_id
+        })
+        .then_some(
+            arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationStatus::Active,
+        );
     let authorization_is_witnessed = authorization_status_allows_activation(authorization_status);
     if !authorization_is_witnessed {
         return Ok(agent_record);
