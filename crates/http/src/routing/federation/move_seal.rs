@@ -59,7 +59,6 @@ fn app_error_from_seal_reject(reject: SealReject) -> AppError {
         | SealReject::ControlMoveRejected { .. }
         | SealReject::MissingSealBasis { .. }
         | SealReject::SealBasisOutsideClosure { .. }
-        | SealReject::SealBasisRootMismatch { .. }
         | SealReject::ControlEventSetRootMismatch { .. }
         | SealReject::CoveredSetMismatch
         | SealReject::StateRootMismatch { .. } => ErrorCode::SchemaViolation,

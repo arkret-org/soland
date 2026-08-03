@@ -517,8 +517,8 @@ pub(crate) fn authority_for_scope(
         source: AuthoritySetPolicySource {
             source_kind: AuthoritySetSourceKind::RealmControl,
             source_ref: format!("basis:{}", source_digest.as_str()),
-            source_digest,
-            generation_ref: format!("basis:{}", basis_generation_ref(basis_ref)),
+            source_digest: source_digest.clone(),
+            generation_ref: format!("basis:{}", basis_generation_ref(basis_ref, &source_digest)),
         },
         authorization_rules: vec![AuthoritySetAuthorizationRule {
             rule_id: authorization_rule_id.to_owned(),
@@ -538,10 +538,13 @@ pub(crate) fn authority_for_scope(
     Ok((reference, policy))
 }
 
-fn basis_generation_ref(basis_ref: &LeaseBasisRef) -> String {
+fn basis_generation_ref(
+    basis_ref: &LeaseBasisRef,
+    source_digest: &arkret_identifiers::Hash,
+) -> String {
     match basis_ref {
         LeaseBasisRef::Seal(seal) => seal.as_str().to_owned(),
-        LeaseBasisRef::Joined(basis) => basis.control_event_set_root.as_str().to_owned(),
+        LeaseBasisRef::Joined(_) => source_digest.as_str().to_owned(),
         LeaseBasisRef::AnchorUnit(reference) => {
             reference.anchor_unit.unit_digest.as_str().to_owned()
         }

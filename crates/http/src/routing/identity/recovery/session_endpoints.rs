@@ -590,18 +590,14 @@ pub(super) async fn recovery_session_create(
         let accepted_seal_frontier = if leaves.is_empty() {
             None
         } else {
-            let view = state
+            state
                 .projections()
                 .effective_seal_view(&leaves, &realm_id)
                 .map_err(|error| {
                     AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
                         .with_wire_code("device_reanchor_frontier_mismatch")
                 })?;
-            Some(arkret_wire::SealBasis {
-                leaves,
-                control_event_set_root: view.control_event_set_root,
-                state_root: view.state_root,
-            })
+            Some(arkret_wire::SealBasis { leaves })
         };
         (
             RecoveryIdentityModel::EnrollmentAuthority,

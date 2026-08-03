@@ -173,8 +173,6 @@ pub(crate) fn pick_admin_seal_basis(
         .map_err(|e| app_error!(InternalError, "effective_seal_view failed: {e}"))?;
     Ok(arkret_wire::SealBasis {
         leaves: view.predecessor_refs,
-        control_event_set_root: view.control_event_set_root,
-        state_root: view.state_root,
     })
 }
 

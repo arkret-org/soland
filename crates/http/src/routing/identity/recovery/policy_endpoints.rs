@@ -121,7 +121,7 @@ pub(super) fn recovery_policy_acceptance_basis(
     if leaves.len() == 1 {
         return Ok(LeaseBasisRef::Seal(leaves.remove(0)));
     }
-    let view = state
+    state
         .projections()
         .effective_seal_view(&leaves, realm_id)
         .map_err(|error| {
@@ -129,11 +129,7 @@ pub(super) fn recovery_policy_acceptance_basis(
                 "recovery policy joined Seal basis is unavailable: {error}"
             ))
         })?;
-    Ok(LeaseBasisRef::Joined(arkret_wire::SealBasis {
-        leaves,
-        control_event_set_root: view.control_event_set_root,
-        state_root: view.state_root,
-    }))
+    Ok(LeaseBasisRef::Joined(arkret_wire::SealBasis { leaves }))
 }
 
 #[salvo::oapi::endpoint(

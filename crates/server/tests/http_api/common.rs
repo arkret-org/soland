@@ -976,8 +976,6 @@ fn apply_registered_cba_plane(event: &mut arkret_wire::Event, verification_metho
         Some("control") => {
             event.seal_basis = Some(arkret_wire::SealBasis {
                 leaves: vec![basis_seal.id],
-                control_event_set_root: basis_seal.control_event_set_root,
-                state_root: basis_seal.state_root,
             });
         }
         _ => {}

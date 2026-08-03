@@ -111,8 +111,6 @@ pub fn realm_basis_seal_basis(
     let seal = realm_basis_seal(realm_id, subject, data_plane_actions);
     SealBasis {
         leaves: vec![seal.id],
-        control_event_set_root: seal.control_event_set_root,
-        state_root: seal.state_root,
     }
 }
 
@@ -323,8 +321,6 @@ pub fn apply_registered_cba_plane(
         Some("control") => {
             event.seal_basis = Some(SealBasis {
                 leaves: vec![basis.id],
-                control_event_set_root: basis.control_event_set_root,
-                state_root: basis.state_root,
             });
         }
         _ => {}

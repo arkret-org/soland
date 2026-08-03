@@ -705,8 +705,6 @@ pub(super) async fn join_candidates_for_resolved_realm(
     let seal = seal_view.accepted_seal;
     let seal_basis = arkret_wire::SealBasis {
         leaves: vec![seal.id.clone()],
-        control_event_set_root: seal.control_event_set_root.clone(),
-        state_root: seal.state_root.clone(),
     };
     let authority_dids = crate::notary::NotaryWorker::for_service(state.service_id().clone())
         .current_notary_profile_for_events(state, &realm_id_typed, &[])

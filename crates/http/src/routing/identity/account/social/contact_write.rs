@@ -586,8 +586,6 @@ async fn prepare(
     let accepted_seal = seal_view.accepted_seal;
     let seal_basis = arkret_wire::SealBasis {
         leaves: vec![accepted_seal.id],
-        control_event_set_root: accepted_seal.control_event_set_root,
-        state_root: accepted_seal.state_root,
     };
     let created_at = now();
     let event = new_unsigned_contact_event(

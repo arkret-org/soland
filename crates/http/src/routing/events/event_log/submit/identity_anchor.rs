@@ -1560,15 +1560,10 @@ async fn validate_pre_fence_basis(
     if declared_sorted != expected_leaves {
         return Err(frontier_error());
     }
-    let view = state
+    state
         .projections()
         .effective_seal_view(&leaves, &realm_id)
         .map_err(|_| frontier_error())?;
-    if basis.control_event_set_root != view.control_event_set_root
-        || basis.state_root != view.state_root
-    {
-        return Err(frontier_error());
-    }
     Ok(())
 }
 
