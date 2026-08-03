@@ -567,6 +567,46 @@ pub(crate) fn current_accepted_ssk_generation(state: &AppState, principal_id: &s
         .map(|publish| publish.generation.get())
 }
 
+/// Verify a detached JWS against the current accepted cross-signing SSK.
+///
+/// SSK methods are registered by `ak.cross_signing.publish`; they are not DID
+/// Document verification methods. `Ok(false)` means the supplied method is not
+/// the current SSK and lets the caller try another protocol authority branch.
+pub(crate) fn verify_current_ssk_detached_jws(
+    state: &AppState,
+    principal_id: &str,
+    verification_method: &str,
+    canonical_bytes: &[u8],
+    jws: &str,
+) -> Result<bool, String> {
+    let principal = Did::new(principal_id.to_owned()).map_err(|error| error.to_string())?;
+    let Some(publish) = state.identities().current_cross_signing(&principal) else {
+        return Ok(false);
+    };
+    if publish.self_signing_key.kid.as_str() != verification_method {
+        return Ok(false);
+    }
+    let key = decode_ed25519_key(
+        publish.self_signing_key.public_key.as_str(),
+        publish.self_signing_key.key_format.as_str(),
+    )
+    .map_err(str::to_owned)?;
+    let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
+        bytes: key.to_bytes().to_vec(),
+    };
+    let outcome = arkret_signatures::Ed25519DetachedJwsVerifier::new().verify_detached_jws(
+        jws,
+        canonical_bytes,
+        &material,
+    );
+    crate::metrics::record_signature_verify(
+        crate::metrics::SIGNATURE_SCHEME_RECOVERY_SSK,
+        outcome.is_ok(),
+    );
+    outcome.map_err(|error| error.to_string())?;
+    Ok(true)
+}
+
 pub(crate) fn persisted_device_is_anchored_to_ssk_generation(
     state: &AppState,
     principal_id: &str,

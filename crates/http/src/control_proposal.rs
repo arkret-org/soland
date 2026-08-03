@@ -235,7 +235,17 @@ pub(crate) async fn verify_control_proposal_receipt(
             .verification_method
             .strip_prefix(&format!("{signer}#"))
             .is_some_and(|fragment| arkret_identifiers::DeviceId::new(fragment.to_owned()).is_ok());
-        if device_method {
+        let current_ssk = crate::routing::identity::cross_signing::verify_current_ssk_detached_jws(
+            state,
+            signer.as_str(),
+            member.signature.verification_method.as_str(),
+            &bytes,
+            &member.signature.jws,
+        )?;
+        if current_ssk {
+            // The accepted cross-signing publish, not the DID Document, is the
+            // authority source for this self-signing verification method.
+        } else if device_method {
             crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
                 &bytes,
                 &member.signature.jws,
