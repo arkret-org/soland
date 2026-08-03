@@ -541,17 +541,7 @@ async fn active_series_signature_is_valid(
     {
         return Ok(false);
     }
-    let record = pointer.clone();
-    let mut unsigned = serde_json::to_value(&record).map_err(|error| {
-        AppError::internal(format!(
-            "active-series record serialization failed: {error}"
-        ))
-    })?;
-    unsigned["auth_data"]
-        .as_object_mut()
-        .ok_or_else(|| AppError::internal("active-series auth_data is not an object"))?
-        .remove("signature");
-    let message = arkret_canonical::canonical_json_bytes(&unsigned).map_err(|error| {
+    let message = pointer.signature_payload_bytes().map_err(|error| {
         AppError::internal(format!("active-series canonicalization failed: {error}"))
     })?;
     let signature = URL_SAFE_NO_PAD
