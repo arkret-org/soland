@@ -400,10 +400,20 @@ pub(super) async fn submit_identity_anchor_batch(
     }
 
     if !reanchor_conflict {
-        for (event, receipt) in typed_control_events.iter().zip(&proposal_receipts) {
+        for event in &typed_control_events {
+            let digest = event.event_digest().map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted identity anchor digest failed: {error}"),
+                )
+            })?;
+            let receipt = proposal_receipts
+                .iter()
+                .find(|receipt| receipt.proposal_digest.as_str() == digest);
             state
                 .projections()
-                .put_pending_control_event_with_receipt(event, receipt)
+                .put_pending_control_event(event, receipt)
                 .map_err(|error| {
                     SubmitOneError::new(
                         StatusCode::INTERNAL_SERVER_ERROR,
@@ -858,7 +868,7 @@ pub(super) async fn identical_historical_retry(
                     format!("stored anchor Event digest is invalid: {error}"),
                 )
             })?;
-            if let Some(receipt) = state
+            let indexed_receipt = state
                 .projections()
                 .control_proposal_receipt(&digest)
                 .map_err(|error| {
@@ -867,11 +877,46 @@ pub(super) async fn identical_historical_retry(
                         "internal_error",
                         format!("stored Control Proposal receipt unavailable: {error}"),
                     )
-                })?
-            {
+                })?;
+            let durable_receipt = if indexed_receipt.is_none() {
+                state
+                    .event_queries()
+                    .control_proposal_receipt_for_event(&record.event_id)
+                    .await
+                    .map_err(|error| {
+                        SubmitOneError::new(
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            "internal_error",
+                            format!("durable Control Proposal receipt unavailable: {error}"),
+                        )
+                    })?
+            } else {
+                None
+            };
+            let receipt = indexed_receipt.or(durable_receipt);
+            let event = serde_json::from_value::<arkret_wire::Event>(record.envelope.clone())
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("stored identity anchor is not canonical Event wire: {error}"),
+                    )
+                })?;
+            state
+                .projections()
+                .put_pending_control_event(&event, receipt.as_ref())
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        "internal_error",
+                        format!("accepted identity anchor pending index recovery failed: {error}"),
+                    )
+                })?;
+            if let Some(receipt) = receipt {
                 outcome.control_proposal_receipts.push(receipt);
             }
         }
+        state.wake_control_seal_coordinator();
         return Ok(Some(outcome));
     }
     Err(SubmitOneError::new(
@@ -2161,7 +2206,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn identical_retry_survives_response_loss_and_later_head_advancement() {
+    async fn identical_retry_restores_receipt_free_pending_anchor_index() {
         let state = AppState::new(
             crate::config::AppConfig::test_default(),
             soland_storage_postgres::Db { pool: None },
@@ -2215,5 +2260,23 @@ mod tests {
             .expect("stored canonical unit must be returned as duplicate");
         assert_eq!(outcome.status, EventsSubmitStatus::Duplicate);
         assert_eq!(outcome.duplicate.len(), 2);
+        for event_id in [event_id("000000000001"), event_id("000000000002")] {
+            let stored = state
+                .event_queries()
+                .canonical_event(&event_id)
+                .await
+                .unwrap()
+                .expect("canonical anchor Event must remain stored");
+            let event: arkret_wire::Event = serde_json::from_value(stored.envelope).unwrap();
+            let digest = Hash::new(event.event_digest().unwrap()).unwrap();
+            assert_eq!(
+                state
+                    .projections()
+                    .control_event_by_digest(&digest)
+                    .unwrap(),
+                Some(event),
+                "an exact retry must restore the required pending control index",
+            );
+        }
     }
 }

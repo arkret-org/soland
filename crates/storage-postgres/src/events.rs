@@ -153,7 +153,7 @@ async fn insert_canonical_event(
 async fn insert_pending_control_event(
     conn: &mut AsyncPgConnection,
     record: &CanonicalEventRecord,
-    proposal_receipt: &arkret_wire::ControlProposalReceipt,
+    proposal_receipt: Option<&arkret_wire::ControlProposalReceipt>,
 ) -> PersistenceResult<()> {
     let event =
         serde_json::from_value::<arkret_wire::Event>(record.envelope.clone()).map_err(|error| {
@@ -171,16 +171,28 @@ async fn insert_pending_control_event(
             "schema_violation: canonical digest differs from anchor Event digest".to_owned(),
         ));
     }
-    if proposal_receipt.proposal_digest.as_str() != digest
-        || proposal_receipt.realm_id != event.realm_id
-    {
-        return Err(PersistenceError::Conflict(
-            "schema_violation: proposal receipt does not bind anchor Event".to_owned(),
-        ));
+    if let Some(proposal_receipt) = proposal_receipt {
+        if proposal_receipt.proposal_digest.as_str() != digest
+            || proposal_receipt.realm_id != event.realm_id
+        {
+            return Err(PersistenceError::Conflict(
+                "schema_violation: proposal receipt does not bind anchor Event".to_owned(),
+            ));
+        }
+        proposal_receipt
+            .validate_protocol_bounds()
+            .map_err(|error| {
+                PersistenceError::Conflict(format!(
+                    "schema_violation: invalid proposal receipt: {error}"
+                ))
+            })?;
     }
-    let proposal_receipt = serde_json::to_value(proposal_receipt).map_err(|error| {
-        PersistenceError::Internal(format!("proposal receipt encoding failed: {error}"))
-    })?;
+    let proposal_receipt = proposal_receipt
+        .map(serde_json::to_value)
+        .transpose()
+        .map_err(|error| {
+            PersistenceError::Internal(format!("proposal receipt encoding failed: {error}"))
+        })?;
     sql_query(
         "INSERT INTO state_control_events \
          (event_digest, realm_id, event_json, proposal_receipt) VALUES ($1, $2, $3, $4) \
@@ -191,12 +203,13 @@ async fn insert_pending_control_event(
          WHERE state_control_events.realm_id = EXCLUDED.realm_id \
            AND state_control_events.event_json = EXCLUDED.event_json \
            AND (state_control_events.proposal_receipt IS NULL \
+             OR EXCLUDED.proposal_receipt IS NULL \
              OR state_control_events.proposal_receipt = EXCLUDED.proposal_receipt)",
     )
     .bind::<Text, _>(&digest)
     .bind::<Text, _>(event.realm_id.as_str())
     .bind::<Jsonb, _>(&record.envelope)
-    .bind::<Jsonb, _>(&proposal_receipt)
+    .bind::<Nullable<Jsonb>, _>(proposal_receipt.as_ref())
     .execute(conn)
     .await
     .map_err(PersistenceError::database)
@@ -398,7 +411,7 @@ impl EventStore for PgEventStore {
                             .to_owned(),
                     )
                 })?;
-                insert_pending_control_event(conn, &record, proposal_receipt).await?;
+                insert_pending_control_event(conn, &record, Some(proposal_receipt)).await?;
             }
             // Same transaction as the Events: the delivery intent for a Realm
             // genesis unit is not a post-commit best-effort follow-up.
@@ -499,11 +512,13 @@ impl EventStore for PgEventStore {
                 }
                 for record in records {
                     insert_canonical_event(conn, &record).await.map_err(PersistenceError::database)?;
-                    if !reanchor_conflict
-                        && let Some(proposal_receipt) =
-                            proposal_receipts_by_digest.get(&record.canonical_digest)
-                    {
-                        insert_pending_control_event(conn, &record, proposal_receipt).await?;
+                    if !reanchor_conflict {
+                        insert_pending_control_event(
+                            conn,
+                            &record,
+                            proposal_receipts_by_digest.get(&record.canonical_digest),
+                        )
+                        .await?;
                     }
                 }
                 if !reanchor_conflict

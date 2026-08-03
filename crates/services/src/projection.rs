@@ -478,8 +478,20 @@ impl ProjectionService {
         event: &Event,
         receipt: &ControlProposalReceipt,
     ) -> StoreResult<()> {
+        self.put_pending_control_event(event, Some(receipt))
+    }
+
+    /// Record an accepted Control Move before a Seal may cover it.
+    ///
+    /// Closed anchor units are deliberately receipt-free, but their Events
+    /// still belong to the pending control set until the founding Seal commits.
+    pub fn put_pending_control_event(
+        &self,
+        event: &Event,
+        receipt: Option<&ControlProposalReceipt>,
+    ) -> StoreResult<()> {
         self.control_event_store()
-            .put_pending_with_receipt(event, Some(receipt))
+            .put_pending_with_receipt(event, receipt)
     }
 
     /// Control-plane Events are keyed by their canonical `event_digest`, not by
