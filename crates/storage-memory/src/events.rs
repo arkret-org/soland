@@ -259,7 +259,7 @@ impl EventStore for MemoryEventStore {
                 &mut staged_proposal_receipts,
                 &records,
                 proposal_receipts,
-                false,
+                true,
             )?;
         }
         stage_identity_anchor_events(&mut staged_events, records)?;

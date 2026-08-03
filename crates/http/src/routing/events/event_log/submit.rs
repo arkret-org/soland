@@ -875,7 +875,14 @@ async fn submit_event_batch_outcome_with_leases(
         ));
     }
     if batch_contains_identity_anchor(&envelopes) {
-        return submit_identity_anchor_batch(state, session, envelopes, authorization_leases).await;
+        return submit_identity_anchor_batch(
+            state,
+            session,
+            envelopes,
+            authorization_leases,
+            control_proposal_receipts,
+        )
+        .await;
     }
     if batch_begins_realm_create(&envelopes) && !batch_is_managed_agent_pcr_create(&envelopes) {
         return submit_realm_bootstrap_batch(state, session, envelopes, None, authorization_leases)
@@ -1025,11 +1032,23 @@ pub(in crate::routing) async fn submit_initial_identity_anchor_batch(
         .iter()
         .map(|submission| typed_event_to_canonical_value(submission.event.clone()))
         .collect::<Result<Vec<_>, _>>()?;
-    let leases = submissions
+    let (leases, proposal_receipts): (Vec<_>, Vec<_>) = submissions
         .into_iter()
-        .map(|submission| submission.authorization_lease)
-        .collect::<Vec<_>>();
-    submit_identity_anchor_batch(state, session, envelopes, Some(&leases)).await
+        .map(|submission| {
+            (
+                submission.authorization_lease,
+                submission.control_proposal_receipt,
+            )
+        })
+        .unzip();
+    submit_identity_anchor_batch(
+        state,
+        session,
+        envelopes,
+        Some(&leases),
+        Some(&proposal_receipts),
+    )
+    .await
 }
 
 async fn direct_bootstrap_source_is_contact_authority(

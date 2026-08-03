@@ -214,7 +214,10 @@ async fn federation_submissions(
     let mut submissions = Vec::with_capacity(events.len());
     for (event, digest) in events.iter().zip(digests) {
         let record = by_digest.get(&digest);
-        let control_proposal_receipt = if event.seal_basis.is_some() {
+        let is_control_move = event.kind.is_reducer_input()
+            && event.seal_ref.is_none()
+            && event.auth_context.is_none();
+        let control_proposal_receipt = if is_control_move {
             let proposal_digest =
                 arkret_identifiers::Hash::new(digest.clone()).map_err(|error| {
                     format!(

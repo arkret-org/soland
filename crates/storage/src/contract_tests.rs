@@ -1409,17 +1409,13 @@ pub async fn assert_atomic_batch_outbox_rollback_contract(
     );
 
     let anchor_event_id = format!("ak:event:{}", uuid::Uuid::now_v7());
+    let anchor_record =
+        canonical_wire_event_record(&anchor_event_id, &principal_id, &realm_id, 0, now);
     assert!(
         events
             .put_identity_anchor_batch_atomic(
-                vec![canonical_wire_event_record(
-                    &anchor_event_id,
-                    &principal_id,
-                    &realm_id,
-                    0,
-                    now,
-                )],
-                Vec::new(),
+                vec![anchor_record.clone()],
+                vec![proposal_receipt(&anchor_record)],
                 None,
                 None,
                 None,

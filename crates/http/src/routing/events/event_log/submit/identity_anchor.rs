@@ -33,10 +33,16 @@ pub(super) async fn submit_identity_anchor_batch(
     session: &SessionRecord,
     envelopes: Vec<Value>,
     authorization_leases: Option<&[Option<arkret_wire::AuthorizationLease>]>,
+    submitted_proposal_receipts: Option<&[Option<arkret_wire::ControlProposalReceipt>]>,
 ) -> Result<EventsSubmitOutcome, SubmitOneError> {
     if authorization_leases.is_some_and(|leases| leases.len() != envelopes.len()) {
         return Err(unit_error(
             "identity anchor publication lease cardinality mismatch",
+        ));
+    }
+    if submitted_proposal_receipts.is_some_and(|receipts| receipts.len() != envelopes.len()) {
+        return Err(unit_error(
+            "identity anchor proposal-receipt cardinality mismatch",
         ));
     }
     if envelopes.len() != 2 {
@@ -204,26 +210,27 @@ pub(super) async fn submit_identity_anchor_batch(
         })?;
     let proposal_receipts = if reanchor_conflict {
         Vec::new()
-    } else if is_bootstrap || is_reanchor {
-        // Closed anchor units have no accepted Seal basis and wire validation
-        // therefore forbids proposal receipts. Their two Events and ingress
-        // evidence commit atomically; the later client-signed Seal supplies
-        // control-plane finality.
-        Vec::new()
-    } else {
+    } else if is_bootstrap {
         // A self-principal PCR names the newly authorized device as founding
         // notary, so no notary authority exists before this closed genesis
         // unit is committed. The Principal Server that performed lease
         // pre-admission acknowledges ingress; only the later client-signed
         // Seal provides control-plane finality.
-        let bootstrap_ingress_authority_set_ref = is_bootstrap
-            .then(|| {
-                authorization_leases
-                    .and_then(|leases| leases.first())
-                    .and_then(Option::as_ref)
-                    .map(|lease| &lease.authority_set_ref)
-            })
-            .flatten();
+        if submitted_proposal_receipts.is_some_and(|receipts| receipts.iter().any(Option::is_some))
+        {
+            return Err(unit_error(
+                "self-principal bootstrap receipts are issued after complete lease pre-admission",
+            ));
+        }
+        let bootstrap_ingress_authority_set_ref = authorization_leases
+            .and_then(|leases| leases.first())
+            .and_then(Option::as_ref)
+            .map(|lease| &lease.authority_set_ref)
+            .ok_or_else(|| {
+                unit_error(
+                    "self-principal bootstrap requires complete anchor-unit authorization leases",
+                )
+            })?;
         crate::control_proposal::mint_control_proposal_receipts(
             state,
             &RealmId::new(first.realm_id.clone()).map_err(|error| {
@@ -231,7 +238,7 @@ pub(super) async fn submit_identity_anchor_batch(
             })?,
             &typed_control_events,
             received_at,
-            bootstrap_ingress_authority_set_ref,
+            Some(bootstrap_ingress_authority_set_ref),
         )
         .await
         .map_err(|error| {
@@ -241,6 +248,40 @@ pub(super) async fn submit_identity_anchor_batch(
                 format!("identity anchor proposal receipts unavailable: {error}"),
             )
         })?
+    } else {
+        let submitted = submitted_proposal_receipts
+            .and_then(|receipts| receipts.iter().cloned().collect::<Option<Vec<_>>>())
+            .ok_or_else(|| {
+                unit_error("reanchor requires a proposal receipt for each Control Move")
+            })?;
+        let realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
+            SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+        })?;
+        let policy = crate::control_proposal::control_proposal_policy(
+            state,
+            &realm_id,
+            &typed_control_events,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "quorum_unreachable",
+                format!("identity anchor proposal policy unavailable: {error}"),
+            )
+        })?;
+        for (event, receipt) in typed_control_events.iter().zip(&submitted) {
+            crate::control_proposal::verify_control_proposal_receipt(state, event, receipt, policy)
+                .await
+                .map_err(|error| {
+                    SubmitOneError::new(
+                        StatusCode::PRECONDITION_FAILED,
+                        "failed_precondition",
+                        format!("reanchor proposal receipt is invalid: {error}"),
+                    )
+                })?;
+        }
+        submitted
     };
     let complete_leases = authorization_leases
         .filter(|leases| leases.iter().any(Option::is_some))
@@ -348,6 +389,7 @@ pub(super) async fn submit_identity_anchor_batch(
         state,
         session,
         &[(&first, &envelopes[0]), (&second, &envelopes[1])],
+        &proposal_receipts,
         &publication_evidence,
     )
     .await?;
@@ -570,6 +612,50 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         validate_event_envelope_with_context(state, session, &envelopes[0], &[], None).await?;
     let second =
         validate_event_envelope_with_context(state, session, &envelopes[1], &[], None).await?;
+    let typed_control_events = submissions
+        .iter()
+        .map(|submission| submission.event.clone())
+        .collect::<Vec<_>>();
+    let proposal_receipts = submissions
+        .iter()
+        .map(|submission| {
+            submission.control_proposal_receipt.clone().ok_or_else(|| {
+                unit_error("cross-signing recovery requires proposal receipts for both Events")
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let recovery_realm_id = RealmId::new(first.realm_id.clone()).map_err(|error| {
+        SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
+    })?;
+    let proposal_policy = crate::control_proposal::control_proposal_policy(
+        state,
+        &recovery_realm_id,
+        &typed_control_events,
+    )
+    .await
+    .map_err(|error| {
+        SubmitOneError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "quorum_unreachable",
+            format!("cross-signing proposal policy unavailable: {error}"),
+        )
+    })?;
+    for (event, receipt) in typed_control_events.iter().zip(&proposal_receipts) {
+        crate::control_proposal::verify_control_proposal_receipt(
+            state,
+            event,
+            receipt,
+            proposal_policy,
+        )
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "failed_precondition",
+                format!("cross-signing proposal receipt is invalid: {error}"),
+            )
+        })?;
+    }
     let authorize_payload = envelopes[0]
         .get("payload")
         .and_then(Value::as_object)
@@ -671,6 +757,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         state,
         session,
         &[(&first, &envelopes[0]), (&second, &envelopes[1])],
+        &proposal_receipts,
         &publication_evidence,
     )
     .await?;
@@ -678,7 +765,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         .event_queries()
         .store_identity_anchor_batch(
             records,
-            Vec::new(),
+            proposal_receipts.clone(),
             None,
             Some(device),
             None,
@@ -694,6 +781,19 @@ pub(super) async fn submit_cross_signing_recovery_batch(
                 format!("atomic cross-signing recovery commit failed: {error}"),
             )
         })?;
+    for (event, receipt) in typed_control_events.iter().zip(&proposal_receipts) {
+        state
+            .projections()
+            .put_pending_control_event_with_receipt(event, receipt)
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("accepted cross-signing pending index unavailable: {error}"),
+                )
+            })?;
+    }
+    state.wake_control_seal_coordinator();
     for (parsed, envelope) in [(&first, &envelopes[0]), (&second, &envelopes[1])] {
         if let Some(operation) = projection_operation_from_event(parsed, envelope) {
             crate::routing::events::projection::project_accepted_operations_from_device(
@@ -731,6 +831,7 @@ pub(super) async fn submit_cross_signing_recovery_batch(
         Some(cursor),
     );
     outcome.ingress_receipts = ingress_receipts;
+    outcome.control_proposal_receipts = proposal_receipts;
     Ok(outcome)
 }
 
@@ -745,6 +846,7 @@ async fn identity_anchor_fanout_records(
     state: &AppState,
     session: &SessionRecord,
     unit: &[(&ValidatedEventEnvelope, &Value)],
+    proposal_receipts: &[arkret_wire::ControlProposalReceipt],
     publication_evidence: &[soland_services::events::PublicationEvidenceRecord],
 ) -> Result<Vec<soland_services::events::FederationDelivery>, SubmitOneError> {
     if session.token_hash.starts_with("federation:") {
@@ -752,18 +854,28 @@ async fn identity_anchor_fanout_records(
     }
     let mut deliveries = Vec::new();
     for (parsed, envelope) in unit {
+        let proposal_receipt = proposal_receipts
+            .iter()
+            .find(|receipt| receipt.proposal_digest.as_str() == parsed.canonical_digest);
         deliveries.extend(
             // This unit's ingress receipts are minted but not yet durable —
             // they commit alongside these very outbox rows.
-            peer_event_fanout_records(state, parsed, envelope, None, publication_evidence, None)
-                .await
-                .map_err(|error| {
-                    SubmitOneError::new(
-                        StatusCode::INTERNAL_SERVER_ERROR,
-                        "federation_fanout_unavailable",
-                        format!("identity anchor federation delivery intent unavailable: {error}"),
-                    )
-                })?,
+            peer_event_fanout_records(
+                state,
+                parsed,
+                envelope,
+                proposal_receipt,
+                publication_evidence,
+                None,
+            )
+            .await
+            .map_err(|error| {
+                SubmitOneError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "federation_fanout_unavailable",
+                    format!("identity anchor federation delivery intent unavailable: {error}"),
+                )
+            })?,
         );
     }
     Ok(deliveries)

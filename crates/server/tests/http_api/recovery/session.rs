@@ -352,12 +352,27 @@ async fn recovery_session_derives_enrollment_authority_model() {
             received_at: now,
         });
     }
+    let proposal_receipts = bootstrap_records
+        .iter()
+        .map(|record| arkret_wire::ControlProposalReceipt {
+            kind: arkret_wire::ControlProposalReceiptKind::ProposalReceipt,
+            realm_id: arkret_wire::RealmId::new(realm_id.clone()).unwrap(),
+            proposal_digest: arkret_wire::Hash::new(record.canonical_digest.clone()).unwrap(),
+            received_at: now,
+            decision_due_at: now + chrono::Duration::hours(1),
+            absolute_due_at: now + chrono::Duration::hours(24),
+            defer_count: 0,
+            authority_set_ref: arkret_wire::Hash::new(format!("sha256:{}", "a".repeat(64)))
+                .unwrap(),
+            member_receipts: Vec::new(),
+        })
+        .collect();
     state
         .test_persistence()
         .events()
         .put_identity_anchor_batch_atomic(
             bootstrap_records,
-            Vec::new(),
+            proposal_receipts,
             None,
             None,
             None,

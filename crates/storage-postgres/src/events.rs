@@ -341,7 +341,7 @@ fn identity_anchor_receipt_cardinality_is_valid(
     if reanchor_conflict {
         proposal_receipt_count == 0
     } else {
-        proposal_receipt_count == 0 || proposal_receipt_count == record_count
+        proposal_receipt_count == record_count
     }
 }
 
@@ -819,8 +819,8 @@ mod identity_anchor_receipt_tests {
     use super::identity_anchor_receipt_cardinality_is_valid;
 
     #[test]
-    fn closed_anchor_units_accept_no_proposal_receipts() {
-        assert!(identity_anchor_receipt_cardinality_is_valid(2, 0, false));
+    fn accepted_anchor_units_require_one_proposal_receipt_per_event() {
+        assert!(!identity_anchor_receipt_cardinality_is_valid(2, 0, false));
         assert!(identity_anchor_receipt_cardinality_is_valid(2, 2, false));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 1, false));
         assert!(!identity_anchor_receipt_cardinality_is_valid(2, 3, false));

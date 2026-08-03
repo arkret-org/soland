@@ -483,8 +483,9 @@ impl ProjectionService {
 
     /// Record an accepted Control Move before a Seal may cover it.
     ///
-    /// Closed anchor units are deliberately receipt-free, but their Events
-    /// still belong to the pending control set until the founding Seal commits.
+    /// Closed genesis units carry ingress-authority proposal receipts even
+    /// though their Events have no predecessor `seal_basis`; the founding
+    /// Seal still supplies finality later.
     pub fn put_pending_control_event(
         &self,
         event: &Event,

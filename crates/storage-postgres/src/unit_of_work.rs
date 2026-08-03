@@ -104,7 +104,10 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                     "schema_violation: accepted Event envelope is not canonical wire: {error}"
                 ))
             })?;
-            if typed_event.seal_basis.is_some() {
+            let is_control_move = typed_event.kind.is_reducer_input()
+                && typed_event.seal_ref.is_none()
+                && typed_event.auth_context.is_none();
+            if is_control_move {
                 let event_digest = typed_event.event_digest().map_err(|error| {
                     PersistenceError::Conflict(format!(
                         "schema_violation: accepted Control Move digest failed: {error}"
@@ -172,6 +175,12 @@ impl EventCommitUnitOfWork for PgEventCommitUnitOfWork {
                         Ok(())
                     }
                 })?;
+            } else if request.control_proposal_receipt.is_some() {
+                return Err(PersistenceError::Conflict(
+                    "schema_violation: non-Control Event cannot carry a proposal receipt"
+                        .to_owned(),
+                )
+                .into());
             }
 
             for projection in request.projections {

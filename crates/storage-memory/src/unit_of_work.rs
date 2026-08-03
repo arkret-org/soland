@@ -18,10 +18,12 @@ fn stage_control_proposal_receipt(
                 "schema_violation: accepted Event envelope is not canonical wire: {error}"
             ))
         })?;
-    if event.seal_basis.is_none() {
+    let is_control_move =
+        event.kind.is_reducer_input() && event.seal_ref.is_none() && event.auth_context.is_none();
+    if !is_control_move {
         if request.control_proposal_receipt.is_some() {
             return Err(PersistenceError::Conflict(
-                "schema_violation: DataEvent cannot carry a proposal receipt".to_owned(),
+                "schema_violation: non-Control Event cannot carry a proposal receipt".to_owned(),
             ));
         }
         return Ok(());
