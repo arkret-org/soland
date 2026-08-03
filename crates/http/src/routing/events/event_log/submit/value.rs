@@ -258,7 +258,12 @@ pub(in crate::routing) async fn submit_initial_event_submission(
     session: &SessionRecord,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<SubmittedEventOutcome, SubmitOneError> {
-    validate_initial_submission(&submission)?;
+    let submit_context = if submission.event.kind == arkret_wire::EventKind::REALM_CREATE {
+        arkret_wire::EventSubmitContext::AnchorUnit
+    } else {
+        arkret_wire::EventSubmitContext::Standard
+    };
+    validate_initial_submission_in_context(&submission, submit_context)?;
     if let Some(lease) = &submission.authorization_lease {
         validate_authorization_lease_for_event(state, Some(session), &submission.event, lease)
             .await?;

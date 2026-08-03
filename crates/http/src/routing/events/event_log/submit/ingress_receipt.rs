@@ -418,12 +418,6 @@ fn publication_reject(message: String) -> SubmitOneError {
 /// `offline-publication.md` §2.1 puts lease verification ahead of receipt
 /// issuance: this service must not sign arrival evidence for a submission whose
 /// lease is structurally invalid or does not bind the Event it travels with.
-pub(in crate::routing) fn validate_initial_submission(
-    submission: &arkret_wire::EventInitialSubmission,
-) -> Result<(), SubmitOneError> {
-    validate_initial_submission_in_context(submission, arkret_wire::EventSubmitContext::Standard)
-}
-
 pub(super) fn validate_initial_submission_in_context(
     submission: &arkret_wire::EventInitialSubmission,
     context: arkret_wire::EventSubmitContext,
