@@ -6,9 +6,9 @@ use diesel::{
 use super::{
     AgentPairingCommitIntent, AgentParticipationStore, AgentPrincipalRecord, AgentPrincipalRow,
     AgentRuntimeActivation, AgentRuntimeApprovalWrite, AgentStore, Array, BigInt, Bool, Jsonb,
-    Nullable, OptionalExtension, PersistenceError, PersistenceResult, PgPool, QueryableByName,
-    RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Uuid, Value, async_trait, ids, pg_conn,
-    sql_query,
+    Nullable, OptionalExtension, PendingAgentPairingCommitIntent, PersistenceError,
+    PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Utc, Uuid,
+    Value, async_trait, ids, pg_conn, sql_query,
 };
 use crate::schema::agent_principals;
 #[derive(QueryableByName)]
