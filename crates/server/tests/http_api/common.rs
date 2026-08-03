@@ -157,6 +157,7 @@ pub(crate) async fn prepare_standard_initial_submissions(
             authorization_lease: Some(authorization_lease),
             cba_proof_bundles: Vec::new(),
             control_proposal_receipt: Some(control_proposal_receipt),
+            membership_compensation_evidence: None,
         };
         submission
             .validate_structural_in_context(arkret_wire::EventSubmitContext::Standard)

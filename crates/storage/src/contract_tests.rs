@@ -1577,7 +1577,7 @@ pub async fn assert_mls_keypackage_retirement_contract(
         .expect("claim KeyPackage before consume")
         .expect("ordinary KeyPackage must be claimable");
     store
-        .consume_claim(&consumed.id, &group_id, 15)
+        .consume_claim(&consumed.id, &group_id, 15, None)
         .await
         .expect("consume KeyPackage")
         .expect("claimed KeyPackage must be consumable");
@@ -1674,6 +1674,8 @@ pub async fn assert_last_resort_claim_ledger_contract(
                 }]
             }
         })),
+        consume_receipt: None,
+        terminal_receipt: None,
         keypackage_id: Some(keypackage.id.clone()),
         claim_expires_at_unix_ms: None,
         expires_at: i64::MAX,

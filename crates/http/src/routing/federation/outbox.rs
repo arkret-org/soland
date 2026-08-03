@@ -459,7 +459,20 @@ fn peer_event_partial_retry(
     });
     if let Some(bundle) = &mut request.agent_signer_evidence_bundle {
         bundle.evidence.retain(|evidence| {
-            let binding = &evidence.signing_key_binding;
+            let admission_evidence = match evidence {
+                arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
+                    admission_evidence,
+                    ..
+                }
+                | arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
+                    admission_evidence,
+                    ..
+                } => admission_evidence,
+            };
+            let binding = &admission_evidence
+                .agent_authority_snapshot
+                .core
+                .signing_key_binding;
             retained_events.iter().any(|event| {
                 event.applet_id.is_none()
                     && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id

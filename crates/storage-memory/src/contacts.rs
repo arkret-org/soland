@@ -16,41 +16,17 @@ impl MemoryContactStore {
 #[async_trait]
 impl ContactStore for MemoryContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
-        let data = self.data.lock();
-        Ok(data
-            .values()
-            .find(|record| {
-                record.requester == requester
-                    && record.target == target
-                    && record.scope == "message"
-            })
-            .or_else(|| {
-                data.values()
-                    .find(|record| record.requester == requester && record.target == target)
-            })
-            .cloned())
-    }
-
-    async fn get_scoped(
-        &self,
-        requester: &str,
-        target: &str,
-        scope: &str,
-    ) -> PersistenceResult<Option<ContactRecord>> {
-        let data = self.data.lock();
-        Ok(data
-            .get(&(requester.to_owned(), target.to_owned(), scope.to_owned()))
+        Ok(self
+            .data
+            .lock()
+            .get(&(requester.to_owned(), target.to_owned()))
             .cloned())
     }
 
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()> {
         let mut data = self.data.lock();
         data.insert(
-            (
-                record.requester.clone(),
-                record.target.clone(),
-                record.scope.clone(),
-            ),
+            (record.requester.clone(), record.target.clone()),
             record.clone(),
         );
         Ok(())
@@ -67,7 +43,7 @@ impl ContactStore for MemoryContactStore {
 
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()> {
         let mut data = self.data.lock();
-        data.retain(|(row_requester, row_target, _), _| {
+        data.retain(|(row_requester, row_target), _| {
             row_requester != requester || row_target != target
         });
         Ok(())
@@ -203,6 +179,19 @@ impl DirectConversationBindingStore for MemoryDirectConversationBindingStore {
             .lock()
             .insert(participants_key.to_owned(), record.clone());
         Ok(())
+    }
+
+    async fn put_if_absent(
+        &self,
+        participants_key: &str,
+        record: &DirectConversationBindingRecord,
+    ) -> PersistenceResult<bool> {
+        let mut data = self.data.lock();
+        if data.contains_key(participants_key) {
+            return Ok(false);
+        }
+        data.insert(participants_key.to_owned(), record.clone());
+        Ok(true)
     }
 
     async fn delete(&self, participants_key: &str) -> PersistenceResult<()> {

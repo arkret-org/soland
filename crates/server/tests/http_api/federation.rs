@@ -830,6 +830,7 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
         authorization_lease: Some(lease),
         ingress_receipts: vec![receipt],
         control_proposal_receipt,
+        membership_compensation_evidence: None,
     }
 }
 

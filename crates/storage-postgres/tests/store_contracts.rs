@@ -148,6 +148,8 @@ async fn postgres_adapter_satisfies_last_resort_claim_ledger_contract_when_confi
             .to_owned(),
         state: "last_resort_claimed".to_owned(),
         outcome: Some(serde_json::json!({"response": {"claims": ["concurrent"]}})),
+        consume_receipt: None,
+        terminal_receipt: None,
         keypackage_id: Some(format!("{namespace}-keypackage-last-resort")),
         claim_expires_at_unix_ms: None,
         expires_at: i64::MAX,

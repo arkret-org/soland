@@ -49,7 +49,10 @@ pub struct ConsentCellRecord {
 pub struct ContactRecord {
     pub requester: String,
     pub target: String,
-    pub scope: String,
+    pub basis_id: Option<String>,
+    pub version: Option<u64>,
+    pub granted_to_target_scopes: Vec<String>,
+    pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
     pub request_event_ref: Option<String>,
     pub response_event_ref: Option<String>,
@@ -204,12 +207,6 @@ pub trait ContactPort: Send + Sync {
         requester: &str,
         target: &str,
     ) -> ServiceResult<Option<ContactRecord>>;
-    async fn contact(
-        &self,
-        requester: &str,
-        target: &str,
-        scope: &str,
-    ) -> ServiceResult<Option<ContactRecord>>;
     async fn contacts_for_actor(&self, actor_id: &str) -> ServiceResult<Vec<ContactRecord>>;
     async fn save_contact(&self, contact: ContactRecord) -> ServiceResult<()>;
 }
@@ -237,6 +234,11 @@ pub trait DirectConversationBindingPort: Send + Sync {
         pair_key: &str,
         binding: DirectConversationBindingRecord,
     ) -> ServiceResult<()>;
+    async fn reserve_binding(
+        &self,
+        pair_key: &str,
+        binding: DirectConversationBindingRecord,
+    ) -> ServiceResult<bool>;
     async fn delete_binding(&self, pair_key: &str) -> ServiceResult<()>;
     async fn bindings(&self) -> ServiceResult<Vec<(String, DirectConversationBindingRecord)>>;
 }
@@ -282,15 +284,6 @@ impl ContactService {
             runtime_invite_policies: Arc::new(Mutex::new(BTreeMap::new())),
             runtime_direct_bindings: Arc::new(Mutex::new(BTreeMap::new())),
         }
-    }
-
-    pub async fn contact(
-        &self,
-        requester: &str,
-        target: &str,
-        scope: &str,
-    ) -> ServiceResult<Option<ContactRecord>> {
-        self.contacts.contact(requester, target, scope).await
     }
 
     pub async fn contact_any(
@@ -352,6 +345,24 @@ impl ContactService {
             .lock()
             .insert(pair_key.to_owned(), binding);
         Ok(())
+    }
+
+    pub async fn reserve_direct_binding(
+        &self,
+        pair_key: &str,
+        binding: DirectConversationBindingRecord,
+    ) -> ServiceResult<bool> {
+        if !self
+            .direct_bindings
+            .reserve_binding(pair_key, binding.clone())
+            .await?
+        {
+            return Ok(false);
+        }
+        self.runtime_direct_bindings
+            .lock()
+            .insert(pair_key.to_owned(), binding);
+        Ok(true)
     }
 
     pub async fn delete_direct_binding(&self, pair_key: &str) -> ServiceResult<()> {

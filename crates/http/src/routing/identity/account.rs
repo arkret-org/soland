@@ -23,18 +23,16 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
-use arkret_models_collaboration::governance::peer_contact::ContactIntroductionEvidence;
 use arkret_models_collaboration::http_bodies::{
-    ContactAgentProjection, ContactList, ContactListRow, ContactRequestOutcome,
-    ContactRequestRequestBody, ContactRespondOutcome, ContactRespondRequestBody, ContactState,
-    ContactTombstone, ContactTombstoneRequestBody, DirectConversationSummary,
+    ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
     DirectConversationSummaryState,
 };
 use arkret_models_collaboration::objects::account_status::AccountStatus;
 use arkret_models_collaboration::protocol_journey::{
-    ContactPeer, DirectConversationCoordinates, DirectConversationOperationState,
-    DirectConversationResolveOutcome, DirectConversationResolveRequestBody,
-    DirectConversationResolveStateOutcome,
+    ContactAcceptRequestBody, ContactOperationOutcome, ContactOperationRequestBody, ContactPeer,
+    ContactRejectRequestBody, ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
+    DirectConversationCoordinates, DirectConversationResolveOutcome,
+    DirectConversationResolveRequestBody, DirectConversationResolveStateOutcome,
 };
 use arkret_models_identity::account::{
     AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
@@ -57,22 +55,15 @@ use soland_contracts::admin::{
     AccountLocalpartMutationOutcome, AccountLocalpartUpdateRequestBody, AccountLocalpartView,
 };
 use soland_http::error::AppError;
-use soland_services::events::ProjectedEvent as ProjectionEventRecord;
 use soland_services::identity::{
     AccountLifecycleState, AccountLocalpartState as AccountLocalpartRecord,
     AccountProfileState as AccountRecord, AgentPairingState, ContactRecord, DeviceIdentity,
-    DirectConversationBindingRecord,
+    DirectConversationBindingRecord, SessionIdentityState as SessionRecord,
 };
 
 use super::auth::{
     active_delegated_sessions_for_actor, purge_device_delivery_state, revoke_devices_for_actor,
     revoke_sessions_for_actor,
-};
-use super::consent::{
-    active_invite_consent_grant_ref, auto_revoke_requester_side_contact_consent,
-    consent_cell_snapshot, emit_consent_revoke_invalidation, grant_contact_managed_consent,
-    has_active_consent_for_scope, normalize_scope, persist_consent_cell, record_pending_request,
-    revoke_contact_managed_consent,
 };
 use super::did::require_embedded_webvh_registration_bearer;
 use super::{AuthArgs, append_audit_log, bearer_token, now, sha256_hex, validate_did};
@@ -146,8 +137,10 @@ mod social;
 use arkret_wire::SchemaId;
 use social::*;
 pub(crate) use social::{
-    accepted_contact_for_pair, direct_binding_matches_projection, project_canonical_direct_binding,
-    retire_direct_bindings_for_operation, validate_direct_binding_operation,
+    accepted_contact_for_pair, canonical_contact_digest, direct_binding_matches_projection,
+    project_canonical_direct_binding, retire_direct_bindings_for_operation,
+    validate_direct_binding_operation, validate_request_receipt_cryptography,
+    verify_contact_service_signature,
 };
 mod lifecycle;
 // Re-export the lifecycle surface used by sibling routing modules.
@@ -208,6 +201,8 @@ fn contact_routes() -> Router {
         .get(list_contacts)
         .push(Router::with_path("request").post(contact_request))
         .push(Router::with_path("respond").post(contact_respond))
+        .push(Router::with_path("reject").post(contact_reject))
+        .push(Router::with_path("scope-update").post(contact_scope_update))
         .push(Router::with_path("tombstone").post(contact_tombstone))
 }
 
@@ -1365,19 +1360,52 @@ async fn direct_conversation_resolve(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let (peer_descriptor, create_request) = match body {
-        DirectConversationResolveRequestBody::Lookup(lookup) => (lookup.peer, None),
-        DirectConversationResolveRequestBody::Create(create) => {
-            create
-                .operation_control_authorization
-                .validate()
-                .map_err(|error| AppError::invalid_param(error.to_string()))?;
-            if create.operation_control_authorization.operation_id != create.operation_id {
+    let (peer_descriptor, operation_id) = match &body {
+        DirectConversationResolveRequestBody::Lookup(request) => (&request.peer, None),
+        DirectConversationResolveRequestBody::PrepareAuthorization(request) => {
+            (&request.peer, Some(request.operation_id.clone()))
+        }
+        DirectConversationResolveRequestBody::CommitAuthorization(request) => {
+            if request.operation_control_authorization.core.operation_id != request.operation_id
+                || request
+                    .operation_control_authorization
+                    .materialization_genesis
+                    .operation_id
+                    != request.operation_id
+            {
                 return Err(AppError::invalid_param(
-                    "operation_control_authorization.operation_id mismatch",
+                    "operation-control authorization draft does not bind operation_id",
                 ));
             }
-            (create.peer.clone(), Some(create))
+            (&request.peer, Some(request.operation_id.clone()))
+        }
+        DirectConversationResolveRequestBody::PrepareMaterializationStep(request) => {
+            if request.operation_control_authorization.core.operation_id != request.operation_id
+                || request
+                    .operation_control_authorization
+                    .materialization_genesis
+                    .operation_id
+                    != request.operation_id
+            {
+                return Err(AppError::invalid_param(
+                    "operation-control authorization does not bind operation_id",
+                ));
+            }
+            (&request.peer, Some(request.operation_id.clone()))
+        }
+        DirectConversationResolveRequestBody::CommitMaterializationStep(request) => {
+            if request.operation_control_authorization.core.operation_id != request.operation_id
+                || request
+                    .operation_control_authorization
+                    .materialization_genesis
+                    .operation_id
+                    != request.operation_id
+            {
+                return Err(AppError::invalid_param(
+                    "operation-control authorization does not bind operation_id",
+                ));
+            }
+            (&request.peer, Some(request.operation_id.clone()))
         }
     };
     if peer_descriptor.subject_id().as_str() == session.actor {
@@ -1398,17 +1426,16 @@ async fn direct_conversation_resolve(
             ));
         }
     }
-    // The peer MAY be either an active controller-owned local Agent or a
-    // contact hosted on this or another Principal Server. The former is
-    // authorized by its immutable controller/provisioning/runtime-key facts;
-    // the latter by accepted contact plus direct-message consent.
-    let scope = normalize_scope(Some("direct_message"))?;
+    // The peer MAY be either an active controller-owned local Agent or an
+    // accepted Contact. Direction grants are read only from the canonical
+    // Contact record.
+    let scope = "direct_message";
     let (contact, authorization_basis) = if let Some(basis) =
         managed_agent_direct_authorization_basis(state, &session.actor, &peer).await?
     {
         (None, basis)
     } else {
-        let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, &scope).await?
+        let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, scope).await?
         else {
             return Err(direct_resolve_precondition(
                 arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
@@ -1419,30 +1446,12 @@ async fn direct_conversation_resolve(
                 session.actor
             )));
         };
-        if !has_active_consent_for_scope(state, &peer, &session.actor, &scope, now()) {
-            return Err(direct_resolve_precondition(
-                arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-                "direct conversation is unavailable",
-            )
-            .with_private_detail(format!(
-                "peer has no active direct_message or any consent for requester: requester={}, peer={peer}",
-                session.actor
-            )));
-        }
         let basis = direct_authorization_basis_from_contact(&contact)?;
         (Some(contact), basis)
     };
     let pair_key = direct_pair_key(state, &session.actor, &peer)?;
     let pair_key_hash = Hash::new(pair_key.clone())
         .map_err(|error| AppError::internal(format!("direct pair key invalid: {error}")))?;
-    if let Some(create) = &create_request
-        && create.operation_control_authorization.pair_key != pair_key_hash
-    {
-        return Err(direct_resolve_precondition(
-            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
-            "operation-control authorization does not bind the direct pair",
-        ));
-    }
     if let Some(binding) = active_direct_binding(state, &pair_key) {
         return json_ok(DirectConversationResolveOutcome::State(
             DirectConversationResolveStateOutcome::Found {
@@ -1462,110 +1471,24 @@ async fn direct_conversation_resolve(
             },
         ));
     }
-    let Some(create_request) = create_request else {
+    if matches!(body, DirectConversationResolveRequestBody::Lookup(_)) {
         return json_ok(DirectConversationResolveOutcome::State(
             DirectConversationResolveStateOutcome::CreationRequired,
         ));
-    };
-    let operation_id = create_request.operation_id.clone();
-    if let Some((binding, materialization_draft)) =
-        pending_direct_materialization_reusable(state, &pair_key).await?
-    {
-        let _ = (binding, materialization_draft);
-        return json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::Materializing {
-                operation_id,
-                attempt_sequence: 1,
-                operation_state: DirectConversationOperationState::Materializing,
-            },
-        ));
     }
-    let remote_peer_service_id = contact
-        .as_ref()
-        .and_then(|contact| contact.peer_service_id.as_deref())
-        .filter(|service_id| *service_id != state.service_id());
-    if let Some(peer_service_id) = remote_peer_service_id {
-        let contact = contact
-            .as_ref()
-            .expect("remote direct conversation authorization requires an accepted contact");
-        if let Some(signed_claim) = create_request.peer_claim_request.as_ref() {
-            let (binding, created, materialization_draft) =
-                complete_remote_direct_binding_with_realm(
-                    state,
-                    &pair_key,
-                    &session.actor,
-                    &session.device_id,
-                    &peer,
-                    contact,
-                    signed_claim,
-                )
-                .await?;
-            let _ = created;
-            if materialization_draft.is_none() && binding.state == "active" {
-                return json_ok(DirectConversationResolveOutcome::State(
-                    DirectConversationResolveStateOutcome::Found {
-                        coordinates: direct_coordinates(pair_key_hash, &binding)?,
-                        send_blockers: Vec::new(),
-                    },
-                ));
-            }
-            return json_ok(DirectConversationResolveOutcome::State(
-                DirectConversationResolveStateOutcome::Materializing {
-                    operation_id,
-                    attempt_sequence: 1,
-                    operation_state: DirectConversationOperationState::Materializing,
-                },
-            ));
-        }
-        let (_binding, _claim_authorization_draft) = prepare_remote_direct_keypackage_claim(
-            state,
-            &pair_key,
-            &session.actor,
-            &peer,
-            peer_service_id,
-        )
-        .await?;
-        return json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::Materializing {
-                operation_id,
-                attempt_sequence: 1,
-                operation_state: DirectConversationOperationState::Reserved,
-            },
-        ));
-    }
-    if create_request.peer_claim_request.is_some() {
-        return Err(AppError::invalid_param(
-            "peer_claim_request is only valid for a remote direct conversation peer",
-        ));
-    }
-    ensure_direct_peer_resolvable(state, &peer).await?;
-    let (binding, created, materialization_draft) = create_direct_binding_with_realm(
-        state,
-        &pair_key,
-        &session.actor,
-        &session.device_id,
-        &peer,
-        contact.as_ref(),
-        authorization_basis,
-    )
-    .await?;
-    let _ = created;
-    if materialization_draft.is_some() || binding.state != "active" {
-        json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::Materializing {
-                operation_id,
-                attempt_sequence: 1,
-                operation_state: DirectConversationOperationState::Materializing,
-            },
-        ))
-    } else {
-        json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::Found {
-                coordinates: direct_coordinates(pair_key_hash, &binding)?,
-                send_blockers: Vec::new(),
-            },
-        ))
-    }
+
+    let _ = (contact, authorization_basis);
+    // Every create phase is now routed explicitly. The former one-shot path
+    // synthesized and accepted Events before the caller signed exact prepared
+    // bytes, so it is intentionally not a fallback for these phases. Until the
+    // durable reservation/receipt executor has a complete local dependency
+    // frontier, expose the protocol's retryable typed state.
+    json_ok(DirectConversationResolveOutcome::State(
+        DirectConversationResolveStateOutcome::TemporarilyUnavailable {
+            operation_id,
+            reason: arkret_models_collaboration::protocol_journey::DirectConversationUnavailableReason::DependencyPending,
+        },
+    ))
 }
 
 fn direct_coordinates(

@@ -565,7 +565,11 @@ async fn validate_event_envelope_with_ingress(
     )
     .await?;
     reject_revoked_actor_device_signature(object, state, session, &actor_id).await?;
-    let cba_context = if bootstrap_unit_member {
+    let sidecar_bootstrap = internal_admission.is_some_and(|admission| {
+        kind == arkret_wire::EventKind::SIDECAR_CREATE
+            && admission.is_sidecar_ensure(session, object)
+    });
+    let cba_context = if bootstrap_unit_member || sidecar_bootstrap {
         arkret_schema::EventCellContractContext::OrdinaryRealmBootstrap
     } else {
         arkret_schema::EventCellContractContext::Standard

@@ -938,11 +938,13 @@ fn application_peer_claim(
         source_service_id: row.source_service_id,
         claim_request_id: row.claim_request_id,
         request_digest: row.request_digest,
-        state: row.state,
-        outcome: row.outcome,
         keypackage_id: row.keypackage_id,
+        outcome: row.outcome,
+        terminal_receipt: row.terminal_receipt,
+        consume_receipt: row.consume_receipt,
         claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
         expires_at: row.expires_at,
+        state: row.state,
         updated_at: row.updated_at,
     }
 }
@@ -954,11 +956,13 @@ fn persistence_peer_claim(
         source_service_id: row.source_service_id.clone(),
         claim_request_id: row.claim_request_id.clone(),
         request_digest: row.request_digest.clone(),
-        state: row.state.clone(),
-        outcome: row.outcome.clone(),
         keypackage_id: row.keypackage_id.clone(),
+        outcome: row.outcome.clone(),
+        terminal_receipt: row.terminal_receipt.clone(),
+        consume_receipt: row.consume_receipt.clone(),
         claim_expires_at_unix_ms: row.claim_expires_at_unix_ms,
         expires_at: row.expires_at,
+        state: row.state.clone(),
         updated_at: row.updated_at,
     }
 }
@@ -1032,11 +1036,12 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
+        peer_consume_receipt: Option<&Value>,
     ) -> crate::ServiceResult<Option<crate::events::MlsKeyPackageState>> {
         Ok(self
             .0
             .mls_key_packages()
-            .consume_claim(id, mls_group_id, consumed_at)
+            .consume_claim(id, mls_group_id, consumed_at, peer_consume_receipt)
             .await?
             .map(application_mls_key_package))
     }
@@ -1108,6 +1113,27 @@ impl crate::events::MlsKeyPackageMaintenancePort for PersistenceMlsKeyPackageMai
                 }
             },
         )
+    }
+    async fn attach_peer_claim_terminal_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        terminal_receipt: &Value,
+        updated_at: i64,
+    ) -> crate::ServiceResult<Option<crate::events::PeerKeyPackageClaimLedgerState>> {
+        Ok(self
+            .0
+            .mls_key_packages()
+            .attach_peer_claim_terminal_receipt(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                terminal_receipt,
+                updated_at,
+            )
+            .await?
+            .map(application_peer_claim))
     }
     async fn revoke_expired_peer_claims(
         &self,

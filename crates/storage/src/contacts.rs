@@ -8,12 +8,6 @@ use super::{BTreeMap, PersistenceResult, Value, async_trait};
 #[async_trait]
 pub trait ContactStore: Send + Sync {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>>;
-    async fn get_scoped(
-        &self,
-        requester: &str,
-        target: &str,
-        scope: &str,
-    ) -> PersistenceResult<Option<ContactRecord>>;
     async fn put(&self, record: &ContactRecord) -> PersistenceResult<()>;
     async fn list_for_actor(&self, actor: &str) -> PersistenceResult<Vec<ContactRecord>>;
     async fn delete(&self, requester: &str, target: &str) -> PersistenceResult<()>;
@@ -79,13 +73,21 @@ pub trait DirectConversationBindingStore: Send + Sync {
         participants_key: &str,
         record: &DirectConversationBindingRecord,
     ) -> PersistenceResult<()>;
+    /// Permanently reserve a pair slot. Returns `true` only for the first
+    /// writer; an existing pair is never overwritten by a competing
+    /// operation.
+    async fn put_if_absent(
+        &self,
+        participants_key: &str,
+        record: &DirectConversationBindingRecord,
+    ) -> PersistenceResult<bool>;
     async fn delete(&self, participants_key: &str) -> PersistenceResult<()>;
     async fn snapshot_all(
         &self,
     ) -> PersistenceResult<Vec<(String, DirectConversationBindingRecord)>>;
 }
 #[doc(hidden)]
-pub type ContactKey = (String, String, String);
+pub type ContactKey = (String, String);
 /// Decode a persisted `grant_dots` JSONB object back into the in-memory
 /// `BTreeMap<String, ConsentGrantDot>`.
 pub fn decode_grant_dots(value: &Value) -> BTreeMap<String, ConsentGrantDot> {

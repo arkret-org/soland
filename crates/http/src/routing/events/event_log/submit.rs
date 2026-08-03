@@ -34,6 +34,8 @@ use identity_anchor::{
 };
 mod ghost_provision;
 pub(in crate::routing) use ghost_provision::submit_ghost_provision_batch;
+mod sidecar_ensure;
+pub(crate) use sidecar_ensure::submit_sidecar_ensure_batch;
 mod realm_bootstrap;
 use realm_bootstrap::{batch_begins_realm_create, submit_realm_bootstrap_batch};
 
@@ -236,7 +238,6 @@ pub(in crate::routing) struct VerifiedFederatedAgentSignerEvidence {
     agent_id: arkret_identifiers::Did,
     verification_method: arkret_wire::DidUrl,
     authorization_event_id: arkret_identifiers::EventId,
-    accepted_frontier: arkret_wire::NonEmptyString,
     public_key: [u8; 32],
 }
 
@@ -264,6 +265,9 @@ enum InternalEventBinding {
         payload: Value,
     },
     AppletFormal {
+        event_id: String,
+    },
+    SidecarEnsure {
         event_id: String,
     },
     PeerDirectBinding {
@@ -397,6 +401,26 @@ impl InternalEventAdmission {
         }
     }
 
+    pub(in crate::routing) fn sidecar_ensure(
+        realm_id: impl Into<String>,
+        actor_id: impl Into<String>,
+        device_id: impl Into<String>,
+        kind: impl Into<String>,
+        event_id: impl Into<String>,
+    ) -> Self {
+        let actor_id = actor_id.into();
+        Self {
+            realm_id: realm_id.into(),
+            session_actor_id: actor_id.clone(),
+            actor_id,
+            kind: kind.into(),
+            device_id: device_id.into(),
+            binding: InternalEventBinding::SidecarEnsure {
+                event_id: event_id.into(),
+            },
+        }
+    }
+
     pub(in crate::routing) fn peer_federated_event(
         realm_id: impl Into<String>,
         actor_id: impl Into<String>,
@@ -464,7 +488,8 @@ impl InternalEventAdmission {
                             == Some(self.session_actor_id.as_str())
                         && object.get("payload") == Some(payload)
                 }
-                InternalEventBinding::AppletFormal { event_id } => {
+                InternalEventBinding::AppletFormal { event_id }
+                | InternalEventBinding::SidecarEnsure { event_id } => {
                     object.get("event_id").and_then(Value::as_str) == Some(event_id.as_str())
                 }
                 InternalEventBinding::PeerDirectBinding { subject_id, .. } => object
@@ -525,12 +550,6 @@ impl InternalEventAdmission {
         else {
             return None;
         };
-        let admission: arkret_models_collaboration::agent_signer_evidence::AgentAuthorizationAdmission =
-            object
-                .get("unsigned")
-                .and_then(|unsigned| unsigned.get("agent_authorization_admission"))
-                .cloned()
-                .and_then(|value| serde_json::from_value(value).ok())?;
         let actor = object.get("actor_id").and_then(Value::as_str)?;
         let signer = object
             .get("executed_by")
@@ -539,10 +558,6 @@ impl InternalEventAdmission {
         agent_signer_evidence.iter().find(|entry| {
             signer == entry.agent_id.as_str()
                 && verification_method == entry.verification_method.as_str()
-                && admission.agent_id == entry.agent_id
-                && admission.verification_method == entry.verification_method
-                && admission.authorization_event_id == entry.authorization_event_id
-                && admission.accepted_frontier == entry.accepted_frontier
         })
     }
 
@@ -556,6 +571,15 @@ impl InternalEventAdmission {
                 &self.binding,
                 InternalEventBinding::PeerFederatedEvent { .. }
             )
+    }
+
+    pub(in crate::routing::events::event_log) fn is_sidecar_ensure(
+        &self,
+        session: &SessionRecord,
+        object: &serde_json::Map<String, Value>,
+    ) -> bool {
+        matches!(self.binding, InternalEventBinding::SidecarEnsure { .. })
+            && self.matches(session, object)
     }
 }
 
@@ -1415,7 +1439,20 @@ pub(crate) async fn submit_federation_events(
     let mut verified_agent_signer_evidence = Vec::new();
     if let Some(bundle) = &agent_signer_evidence_bundle {
         for evidence in &bundle.evidence {
-            let binding = &evidence.signing_key_binding;
+            let admission_evidence = match evidence {
+                arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::CurrentAdmission {
+                    admission_evidence,
+                    ..
+                }
+                | arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidence::HistoricalEvent {
+                    admission_evidence,
+                    ..
+                } => admission_evidence,
+            };
+            let binding = &admission_evidence
+                .agent_authority_snapshot
+                .core
+                .signing_key_binding;
             let Some(event) = events.iter().find(|event| {
                 event.applet_id.is_none()
                     && event.executed_by.as_ref().unwrap_or(&event.actor_id) == &binding.agent_id
@@ -1456,7 +1493,6 @@ pub(crate) async fn submit_federation_events(
                 agent_id: binding.agent_id.clone(),
                 verification_method: binding.verification_method.clone(),
                 authorization_event_id: binding.agent_key_authorize_event_id.clone(),
-                accepted_frontier: evidence.authorization.accepted_frontier.clone(),
                 public_key,
             });
         }

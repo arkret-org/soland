@@ -35,7 +35,10 @@ pub struct ConsentCellRecord {
 pub struct ContactRecord {
     pub requester: String,
     pub target: String,
-    pub scope: String,
+    pub basis_id: Option<String>,
+    pub version: Option<u64>,
+    pub granted_to_target_scopes: Vec<String>,
+    pub granted_to_requester_scopes: Vec<String>,
     pub status: String,
     pub request_event_ref: Option<String>,
     pub response_event_ref: Option<String>,

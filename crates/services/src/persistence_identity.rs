@@ -391,20 +391,6 @@ impl crate::identity::ContactPort for PersistenceContacts {
             .map(application_contact))
     }
 
-    async fn contact(
-        &self,
-        requester: &str,
-        target: &str,
-        scope: &str,
-    ) -> crate::ServiceResult<Option<crate::identity::ContactRecord>> {
-        Ok(self
-            .0
-            .contacts()
-            .get_scoped(requester, target, scope)
-            .await?
-            .map(application_contact))
-    }
-
     async fn contacts_for_actor(
         &self,
         actor_id: &str,
@@ -462,6 +448,18 @@ impl crate::identity::DirectConversationBindingPort for PersistenceDirectConvers
             .put(pair_key, &storage_direct_binding(binding))
             .await?;
         Ok(())
+    }
+
+    async fn reserve_binding(
+        &self,
+        pair_key: &str,
+        binding: crate::identity::DirectConversationBindingRecord,
+    ) -> crate::ServiceResult<bool> {
+        Ok(self
+            .0
+            .direct_conversation_bindings()
+            .put_if_absent(pair_key, &storage_direct_binding(binding))
+            .await?)
     }
 
     async fn delete_binding(&self, pair_key: &str) -> crate::ServiceResult<()> {
@@ -556,7 +554,10 @@ fn application_contact(record: soland_storage::ContactRecord) -> crate::identity
     crate::identity::ContactRecord {
         requester: record.requester,
         target: record.target,
-        scope: record.scope,
+        basis_id: record.basis_id,
+        version: record.version,
+        granted_to_target_scopes: record.granted_to_target_scopes,
+        granted_to_requester_scopes: record.granted_to_requester_scopes,
         status: record.status,
         request_event_ref: record.request_event_ref,
         response_event_ref: record.response_event_ref,
@@ -572,7 +573,10 @@ fn storage_contact(record: crate::identity::ContactRecord) -> soland_storage::Co
     soland_storage::ContactRecord {
         requester: record.requester,
         target: record.target,
-        scope: record.scope,
+        basis_id: record.basis_id,
+        version: record.version,
+        granted_to_target_scopes: record.granted_to_target_scopes,
+        granted_to_requester_scopes: record.granted_to_requester_scopes,
         status: record.status,
         request_event_ref: record.request_event_ref,
         response_event_ref: record.response_event_ref,

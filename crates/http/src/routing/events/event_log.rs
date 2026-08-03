@@ -95,6 +95,7 @@ use realm_index::{
 };
 
 mod submit;
+pub(crate) use endpoints::load_realm_actor_frontier;
 pub(super) use submit::submit_federation_events;
 pub(in crate::routing) use submit::{
     DataEventQueryGrade, EventCommitIdempotency, InternalEventAdmission, ValidatedEventEnvelope,
@@ -102,6 +103,7 @@ pub(in crate::routing) use submit::{
     submit_ghost_provision_batch, submit_initial_event_batch_outcome,
     submit_initial_event_submission, submit_initial_identity_anchor_batch, submit_mimi_event_value,
     submit_moderation_report_event_value, submit_realm_policy_server_event_value,
+    submit_sidecar_ensure_batch,
 };
 use submit::{
     EventValidationError, IDEMPOTENCY_KEY_TTL_SECONDS, RealmBootstrapBatchContext, SubmitOneError,

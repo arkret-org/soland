@@ -1568,6 +1568,25 @@ impl ProjectionService {
             .into()
     }
 
+    pub fn apply_sidecar_ensure_atomic(
+        &self,
+        operations: &[(&Operation, &[ProjectedCellWrite])],
+        hlc: &ServerHlc,
+    ) -> Result<(), String> {
+        let registry = soland_domain::reducer::lattice_kinds::default_lattice_registry();
+        let mut state = self.state.lock();
+        let mut staged = state.clone();
+        for (operation, cell_writes) in operations {
+            if let soland_domain::reducer::ProjectionEffect::Rejected { reason } =
+                staged.apply_via_lattice_registry(operation, cell_writes, hlc, &registry)
+            {
+                return Err(reason);
+            }
+        }
+        *state = staged;
+        Ok(())
+    }
+
     pub fn apply_mls_keypackage_publish(&self, operation: &Operation) -> ProjectionEffectView {
         soland_domain::reducer::mls::apply_keypackage_publish(&mut self.state.lock(), operation)
             .into()

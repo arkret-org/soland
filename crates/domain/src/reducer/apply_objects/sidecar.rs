@@ -44,6 +44,70 @@ impl ProjectionState {
             created_at: sidecar.created_at,
             updated_at: sidecar.updated_at,
         };
+        if self
+            .circles
+            .contains_key(sidecar.backing_circle_id.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_backing_circle_conflict".to_owned(),
+            };
+        }
+        let members = BTreeSet::from([sidecar.controller_id.to_string()]);
+        self.circles.insert(
+            sidecar.backing_circle_id.to_string(),
+            CircleProjection {
+                circle_id: sidecar.backing_circle_id.to_string(),
+                realm_id: sidecar.realm_id.to_string(),
+                profile_ref: None,
+                title: "Private Sidecar".to_owned(),
+                summary: None,
+                display: serde_json::json!({
+                    "short_name": "Private Sidecar",
+                    "color_token": "slate",
+                    "symbol": {"glyph": "lock"}
+                }),
+                directory_visibility: "members".to_owned(),
+                join_rule: "invite".to_owned(),
+                history_visibility: "restricted".to_owned(),
+                content_encryption_floor: Some("e2ee_required".to_owned()),
+                metadata_encryption_floor: Some("e2ee_required".to_owned()),
+                encryption_profile: "mls_rfc9420".to_owned(),
+                mls_group_ref: None,
+                state: CircleLifecycleState::Active,
+                state_changed_at: None,
+                created_by: sidecar.controller_id.to_string(),
+                created_at: sidecar.created_at,
+                updated_by: None,
+                updated_at: None,
+                members,
+            },
+        );
+        self.circle_memberships.insert(
+            (
+                sidecar.backing_circle_id.to_string(),
+                sidecar.controller_id.to_string(),
+            ),
+            CircleMembershipState {
+                circle_id: sidecar.backing_circle_id.to_string(),
+                member: sidecar.controller_id.to_string(),
+                state: "join".to_owned(),
+                invited_at: None,
+                joined_at: sidecar.created_at,
+                updated_at: sidecar.created_at,
+            },
+        );
+        self.circle_member_join_refs.insert(
+            (
+                sidecar.backing_circle_id.to_string(),
+                sidecar.controller_id.to_string(),
+            ),
+            operation
+                .payload
+                .get("event_id")
+                .and_then(Value::as_str)
+                .unwrap_or_else(|| operation.operation_id.as_str())
+                .to_owned(),
+        );
         self.sidecars
             .insert(projection.sidecar_id.clone(), projection);
         let control_ref = operation
@@ -54,6 +118,88 @@ impl ProjectionState {
             .to_owned();
         self.sidecar_create_refs
             .insert(sidecar.id.to_string(), control_ref);
+        ProjectionEffect::Ignored
+    }
+
+    pub(crate) fn apply_sidecar_context_attach(
+        &mut self,
+        operation: &Operation,
+    ) -> ProjectionEffect {
+        let Some(sidecar_id) = operation.payload.get("sidecar_id").and_then(Value::as_str) else {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        };
+        let Some(private_strand) = operation.payload.get("private_strand") else {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        };
+        let Some(relation) = operation.payload.get("relation") else {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        };
+        if operation.payload.get("version").and_then(Value::as_u64) != Some(1)
+            || operation.payload.get("predecessor_event_ref").is_some()
+        {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        }
+        let Some(sidecar) = self.sidecars.get(sidecar_id) else {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        };
+        if sidecar.realm_id != operation.realm_id.as_str()
+            || private_strand.get("realm_id").and_then(Value::as_str)
+                != Some(sidecar.realm_id.as_str())
+            || private_strand
+                .get("scope_circle_id")
+                .and_then(Value::as_str)
+                != Some(sidecar.backing_circle_id.as_str())
+            || relation.get("kind").and_then(Value::as_str) != Some("agent_sidecar_of")
+            || relation.get("from_ref").and_then(Value::as_str)
+                != private_strand.get("id").and_then(Value::as_str)
+            || relation.get("scope_circle_id").and_then(Value::as_str)
+                != Some(sidecar.backing_circle_id.as_str())
+        {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        }
+
+        let mut next = self.clone();
+        let strand_operation = Operation::create(
+            operation.operation_id.clone(),
+            operation.realm_id.clone(),
+            arkret_wire::EventKind::STRAND_CREATE,
+            serde_json::json!({"object": private_strand}),
+        );
+        if matches!(
+            next.apply_strand_create(&strand_operation, operation.created_at),
+            ProjectionEffect::Rejected { .. }
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        }
+        let relation_operation = Operation::create(
+            operation.operation_id.clone(),
+            operation.realm_id.clone(),
+            arkret_wire::EventKind::RELATION_CREATE,
+            serde_json::json!({"relation": relation}),
+        );
+        if matches!(
+            next.apply_relation_create(&relation_operation, operation.created_at),
+            ProjectionEffect::Rejected { .. }
+        ) {
+            return ProjectionEffect::Rejected {
+                reason: "sidecar_context_attach_invalid".to_owned(),
+            };
+        }
+        *self = next;
         ProjectionEffect::Ignored
     }
 

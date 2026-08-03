@@ -37,6 +37,7 @@ use arkret_identifiers::{Did, Hash, OperationId, RealmId};
 use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 use arkret_models_crypto::{
     Failure as KeypackageFailure, KeyOperationSignature, KeyPackageClaimRecord,
+    KeyPackageClaimTerminalReceipt, KeyPackageClaimTerminalState, KeyPackageConsumeReceipt,
     KeyPackageUploadEntry, KeyPackagesClaimOutcome, KeyPackagesClaimRequestBody,
     KeyPackagesConsumeOutcome, KeyPackagesConsumeRequestBody, KeyPackagesRevokeOutcome,
     KeyPackagesRevokeRequestBody, KeyPackagesUploadOutcome, KeyPackagesUploadRequestBody,
@@ -660,6 +661,8 @@ async fn peer_claim_keypackage(
             request_digest: request_digest.clone(),
             state: "claimed".to_owned(),
             outcome: Some(outcome_value),
+            consume_receipt: None,
+            terminal_receipt: None,
             keypackage_id: Some(candidate_id.clone()),
             claim_expires_at_unix_ms: Some(body.expires_at.timestamp_millis()),
             expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
@@ -728,6 +731,8 @@ async fn peer_query_keypackage_claim(
             claim_request_id: body.claim_request_id,
             state: PeerKeyPackagesClaimQueryState::Unknown,
             claim_outcome: None,
+            consume_receipt: None,
+            terminal_receipt: None,
             retry_after_ms: None,
             error_code: None,
         });
@@ -737,6 +742,7 @@ async fn peer_query_keypackage_claim(
     }
     let claim_outcome = record
         .outcome
+        .clone()
         .map(serde_json::from_value::<PeerKeyPackagesClaimOutcome>)
         .transpose()
         .map_err(|error| {
@@ -744,6 +750,7 @@ async fn peer_query_keypackage_claim(
         })?;
     let (state_value, error_code) = match record.state.as_str() {
         "claimed" => (PeerKeyPackagesClaimQueryState::Claimed, None),
+        "consumed" => (PeerKeyPackagesClaimQueryState::Consumed, None),
         "expired" => (PeerKeyPackagesClaimQueryState::Expired, None),
         "revoked" => (PeerKeyPackagesClaimQueryState::Revoked, None),
         "claim_failed" => (
@@ -752,10 +759,84 @@ async fn peer_query_keypackage_claim(
         ),
         _ => return Err(AppError::internal("stored peer claim state invalid")),
     };
+    let consume_receipt = record
+        .consume_receipt
+        .clone()
+        .map(serde_json::from_value::<KeyPackageConsumeReceipt>)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored consume receipt invalid: {error}")))?;
+    let mut terminal_receipt = record
+        .terminal_receipt
+        .clone()
+        .map(serde_json::from_value::<KeyPackageClaimTerminalReceipt>)
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored terminal receipt invalid: {error}")))?;
+    if matches!(record.state.as_str(), "expired" | "revoked") && terminal_receipt.is_none() {
+        let claim = claim_outcome.as_ref().ok_or_else(|| {
+            AppError::internal(
+                "terminal peer claim has no durable claim_outcome source; refusing to fabricate a receipt",
+            )
+        })?;
+        let refs = claim
+            .claims
+            .iter()
+            .map(|claim| claim.keypackage_ref.clone())
+            .collect::<Vec<_>>();
+        if refs.is_empty() {
+            return Err(AppError::internal(
+                "terminal peer claim has no durable KeyPackage refs; refusing to fabricate a receipt",
+            ));
+        }
+        let terminal_state = if record.state == "expired" {
+            KeyPackageClaimTerminalState::Expired
+        } else {
+            KeyPackageClaimTerminalState::Revoked
+        };
+        let receipt = build_peer_claim_terminal_receipt(
+            state,
+            body.claim_request_id.clone(),
+            body.request_digest.clone(),
+            terminal_state,
+            Some(refs),
+            Did::new(source_service_id.clone()).map_err(|error| {
+                AppError::internal(format!("peer source service id invalid: {error}"))
+            })?,
+            now(),
+        )?;
+        let receipt_value = serde_json::to_value(&receipt)
+            .map_err(|error| AppError::internal(format!("terminal receipt serialize: {error}")))?;
+        state
+            .mls_key_packages()
+            .attach_peer_claim_terminal_receipt(
+                &source_service_id,
+                body.claim_request_id.as_str(),
+                body.request_digest.as_str(),
+                &receipt_value,
+                now().timestamp(),
+            )
+            .await
+            .map_err(|error| AppError::internal(format!("terminal receipt persist: {error}")))?
+            .ok_or_else(|| {
+                AppError::conflict("peer claim terminal state changed while persisting receipt")
+            })?;
+        terminal_receipt = Some(receipt);
+    }
+    if record.state == "consumed" && consume_receipt.is_none() {
+        return Err(AppError::internal(
+            "consumed peer claim has no durable consume_receipt; refusing to fabricate one",
+        ));
+    }
+    if record.state == "claim_failed" && terminal_receipt.is_none() {
+        return Err(AppError::internal(
+            "failed peer claim has no durable terminal_receipt; refusing to fabricate one",
+        ));
+    }
     let outcome = PeerKeyPackagesClaimQueryOutcome {
         claim_request_id: body.claim_request_id,
         state: state_value,
         claim_outcome,
+        consume_receipt,
+        terminal_receipt,
         retry_after_ms: None,
         error_code,
     };
@@ -1183,12 +1264,28 @@ async fn record_peer_claim_failed(
     request_digest: &str,
 ) -> Result<(), AppError> {
     let timestamp = now().timestamp();
+    let terminal_receipt = build_peer_claim_terminal_receipt(
+        state,
+        body.claim_request_id.clone(),
+        Hash::new(request_digest.to_owned()).map_err(|error| {
+            AppError::internal(format!("peer claim request digest invalid: {error}"))
+        })?,
+        KeyPackageClaimTerminalState::NeverClaimed,
+        None,
+        Did::new(source_service_id.to_owned())
+            .map_err(|error| AppError::internal(format!("peer service DID invalid: {error}")))?,
+        now(),
+    )?;
     let record = PeerKeyPackageClaimLedgerRecord {
         source_service_id: source_service_id.to_owned(),
         claim_request_id: body.claim_request_id.as_str().to_owned(),
         request_digest: request_digest.to_owned(),
         state: "claim_failed".to_owned(),
         outcome: None,
+        consume_receipt: None,
+        terminal_receipt: Some(serde_json::to_value(terminal_receipt).map_err(|error| {
+            AppError::internal(format!("peer claim terminal receipt serialize: {error}"))
+        })?),
         keypackage_id: None,
         claim_expires_at_unix_ms: None,
         expires_at: (body.expires_at + chrono::Duration::minutes(10)).timestamp(),
@@ -1208,6 +1305,44 @@ async fn record_peer_claim_failed(
         }
         PeerKeyPackageClaimLedgerWriteResult::Existing(_) => Err(peer_claim_duplicate_conflict()),
     }
+}
+
+fn build_peer_claim_terminal_receipt(
+    state: &AppState,
+    claim_request_id: arkret_wire::Base64UrlString,
+    request_digest: Hash,
+    terminal_state: KeyPackageClaimTerminalState,
+    key_package_refs: Option<Vec<String>>,
+    source_service_id: Did,
+    terminal_at: DateTime<Utc>,
+) -> Result<KeyPackageClaimTerminalReceipt, AppError> {
+    let verification_method = format!("{}#notary-key", state.service_id());
+    let mut receipt = KeyPackageClaimTerminalReceipt {
+        domain: arkret_wire::NonEmptyString::new("ak.keypackage.claim-terminal-receipt.v1")
+            .expect("terminal receipt domain is non-empty"),
+        claim_request_id,
+        request_digest,
+        terminal_state,
+        key_package_refs,
+        source_service_id,
+        destination_service_id: Did::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
+        terminal_at,
+        signature: KeyOperationSignature {
+            kid: arkret_wire::NonEmptyString::new(verification_method)
+                .expect("service notary method is non-empty"),
+            alg: Some(arkret_wire::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
+            sig: arkret_wire::Base64UrlString::new("AA")
+                .expect("placeholder signature is base64url"),
+        },
+    };
+    let signing_input =
+        signed_object_transcript(&receipt, "ak.keypackage.claim-terminal-receipt.v1")?;
+    receipt.signature.sig = arkret_wire::Base64UrlString::new(
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes()),
+    )
+    .map_err(|error| AppError::internal(format!("terminal receipt signature invalid: {error}")))?;
+    Ok(receipt)
 }
 
 fn replay_peer_claim(
@@ -1314,7 +1449,7 @@ async fn claim_keypackages_for_request_inner(
         let authority = Did::new(state.service_id().clone()).map_err(|error| {
             AppError::internal(format!("configured service DID invalid: {error}"))
         })?;
-        let proof = &body.proofs[0];
+        let proof = &body.holder_acceptance_proof;
         if proof.alg != arkret_models_crypto::http_bodies::KeyPackageClaimProofAlgorithm::EdDsa {
             return Err(AppError::invalid_param(
                 "KeyPackage self-claim proof algorithm is not supported by this authority",
@@ -1630,6 +1765,8 @@ fn local_claim_ledger_record(
         request_digest: request_digest.to_owned(),
         state: terminal_state.to_owned(),
         outcome: Some(response),
+        consume_receipt: None,
+        terminal_receipt: None,
         keypackage_id: keypackage.map(|keypackage| keypackage.id.clone()),
         claim_expires_at_unix_ms: Some(body.expires_at.timestamp_millis()),
         // Keep the byte-identical outcome through the protocol minimum
@@ -1727,6 +1864,11 @@ async fn consume_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
+    if body.owner_account_id.as_str() != session.actor {
+        return Err(AppError::capability_denied(
+            "owner_account_id must match the calling principal",
+        ));
+    }
     if body.consumer_device_id.to_string() != session.device_id {
         return Err(AppError::capability_denied(
             "consumer_device_id must match the calling session",
@@ -1748,12 +1890,17 @@ async fn consume_keypackages(
         &consume_signing_input,
     )
     .await?;
-    let canonical_direct_consume =
-        validate_direct_keypackage_consume(state, &session, &body).await?;
+    validate_recipient_durable_receipt(state, &session, &body).await?;
+    validate_direct_keypackage_consume(state, &session, &body).await?;
     validate_sidecar_keypackage_consume(state, &session, &body).await?;
     let group_id = consume_group_ref(&body);
     let consume_realm_id = body.realm_id.as_ref().map(ToString::to_string);
-    let consumed_at = now().timestamp();
+    let consumed_at_datetime = now();
+    let consumed_at = consumed_at_datetime.timestamp();
+    let prepared_consume_receipt =
+        build_keypackage_consume_receipt(state, &body, refs.clone(), consumed_at_datetime)?;
+    let prepared_consume_receipt_value = serde_json::to_value(&prepared_consume_receipt)
+        .map_err(|error| AppError::internal(format!("consume receipt serialize: {error}")))?;
     let mut consumed = Vec::new();
     let mut failures = Vec::new();
     for keypackage_ref in refs {
@@ -1764,22 +1911,10 @@ async fn consume_keypackages(
         {
             Ok(Some(record)) => record,
             Ok(None) => {
-                if missing_keypackage_consume_is_idempotent(canonical_direct_consume) {
-                    // A Direct Conversation consume request is bound to one accepted
-                    // Welcome, claim, recipient device and canonical Realm binding above.
-                    // Once that proof has passed, a missing terminal row is
-                    // indistinguishable from a successful consume whose response (or
-                    // terminal row in an ephemeral deployment) was lost.  Treat the
-                    // byte-identical recovery request as idempotent success; the
-                    // canonical Welcome checks prevent this path from consuming an
-                    // unrelated or fabricated KeyPackage.
-                    consumed.push(keypackage_ref);
-                } else {
-                    failures.push(keypackage_ref_failure(
-                        keypackage_ref,
-                        "already_consumed_or_missing",
-                    ));
-                }
+                failures.push(keypackage_ref_failure(
+                    keypackage_ref,
+                    "already_consumed_or_missing",
+                ));
                 continue;
             }
             Err(error) => {
@@ -1787,6 +1922,10 @@ async fn consume_keypackages(
                 continue;
             }
         };
+        if record.actor_id != session.actor || record.device_id != session.device_id {
+            failures.push(keypackage_ref_failure(keypackage_ref, "not_owner"));
+            continue;
+        }
         let lifecycle = match record.lifecycle() {
             Ok(lifecycle) => lifecycle,
             Err(error) => {
@@ -1832,7 +1971,12 @@ async fn consume_keypackages(
         }
         match state
             .mls_key_packages()
-            .consume_key_package_claim(&record.id, &group_id, consumed_at)
+            .consume_key_package_claim(
+                &record.id,
+                &group_id,
+                consumed_at,
+                Some(&prepared_consume_receipt_value),
+            )
             .await
         {
             Ok(Some(_)) => {
@@ -1852,7 +1996,160 @@ async fn consume_keypackages(
             }
         }
     }
-    json_ok(KeyPackagesConsumeOutcome { consumed, failures })
+    if !failures.is_empty() || consumed.len() != body.key_package_refs.len() {
+        return Err(AppError::new(
+            ErrorCode::CasConflict,
+            "KeyPackage consume did not atomically reach the requested terminal state",
+        )
+        .with_wire_code("consume_conflict"));
+    }
+    json_ok(KeyPackagesConsumeOutcome {
+        consumed,
+        consume_receipt: prepared_consume_receipt,
+        failures,
+    })
+}
+
+async fn validate_recipient_durable_receipt(
+    state: &AppState,
+    session: &SessionRecord,
+    body: &KeyPackagesConsumeRequestBody,
+) -> Result<(), AppError> {
+    if body.key_package_refs.len() != 1 || body.claim_ids.len() != 1 {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "one recipient durable receipt authorizes exactly one KeyPackage claim",
+        ));
+    }
+    let receipt = &body.recipient_durable_receipt;
+    if receipt.domain.as_str() != "ak.mls.recipient-durable-receipt.v1"
+        || receipt.key_package_ref.as_str() != body.key_package_refs[0]
+        || receipt.recipient_principal_id.as_str() != session.actor
+        || receipt.recipient_device_id.as_str() != session.device_id
+        || receipt.recipient_service_id.as_str() != state.service_id()
+        || receipt.welcome_ref.as_str() != body.welcome_ref.as_str()
+        || receipt.signature.kid.as_str() != receipt.device_verification_method.as_str()
+        || body
+            .realm_id
+            .as_ref()
+            .is_some_and(|realm_id| realm_id != &receipt.realm_id)
+        || body
+            .mls_group_id
+            .as_ref()
+            .is_some_and(|group_id| group_id != &receipt.mls_group_id)
+        || body.epoch.is_some_and(|epoch| epoch != receipt.mls_epoch)
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "recipient durable receipt differs from the consume coordinates",
+        ));
+    }
+    let stored = state
+        .event_queries()
+        .accepted_event(body.welcome_ref.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Welcome lookup failed: {error}")))?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCode::FailedPrecondition,
+                "recipient durable receipt references an unaccepted Welcome",
+            )
+        })?;
+    let event = serde_json::from_value::<arkret_wire::Event>(stored.envelope.clone())
+        .map_err(|error| AppError::internal(format!("stored Welcome invalid: {error}")))?;
+    if event.kind.as_str() != arkret_wire::EventKind::MLS_WELCOME
+        || event.realm_id.as_str() != receipt.realm_id.as_str()
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "recipient durable receipt does not identify the accepted Welcome",
+        ));
+    }
+    let welcome = serde_json::from_value::<
+        arkret_models_collaboration::events_payloads::MlsWelcomePayload,
+    >(serde_json::to_value(event.payload).map_err(|error| {
+        AppError::internal(format!("stored Welcome payload serialize: {error}"))
+    })?)
+    .map_err(|error| AppError::internal(format!("stored Welcome payload invalid: {error}")))?;
+    let welcome_digest = arkret_canonical::canonical_sha256(&stored.envelope)
+        .map_err(|error| AppError::internal(format!("Welcome digest failed: {error}")))?;
+    if welcome.recipient_principal_id.as_str() != session.actor
+        || welcome.recipient_device_id.as_str() != session.device_id
+        || welcome.keypackage_ref != body.key_package_refs[0]
+        || welcome.claim_id.as_str() != body.claim_ids[0].as_str()
+        || welcome.mls_group_id.as_str() != receipt.mls_group_id.as_str()
+        || welcome.epoch != receipt.mls_epoch
+        || receipt.welcome_digest.as_str() != welcome_digest
+    {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "recipient durable receipt does not match the accepted Welcome payload",
+        ));
+    }
+    let signing_input = signed_object_transcript(receipt, "ak.mls.recipient-durable-receipt.v1")?;
+    verify_session_keypackage_write_signature(
+        state,
+        session,
+        &body.key_package_refs,
+        &receipt.signature,
+        &signing_input,
+    )
+    .await
+}
+
+fn build_keypackage_consume_receipt(
+    state: &AppState,
+    body: &KeyPackagesConsumeRequestBody,
+    consumed: Vec<String>,
+    consumed_at: DateTime<Utc>,
+) -> Result<KeyPackageConsumeReceipt, AppError> {
+    let verification_method = format!("{}#notary-key", state.service_id());
+    let mut receipt = KeyPackageConsumeReceipt {
+        domain: arkret_wire::NonEmptyString::new("ak.keypackage.consume-receipt.v1")
+            .expect("receipt domain is non-empty"),
+        claim_request_id: body.recipient_durable_receipt.claim_request_id.clone(),
+        claim_ids: body.claim_ids.clone(),
+        key_package_refs: consumed,
+        recipient_durable_receipt: body.recipient_durable_receipt.clone(),
+        welcome_ref: body.welcome_ref.clone(),
+        realm_id: body.recipient_durable_receipt.realm_id.clone(),
+        mls_group_id: body.recipient_durable_receipt.mls_group_id.clone(),
+        mls_epoch: body.recipient_durable_receipt.mls_epoch,
+        source_service_id: Did::new(state.service_id().clone())
+            .map_err(|error| AppError::internal(format!("service id invalid: {error}")))?,
+        consumed_at,
+        signature: KeyOperationSignature {
+            kid: arkret_wire::NonEmptyString::new(verification_method)
+                .expect("service notary method is non-empty"),
+            alg: Some(arkret_wire::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
+            sig: arkret_wire::Base64UrlString::new("AA")
+                .expect("placeholder signature is base64url"),
+        },
+    };
+    let signing_input = signed_object_transcript(&receipt, "ak.keypackage.consume-receipt.v1")?;
+    receipt.signature.sig = arkret_wire::Base64UrlString::new(
+        URL_SAFE_NO_PAD.encode(state.notary_signing_key().sign(&signing_input).to_bytes()),
+    )
+    .map_err(|error| AppError::internal(format!("consume receipt signature invalid: {error}")))?;
+    Ok(receipt)
+}
+
+fn signed_object_transcript<T: serde::Serialize>(
+    value: &T,
+    domain: &str,
+) -> Result<Vec<u8>, AppError> {
+    let mut unsigned = serde_json::to_value(value)
+        .map_err(|error| AppError::internal(format!("signed object serialize: {error}")))?;
+    unsigned
+        .as_object_mut()
+        .ok_or_else(|| AppError::internal("signed object must be a JSON object"))?
+        .remove("signature");
+    let canonical = arkret_canonical::canonical_json_bytes(&unsigned)
+        .map_err(|error| AppError::internal(format!("signed object canonicalize: {error}")))?;
+    let mut transcript = domain.as_bytes().to_vec();
+    transcript.push(b'\n');
+    transcript.extend(canonical);
+    Ok(transcript)
 }
 
 async fn validate_direct_keypackage_consume(
@@ -1872,7 +2169,6 @@ async fn validate_direct_keypackage_consume(
     }
     if body.key_package_refs.len() != 1
         || body.claim_ids.len() != 1
-        || body.welcome_ref.is_none()
         || body.strand_id.is_none()
         || body.mls_group_id.is_none()
         || body.epoch.is_none()
@@ -1926,7 +2222,7 @@ async fn validate_direct_keypackage_consume(
             "canonical direct binding payload is invalid",
         )
     })?;
-    let welcome_ref = body.welcome_ref.as_deref().expect("checked above");
+    let welcome_ref = body.welcome_ref.as_str();
     if binding_payload.mls_welcome_event_ref.as_str() != welcome_ref
         || body.mls_group_id.as_deref() != Some(binding_payload.mls_group_id.as_str())
     {
@@ -1998,13 +2294,9 @@ fn direct_welcome_claim_matches_consume(
     consumed_keypackage_ref == welcome_keypackage_ref && consumed_claim_id == welcome_claim_id
 }
 
-fn missing_keypackage_consume_is_idempotent(canonical_direct_consume: bool) -> bool {
-    canonical_direct_consume
-}
-
 #[cfg(test)]
 mod direct_consume_tests {
-    use super::{direct_welcome_claim_matches_consume, missing_keypackage_consume_is_idempotent};
+    use super::direct_welcome_claim_matches_consume;
 
     #[test]
     fn direct_consume_binds_the_wire_ref_without_assuming_claim_id_prefix() {
@@ -2028,12 +2320,6 @@ mod direct_consume_tests {
             &keypackage_ref,
             claim_id,
         ));
-    }
-
-    #[test]
-    fn missing_direct_keypackage_is_only_idempotent_after_canonical_welcome_validation() {
-        assert!(missing_keypackage_consume_is_idempotent(true));
-        assert!(!missing_keypackage_consume_is_idempotent(false));
     }
 }
 
@@ -2074,17 +2360,13 @@ async fn validate_sidecar_keypackage_consume(
             &sidecar_record,
         )
         .await?;
-    if body.key_package_refs.len() != 1
-        || body.claim_ids.len() != 1
-        || body.welcome_ref.is_none()
-        || body.epoch.is_none()
-    {
+    if body.key_package_refs.len() != 1 || body.claim_ids.len() != 1 || body.epoch.is_none() {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
             "Sidecar KeyPackage consume requires one exact claim and Welcome context",
         ));
     }
-    let welcome_ref = body.welcome_ref.as_deref().expect("checked above");
+    let welcome_ref = body.welcome_ref.as_str();
     let stored = state
         .event_queries()
         .accepted_event(welcome_ref)
@@ -2148,7 +2430,7 @@ async fn validate_sidecar_keypackage_consume(
         || welcome.recipient_principal_id.as_str() != session.actor
         || welcome.recipient_device_id.as_str() != session.device_id
         || welcome.keypackage_ref.as_str() != key_package_id
-        || welcome.claim_id.as_str() != claim_id
+        || welcome.claim_id.as_str() != claim_id.as_str()
         || !claim_id.starts_with(&format!("{key_package_id}:"))
         || sidecar_binding != &expected_sidecar_binding
         || welcome.governance_binding.realm_id().as_str() != sidecar.realm_id
@@ -2220,6 +2502,11 @@ async fn revoke_keypackages(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
+    if body.owner_account_id.as_str() != session.actor {
+        return Err(AppError::capability_denied(
+            "owner_account_id must match the calling principal",
+        ));
+    }
     let device_id = body.device_id.to_string();
     if device_id != session.device_id {
         return Err(AppError::capability_denied(
@@ -2868,11 +3155,11 @@ fn non_empty_keypackage_refs(refs: &[String]) -> Result<Vec<String>, AppError> {
 
 fn consume_group_ref(body: &KeyPackagesConsumeRequestBody) -> String {
     body.mls_group_id
-        .clone()
+        .as_ref()
+        .map(ToString::to_string)
         .or_else(|| body.strand_id.as_ref().map(ToString::to_string))
         .or_else(|| body.realm_id.as_ref().map(ToString::to_string))
-        .or_else(|| body.welcome_ref.clone())
-        .unwrap_or_else(|| "manual-consume".to_owned())
+        .unwrap_or_else(|| body.recipient_durable_receipt.mls_group_id.to_string())
 }
 
 fn available_keypackage_count(
@@ -3193,6 +3480,8 @@ mod trust_binding_tests {
             request_digest: "sha256:first".to_owned(),
             state: "claimed".to_owned(),
             outcome: Some(response.clone()),
+            consume_receipt: None,
+            terminal_receipt: None,
             keypackage_id: Some("kp-1".to_owned()),
             claim_expires_at_unix_ms: Some(2_000),
             expires_at: i64::MAX,
@@ -3214,6 +3503,8 @@ mod trust_binding_tests {
             request_digest: "sha256:failed".to_owned(),
             state: "claim_failed".to_owned(),
             outcome: Some(response.clone()),
+            consume_receipt: None,
+            terminal_receipt: None,
             keypackage_id: None,
             claim_expires_at_unix_ms: Some(2_000),
             expires_at: 86_402,

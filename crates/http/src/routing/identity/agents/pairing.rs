@@ -469,24 +469,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
     // authorization Event is covered by the accepted, controller-signed PCR
     // frontier. Until the client publishes that successor Seal, keep both the
     // pairing handle and its account notification open.
-    let evidence_selector =
-        arkret_models_collaboration::agent_signer_evidence::AgentSignerEvidenceQuerySelector {
-            agent_id: typed_agent_id,
-            verification_method: typed_verification_method,
-            agent_key_authorize_event_id: Some(EventId::new(accepted.event_id.clone()).map_err(
-                |error| {
-                    AppError::internal(format!(
-                        "accepted Agent authorization Event id is invalid: {error}"
-                    ))
-                },
-            )?),
-            event_accepted_frontier: None,
-        };
-    let authorization_status = super::evidence::build_evidence(state, &evidence_selector)
-        .await
-        .ok()
-        .flatten()
-        .map(|evidence| evidence.authorization.status);
+    let authorization_status = None;
     let authorization_is_witnessed = authorization_status_allows_activation(authorization_status);
     if !authorization_is_witnessed {
         return Ok(agent_record);

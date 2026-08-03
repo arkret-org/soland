@@ -45,10 +45,6 @@ use arkret_models_collaboration::agent_operations::{
     AgentRuntimeApprovalStatusOutcome, AgentRuntimeApprovalStatusRequestBody, AgentRuntimeState,
     AgentView, KeyState,
 };
-#[cfg(test)]
-use arkret_models_collaboration::agent_operations::{
-    AgentSidecarContextRef, AgentSidecarEnsureRequestBody,
-};
 use arkret_models_collaboration::events_payloads::agent::{AgentKeyScope, AgentSidecarExposureAck};
 use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, PublicKey};
 use arkret_models_collaboration::governance::agent_participation::{
@@ -77,7 +73,6 @@ use subtle::ConstantTimeEq as _;
 
 use super::{AuthArgs, append_audit_log, now, validate_did};
 use crate::ids;
-use crate::routing::accept_local_operations;
 use crate::state::AppState;
 
 mod dev_fanout;
@@ -630,18 +625,15 @@ mod tests {
         record.agent_slug = Some("summary".to_owned());
         let view = AgentView {
             agent: agent_projection_from_record(&record, AgentRuntimeState::Ready),
-            status: AgentLifecycleState::Active,
-            runtime_state: AgentRuntimeState::Ready,
             grants: Vec::new(),
             key_state: None,
         };
-        // spec `agent_view` = `{agent: <agent_projection>, status, runtime_state, ...}`.
-        assert_eq!(view.status, AgentLifecycleState::Active);
-        assert_eq!(view.runtime_state, AgentRuntimeState::Ready);
+        assert_eq!(view.agent.lifecycle, AgentLifecycleState::Active);
+        assert_eq!(view.agent.readiness.state, AgentReadinessState::Ready);
         let agent = serde_json::to_value(&view).expect("view serializes");
         assert_eq!(agent["agent"]["slug"], "summary");
-        assert_eq!(agent["agent"]["status"], "active");
-        assert_eq!(agent["agent"]["runtime_state"], "ready");
+        assert_eq!(agent["agent"]["lifecycle"], "active");
+        assert_eq!(agent["agent"]["readiness"]["state"], "ready");
         assert_eq!(
             agent["agent"]["agent_id"],
             "did:webvh:z6mkfixture:agent.example"
@@ -1394,52 +1386,5 @@ mod tests {
 
         assert_eq!(err.wire_code(), "invalid_param");
         assert!(err.message.contains("public_key_digest"));
-    }
-
-    #[test]
-    fn sidecar_request_rejects_body_controller_mismatch() {
-        let session = test_session("did:web:controller.example");
-        let body = AgentSidecarEnsureRequestBody {
-            controller_id: Did::new("did:web:mallory.example").expect("controller did"),
-            addressed_agent_ids: Vec::new(),
-            context_ref: AgentSidecarContextRef::strand(
-                RealmId::new("ak:realm:0196419b-0000-7000-8000-000000000001").expect("realm id"),
-                StrandId::new("ak:strand:0196419b-0000-7000-8000-000000000002").expect("strand id"),
-            ),
-        };
-
-        let err = ensure_sidecar_controller_request(&body, &session)
-            .expect_err("sidecar body controller must match session actor");
-
-        assert_eq!(
-            err.wire_code(),
-            arkret_wire::ReasonCode::SIDECAR_CREATE_DENIED
-        );
-    }
-
-    #[test]
-    fn sidecar_context_ref_requires_exactly_one_typed_target() {
-        assert!(
-            serde_json::from_value::<AgentSidecarContextRef>(serde_json::json!({
-                "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030"
-            }))
-            .is_err()
-        );
-    }
-
-    #[test]
-    fn sidecar_addressed_agents_rejects_controller() {
-        let controller = Did::new("did:web:example.com:users:alice").unwrap();
-        let body = AgentSidecarEnsureRequestBody {
-            controller_id: controller.clone(),
-            addressed_agent_ids: vec![controller.clone()],
-            context_ref: AgentSidecarContextRef::strand(
-                RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
-                StrandId::new("ak:strand:01964137-0000-7000-8000-000000000031").unwrap(),
-            ),
-        };
-        let err = normalize_addressed_agents(controller.as_str(), &body)
-            .expect_err("controller must not be addressable as an agent");
-        assert_eq!(err.wire_code(), CONTROLLER_IN_ADDRESSED_AGENTS);
     }
 }

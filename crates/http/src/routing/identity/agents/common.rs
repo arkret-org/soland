@@ -350,19 +350,6 @@ pub(crate) fn requested_scope_participation_ceiling(scope: &AgentKeyScope) -> Pa
     }
 }
 
-#[cfg(test)]
-pub(super) fn ensure_sidecar_controller_request(
-    body: &AgentSidecarEnsureRequestBody,
-    session: &SessionRecord,
-) -> Result<(), AppError> {
-    if body.controller_id.as_str() != session.actor.as_str() {
-        return Err(sidecar_create_denied(
-            "sidecar controller_id must match the authenticated session",
-        ));
-    }
-    Ok(())
-}
-
 pub(super) fn verification_method_principal(verification_method: &str) -> &str {
     verification_method
         .split('#')

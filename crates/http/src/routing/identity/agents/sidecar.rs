@@ -1,10 +1,13 @@
 use arkret_identifiers::SidecarId;
 use arkret_models_collaboration::agent_operations::{
     AgentLifecycleState, AgentSidecar, AgentSidecarAccessReadiness, AgentSidecarContextRef,
-    AgentSidecarEncryptionProfile, AgentSidecarEnsureOutcome, AgentSidecarEnsureRequestBody,
-    AgentSidecarList, AgentSidecarMlsContext, AgentSidecarSchema, AgentSidecarState,
-    AgentSidecarView, PendingSidecarAccessReconciliationItem,
+    AgentSidecarEncryptionProfile, AgentSidecarList, AgentSidecarMlsContext, AgentSidecarSchema,
+    AgentSidecarState, AgentSidecarView, PendingSidecarAccessReconciliationItem,
     PendingSidecarAccessReconciliationStage, agent_sidecar_desired_access_digest,
+};
+use arkret_models_collaboration::protocol_journey::{
+    SidecarContextRef, SidecarEnsureOutcome, SidecarEnsureRequestBody, SidecarPreparedEventDraft,
+    SidecarPreparedOutcome,
 };
 use arkret_models_crypto::{MlsGovernanceBindingPayload, SidecarMlsBinding};
 use arkret_wire::{MlsGroupId, NonEmptyString};
@@ -16,7 +19,6 @@ use soland_services::identity::{
 use super::*;
 
 pub(super) const ADDRESSED_AGENT_NOT_ELIGIBLE: &str = "addressed_agent_not_eligible";
-pub(super) const CONTROLLER_IN_ADDRESSED_AGENTS: &str = "controller_in_addressed_agents";
 
 const SIDECAR_ENSURE_LOCK_SHARDS: usize = 256;
 const SIDECAR_LIST_PAGE_SIZE: usize = 100;
@@ -139,10 +141,6 @@ fn normalize_sidecar_context_ref(context_ref: &AgentSidecarContextRef) -> Result
         .map_err(|err| AppError::internal(format!("context_ref serialization failed: {err}")))
 }
 
-fn context_realm_id(context_ref: &AgentSidecarContextRef) -> &RealmId {
-    context_ref.realm_id()
-}
-
 fn sidecar_context_target_ref(context_ref: &AgentSidecarContextRef) -> &str {
     match context_ref {
         AgentSidecarContextRef::Strand(context) => context.strand_id.as_str(),
@@ -189,29 +187,6 @@ fn validate_sidecar_context_projection(
         }
     }
     Ok(())
-}
-
-pub(super) fn normalize_addressed_agents(
-    controller: &str,
-    body: &AgentSidecarEnsureRequestBody,
-) -> Result<Vec<String>, AppError> {
-    if body
-        .addressed_agent_ids
-        .iter()
-        .any(|agent| agent.as_str() == controller)
-    {
-        return Err(sidecar_failed_precondition(
-            CONTROLLER_IN_ADDRESSED_AGENTS,
-            "addressed_agent_ids must not contain the controller",
-        ));
-    }
-    body.validate()
-        .map_err(|error| AppError::invalid_param(error.to_string()))?;
-    let mut out = Vec::with_capacity(body.addressed_agent_ids.len());
-    for agent in &body.addressed_agent_ids {
-        out.push(agent.to_string());
-    }
-    Ok(out)
 }
 
 pub(crate) async fn eligible_sidecar_agents(
@@ -276,171 +251,6 @@ fn new_sidecar_operation(
     ))
 }
 
-fn backing_circle_is_compliant(
-    circle: &soland_services::projection::CircleReadModel,
-    sidecar_id: &SidecarId,
-    controller: &str,
-) -> bool {
-    let expected_short_name =
-        arkret_wire::constants::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
-    circle.profile_ref.is_none()
-        && circle.title == "Agent Sidecar Scope"
-        && circle.summary.is_none()
-        && circle.created_by == controller
-        && circle.directory_visibility == "members"
-        && circle.join_rule == "invite"
-        && circle.history_visibility == "restricted"
-        && circle.encryption_profile == "mls_rfc9420"
-        && circle.content_encryption_floor.as_deref() == Some("e2ee_required")
-        && circle.metadata_encryption_floor.as_deref() == Some("e2ee_required")
-        && circle
-            .display
-            .pointer("/short_name")
-            .and_then(Value::as_str)
-            == Some(expected_short_name.as_str())
-        && circle
-            .display
-            .pointer("/symbol/glyph")
-            .and_then(Value::as_str)
-            == Some("lock")
-}
-
-async fn ensure_backing_circle(
-    state: &AppState,
-    controller: &str,
-    realm_id: &RealmId,
-    sidecar_id: &SidecarId,
-    circle_id: &CircleId,
-) -> Result<(), AppError> {
-    if let Some(circle) = state
-        .projections()
-        .snapshot()
-        .circles
-        .get(circle_id.as_str())
-    {
-        return if circle.realm_id == realm_id.as_str()
-            && backing_circle_is_compliant(circle, sidecar_id, controller)
-        {
-            Ok(())
-        } else {
-            Err(sidecar_create_denied("Sidecar backing scope conflict"))
-        };
-    }
-    let short_name =
-        arkret_wire::constants::agent_sidecar_backing_circle_short_name(sidecar_id.as_str());
-    let object = json!({
-        "id": circle_id,
-        "schema": "ak.schema.circle.v1",
-        "realm_id": realm_id,
-        "title": "Agent Sidecar Scope",
-        "display": {
-            "short_name": short_name,
-            "color_token": "slate",
-            "symbol": { "glyph": "lock" }
-        },
-        "directory_visibility": "members",
-        "join_rule": "invite",
-        "history_visibility": "restricted",
-        "content_encryption_floor": "e2ee_required",
-        "metadata_encryption_floor": "e2ee_required",
-        "encryption_profile": "mls_rfc9420",
-        "state": "active",
-        "created_by": controller,
-        "created_at": arkret_canonical::format_timestamp_canonical(chrono::Utc::now())
-    });
-    let operation = new_sidecar_operation(
-        realm_id,
-        arkret_wire::EventKind::CIRCLE_CREATE,
-        json!({"object": object}),
-    )?;
-    crate::routing::events::projection::accept_trusted_sidecar_circle_operation(
-        state, controller, sidecar_id, &operation,
-    )
-    .await
-    .map_err(sidecar_reducer_reject_to_app_error)?;
-    if state
-        .projections()
-        .snapshot()
-        .circles
-        .get(circle_id.as_str())
-        .is_some_and(|circle| backing_circle_is_compliant(circle, sidecar_id, controller))
-    {
-        Ok(())
-    } else {
-        Err(AppError::internal(
-            "Sidecar backing Circle accepted but not projected",
-        ))
-    }
-}
-
-async fn ensure_sidecar_aggregate(
-    state: &AppState,
-    controller: &str,
-    realm_id: &RealmId,
-) -> Result<AgentSidecarRecord, AppError> {
-    if let Some(record) = state
-        .agent_pairings()
-        .sidecar_for_realm_controller(realm_id.as_str(), controller)
-        .await
-        .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?
-    {
-        let sidecar_id = SidecarId::new(record.sidecar_id.clone())
-            .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?;
-        let circle_id = CircleId::new(record.backing_circle_id.clone())
-            .map_err(|error| AppError::internal(format!("stored backing Circle id: {error}")))?;
-        ensure_backing_circle(state, controller, realm_id, &sidecar_id, &circle_id).await?;
-        return Ok(record);
-    }
-
-    let sidecar_id = SidecarId::new(ids::generate("sidecar"))
-        .map_err(|error| AppError::internal(format!("generated Sidecar id: {error}")))?;
-    let backing_circle_id = CircleId::new(ids::generate_circle_id())
-        .map_err(|error| AppError::internal(format!("generated Circle id: {error}")))?;
-    let created_at = chrono::Utc::now();
-    ensure_backing_circle(state, controller, realm_id, &sidecar_id, &backing_circle_id).await?;
-    let sidecar = AgentSidecar {
-        id: sidecar_id.clone(),
-        schema: AgentSidecarSchema::V1,
-        realm_id: realm_id.clone(),
-        controller_id: Did::new(controller.to_owned())
-            .map_err(|error| AppError::internal(format!("controller id: {error}")))?,
-        backing_circle_id: backing_circle_id.clone(),
-        encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
-        state: AgentSidecarState::Active,
-        state_changed_at: None,
-        created_at,
-        updated_at: None,
-    };
-    let operation = new_sidecar_operation(
-        realm_id,
-        arkret_wire::EventKind::SIDECAR_CREATE,
-        json!({"object": sidecar}),
-    )?;
-    crate::routing::events::projection::accept_trusted_sidecar_create_operation(
-        state,
-        controller,
-        &backing_circle_id,
-        &operation,
-    )
-    .await
-    .map_err(sidecar_reducer_reject_to_app_error)?;
-    let record = AgentSidecarRecord {
-        sidecar_id: sidecar_id.to_string(),
-        realm_id: realm_id.to_string(),
-        controller_id: controller.to_owned(),
-        backing_circle_id: backing_circle_id.to_string(),
-        state: "active".to_owned(),
-        state_changed_at: None,
-        created_at,
-        updated_at: None,
-    };
-    state
-        .agent_pairings()
-        .ensure_sidecar(record)
-        .await
-        .map_err(|error| AppError::internal(format!("Sidecar persistence failed: {error}")))
-}
-
 fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
     state
         .projections()
@@ -448,35 +258,6 @@ fn circle_has_member(state: &AppState, circle_id: &str, actor: &str) -> bool {
         .circles
         .get(circle_id)
         .is_some_and(|circle| circle.members.contains(actor))
-}
-
-async fn ensure_sidecar_member(
-    state: &AppState,
-    controller: &str,
-    realm_id: &RealmId,
-    circle_id: &CircleId,
-    actor: &str,
-) -> Result<(), AppError> {
-    if circle_has_member(state, circle_id.as_str(), actor) {
-        return Ok(());
-    }
-    let operation = new_sidecar_operation(
-        realm_id,
-        arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
-        json!({"circle_id": circle_id, "actor_id": actor, "membership": "join"}),
-    )?;
-    crate::routing::events::projection::accept_trusted_sidecar_member_operation(
-        state, controller, &operation,
-    )
-    .await
-    .map_err(sidecar_reducer_reject_to_app_error)?;
-    if circle_has_member(state, circle_id.as_str(), actor) {
-        Ok(())
-    } else {
-        Err(AppError::internal(
-            "Sidecar backing membership accepted but not projected",
-        ))
-    }
 }
 
 pub(crate) async fn remove_agent_from_controller_sidecars(
@@ -547,99 +328,6 @@ fn private_context_strand_object(
         "created_by": controller,
         "created_at": created_at
     })
-}
-
-async fn create_private_context(
-    state: &AppState,
-    controller: &str,
-    sidecar: &AgentSidecarRecord,
-    context_ref: &AgentSidecarContextRef,
-    normalized_context_ref: &Value,
-    normalized_context_ref_digest: &str,
-) -> Result<AgentSidecarContextRecord, AppError> {
-    let realm_id = RealmId::new(sidecar.realm_id.clone())
-        .map_err(|error| AppError::internal(format!("stored Realm id: {error}")))?;
-    let circle_id = CircleId::new(sidecar.backing_circle_id.clone())
-        .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
-    let strand_id = StrandId::new(ids::generate("strand"))
-        .map_err(|error| AppError::internal(format!("generated Strand id: {error}")))?;
-    let tracks = private_tracks_for_context(state, context_ref);
-    let created_at = arkret_canonical::format_timestamp_canonical(chrono::Utc::now());
-    let object = private_context_strand_object(
-        &strand_id,
-        &realm_id,
-        &circle_id,
-        controller,
-        tracks,
-        &created_at,
-    );
-    let strand_operation = new_sidecar_operation(
-        &realm_id,
-        arkret_wire::EventKind::STRAND_CREATE,
-        json!({"object": object}),
-    )?;
-    accept_local_operations(state, controller, std::slice::from_ref(&strand_operation))
-        .await
-        .map_err(sidecar_reducer_reject_to_app_error)?;
-
-    let relation_id = RelationId::new(ids::generate_relation_id())
-        .map_err(|error| AppError::internal(format!("generated Relation id: {error}")))?;
-    let relation_operation = new_sidecar_operation(
-        &realm_id,
-        arkret_wire::EventKind::RELATION_CREATE,
-        json!({"relation": {
-            "id": relation_id,
-            "kind": "agent_sidecar_of",
-            "from_ref": strand_id,
-            "to_ref": sidecar_context_target_ref(context_ref),
-            "scope_circle_id": circle_id,
-            "created_by": controller
-        }}),
-    )?;
-    accept_local_operations(state, controller, std::slice::from_ref(&relation_operation))
-        .await
-        .map_err(sidecar_reducer_reject_to_app_error)?;
-
-    let record = AgentSidecarContextRecord {
-        sidecar_id: sidecar.sidecar_id.clone(),
-        normalized_context_ref_digest: normalized_context_ref_digest.to_owned(),
-        normalized_context_ref: normalized_context_ref.clone(),
-        private_strand_id: strand_id.to_string(),
-        private_relation_id: relation_id.to_string(),
-        created_at: chrono::Utc::now(),
-    };
-    state
-        .agent_pairings()
-        .ensure_sidecar_context(record)
-        .await
-        .map_err(|error| AppError::internal(format!("Sidecar context persistence failed: {error}")))
-}
-
-async fn ensure_private_context(
-    state: &AppState,
-    controller: &str,
-    sidecar: &AgentSidecarRecord,
-    context_ref: &AgentSidecarContextRef,
-    normalized_context_ref: &Value,
-    normalized_context_ref_digest: &str,
-) -> Result<AgentSidecarContextRecord, AppError> {
-    if let Some(record) = state
-        .agent_pairings()
-        .sidecar_context(&sidecar.sidecar_id, normalized_context_ref_digest)
-        .await
-        .map_err(|error| AppError::internal(format!("Sidecar context lookup failed: {error}")))?
-    {
-        return Ok(record);
-    }
-    create_private_context(
-        state,
-        controller,
-        sidecar,
-        context_ref,
-        normalized_context_ref,
-        normalized_context_ref_digest,
-    )
-    .await
 }
 
 fn sidecar_from_record(record: &AgentSidecarRecord) -> Result<AgentSidecar, AppError> {
@@ -1221,71 +909,718 @@ async fn sidecar_view(
     Ok(view)
 }
 
-async fn ensure_sidecar_impl(
-    aa: AuthArgs,
-    body: AgentSidecarEnsureRequestBody,
-    depot: &mut Depot,
-    req: &mut Request,
-) -> JsonResult<AgentSidecarEnsureOutcome> {
-    let state = depot.get_typed::<AppState>().expect("state injected");
-    let session = aa.authenticated_session(state, req).await?;
+fn sidecar_context_for_realm(
+    realm_id: &RealmId,
+    context_ref: &SidecarContextRef,
+) -> AgentSidecarContextRef {
+    match context_ref {
+        SidecarContextRef::Strand { strand_id } => {
+            AgentSidecarContextRef::strand(realm_id.clone(), strand_id.clone())
+        }
+        SidecarContextRef::Relation { relation_id } => {
+            AgentSidecarContextRef::relation(realm_id.clone(), relation_id.clone())
+        }
+    }
+}
+
+fn event_payload_map(payload: Value) -> Result<BTreeMap<String, Value>, AppError> {
+    payload
+        .as_object()
+        .cloned()
+        .map(|fields| fields.into_iter().collect())
+        .ok_or_else(|| AppError::internal("Sidecar draft payload must be an object"))
+}
+
+fn sidecar_event_draft(event: &arkret_wire::Event) -> Result<SidecarPreparedEventDraft, AppError> {
+    let unsigned_bytes = arkret_canonical::canonical_json_bytes(
+        &event
+            .digest_payload()
+            .map_err(|error| AppError::internal(format!("Sidecar draft payload: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Sidecar draft canonicalize: {error}")))?;
+    let event_digest = Hash::new(
+        event
+            .event_digest()
+            .map_err(|error| AppError::internal(format!("Sidecar draft digest: {error}")))?,
+    )
+    .map_err(|error| AppError::internal(format!("Sidecar draft digest invalid: {error}")))?;
+    Ok(SidecarPreparedEventDraft {
+        event_id: event.event_id.clone(),
+        kind: event.kind.clone(),
+        unsigned_event_bytes: arkret_wire::Base64UrlString::new(
+            URL_SAFE_NO_PAD.encode(unsigned_bytes),
+        )
+        .map_err(|error| AppError::internal(format!("Sidecar draft bytes invalid: {error}")))?,
+        event_digest,
+    })
+}
+
+fn new_unsigned_sidecar_event(
+    event_id: EventId,
+    kind: &'static str,
+    realm_id: RealmId,
+    scope_ref: arkret_wire::ScopeRef,
+    actor_id: Did,
+    actor_seq: u64,
+    prev_refs: Vec<EventId>,
+    refs: Vec<arkret_wire::EventRef>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    payload: Value,
+) -> Result<arkret_wire::Event, AppError> {
+    Ok(arkret_wire::Event {
+        event_id,
+        kind: arkret_wire::EventKind::from_wire(kind),
+        realm_id,
+        scope_ref,
+        actor_id,
+        executed_by: None,
+        authorization_ref: None,
+        applet_id: None,
+        external_ref: None,
+        actor_kind: None,
+        actor_seq,
+        created_at,
+        hlc: None,
+        prev_refs,
+        refs,
+        causal_refs: Vec::new(),
+        preconditions: Vec::new(),
+        seal_ref: None,
+        auth_context: None,
+        seal_basis: None,
+        payload: event_payload_map(payload)?,
+        redacts: None,
+        unsigned: BTreeMap::new(),
+        proofs: Vec::new(),
+        requirements: arkret_wire::EventRequirements::default(),
+    })
+}
+
+fn sidecar_reservation_key(handle: &arkret_wire::ProtocolOpaqueId) -> String {
+    format!("sidecar-reservation:{}", handle.as_str())
+}
+
+async fn store_sidecar_prepare(
+    state: &AppState,
+    principal_id: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+    reservation_handle: &arkret_wire::ProtocolOpaqueId,
+    expires_at: chrono::DateTime<chrono::Utc>,
+    outcome: &SidecarEnsureOutcome,
+) -> Result<(), AppError> {
+    let response_body = serde_json::to_value(outcome)
+        .map_err(|error| AppError::internal(format!("Sidecar outcome encode: {error}")))?;
+    let created_at = chrono::Utc::now();
+    for key in [
+        idempotency_key.to_owned(),
+        sidecar_reservation_key(reservation_handle),
+    ] {
+        state
+            .jobs()
+            .store_idempotency_record(soland_services::jobs::IdempotencyState {
+                principal_id: principal_id.to_owned(),
+                idempotency_key: key,
+                service_id: state.service_id().clone(),
+                request_hash: request_hash.to_owned(),
+                response_status: StatusCode::OK.as_u16().into(),
+                response_body: response_body.clone(),
+                created_at,
+                expires_at,
+            })
+            .await
+            .map_err(|error| AppError::internal(format!("Sidecar reservation store: {error}")))?;
+    }
+    Ok(())
+}
+
+async fn store_sidecar_final_outcome(
+    state: &AppState,
+    principal_id: &str,
+    idempotency_key: &str,
+    request_hash: &str,
+    outcome: &SidecarEnsureOutcome,
+) -> Result<(), AppError> {
+    let created_at = chrono::Utc::now();
+    state
+        .jobs()
+        .store_idempotency_record(soland_services::jobs::IdempotencyState {
+            principal_id: principal_id.to_owned(),
+            idempotency_key: idempotency_key.to_owned(),
+            service_id: state.service_id().clone(),
+            request_hash: request_hash.to_owned(),
+            response_status: StatusCode::OK.as_u16().into(),
+            response_body: serde_json::to_value(outcome)
+                .map_err(|error| AppError::internal(format!("Sidecar outcome encode: {error}")))?,
+            created_at,
+            expires_at: created_at + chrono::Duration::hours(24),
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar outcome store: {error}")))
+}
+
+async fn prepare_sidecar(
+    state: &AppState,
+    session: &SessionRecord,
+    body: arkret_models_collaboration::protocol_journey::SidecarEnsurePrepareRequestBody,
+) -> JsonResult<SidecarEnsureOutcome> {
     if body.controller_id.as_str() != session.actor {
         return Err(sidecar_create_denied(
             "Sidecar controller_id must match the authenticated session",
         ));
     }
-    let controller = body.controller_id.as_str();
-    let realm_id = context_realm_id(&body.context_ref).clone();
-    authorize_sidecar_ensure(state, controller, realm_id.as_str()).await?;
-    validate_sidecar_context_projection(state, &body.context_ref)?;
-    let addressed_agents = normalize_addressed_agents(controller, &body)?;
-    let normalized_context_ref = normalize_sidecar_context_ref(&body.context_ref)?;
-    let normalized_context_ref_digest = arkret_canonical::canonical_sha256(&normalized_context_ref)
-        .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
-    let eligible_agents =
-        eligible_sidecar_agents(state, realm_id.as_str(), controller, &addressed_agents).await?;
-
-    let _guard = lock_sidecar_ensure(realm_id.as_str(), controller).await;
-    let sidecar = ensure_sidecar_aggregate(state, controller, &realm_id).await?;
-    let circle_id = CircleId::new(sidecar.backing_circle_id.clone())
-        .map_err(|error| AppError::internal(format!("stored Circle id: {error}")))?;
-    ensure_sidecar_member(state, controller, &realm_id, &circle_id, controller).await?;
-    for agent_id in &eligible_agents {
-        ensure_sidecar_member(state, controller, &realm_id, &circle_id, agent_id).await?;
-    }
-    let context = ensure_private_context(
+    authorize_sidecar_ensure(
         state,
-        controller,
-        &sidecar,
-        &body.context_ref,
-        &normalized_context_ref,
-        &normalized_context_ref_digest,
+        body.controller_id.as_str(),
+        body.source_realm_id.as_str(),
     )
     .await?;
-    let view = sidecar_view(state, &sidecar, &session.device_id).await?;
-    append_audit_log(
+    let context_ref = sidecar_context_for_realm(&body.source_realm_id, &body.context_ref);
+    validate_sidecar_context_projection(state, &context_ref)?;
+    let normalized_context_ref = normalize_sidecar_context_ref(&context_ref)?;
+    let normalized_context_ref_digest = arkret_canonical::canonical_sha256(&normalized_context_ref)
+        .map_err(|error| AppError::internal(format!("context_ref digest failed: {error}")))?;
+    let request_hash = arkret_canonical::canonical_sha256(&body)
+        .map_err(|error| AppError::internal(format!("Sidecar prepare digest: {error}")))?;
+    if let Some(cached) = state
+        .jobs()
+        .idempotency_record(session.actor.as_str(), body.idempotency_key.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar idempotency lookup: {error}")))?
+    {
+        if cached.request_hash != request_hash {
+            return Err(AppError::conflict(
+                "idempotency key was used for another Sidecar prepare",
+            ));
+        }
+        let outcome = serde_json::from_value::<SidecarEnsureOutcome>(cached.response_body)
+            .map_err(|error| AppError::internal(format!("stored Sidecar outcome: {error}")))?;
+        return json_ok(outcome);
+    }
+
+    let _guard =
+        lock_sidecar_ensure(body.source_realm_id.as_str(), body.controller_id.as_str()).await;
+    let existing_sidecar = state
+        .agent_pairings()
+        .sidecar_for_realm_controller(body.source_realm_id.as_str(), body.controller_id.as_str())
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar lookup failed: {error}")))?;
+    if let Some(sidecar) = &existing_sidecar
+        && let Some(context) = state
+            .agent_pairings()
+            .sidecar_context(&sidecar.sidecar_id, &normalized_context_ref_digest)
+            .await
+            .map_err(|error| {
+                AppError::internal(format!("Sidecar context lookup failed: {error}"))
+            })?
+    {
+        return json_ok(SidecarEnsureOutcome::Accepted {
+            operation_id: body.operation_id,
+            accepted_phase: arkret_models_collaboration::protocol_journey::SidecarAcceptedPhase::Attach,
+            ok: arkret_models_collaboration::protocol_journey::SidecarAcceptedOk,
+            sidecar_id: SidecarId::new(sidecar.sidecar_id.clone())
+                .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
+            private_strand_id: StrandId::new(context.private_strand_id)
+                .map_err(|error| AppError::internal(format!("stored Strand id: {error}")))?,
+            private_relation_id: RelationId::new(context.private_relation_id)
+                .map_err(|error| AppError::internal(format!("stored Relation id: {error}")))?,
+            access_readiness: arkret_models_collaboration::protocol_journey::SidecarAccessReadiness::KeyMaterialPending,
+            pending_access_reconciliations: Vec::new(),
+        });
+    }
+
+    let controller_id = Did::new(session.actor.clone())
+        .map_err(|error| AppError::internal(format!("controller id invalid: {error}")))?;
+    let sidecar_id = existing_sidecar
+        .as_ref()
+        .map(|record| SidecarId::new(record.sidecar_id.clone()))
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?
+        .unwrap_or_else(|| SidecarId::new(ids::generate("sidecar")).expect("generated Sidecar id"));
+    let backing_circle_id = existing_sidecar
+        .as_ref()
+        .map(|record| CircleId::new(record.backing_circle_id.clone()))
+        .transpose()
+        .map_err(|error| AppError::internal(format!("stored backing Circle id: {error}")))?
+        .unwrap_or_else(|| CircleId::new(ids::generate_circle_id()).expect("generated Circle id"));
+    let private_strand_id = StrandId::new(ids::generate("strand"))
+        .map_err(|error| AppError::internal(format!("generated Strand id: {error}")))?;
+    let private_relation_id = RelationId::new(ids::generate_relation_id())
+        .map_err(|error| AppError::internal(format!("generated Relation id: {error}")))?;
+    let context_attach_event_id = EventId::new(ids::generate_event_id())
+        .map_err(|error| AppError::internal(format!("generated Event id: {error}")))?;
+    let create_event_id = existing_sidecar
+        .is_none()
+        .then(|| EventId::new(ids::generate_event_id()).expect("generated Event id"));
+    let frontier = crate::routing::events::event_log::load_realm_actor_frontier(
         state,
-        Some(&session.actor),
-        "ak.self.agent.sidecar.command.ensure",
-        json!({
-            "controller_id": body.controller_id,
-            "realm_id": realm_id,
-            "addressed_agent_count": addressed_agents.len(),
-            "context_ref_digest": normalized_context_ref_digest
-        }),
-        "accepted",
+        body.source_realm_id.clone(),
+        controller_id.clone(),
     )
-    .await;
-    json_ok(AgentSidecarEnsureOutcome {
-        ok: true,
-        sidecar_id: view.sidecar.id,
-        private_strand_id: StrandId::new(context.private_strand_id)
-            .map_err(|error| AppError::internal(format!("stored Strand id: {error}")))?,
-        private_relation_id: RelationId::new(context.private_relation_id)
-            .map_err(|error| AppError::internal(format!("stored Relation id: {error}")))?,
-        access_readiness: view.access_readiness,
-        pending_access_reconciliations: view.pending_access_reconciliations,
-    })
+    .await?;
+    let created_at = chrono::Utc::now();
+    let tracks = private_tracks_for_context(state, &context_ref);
+    let private_strand = private_context_strand_object(
+        &private_strand_id,
+        &body.source_realm_id,
+        &backing_circle_id,
+        session.actor.as_str(),
+        tracks,
+        &arkret_canonical::format_timestamp_canonical(created_at),
+    );
+    let relation = json!({
+        "id": private_relation_id,
+        "kind": "agent_sidecar_of",
+        "from_ref": private_strand_id,
+        "to_ref": sidecar_context_target_ref(&context_ref),
+        "scope_circle_id": backing_circle_id,
+        "created_by": controller_id,
+    });
+    let attach_seq = frontier
+        .next_actor_seq
+        .checked_add(u64::from(create_event_id.is_some()))
+        .ok_or_else(|| AppError::conflict("Sidecar actor sequence is exhausted"))?;
+    let attach_event = new_unsigned_sidecar_event(
+        context_attach_event_id.clone(),
+        arkret_wire::EventKind::SIDECAR_CONTEXT_ATTACH,
+        body.source_realm_id.clone(),
+        arkret_wire::ScopeRef::Circle {
+            realm_id: body.source_realm_id.clone(),
+            circle_id: backing_circle_id.clone(),
+        },
+        controller_id.clone(),
+        attach_seq,
+        create_event_id
+            .clone()
+            .map_or_else(|| frontier.frontier_event_ids.clone(), |id| vec![id]),
+        create_event_id
+            .clone()
+            .map(|id| vec![arkret_wire::EventRef::new(id.to_string(), "after")])
+            .unwrap_or_default(),
+        created_at,
+        json!({
+            "sidecar_id": sidecar_id,
+            "private_strand": private_strand,
+            "relation": relation,
+            "version": 1,
+        }),
+    )?;
+    let context_attach_event_draft = sidecar_event_draft(&attach_event)?;
+    let reservation_handle = arkret_wire::ProtocolOpaqueId::new(ids::generate("reservation"))
+        .map_err(AppError::internal)?;
+    let expires_at = created_at + chrono::Duration::minutes(10);
+    let prepared = if let Some(create_event_id) = create_event_id {
+        let sidecar = AgentSidecar {
+            id: sidecar_id.clone(),
+            schema: AgentSidecarSchema::V1,
+            realm_id: body.source_realm_id.clone(),
+            controller_id: controller_id.clone(),
+            backing_circle_id: backing_circle_id.clone(),
+            encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
+            state: AgentSidecarState::Active,
+            state_changed_at: None,
+            created_at,
+            updated_at: None,
+        };
+        let create_event = new_unsigned_sidecar_event(
+            create_event_id.clone(),
+            arkret_wire::EventKind::SIDECAR_CREATE,
+            body.source_realm_id.clone(),
+            arkret_wire::ScopeRef::Realm {
+                realm_id: body.source_realm_id.clone(),
+            },
+            controller_id,
+            frontier.next_actor_seq,
+            frontier.frontier_event_ids,
+            Vec::new(),
+            created_at,
+            json!({"object": sidecar}),
+        )?;
+        SidecarPreparedOutcome::New {
+            operation_id: body.operation_id.clone(),
+            reservation_handle: reservation_handle.clone(),
+            expires_at,
+            sidecar_id,
+            backing_circle_id,
+            private_strand_id,
+            private_relation_id,
+            create_event_id,
+            context_attach_event_id,
+            create_event_draft: sidecar_event_draft(&create_event)?,
+            context_attach_event_draft,
+        }
+    } else {
+        SidecarPreparedOutcome::Existing {
+            operation_id: body.operation_id.clone(),
+            reservation_handle: reservation_handle.clone(),
+            expires_at,
+            sidecar_id,
+            backing_circle_id,
+            private_strand_id,
+            private_relation_id,
+            context_attach_event_id,
+            context_attach_event_draft,
+        }
+    };
+    let outcome = SidecarEnsureOutcome::Prepared { prepared };
+    store_sidecar_prepare(
+        state,
+        session.actor.as_str(),
+        body.idempotency_key.as_str(),
+        &request_hash,
+        &reservation_handle,
+        expires_at,
+        &outcome,
+    )
+    .await?;
+    json_ok(outcome)
+}
+
+fn validate_signed_sidecar_draft(
+    signed_event: &arkret_wire::Event,
+    draft: &SidecarPreparedEventDraft,
+) -> Result<(), AppError> {
+    let actual_unsigned = arkret_canonical::canonical_json_bytes(
+        &signed_event
+            .digest_payload()
+            .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event: {error}")))?,
+    )
+    .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event: {error}")))?;
+    let expected_unsigned = URL_SAFE_NO_PAD
+        .decode(draft.unsigned_event_bytes.as_str())
+        .map_err(|_| AppError::internal("stored Sidecar draft bytes are invalid"))?;
+    let digest = Hash::new(
+        signed_event
+            .event_digest()
+            .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event: {error}")))?,
+    )
+    .map_err(|error| AppError::invalid_param(format!("signed Sidecar Event digest: {error}")))?;
+    if signed_event.event_id != draft.event_id
+        || signed_event.kind != draft.kind
+        || actual_unsigned != expected_unsigned
+        || digest != draft.event_digest
+        || signed_event.proofs.is_empty()
+        || signed_event
+            .proofs
+            .iter()
+            .any(|proof| proof.event_digest != draft.event_digest)
+    {
+        return Err(AppError::invalid_param(
+            "signed Sidecar Event does not exactly match its reservation draft",
+        ));
+    }
+    Ok(())
+}
+
+async fn validate_sidecar_commit_reservation(
+    state: &AppState,
+    session: &SessionRecord,
+    operation_id: &arkret_wire::ProtocolOperationId,
+    reservation_handle: &arkret_wire::ProtocolOpaqueId,
+    create_event: Option<&arkret_wire::Event>,
+    context_attach_event: &arkret_wire::Event,
+) -> Result<SidecarPreparedOutcome, AppError> {
+    let record = state
+        .jobs()
+        .idempotency_record(
+            session.actor.as_str(),
+            &sidecar_reservation_key(reservation_handle),
+        )
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar reservation lookup: {error}")))?
+        .ok_or_else(|| AppError::conflict("Sidecar reservation is missing or expired"))?;
+    if record.expires_at <= chrono::Utc::now() {
+        return Err(AppError::conflict("Sidecar reservation has expired"));
+    }
+    let outcome = serde_json::from_value::<SidecarEnsureOutcome>(record.response_body)
+        .map_err(|error| AppError::internal(format!("stored Sidecar reservation: {error}")))?;
+    let SidecarEnsureOutcome::Prepared { prepared } = outcome else {
+        return Err(AppError::conflict(
+            "Sidecar reservation is already finalized",
+        ));
+    };
+    match &prepared {
+        SidecarPreparedOutcome::New {
+            operation_id: reserved_operation_id,
+            reservation_handle: reserved_handle,
+            create_event_draft,
+            context_attach_event_draft,
+            ..
+        } => {
+            if reserved_operation_id != operation_id || reserved_handle != reservation_handle {
+                return Err(AppError::invalid_param(
+                    "Sidecar reservation binding mismatch",
+                ));
+            }
+            let create_event = create_event.ok_or_else(|| {
+                AppError::invalid_param("new Sidecar commit requires create_event")
+            })?;
+            validate_signed_sidecar_draft(create_event, create_event_draft)?;
+            validate_signed_sidecar_draft(context_attach_event, context_attach_event_draft)?;
+        }
+        SidecarPreparedOutcome::Existing {
+            operation_id: reserved_operation_id,
+            reservation_handle: reserved_handle,
+            context_attach_event_draft,
+            ..
+        } => {
+            if reserved_operation_id != operation_id || reserved_handle != reservation_handle {
+                return Err(AppError::invalid_param(
+                    "Sidecar reservation binding mismatch",
+                ));
+            }
+            if create_event.is_some() {
+                return Err(AppError::invalid_param(
+                    "existing Sidecar attach must not carry create_event",
+                ));
+            }
+            validate_signed_sidecar_draft(context_attach_event, context_attach_event_draft)?;
+        }
+    }
+    Ok(prepared)
+}
+
+fn sidecar_prepared_coordinates(
+    prepared: &SidecarPreparedOutcome,
+) -> (&SidecarId, &CircleId, &StrandId, &RelationId) {
+    match prepared {
+        SidecarPreparedOutcome::New {
+            sidecar_id,
+            backing_circle_id,
+            private_strand_id,
+            private_relation_id,
+            ..
+        }
+        | SidecarPreparedOutcome::Existing {
+            sidecar_id,
+            backing_circle_id,
+            private_strand_id,
+            private_relation_id,
+            ..
+        } => (
+            sidecar_id,
+            backing_circle_id,
+            private_strand_id,
+            private_relation_id,
+        ),
+    }
+}
+
+async fn finalize_sidecar_projection_records(
+    state: &AppState,
+    session: &SessionRecord,
+    prepared: &SidecarPreparedOutcome,
+    context_attach_event: &arkret_wire::Event,
+) -> Result<(), AppError> {
+    let (sidecar_id, backing_circle_id, private_strand_id, private_relation_id) =
+        sidecar_prepared_coordinates(prepared);
+    let created_at = context_attach_event.created_at;
+    state
+        .agent_pairings()
+        .ensure_sidecar(AgentSidecarRecord {
+            sidecar_id: sidecar_id.to_string(),
+            realm_id: context_attach_event.realm_id.to_string(),
+            controller_id: session.actor.clone(),
+            backing_circle_id: backing_circle_id.to_string(),
+            state: "active".to_owned(),
+            state_changed_at: None,
+            created_at,
+            updated_at: None,
+        })
+        .await
+        .map_err(|error| AppError::internal(format!("Sidecar projection persistence: {error}")))?;
+    let context_ref = context_attach_event
+        .payload
+        .get("relation")
+        .and_then(Value::as_object)
+        .and_then(|relation| relation.get("to_ref"))
+        .and_then(Value::as_str)
+        .ok_or_else(|| AppError::internal("accepted Sidecar relation target is missing"))?;
+    let normalized_context_ref = if context_ref.starts_with("ak:strand:") {
+        json!({"realm_id": context_attach_event.realm_id, "strand_id": context_ref})
+    } else {
+        json!({"realm_id": context_attach_event.realm_id, "relation_id": context_ref})
+    };
+    let normalized_context_ref_digest = arkret_canonical::canonical_sha256(&normalized_context_ref)
+        .map_err(|error| AppError::internal(format!("accepted Sidecar context digest: {error}")))?;
+    state
+        .agent_pairings()
+        .ensure_sidecar_context(AgentSidecarContextRecord {
+            sidecar_id: sidecar_id.to_string(),
+            normalized_context_ref_digest,
+            normalized_context_ref,
+            private_strand_id: private_strand_id.to_string(),
+            private_relation_id: private_relation_id.to_string(),
+            created_at,
+        })
+        .await
+        .map(|_| ())
+        .map_err(|error| AppError::internal(format!("Sidecar context persistence: {error}")))
+}
+
+async fn ensure_sidecar_impl(
+    aa: AuthArgs,
+    body: SidecarEnsureRequestBody,
+    depot: &mut Depot,
+    req: &mut Request,
+) -> JsonResult<SidecarEnsureOutcome> {
+    let state = depot.get_typed::<AppState>().expect("state injected");
+    let session = aa.authenticated_session(state, req).await?;
+    match body {
+        SidecarEnsureRequestBody::Prepare(body) => prepare_sidecar(state, &session, body).await,
+        SidecarEnsureRequestBody::Commit(body) => {
+            let request_hash = arkret_canonical::canonical_sha256(&body)
+                .map_err(|error| AppError::internal(format!("Sidecar commit digest: {error}")))?;
+            if let Some(cached) = state
+                .jobs()
+                .idempotency_record(session.actor.as_str(), body.idempotency_key.as_str())
+                .await
+                .map_err(|error| AppError::internal(format!("Sidecar commit replay: {error}")))?
+            {
+                if cached.request_hash != request_hash {
+                    return Err(AppError::conflict(
+                        "idempotency key was used for another Sidecar commit",
+                    ));
+                }
+                return json_ok(
+                    serde_json::from_value(cached.response_body).map_err(|error| {
+                        AppError::internal(format!("stored Sidecar commit outcome: {error}"))
+                    })?,
+                );
+            }
+            let prepared = validate_sidecar_commit_reservation(
+                state,
+                &session,
+                &body.operation_id,
+                &body.reservation_handle,
+                Some(&body.create_event),
+                &body.context_attach_event,
+            )
+            .await?;
+            authorize_sidecar_ensure(
+                state,
+                session.actor.as_str(),
+                body.create_event.realm_id.as_str(),
+            )
+            .await?;
+            crate::routing::events::event_log::submit_sidecar_ensure_batch(
+                state,
+                &session,
+                Some(body.create_event),
+                body.context_attach_event.clone(),
+            )
+            .await
+            .map_err(|error| {
+                AppError::new(ErrorCode::FailedPrecondition, error.message)
+                    .with_status(error.status)
+                    .with_wire_code(error.code)
+            })?;
+            finalize_sidecar_projection_records(
+                state,
+                &session,
+                &prepared,
+                &body.context_attach_event,
+            )
+            .await?;
+            let (sidecar_id, _, private_strand_id, private_relation_id) =
+                sidecar_prepared_coordinates(&prepared);
+            let outcome = SidecarEnsureOutcome::Accepted {
+                operation_id: body.operation_id,
+                accepted_phase: arkret_models_collaboration::protocol_journey::SidecarAcceptedPhase::Commit,
+                ok: arkret_models_collaboration::protocol_journey::SidecarAcceptedOk,
+                sidecar_id: sidecar_id.clone(),
+                private_strand_id: private_strand_id.clone(),
+                private_relation_id: private_relation_id.clone(),
+                access_readiness: arkret_models_collaboration::protocol_journey::SidecarAccessReadiness::KeyMaterialPending,
+                pending_access_reconciliations: Vec::new(),
+            };
+            store_sidecar_final_outcome(
+                state,
+                session.actor.as_str(),
+                body.idempotency_key.as_str(),
+                &request_hash,
+                &outcome,
+            )
+            .await?;
+            json_ok(outcome)
+        }
+        SidecarEnsureRequestBody::Attach(body) => {
+            let request_hash = arkret_canonical::canonical_sha256(&body)
+                .map_err(|error| AppError::internal(format!("Sidecar attach digest: {error}")))?;
+            if let Some(cached) = state
+                .jobs()
+                .idempotency_record(session.actor.as_str(), body.idempotency_key.as_str())
+                .await
+                .map_err(|error| AppError::internal(format!("Sidecar attach replay: {error}")))?
+            {
+                if cached.request_hash != request_hash {
+                    return Err(AppError::conflict(
+                        "idempotency key was used for another Sidecar attach",
+                    ));
+                }
+                return json_ok(
+                    serde_json::from_value(cached.response_body).map_err(|error| {
+                        AppError::internal(format!("stored Sidecar attach outcome: {error}"))
+                    })?,
+                );
+            }
+            let prepared = validate_sidecar_commit_reservation(
+                state,
+                &session,
+                &body.operation_id,
+                &body.reservation_handle,
+                None,
+                &body.context_attach_event,
+            )
+            .await?;
+            authorize_sidecar_ensure(
+                state,
+                session.actor.as_str(),
+                body.context_attach_event.realm_id.as_str(),
+            )
+            .await?;
+            crate::routing::events::event_log::submit_sidecar_ensure_batch(
+                state,
+                &session,
+                None,
+                body.context_attach_event.clone(),
+            )
+            .await
+            .map_err(|error| {
+                AppError::new(ErrorCode::FailedPrecondition, error.message)
+                    .with_status(error.status)
+                    .with_wire_code(error.code)
+            })?;
+            finalize_sidecar_projection_records(
+                state,
+                &session,
+                &prepared,
+                &body.context_attach_event,
+            )
+            .await?;
+            let (sidecar_id, _, private_strand_id, private_relation_id) =
+                sidecar_prepared_coordinates(&prepared);
+            let outcome = SidecarEnsureOutcome::Accepted {
+                operation_id: body.operation_id,
+                accepted_phase: arkret_models_collaboration::protocol_journey::SidecarAcceptedPhase::Attach,
+                ok: arkret_models_collaboration::protocol_journey::SidecarAcceptedOk,
+                sidecar_id: sidecar_id.clone(),
+                private_strand_id: private_strand_id.clone(),
+                private_relation_id: private_relation_id.clone(),
+                access_readiness: arkret_models_collaboration::protocol_journey::SidecarAccessReadiness::KeyMaterialPending,
+                pending_access_reconciliations: Vec::new(),
+            };
+            store_sidecar_final_outcome(
+                state,
+                session.actor.as_str(),
+                body.idempotency_key.as_str(),
+                &request_hash,
+                &outcome,
+            )
+            .await?;
+            json_ok(outcome)
+        }
+    }
 }
 
 #[salvo::oapi::endpoint(
@@ -1295,10 +1630,10 @@ async fn ensure_sidecar_impl(
 #[tracing::instrument(skip_all, fields(op = "ak.self.agent.sidecar.command.ensure"))]
 pub(super) async fn ensure_sidecar(
     aa: AuthArgs,
-    body: JsonBody<AgentSidecarEnsureRequestBody>,
+    body: JsonBody<SidecarEnsureRequestBody>,
     depot: &mut Depot,
     req: &mut Request,
-) -> JsonResult<AgentSidecarEnsureOutcome> {
+) -> JsonResult<SidecarEnsureOutcome> {
     ensure_sidecar_impl(aa, body.into_inner(), depot, req).await
 }
 

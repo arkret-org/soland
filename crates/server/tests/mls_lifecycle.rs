@@ -110,7 +110,7 @@ fn signed_keypackage_claim_request(
             "claim_nonce": b64(claim_nonce),
             "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
             "mls_group_id": mls_group_id,
-            "proofs": [{
+            "holder_acceptance_proof": {
                 "kind": "detached_jws",
                 "verification_method": verification_method,
                 "alg": "EdDSA",
@@ -119,12 +119,13 @@ fn signed_keypackage_claim_request(
                 "audience": authority_service_id,
                 "proof_purpose": "holder_acceptance",
                 "jws": "pending"
-            }]
+            }
         }))
         .expect("typed self KeyPackage claim request");
-    body.proofs[0].payload_digest = body.payload_digest().expect("claim payload digest");
+    body.holder_acceptance_proof.payload_digest =
+        body.payload_digest().expect("claim payload digest");
     let binding = body.proof_binding_bytes().expect("claim proof binding");
-    body.proofs[0].jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
+    body.holder_acceptance_proof.jws = arkret_signatures::Ed25519DetachedJwsSigner::new(
         SigningKey::from_bytes(&[21_u8; 32]),
         verification_method,
     )

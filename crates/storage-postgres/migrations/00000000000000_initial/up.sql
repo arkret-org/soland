@@ -394,7 +394,10 @@ CREATE TABLE public.contacts (
     id uuid NOT NULL,
     requester_id text NOT NULL,
     target_id text NOT NULL,
-    scope text NOT NULL,
+    basis_id text,
+    version bigint CHECK (version >= 1),
+    granted_to_target_scopes text[] DEFAULT '{}'::text[] NOT NULL,
+    granted_to_requester_scopes text[] DEFAULT '{}'::text[] NOT NULL,
     status text NOT NULL,
     request_event_ref text,
     response_event_ref text,
@@ -740,13 +743,15 @@ CREATE TABLE public.peer_keypackage_claims (
     source_service_id text NOT NULL,
     claim_request_id text NOT NULL,
     request_digest text NOT NULL,
-    state text NOT NULL,
-    outcome jsonb,
     keypackage_id text,
+    outcome jsonb,
+    terminal_receipt jsonb,
+    consume_receipt jsonb,
     claim_expires_at_unix_ms bigint,
     expires_at bigint NOT NULL,
+    state text NOT NULL,
     updated_at bigint NOT NULL,
-    CONSTRAINT peer_keypackage_claims_state_check CHECK (state IN ('claimed', 'claim_failed', 'expired', 'revoked')),
+    CONSTRAINT peer_keypackage_claims_state_check CHECK (state IN ('claimed', 'consumed', 'claim_failed', 'expired', 'revoked', 'last_resort_claimed')),
     PRIMARY KEY (source_service_id, claim_request_id)
 );
 
@@ -1645,7 +1650,7 @@ ALTER TABLE ONLY public.contacts
     ADD CONSTRAINT contacts_pkey PRIMARY KEY (id);
 
 ALTER TABLE ONLY public.contacts
-    ADD CONSTRAINT contacts_requester_target_scope_key UNIQUE (requester_id, target_id, scope);
+    ADD CONSTRAINT contacts_requester_target_key UNIQUE (requester_id, target_id);
 
 ALTER TABLE ONLY public.devices
     ADD CONSTRAINT devices_pkey PRIMARY KEY (id);
@@ -1933,7 +1938,7 @@ CREATE INDEX state_cell_ops_cell_idx ON public.state_cell_ops USING btree (realm
 
 CREATE INDEX state_cell_ops_seal_idx ON public.state_cell_ops USING btree (realm_id, seal_id);
 
-CREATE INDEX contacts_target_idx ON public.contacts USING btree (target_id, scope);
+CREATE INDEX contacts_target_idx ON public.contacts USING btree (target_id);
 
 CREATE INDEX devices_actor_updated_idx ON public.devices USING btree (actor_id, updated_at DESC);
 

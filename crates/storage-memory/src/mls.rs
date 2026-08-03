@@ -148,8 +148,23 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
+        peer_consume_receipt: Option<&Value>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>> {
         let mut state = self.state.lock();
+        let matching_ledgers = state
+            .peer_claims
+            .iter()
+            .filter(|(_, ledger)| {
+                ledger.keypackage_id.as_deref() == Some(id) && ledger.state == "claimed"
+            })
+            .map(|(key, _)| key.clone())
+            .collect::<Vec<_>>();
+        if matching_ledgers.len() > 1 {
+            return Err(PersistenceError::Internal(
+                "multiple peer claim ledgers reference one KeyPackage".to_owned(),
+            ));
+        }
+        let matching_ledger = matching_ledgers.into_iter().next();
         let Some(row) = state.rows.get_mut(id) else {
             return Ok(None);
         };
@@ -165,7 +180,15 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
             return Ok(None);
         }
         row.consumed_at = Some(consumed_at);
-        Ok(Some(row.clone()))
+        let consumed = row.clone();
+        if let (Some(receipt), Some(ledger_key)) = (peer_consume_receipt, matching_ledger)
+            && let Some(ledger) = state.peer_claims.get_mut(&ledger_key)
+        {
+            ledger.state = "consumed".to_owned();
+            ledger.consume_receipt = Some(receipt.clone());
+            ledger.updated_at = consumed_at;
+        }
+        Ok(Some(consumed))
     }
 
     async fn get_peer_claim(
@@ -244,6 +267,31 @@ impl MlsKeyPackageStore for MemoryMlsKeyPackageStore {
         }
         state.peer_claims.insert(key, record.clone());
         Ok(PeerKeyPackageClaimLedgerWriteResult::Inserted)
+    }
+
+    async fn attach_peer_claim_terminal_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        terminal_receipt: &Value,
+        updated_at: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>> {
+        let mut state = self.state.lock();
+        let Some(record) = state
+            .peer_claims
+            .get_mut(&(source_service_id.to_owned(), claim_request_id.to_owned()))
+        else {
+            return Ok(None);
+        };
+        if record.request_digest != request_digest
+            || !matches!(record.state.as_str(), "expired" | "revoked")
+        {
+            return Ok(None);
+        }
+        record.terminal_receipt = Some(terminal_receipt.clone());
+        record.updated_at = updated_at;
+        Ok(Some(record.clone()))
     }
 
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>> {
@@ -476,6 +524,8 @@ mod tests {
                 "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_owned(),
             state: "claimed".to_owned(),
             outcome: Some(serde_json::json!({"winner": outcome})),
+            consume_receipt: None,
+            terminal_receipt: None,
             keypackage_id: Some(outcome.to_owned()),
             claim_expires_at_unix_ms: Some(i64::MAX - 1),
             expires_at: i64::MAX,
@@ -680,7 +730,7 @@ mod tests {
             ));
         }
         store
-            .consume_claim("kp-consumed", "group-consumed", 19)
+            .consume_claim("kp-consumed", "group-consumed", 19, None)
             .await
             .unwrap()
             .expect("consume before claim deadline");

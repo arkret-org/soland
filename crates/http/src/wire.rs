@@ -485,12 +485,15 @@ pub struct SolandAccountRegisterOutcome {
 pub use arkret_models_collaboration::agent_operations::{
     AgentDeactivateRequestBody, AgentGrantAttachOutcome, AgentGrantAttachRequestBody,
     AgentGrantDetachOutcome, AgentKeyPairOutcome, AgentKeyPairRequestBody, AgentList,
-    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarEnsureOutcome,
-    AgentSidecarEnsureRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
+    AgentPauseRequestBody, AgentResumeRequestBody, AgentSidecarList, AgentSidecarView, AgentView,
 };
 pub use arkret_models_collaboration::objects::media::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
     CallMediaTokenExchangeRequestBody,
+};
+pub use arkret_models_collaboration::protocol_journey::{
+    SidecarEnsureOutcome as AgentSidecarEnsureOutcome,
+    SidecarEnsureRequestBody as AgentSidecarEnsureRequestBody,
 };
 pub use arkret_models_crypto::KeysBackupsPutRequestBody;
 // Key-backup replace/delete outcomes are the SDK server-side DTOs

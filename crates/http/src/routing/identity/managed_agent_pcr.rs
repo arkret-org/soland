@@ -1360,7 +1360,7 @@ mod tests {
             &Did::new(AGENT).unwrap(),
             &Did::new(CONTROLLER).unwrap(),
             &typed_scope,
-            super::agents::requested_scope_participation_ceiling(&typed_scope),
+            crate::routing::identity::agents::requested_scope_participation_ceiling(&typed_scope),
         )
         .unwrap();
         json!({

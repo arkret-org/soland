@@ -443,9 +443,61 @@ async fn provision_agent_sdk_commit_attempt(
         arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
     >(requested_scope.clone())
     .unwrap();
-    let expected_scope_digest =
-        arkret_signatures::agent::agent_requested_scope_digest(&agent_id, &controller_id, &scope)
-            .unwrap();
+    let actions = requested_scope["actions"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .collect::<Vec<_>>();
+    let has_action = |action: &str| actions.contains(&action);
+    let controller_approval_required = requested_scope["constraints"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .any(|constraint| {
+            if constraint["constraint_kind"] != "claim_based" {
+                return false;
+            }
+            let controller_requirement = match constraint["constraint_subkind"].as_str() {
+                Some("approval") => {
+                    constraint["approval_required"].as_bool().unwrap_or(false)
+                        && (constraint["approval_relation"] == "controller"
+                            || constraint["controller_approval_required"]
+                                .as_bool()
+                                .unwrap_or(false))
+                }
+                Some("accountability") => {
+                    constraint["accountability_required"]
+                        .as_bool()
+                        .unwrap_or(false)
+                        && constraint["approval_relation"] == "controller"
+                }
+                _ => false,
+            };
+            let applies_to_message_create =
+                constraint["applies_to_actions"]
+                    .as_array()
+                    .is_none_or(|values| {
+                        values
+                            .iter()
+                            .any(|value| value.as_str() == Some("ak.message.create"))
+                    });
+            controller_requirement && applies_to_message_create
+        });
+    let participation_ceiling = arkret_models_collaboration::protocol_journey::ParticipationBits {
+        reply_message: has_action("ak.message.create") && has_action("ak.reaction.add"),
+        reaction_add: has_action("ak.reaction.add"),
+        reaction_remove: has_action("ak.reaction.remove"),
+        accept_third_party_mention: has_action("ak.event.read"),
+        act_on_behalf: has_action("ak.message.create") && controller_approval_required,
+    };
+    let expected_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(
+        &agent_id,
+        &controller_id,
+        &scope,
+        participation_ceiling,
+    )
+    .unwrap();
     assert_eq!(
         preparation["requested_scope_digest"],
         expected_scope_digest.as_str()

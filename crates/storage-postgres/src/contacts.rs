@@ -5,6 +5,7 @@ use super::{
     PersistenceResult, PgPool, QueryableByName, RunQueryDsl, SqlUuid, Text, Timestamptz, Uuid,
     Value, async_trait, decode_grant_dots, encode_grant_dots, ids, pg_conn, sql_query,
 };
+use diesel::sql_types::BigInt;
 // ── Pg-backed contact projection store ───────────────────────────────────
 // Durable backing for the holder↔peer `ContactStore`. Mirrors the
 // `MemoryContactStore` query shape onto the `contacts` table. Column order
@@ -18,8 +19,14 @@ struct ContactRow {
     requester: String,
     #[diesel(sql_type = Text)]
     target: String,
-    #[diesel(sql_type = Text)]
-    scope: String,
+    #[diesel(sql_type = Nullable<Text>)]
+    basis_id: Option<String>,
+    #[diesel(sql_type = Nullable<BigInt>)]
+    version: Option<i64>,
+    #[diesel(sql_type = Array<Text>)]
+    granted_to_target_scopes: Vec<String>,
+    #[diesel(sql_type = Array<Text>)]
+    granted_to_requester_scopes: Vec<String>,
     #[diesel(sql_type = Text)]
     status: String,
     #[diesel(sql_type = Nullable<Text>)]
@@ -42,7 +49,10 @@ impl From<ContactRow> for ContactRecord {
         Self {
             requester: row.requester,
             target: row.target,
-            scope: row.scope,
+            basis_id: row.basis_id,
+            version: row.version.and_then(|value| u64::try_from(value).ok()),
+            granted_to_target_scopes: row.granted_to_target_scopes,
+            granted_to_requester_scopes: row.granted_to_requester_scopes,
             status: row.status,
             request_event_ref: row.request_event_ref,
             response_event_ref: row.response_event_ref,
@@ -54,45 +64,20 @@ impl From<ContactRow> for ContactRecord {
         }
     }
 }
-const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, scope, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, created_at, updated_at";
+const CONTACT_COLUMNS: &str = "requester_id AS requester, target_id AS target, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id AS peer_service_id, created_at, updated_at";
 #[async_trait]
 impl ContactStore for PgContactStore {
     async fn get(&self, requester: &str, target: &str) -> PersistenceResult<Option<ContactRecord>> {
         let mut conn = pg_conn(&self.pool)
             .await
             .map_err(PersistenceError::database)?;
-        // Mirror MemoryContactStore::get — prefer the `message` scope row, then
-        // fall back to any scope for this requester/target pair.
         let row = sql_query(format!(
             "SELECT {CONTACT_COLUMNS} FROM contacts \
              WHERE requester_id = $1 AND target_id = $2 \
-             ORDER BY (scope = 'message') DESC, scope ASC LIMIT 1"
+             LIMIT 1"
         ))
         .bind::<Text, _>(requester)
         .bind::<Text, _>(target)
-        .get_result::<ContactRow>(&mut *conn)
-        .await
-        .optional()
-        .map_err(PersistenceError::database)?;
-        Ok(row.map(ContactRecord::from))
-    }
-
-    async fn get_scoped(
-        &self,
-        requester: &str,
-        target: &str,
-        scope: &str,
-    ) -> PersistenceResult<Option<ContactRecord>> {
-        let mut conn = pg_conn(&self.pool)
-            .await
-            .map_err(PersistenceError::database)?;
-        let row = sql_query(format!(
-            "SELECT {CONTACT_COLUMNS} FROM contacts \
-             WHERE requester_id = $1 AND target_id = $2 AND scope = $3"
-        ))
-        .bind::<Text, _>(requester)
-        .bind::<Text, _>(target)
-        .bind::<Text, _>(scope)
         .get_result::<ContactRow>(&mut *conn)
         .await
         .optional()
@@ -106,9 +91,13 @@ impl ContactStore for PgContactStore {
             .map_err(PersistenceError::database)?;
         sql_query(
             "INSERT INTO contacts \
-             (id, requester_id, target_id, scope, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) \
-             ON CONFLICT (requester_id, target_id, scope) DO UPDATE SET \
+             (id, requester_id, target_id, basis_id, version, granted_to_target_scopes, granted_to_requester_scopes, status, request_event_ref, response_event_ref, tombstone_event_ref, message, peer_service_id, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
+             ON CONFLICT (requester_id, target_id) DO UPDATE SET \
+                basis_id = EXCLUDED.basis_id, \
+                version = EXCLUDED.version, \
+                granted_to_target_scopes = EXCLUDED.granted_to_target_scopes, \
+                granted_to_requester_scopes = EXCLUDED.granted_to_requester_scopes, \
                 status = EXCLUDED.status, \
                 request_event_ref = EXCLUDED.request_event_ref, \
                 response_event_ref = EXCLUDED.response_event_ref, \
@@ -120,7 +109,10 @@ impl ContactStore for PgContactStore {
         .bind::<diesel::sql_types::Uuid, _>(uuid::Uuid::now_v7())
         .bind::<Text, _>(&record.requester)
         .bind::<Text, _>(&record.target)
-        .bind::<Text, _>(&record.scope)
+        .bind::<Nullable<Text>, _>(record.basis_id.as_deref())
+        .bind::<Nullable<BigInt>, _>(record.version.map(i64::try_from).transpose().map_err(|_| PersistenceError::Internal("Contact version exceeds PostgreSQL BIGINT".to_owned()))?)
+        .bind::<Array<Text>, _>(&record.granted_to_target_scopes)
+        .bind::<Array<Text>, _>(&record.granted_to_requester_scopes)
         .bind::<Text, _>(&record.status)
         .bind::<Nullable<Text>, _>(record.request_event_ref.as_deref())
         .bind::<Nullable<Text>, _>(record.response_event_ref.as_deref())
@@ -142,7 +134,7 @@ impl ContactStore for PgContactStore {
         let rows = sql_query(format!(
             "SELECT {CONTACT_COLUMNS} FROM contacts \
              WHERE requester_id = $1 OR target_id = $1 \
-             ORDER BY created_at ASC, scope ASC"
+             ORDER BY created_at ASC, requester_id ASC, target_id ASC"
         ))
         .bind::<Text, _>(actor)
         .get_results::<ContactRow>(&mut *conn)
@@ -515,6 +507,36 @@ impl DirectConversationBindingStore for PgDirectConversationBindingStore {
         .execute(&mut *conn)
         .await
         .map(|_| ())
+        .map_err(PersistenceError::database)
+    }
+
+    async fn put_if_absent(
+        &self,
+        participants_key: &str,
+        record: &DirectConversationBindingRecord,
+    ) -> PersistenceResult<bool> {
+        let mut conn = pg_conn(&self.pool)
+            .await
+            .map_err(PersistenceError::database)?;
+        sql_query(
+            "INSERT INTO direct_conversation_bindings \
+             (participants_key, participants_unordered, realm_id, main_strand_id, \
+              binding_event_ref, state, authoring_context, created_at, updated_at) \
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) \
+             ON CONFLICT (participants_key) DO NOTHING",
+        )
+        .bind::<Text, _>(participants_key)
+        .bind::<Array<Text>, _>(&record.participants_unordered)
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.realm_id))
+        .bind::<SqlUuid, _>(ids::typed_uuid_part_expect_internal(&record.main_strand_id))
+        .bind::<Text, _>(&record.binding_event_ref)
+        .bind::<Text, _>(&record.state)
+        .bind::<Nullable<Jsonb>, _>(&record.authoring_context)
+        .bind::<Timestamptz, _>(record.created_at)
+        .bind::<Timestamptz, _>(record.updated_at)
+        .execute(&mut *conn)
+        .await
+        .map(|written| written == 1)
         .map_err(PersistenceError::database)
     }
 

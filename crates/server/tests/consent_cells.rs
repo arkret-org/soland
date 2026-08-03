@@ -963,7 +963,7 @@ async fn expired_contact_respond_revokes_requester_side_consent_and_fails_closed
     let mut contact = state
         .test_persistence()
         .contacts()
-        .get_scoped(alice, bob, "invite")
+        .get(alice, bob)
         .await
         .unwrap()
         .expect("stored contact request");

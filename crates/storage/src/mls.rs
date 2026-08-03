@@ -267,15 +267,17 @@ pub struct PeerKeyPackageClaimLedgerRecord {
     pub source_service_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
-    pub state: String,
-    pub outcome: Option<Value>,
     /// Single-use KeyPackage transitioned by this ledger row. Absent for an
     /// opaque failure row.
     pub keypackage_id: Option<String>,
+    pub outcome: Option<Value>,
+    pub terminal_receipt: Option<Value>,
+    pub consume_receipt: Option<Value>,
     /// Unix milliseconds for the protocol claim deadline, distinct from
     /// `expires_at` (Unix-second ledger retention).
     pub claim_expires_at_unix_ms: Option<i64>,
     pub expires_at: i64,
+    pub state: String,
     pub updated_at: i64,
 }
 
@@ -383,6 +385,7 @@ pub trait MlsKeyPackageStore: Send + Sync {
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
+        peer_consume_receipt: Option<&Value>,
     ) -> PersistenceResult<Option<MlsKeyPackageRow>>;
     /// Read a peer claim ledger row without revealing KeyPackage inventory.
     async fn get_peer_claim(
@@ -402,6 +405,17 @@ pub trait MlsKeyPackageStore: Send + Sync {
         &self,
         record: &PeerKeyPackageClaimLedgerRecord,
     ) -> PersistenceResult<PeerKeyPackageClaimLedgerWriteResult>;
+    /// Attach a signed receipt to an existing terminal peer-claim fact. This
+    /// never creates a ledger row and therefore cannot fabricate a terminal
+    /// state without the original durable request/outcome.
+    async fn attach_peer_claim_terminal_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        terminal_receipt: &Value,
+        updated_at: i64,
+    ) -> PersistenceResult<Option<PeerKeyPackageClaimLedgerRecord>>;
     /// Revoke expired, still-unconsumed peer claims atomically with their
     /// ledger transitions. Returns newly revoked KeyPackage ids.
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> PersistenceResult<Vec<String>>;

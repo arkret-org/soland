@@ -1496,11 +1496,13 @@ pub struct PeerKeyPackageClaimLedgerState {
     pub source_service_id: String,
     pub claim_request_id: String,
     pub request_digest: String,
-    pub state: String,
-    pub outcome: Option<Value>,
     pub keypackage_id: Option<String>,
+    pub outcome: Option<Value>,
+    pub terminal_receipt: Option<Value>,
+    pub consume_receipt: Option<Value>,
     pub claim_expires_at_unix_ms: Option<i64>,
     pub expires_at: i64,
+    pub state: String,
     pub updated_at: i64,
 }
 
@@ -1545,6 +1547,7 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
+        peer_consume_receipt: Option<&Value>,
     ) -> ServiceResult<Option<MlsKeyPackageState>>;
     async fn peer_claim(
         &self,
@@ -1559,6 +1562,14 @@ pub trait MlsKeyPackageMaintenancePort: Send + Sync {
         &self,
         record: &PeerKeyPackageClaimLedgerState,
     ) -> ServiceResult<PeerKeyPackageClaimLedgerWriteResult>;
+    async fn attach_peer_claim_terminal_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        terminal_receipt: &Value,
+        updated_at: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>>;
     async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ServiceResult<Vec<String>>;
     async fn key_packages(&self) -> ServiceResult<Vec<MlsKeyPackageState>>;
     async fn key_packages_claimed_by_group(
@@ -1631,9 +1642,10 @@ impl MlsKeyPackageService {
         id: &str,
         mls_group_id: &str,
         consumed_at: i64,
+        peer_consume_receipt: Option<&Value>,
     ) -> ServiceResult<Option<MlsKeyPackageState>> {
         self.key_packages
-            .consume_key_package_claim(id, mls_group_id, consumed_at)
+            .consume_key_package_claim(id, mls_group_id, consumed_at, peer_consume_receipt)
             .await
     }
     pub async fn peer_claim(
@@ -1656,6 +1668,24 @@ impl MlsKeyPackageService {
         record: &PeerKeyPackageClaimLedgerState,
     ) -> ServiceResult<PeerKeyPackageClaimLedgerWriteResult> {
         self.key_packages.store_peer_claim_terminal(record).await
+    }
+    pub async fn attach_peer_claim_terminal_receipt(
+        &self,
+        source_service_id: &str,
+        claim_request_id: &str,
+        request_digest: &str,
+        terminal_receipt: &Value,
+        updated_at: i64,
+    ) -> ServiceResult<Option<PeerKeyPackageClaimLedgerState>> {
+        self.key_packages
+            .attach_peer_claim_terminal_receipt(
+                source_service_id,
+                claim_request_id,
+                request_digest,
+                terminal_receipt,
+                updated_at,
+            )
+            .await
     }
     pub async fn revoke_expired_peer_claims(&self, now_unix_ms: i64) -> ServiceResult<Vec<String>> {
         self.key_packages
