@@ -963,6 +963,7 @@ pub fn describe(
         rate_limits: None,
         supported_features: vec![
             arkret_models_collaboration::objects::direct_conversation::DIRECT_CONVERSATION_REALM_ROLE_FEATURE.to_owned(),
+            arkret_models_collaboration::governance::history_visibility::DISCUSSION_HISTORY_VISIBILITY_FEATURE.to_owned(),
             "org.arkret.soland.feature.auth.logout".to_owned(),
             "org.arkret.soland.feature.contacts.request".to_owned(),
             "org.arkret.soland.feature.contacts.respond".to_owned(),
