@@ -589,8 +589,7 @@ pub(crate) fn verify_current_ssk_detached_jws(
     let key = decode_ed25519_key(
         publish.self_signing_key.public_key.as_str(),
         publish.self_signing_key.key_format.as_str(),
-    )
-    .map_err(str::to_owned)?;
+    )?;
     let material = arkret_signatures::PublicKeyMaterial::Ed25519Raw {
         bytes: key.to_bytes().to_vec(),
     };
