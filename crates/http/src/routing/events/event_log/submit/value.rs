@@ -545,7 +545,7 @@ async fn stored_control_proposal_receipt(
 pub(super) async fn submit_event_value_with_context(
     state: &AppState,
     session: &SessionRecord,
-    mut envelope: Value,
+    envelope: Value,
     realm_bootstrap_contexts: &[RealmBootstrapBatchContext],
     commit_idempotency: Option<EventCommitIdempotency>,
     internal_admission: Option<&InternalEventAdmission>,
@@ -578,6 +578,48 @@ pub(super) async fn submit_event_value_with_context(
         internal_admission,
     )
     .await?;
+    // Ordinary Events never declare a reducer profile. The receiver resolves
+    // it from the Realm's authoritative singleton. The current registry has
+    // one profile and no upgrade edges, so the projected singleton is also the
+    // value at every admissible Event CBA.
+    let profile = if parsed.kind == arkret_wire::EventKind::REALM_CREATE {
+        envelope
+            .get("payload")
+            .and_then(|payload| payload.get("object"))
+            .and_then(|object| object.get("reducer_profile"))
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::BAD_REQUEST,
+                    arkret_wire::ErrorCode::SCHEMA_VIOLATION,
+                    "ak.realm.create requires payload.object.reducer_profile",
+                )
+            })?
+            .to_owned()
+    } else if realm_bootstrap_contexts
+        .iter()
+        .any(|context| context.realm_id == parsed.realm_id)
+    {
+        arkret_wire::CORE_REDUCER_PROFILE.to_owned()
+    } else {
+        state
+            .projections()
+            .realm_reducer_profile(&parsed.realm_id)
+            .ok_or_else(|| {
+                SubmitOneError::new(
+                    StatusCode::CONFLICT,
+                    arkret_wire::ErrorCode::DEPENDENCY_MISSING,
+                    "Realm reducer-profile cell is not materialized",
+                )
+            })?
+    };
+    if !crate::wire::SUPPORTED_REDUCER_PROFILES.contains(&profile.as_str()) {
+        return Err(SubmitOneError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            arkret_wire::ErrorCode::PROFILE_UNSUPPORTED,
+            format!("Realm reducer profile {profile} is not implemented"),
+        ));
+    }
     let has_internal_plaintext_service_binding = internal_admission.is_some_and(|admission| {
         envelope
             .as_object()

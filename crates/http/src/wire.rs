@@ -41,6 +41,9 @@ pub use soland_contracts::admin::{
 };
 use soland_services::protocol_artifacts as artifacts;
 
+/// Reducer profiles whose complete semantics this Soland build implements.
+pub const SUPPORTED_REDUCER_PROFILES: &[&str] = &[arkret_wire::CORE_REDUCER_PROFILE];
+
 #[derive(salvo::oapi::ToSchema, Debug, Serialize)]
 pub struct HealthOutcome {
     pub ok: bool,
@@ -1061,9 +1064,10 @@ pub fn describe(
                     serde_json::json!(crate::routing::TUS_EXTENSIONS),
                 ),
         ],
-        supported_reducer_profiles: vec![
-            ProfileId::FEDERATION_MINIMAL_V1.to_owned(),
-        ],
+        supported_reducer_profiles: SUPPORTED_REDUCER_PROFILES
+            .iter()
+            .map(|profile| (*profile).to_owned())
+            .collect(),
         supported_schema_profiles: vec!["ak.schema.core.v1".to_owned()],
         auth_metadata,
         privacy_derivation: Some(crate::routing::push_target_privacy_derivation_claim(now())),
@@ -1298,7 +1302,6 @@ pub fn describe(
         },
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
-        reducer_profile: Some("ak.reducer.v1".to_owned()),
         last_materialized_at: None,
         extensions: Default::default(),
     }

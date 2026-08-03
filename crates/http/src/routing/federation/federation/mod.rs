@@ -3,8 +3,7 @@
 //! The formal server-to-server HTTP surface is `/_arkret/peer/*`. This module keeps
 //! trust-header utilities and deployment-local read diagnostics.
 //!
-//! Production gaps: `validation_class` instead of bool, reducer-profile
-//! digest enforcement and revocation fanout.
+//! Production gaps: `validation_class` instead of bool and revocation fanout.
 
 use super::{now, sync_token};
 

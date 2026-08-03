@@ -879,11 +879,6 @@ fn peer_submit_body(event: &Value) -> Value {
                 arkret_wire::EventId::new(PEER_DELIVERY_FRONTIER.to_owned()).unwrap(),
             ],
             destination_service_kind: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_identifiers::Hash::new(
-                arkret_policy::generated::profiles::FEDERATION_MINIMAL_REDUCER_PROFILE_DIGEST
-                    .to_owned(),
-            )
-            .unwrap(),
         },
         events: vec![peer_event_submission(event)],
         // The DataEvent's `seal_ref` is a receiver-side prerequisite: a peer

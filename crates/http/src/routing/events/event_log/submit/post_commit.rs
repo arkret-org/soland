@@ -1048,10 +1048,6 @@ fn service_binding_ref_for_realm_target(
             membership_frontier,
             delivery_binding_frontier,
             destination_service_kind: "principal_server".to_owned(),
-            reducer_profile_digest: Hash::new(
-                crate::routing::federation::federation_reducer_profile_digest().to_owned(),
-            )
-            .ok()?,
         },
     )
 }

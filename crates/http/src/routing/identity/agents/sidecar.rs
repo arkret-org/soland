@@ -1841,7 +1841,7 @@ mod tests {
             "next_epoch": 1,
             "security_frontier_digest": format!("sha256:{}", "1".repeat(64)),
             "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-            "reducer_profile": "ak.reducer.v1",
+            "reducer_profile": "ak.reducer.core.v1",
             "sidecar_binding": {
                 "sidecar_id": sidecar_id,
                 "desired_access_digest": format!("sha256:{}", "4".repeat(64)),

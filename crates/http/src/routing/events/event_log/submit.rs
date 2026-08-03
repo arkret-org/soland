@@ -2441,7 +2441,6 @@ mod federation_delivery_binding_tests {
             membership_frontier: vec![create_event_id.clone()],
             delivery_binding_frontier: vec![create_event_id.clone()],
             destination_service_kind: "principal_server".to_owned(),
-            reducer_profile_digest: Hash::new(format!("sha256:{}", "1".repeat(64))).unwrap(),
         };
         let create_envelope = json!({
             "payload": {

@@ -45,8 +45,8 @@ impl FederationProfileIntersection {
     fn enforce_atoms(&self, atoms: &SemanticAtoms) -> Result<(), FederationProfileGateRejection> {
         // federation.md: inbound `/_arkret/peer/events` acceptance is gated by
         // the RFC 9421 service signature + trust-domain/destination binding +
-        // byte-exact `reducer_profile_digest` match (admission.rs) + the
-        // MLS/E2EE governance binding lower bound. A peer ServiceDescribe's
+        // the MLS/E2EE governance binding lower bound. The reducer profile is
+        // resolved independently from each Event's authenticated CBA. A peer ServiceDescribe's
         // `required_event_kinds` is the set the profile *requires support for*
         // (a floor), NOT an allowlist of acceptable kinds — gating per-event
         // acceptance on it wrongly rejected standard federatable DataEvents

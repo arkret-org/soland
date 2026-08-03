@@ -278,6 +278,7 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
                 "object": {
                     "created_by": "did:web:alice",
                     "title": "Test Realm",
+                    "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
                     "capability_action_registry_digest": arkret_policy::current_capability_action_registry_digest().unwrap(),
                 },
             }),
@@ -302,6 +303,73 @@ fn realm_create_writes_both_structured_cache_and_ordered_log_cell() {
     assert_eq!(
         log[0].get("owner").and_then(Value::as_str),
         Some("did:web:alice")
+    );
+    assert_eq!(
+        state.realm_reducer_profile("ak:realm:01904100-0000-7000-8000-cfc039892036"),
+        Some(arkret_wire::CORE_REDUCER_PROFILE)
+    );
+}
+
+#[test]
+fn realm_update_cannot_patch_the_reducer_profile() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::REALM_UPDATE,
+            "ak:realm:01904100-0000-7000-8000-cfc039892036",
+            serde_json::json!({
+                "patch": {
+                    "reducer_profile": {
+                        "$op": "set",
+                        "value": arkret_wire::CORE_REDUCER_PROFILE
+                    }
+                }
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ErrorCode::SCHEMA_VIOLATION
+    ));
+}
+
+#[test]
+fn realm_upgrade_requires_a_registered_direct_edge() {
+    let mut state = ProjectionState::new();
+    let hlc = ServerHlc::new("test");
+    let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
+    state.realm_null_subject_cells.insert(
+        (
+            realm_id.to_owned(),
+            format!(
+                "ak:cell:{}:null",
+                arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+            ),
+        ),
+        CellState::Value(Value::String(arkret_wire::CORE_REDUCER_PROFILE.to_owned())),
+    );
+
+    let effect = state.apply(
+        &make_operation(
+            arkret_wire::EventKind::REALM_UPGRADE,
+            realm_id,
+            serde_json::json!({
+                "target_reducer_profile": arkret_wire::CORE_REDUCER_PROFILE
+            }),
+        ),
+        &hlc,
+    );
+    assert!(matches!(
+        effect,
+        ProjectionEffect::Rejected { ref reason }
+            if reason == arkret_wire::ErrorCode::PROFILE_UNSUPPORTED
+    ));
+    assert_eq!(
+        state.realm_reducer_profile(realm_id),
+        Some(arkret_wire::CORE_REDUCER_PROFILE)
     );
 }
 

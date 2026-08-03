@@ -721,7 +721,9 @@ mod tests {
                 "scope_key": format!("realm:{}", uuid_tail(realm_id)),
                 "realm_id": realm_id,
                 "scope": { "kind": "realm", "realm_id": realm_id },
-                "reply": true,
+                "reply_message": true,
+                "reaction_add": false,
+                "reaction_remove": false,
                 "accept_third_party_mention": accept_third_party_mention,
                 "act_on_behalf": false,
             }))
@@ -747,7 +749,9 @@ mod tests {
                 ),
                 "realm_id": realm_id,
                 "scope": { "kind": "circle", "realm_id": realm_id, "circle_id": circle_id },
-                "reply": true,
+                "reply_message": true,
+                "reaction_add": false,
+                "reaction_remove": false,
                 "accept_third_party_mention": accept_third_party_mention,
                 "act_on_behalf": false,
             }))
@@ -770,7 +774,9 @@ mod tests {
                     circle_id,
                 ),
                 "realm_id": realm_id,
-                "reply": true,
+                "reply_message": true,
+                "reaction_add": false,
+                "reaction_remove": false,
                 "accept_third_party_mention": accept_third_party_mention,
                 "act_on_behalf": false,
             }))

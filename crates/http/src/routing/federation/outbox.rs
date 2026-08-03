@@ -1605,11 +1605,6 @@ mod tests {
                     membership_frontier: Vec::new(),
                     delivery_binding_frontier: Vec::new(),
                     destination_service_kind: "principal_server".to_owned(),
-                    reducer_profile_digest: arkret_identifiers::Hash::new(format!(
-                        "sha256:{}",
-                        "c".repeat(64)
-                    ))
-                    .unwrap(),
                 },
             events: vec![
                 submission("000000000001", "00000000ae01", "00000000ce01"),

@@ -24,9 +24,9 @@ pub use arkret_lattice_registry::{
     RealmDisappearingPolicy, RealmDiscovery, RealmFreeze, RealmHistorySharingPolicy,
     RealmHistoryVisibility, RealmInheritancePolicy, RealmJoinRule, RealmLink, RealmMediaService,
     RealmModerationPolicy, RealmOrganization, RealmPlaintextVisibleServices, RealmPolicy,
-    RealmPolicyBundle, RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy, RealmSchema,
-    RealmSearchPolicy, RealmTombstone, RealmUpgrade, SessionGrant, SpaceParent, StrandPosition,
-    StrandStage, ViewCreate, ViewReconcile, ViewUpdate, build_sdk_cell_registry,
+    RealmPolicyBundle, RealmPolicyServer, RealmPreviewPolicy, RealmReadReceiptPolicy,
+    RealmReducerProfile, RealmSchema, RealmSearchPolicy, RealmTombstone, SessionGrant, SpaceParent,
+    StrandPosition, StrandStage, ViewCreate, ViewReconcile, ViewUpdate, build_sdk_cell_registry,
     default_lattice_registry, lattice_bindings_for_sdk_registry,
 };
 use arkret_lattice_registry::{

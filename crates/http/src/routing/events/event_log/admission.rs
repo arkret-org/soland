@@ -21,7 +21,7 @@ use super::*;
 // change the public constructor shape without changing the JSON.
 #[allow(clippy::large_enum_variant)]
 pub enum SolandEventsSubmitRequestBody {
-    /// Federation form — `service_binding_ref` is REQUIRED and all 6
+    /// Federation form — `service_binding_ref` is REQUIRED and all fields are
     /// fields validated.
     Federation(EventsSubmitFederationRequestBody),
     /// First durable publication of one Event
@@ -59,7 +59,7 @@ pub struct SolandEventsSubmitBatchRequestBody {
 
 impl SolandEventsSubmitRequestBody {
     /// Spec B1.6 — validate the `service_binding_ref` carried on a
-    /// federation submit. All 6 fields MUST be populated and well-shaped
+    /// federation submit. All fields MUST be populated and well-shaped
     /// per SDK typed validators (already enforced by deserialisation); we
     /// additionally reject `membership_frontier` and
     /// `delivery_binding_frontier` if they are non-empty arrays containing
@@ -89,17 +89,6 @@ impl SolandEventsSubmitRequestBody {
                 arkret_wire::ErrorCode::SCHEMA_VIOLATION,
                 "service_binding_ref.destination_service_kind MUST be a non-empty string"
                     .to_owned(),
-            ));
-        }
-        let expected_reducer_digest =
-            crate::routing::federation::federation_reducer_profile_digest();
-        let actual_reducer_digest = binding.reducer_profile_digest.to_string();
-        if actual_reducer_digest != expected_reducer_digest {
-            return Err((
-                arkret_wire::ReasonCode::REDUCER_PROFILE_MISMATCH,
-                format!(
-                    "service_binding_ref.reducer_profile_digest mismatch: expected {expected_reducer_digest}, got {actual_reducer_digest}"
-                ),
             ));
         }
         Ok(())

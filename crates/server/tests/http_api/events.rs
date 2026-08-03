@@ -1128,7 +1128,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ak.reducer.v1"
+        "reducer_profile": "ak.reducer.core.v1"
     });
     let (_, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request).await;
@@ -1151,7 +1151,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         previous_epoch: 0,
         next_epoch: 1,
         binding_profile: "ak.profile.mls_governance_binding.full.v1".to_owned(),
-        reducer_profile: "ak.reducer.v1".to_owned(),
+        reducer_profile: "ak.reducer.core.v1".to_owned(),
         trusted_anchor_seal_id: bundle.trusted_anchor_seal_id.clone(),
         chunk_index: 0,
         expected_bundle_digest: None,
@@ -1187,7 +1187,7 @@ async fn realm_create_genesis_unit_projects_five_cells_without_seal_basis() {
         1,
         materialized.security_frontier_digest,
         "ak.profile.mls_governance_binding.full.v1",
-        "ak.reducer.v1",
+        "ak.reducer.core.v1",
     )
     .unwrap();
 
@@ -1373,7 +1373,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         "previous_epoch": 0,
         "next_epoch": 1,
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ak.reducer.v1"
+        "reducer_profile": "ak.reducer.core.v1"
     });
     let (proof_chunks, bundle) =
         fetch_chunked_mls_governance_proof(&state, &token, &realm_id, proof_request.clone()).await;
@@ -1411,7 +1411,7 @@ async fn canonical_control_event_materializes_verifiable_mls_governance_proof() 
         1,
         materialized.security_frontier_digest,
         "ak.profile.mls_governance_binding.full.v1",
-        "ak.reducer.v1",
+        "ak.reducer.core.v1",
     )
     .unwrap();
     let verified = arkret_state::mls_governance_proof::verify_mls_governance_proof_bundle::<
@@ -1769,7 +1769,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
                 "next_epoch": 0,
                 "security_frontier_digest": format!("sha256:{}", "1".repeat(64)),
                 "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-                "reducer_profile": "ak.reducer.v1"
+                "reducer_profile": "ak.reducer.core.v1"
             }
         }),
     )
@@ -1867,7 +1867,7 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         "previous_epoch": 0,
         "next_epoch": 1,
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ak.reducer.v1",
+        "reducer_profile": "ak.reducer.core.v1",
         "trusted_anchor_seal_id": trusted_anchor_seal_id,
         "chunk_index": 0
     });

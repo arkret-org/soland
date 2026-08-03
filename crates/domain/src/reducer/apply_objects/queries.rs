@@ -286,6 +286,16 @@ impl ProjectionState {
         )
     }
 
+    /// Effective Realm reducer profile. This singleton is the only profile
+    /// authority used by reducers and federation admission.
+    pub fn realm_reducer_profile(&self, realm_id: &str) -> Option<&str> {
+        self.realm_null_subject_cell_value(
+            realm_id,
+            arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1,
+        )
+        .and_then(Value::as_str)
+    }
+
     // ── Realm lifecycle cell helpers ──
 
     /// SOL-ORG-01 — read the effective `ak.component.realm.metadata.v1`

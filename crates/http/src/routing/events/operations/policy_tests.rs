@@ -697,7 +697,9 @@ async fn put_agent_participation_ceiling(
             "scope_kind": scope_kind,
             "scope_key": scope_key,
             "realm_id": realm_id,
-            "reply": reply,
+            "reply_message": reply,
+            "reaction_add": false,
+            "reaction_remove": false,
             "accept_third_party_mention": accept_third_party_mention,
             "act_on_behalf": act_on_behalf,
         }))
@@ -738,7 +740,9 @@ async fn strand_agent_participation_ceiling_cannot_widen_circle_parent() {
                 "metadata": {"title": "Scoped"},
                 "agent_participation": {
                     "native_agent": {
-                        "reply": true,
+                        "reply_message": true,
+                        "reaction_add": false,
+                        "reaction_remove": false,
                         "accept_third_party_mention": true,
                         "act_on_behalf": false
                     }
@@ -811,7 +815,9 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     assert!(!ceiling.accept_third_party_mention);
     let selection =
         arkret_models_collaboration::governance::agent_participation::AgentParticipation {
-            reply: true,
+            reply_message: true,
+            reaction_add: false,
+            reaction_remove: false,
             accept_third_party_mention: true,
             act_on_behalf: false,
         };
@@ -855,7 +861,9 @@ async fn register_agent_selection(
             "scope_key": format!("realm:{realm_uuid}"),
             "realm_id": realm_id.as_str(),
             "scope": { "kind": "realm", "realm_id": realm_id.as_str() },
-            "reply": reply,
+            "reply_message": reply,
+            "reaction_add": false,
+            "reaction_remove": false,
             "accept_third_party_mention": false,
             "act_on_behalf": act_on_behalf,
         }))

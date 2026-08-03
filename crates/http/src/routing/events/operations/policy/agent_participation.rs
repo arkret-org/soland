@@ -46,7 +46,9 @@ pub(super) fn agent_participation_ceiling_change(
         base.get("native_agent").cloned()
     };
     let to_part = |value: &Value| AgentParticipation {
-        reply: ap_bool(value, "reply"),
+        reply_message: ap_bool(value, "reply_message"),
+        reaction_add: ap_bool(value, "reaction_add"),
+        reaction_remove: ap_bool(value, "reaction_remove"),
         accept_third_party_mention: ap_bool(value, "accept_third_party_mention"),
         act_on_behalf: ap_bool(value, "act_on_behalf"),
     };
@@ -177,7 +179,9 @@ pub async fn validate_agent_participation_ceiling(
                 .unwrap_or_default();
             for row in &rows {
                 parent = parent.intersect(AgentParticipation {
-                    reply: ap_bool(row, "reply_message"),
+                    reply_message: ap_bool(row, "reply_message"),
+                    reaction_add: ap_bool(row, "reaction_add"),
+                    reaction_remove: ap_bool(row, "reaction_remove"),
                     accept_third_party_mention: ap_bool(row, "accept_third_party_mention"),
                     act_on_behalf: ap_bool(row, "act_on_behalf"),
                 });
@@ -198,9 +202,9 @@ pub(crate) fn agent_participation_ceiling_record(operation: &Operation) -> Optio
         "scope_kind": scope_kind,
         "scope_key": scope_key,
         "realm_id": operation.realm_id.as_str(),
-        "reply_message": child.reply,
-        "reaction_add": false,
-        "reaction_remove": false,
+        "reply_message": child.reply_message,
+        "reaction_add": child.reaction_add,
+        "reaction_remove": child.reaction_remove,
         "accept_third_party_mention": child.accept_third_party_mention,
         "act_on_behalf": child.act_on_behalf,
     }))
@@ -226,7 +230,7 @@ fn ap_effective_for_mode(
     effective: arkret_models_collaboration::governance::agent_participation::AgentParticipation,
 ) -> bool {
     match mode {
-        AgentParticipationMode::Reply => effective.reply,
+        AgentParticipationMode::Reply => effective.reply_message,
         AgentParticipationMode::ActOnBehalf => effective.act_on_behalf,
     }
 }

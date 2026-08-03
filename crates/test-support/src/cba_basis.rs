@@ -189,6 +189,7 @@ pub async fn seed_realm_genesis_event(state: &AppState, realm_id: &str, subject:
             "title": "Fixture Realm",
             "summary": "Soland integration-test Realm",
             "created_by": subject,
+            "reducer_profile": arkret_wire::CORE_REDUCER_PROFILE,
             "trust_domain": "ak:trust_domain:soland.test",
             "schema_refs": ["ak.schema.realm.v1"],
             "default_discoverability": "unlisted",

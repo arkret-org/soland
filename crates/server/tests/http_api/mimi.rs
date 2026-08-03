@@ -180,7 +180,7 @@ fn mimi_governance_binding(realm_id: &str, group_id: &str, epoch: u64) -> Value 
         "binding_version": 1,
         "encoding_profile": "cbor-deterministic-rfc8949-v1",
         "binding_profile": "ak.profile.mls_governance_binding.full.v1",
-        "reducer_profile": "ak.reducer.v1",
+        "reducer_profile": "ak.reducer.core.v1",
         "mls_group_id": group_id,
         "previous_epoch": epoch.saturating_sub(1),
         "next_epoch": epoch,

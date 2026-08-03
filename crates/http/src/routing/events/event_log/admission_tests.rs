@@ -194,11 +194,6 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
             ],
             delivery_binding_frontier: Vec::new(),
             destination_service_kind: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_identifiers::Hash::new(format!(
-                "sha256:{}",
-                "2".repeat(64)
-            ))
-            .unwrap(),
         },
         events: Vec::new(),
         cba_proof_bundles: Vec::new(),
@@ -213,7 +208,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
 }
 
 #[test]
-fn federation_binding_rejects_reducer_profile_digest_mismatch() {
+fn federation_binding_does_not_carry_a_reducer_profile() {
     let event_id =
         arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
@@ -227,44 +222,6 @@ fn federation_binding_rejects_reducer_profile_digest_mismatch() {
             membership_frontier: vec![event_id.clone()],
             delivery_binding_frontier: vec![event_id],
             destination_service_kind: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_identifiers::Hash::new(format!(
-                "sha256:{}",
-                "2".repeat(64)
-            ))
-            .unwrap(),
-        },
-        events: Vec::new(),
-        cba_proof_bundles: Vec::new(),
-        signer_key_evidence: Vec::new(),
-        agent_signer_evidence_bundle: None,
-    };
-
-    let err = SolandEventsSubmitRequestBody::validate_federation_service_binding(
-        &req.service_binding_ref,
-    )
-    .unwrap_err();
-    assert_eq!(err.0, arkret_wire::ReasonCode::REDUCER_PROFILE_MISMATCH);
-}
-
-#[test]
-fn federation_binding_accepts_registry_reducer_profile_digest() {
-    let event_id =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
-    let req = EventsSubmitFederationRequestBody {
-        service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
-            realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
-            realm_policy_digest: arkret_identifiers::Hash::new(format!(
-                "sha256:{}",
-                "1".repeat(64)
-            ))
-            .unwrap(),
-            membership_frontier: vec![event_id.clone()],
-            delivery_binding_frontier: vec![event_id],
-            destination_service_kind: "principal_server".to_owned(),
-            reducer_profile_digest: arkret_identifiers::Hash::new(
-                crate::routing::federation::federation_reducer_profile_digest(),
-            )
-            .unwrap(),
         },
         events: Vec::new(),
         cba_proof_bundles: Vec::new(),

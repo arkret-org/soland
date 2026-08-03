@@ -232,7 +232,6 @@ async fn directory_describe(depot: &mut Depot) -> JsonResult<ServiceDescribe> {
         supported_schema_profiles: Vec::new(),
         frontier: Vec::new(),
         snapshot_frontier: Vec::new(),
-        reducer_profile: None,
         last_materialized_at: None,
         extensions: Default::default(),
     };

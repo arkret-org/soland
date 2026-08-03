@@ -13,8 +13,16 @@ pub(super) fn participation_scope_kind(scope: &AgentParticipationScope) -> &'sta
 
 pub(super) fn participation_from_value(row: &Value) -> AgentParticipation {
     AgentParticipation {
-        reply: row
+        reply_message: row
             .get("reply_message")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reaction_add: row
+            .get("reaction_add")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reaction_remove: row
+            .get("reaction_remove")
             .and_then(Value::as_bool)
             .unwrap_or(false),
         accept_third_party_mention: row
@@ -100,7 +108,7 @@ pub(super) async fn set_agent_participation(
     }
     let provision_ceiling = agent_requested_participation_ceiling(&record);
     let ceiling = ParticipationBits {
-        reply_message: provision_ceiling.reply,
+        reply_message: provision_ceiling.reply_message,
         reaction_add: false,
         reaction_remove: false,
         accept_third_party_mention: provision_ceiling.accept_third_party_mention,

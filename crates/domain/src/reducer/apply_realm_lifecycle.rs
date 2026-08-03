@@ -10,7 +10,7 @@ const REALM_AUTHORITY_ROOT_FAMILY: &str = arkret_wire::CellFamilyId::REALM_AUTHO
 /// Re-derive the registered `ak.component.realm.authority_root.v1` genesis
 /// value from an `ak.realm.create` payload.
 ///
-/// `realm-and-space.md` §2.5 makes this the fifth genesis write and the only
+/// `realm-and-space.md` §2.5 makes this the sixth genesis write and the only
 /// authority a Realm has at genesis: there is no founding grant. The value is
 /// recomputed through the SDK's own projection type instead of being read off a
 /// producer field, so a receiver can never be talked into a different
@@ -46,6 +46,49 @@ fn registered_authority_root_write(writes: &[ProjectedCellWrite]) -> Option<Valu
 }
 
 impl ProjectionState {
+    /// Apply `ak.realm.upgrade` to the canonical reducer-profile singleton.
+    /// The current profile interprets the Event and must register the target
+    /// as a direct upgrade edge before the cell can change.
+    pub(crate) fn apply_realm_upgrade(&mut self, operation: &Operation) -> ProjectionEffect {
+        let realm_id = operation.realm_id.to_string();
+        let Some(current) = self.realm_reducer_profile(&realm_id).map(ToOwned::to_owned) else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::DEPENDENCY_MISSING.to_owned(),
+            };
+        };
+        let Some(target) = operation
+            .payload
+            .get("target_reducer_profile")
+            .and_then(Value::as_str)
+        else {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        };
+        if target != arkret_wire::CORE_REDUCER_PROFILE
+            || !arkret_policy::generated::profiles::is_reducer_profile_id(target)
+            || !arkret_policy::generated::profiles::can_upgrade_reducer_profile(&current, target)
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::PROFILE_UNSUPPORTED.to_owned(),
+            };
+        }
+        self.realm_null_subject_cells.insert(
+            (
+                realm_id.clone(),
+                format!(
+                    "ak:cell:{}:null",
+                    arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+                ),
+            ),
+            CellState::Value(Value::String(target.to_owned())),
+        );
+        ProjectionEffect::RealmLifecycle {
+            realm_id,
+            action: arkret_wire::EventKind::REALM_UPGRADE.to_owned(),
+        }
+    }
+
     /// Current value of this Realm's registered authority-root cell.
     ///
     /// The controller named here holds effective `ak.realm.owner`
@@ -959,6 +1002,26 @@ impl ProjectionState {
         // terminal-state write rejects with `realm_already_terminal`.
         let payload_object = operation.payload.get("object").and_then(Value::as_object);
         let realm_id = operation.realm_id.to_string();
+        let create_reducer_profile = if kind == arkret_wire::EventKind::REALM_CREATE {
+            let Some(profile) = payload_object
+                .and_then(|object| object.get("reducer_profile"))
+                .and_then(Value::as_str)
+            else {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+                };
+            };
+            if profile != arkret_wire::CORE_REDUCER_PROFILE
+                || !arkret_policy::generated::profiles::is_reducer_profile_id(profile)
+            {
+                return ProjectionEffect::Rejected {
+                    reason: arkret_wire::ErrorCode::PROFILE_UNSUPPORTED.to_owned(),
+                };
+            }
+            Some(profile.to_owned())
+        } else {
+            None
+        };
         let creator = if kind == arkret_wire::EventKind::REALM_CREATE {
             let Some(creator) = payload_object
                 .and_then(|object| object.get("created_by"))
@@ -1079,6 +1142,23 @@ impl ProjectionState {
                 reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
             };
         }
+        if kind == arkret_wire::EventKind::REALM_UPDATE
+            && operation
+                .payload
+                .get("patch")
+                .and_then(Value::as_object)
+                .is_some_and(|patch| {
+                    patch.keys().any(|path| {
+                        path.strip_prefix("object.")
+                            .unwrap_or(path)
+                            .starts_with("reducer_profile")
+                    })
+                })
+        {
+            return ProjectionEffect::Rejected {
+                reason: arkret_wire::ErrorCode::SCHEMA_VIOLATION.to_owned(),
+            };
+        }
         if let Some(ref new_td) = payload_trust_domain {
             // Shape MUST be `ak:trust_domain:<scope>` — delegate to SDK
             // typed id validator.
@@ -1180,7 +1260,7 @@ impl ProjectionState {
             };
         }
 
-        // `realm-and-space.md` §2.5 — genesis registers five cell writes and
+        // `realm-and-space.md` §2.5 — genesis registers six cell writes and
         // the authority root is one of them. Derive it before any structured
         // cache mutation so a create that cannot establish an authority root
         // rejects the whole atomic bootstrap unit instead of materializing a
@@ -1333,6 +1413,18 @@ impl ProjectionState {
                             arkret_wire::REALM_AUTHORITY_ROOT_CELL.to_owned(),
                         ),
                         CellState::Value(authority_root),
+                    );
+                }
+                if let Some(reducer_profile) = create_reducer_profile {
+                    self.realm_null_subject_cells.insert(
+                        (
+                            realm_id.clone(),
+                            format!(
+                                "ak:cell:{}:null",
+                                arkret_wire::CellFamilyId::REALM_REDUCER_PROFILE_V1
+                            ),
+                        ),
+                        CellState::Value(Value::String(reducer_profile)),
                     );
                 }
                 if let Some(creator) = creator.as_deref() {

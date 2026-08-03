@@ -17674,13 +17674,6 @@
                   }
                 ]
               },
-              "reducer_profile": {
-                "description": "Active reducer profile (e.g. `ak.reducer.v1`).",
-                "type": [
-                  "string",
-                  "null"
-                ]
-              },
               "resource_kinds": {
                 "description": "Directory-service overlay: resource classes indexed by\n`ak.find.directory.query.describe`. Required when\n`service_kind == \"directory_service\"`.",
                 "items": {

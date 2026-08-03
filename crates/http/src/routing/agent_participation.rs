@@ -28,8 +28,16 @@ pub(crate) fn strand_scope_key(realm_id: &str, strand_id: &str) -> String {
 
 pub(crate) fn participation_from_value(row: &Value) -> AgentParticipation {
     AgentParticipation {
-        reply: row
+        reply_message: row
             .get("reply_message")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reaction_add: row
+            .get("reaction_add")
+            .and_then(Value::as_bool)
+            .unwrap_or(false),
+        reaction_remove: row
+            .get("reaction_remove")
             .and_then(Value::as_bool)
             .unwrap_or(false),
         accept_third_party_mention: row

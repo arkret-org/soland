@@ -1839,6 +1839,13 @@ impl ProjectionService {
         self.state.lock().cell_value(cell_id).cloned()
     }
 
+    pub fn realm_reducer_profile(&self, realm_id: &str) -> Option<String> {
+        self.state
+            .lock()
+            .realm_reducer_profile(realm_id)
+            .map(ToOwned::to_owned)
+    }
+
     pub fn reload_cells_from_store(
         &self,
         realm_id: &RealmId,

@@ -68,7 +68,7 @@ async fn health_and_describe_work() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|profile| profile == "ak.schema.core.v1" || profile == "ak.reducer.v1")
+            .any(|profile| profile == "ak.schema.core.v1" || profile == "ak.reducer.core.v1")
     );
     assert!(
         describe["supported_schema_profiles"]
@@ -77,23 +77,20 @@ async fn health_and_describe_work() {
             .iter()
             .any(|profile| profile == "ak.schema.core.v1")
     );
-    // Every advertised reducer profile has to be one the Spec registers —
-    // `ak.reducer.v1`, which this assertion used to name, is not in
-    // `reducer-profile-registry.json` at all, so a literal here can outlive the
-    // id it names.
+    // Every advertised reducer profile has to be one the Spec registers.
     let reducer_profiles = describe["supported_reducer_profiles"].as_array().unwrap();
     assert!(!reducer_profiles.is_empty());
     for profile in reducer_profiles {
         let profile = profile.as_str().expect("reducer profile id is a string");
         assert!(
-            arkret_policy::generated::profiles::reducer_profile_digest(profile).is_some(),
+            arkret_policy::generated::profiles::is_reducer_profile_id(profile),
             "advertised reducer profile {profile} is not in the reducer-profile registry"
         );
     }
     assert!(
         reducer_profiles
             .iter()
-            .any(|profile| profile == "ak.profile.federation_minimal.v1")
+            .any(|profile| profile == "ak.reducer.core.v1")
     );
     assert_eq!(
         describe["limits"]["profile_status"]["conformance"],

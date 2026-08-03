@@ -282,7 +282,9 @@ pub(super) fn agent_requested_participation_ceiling(
         .map(requested_scope_participation_ceiling)
         .unwrap_or_default();
     AgentParticipation {
-        reply: bits.reply_message,
+        reply_message: bits.reply_message,
+        reaction_add: bits.reaction_add,
+        reaction_remove: bits.reaction_remove,
         accept_third_party_mention: bits.accept_third_party_mention,
         act_on_behalf: bits.act_on_behalf,
     }
@@ -584,7 +586,9 @@ mod requested_scope_tests {
         assert_eq!(
             agent_requested_participation_ceiling(&record),
             AgentParticipation {
-                reply: true,
+                reply_message: true,
+                reaction_add: true,
+                reaction_remove: false,
                 accept_third_party_mention: true,
                 act_on_behalf: true,
             }
@@ -596,7 +600,9 @@ mod requested_scope_tests {
         assert_eq!(
             agent_requested_participation_ceiling(&record),
             AgentParticipation {
-                reply: false,
+                reply_message: false,
+                reaction_add: false,
+                reaction_remove: false,
                 accept_third_party_mention: false,
                 act_on_behalf: false,
             }
