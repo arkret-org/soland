@@ -23,7 +23,7 @@ fn pair_device_pubkey(device_id: &str) -> Value {
     serde_json::json!({
         "kty": "OKP",
         "kid": device_id,
-        "alg": "EdDSA",
+        "algorithm": "Ed25519",
         "key": URL_SAFE_NO_PAD.encode(signing.verifying_key().as_bytes())
     })
 }
@@ -465,7 +465,7 @@ async fn protocol_device_surface_excludes_pairing_request_scaffold() {
             "pairing_code": "7H2K9M4Q",
             "new_device_pubkey": {
                 "kid": "ak:device:01904100-0000-7000-8000-9b04e0000007",
-                "alg": "EdDSA",
+                "algorithm": "Ed25519",
                 "public_key": "emtleQ"
             },
             "challenge_signature": "c2ln"

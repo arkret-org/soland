@@ -308,7 +308,6 @@ pub(crate) async fn validate_minimal_metadata_author_proof(
     // claim admission) verifies the detached JWS over the proof binding.
     let proof = arkret_wire::Proof {
         kind: "detached_jws".to_owned(),
-        alg: "EdDSA".to_owned(),
         proof_purpose: None,
         verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).map_err(
             |error| {

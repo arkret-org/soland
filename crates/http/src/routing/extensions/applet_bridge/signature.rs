@@ -2,7 +2,7 @@
 //! verification (`applet-integration.md` §7.3.1).
 
 use arkret_canonical as canonical;
-use arkret_models_integration::applet::WebhookSignatureAlg;
+use arkret_models_integration::applet::HttpMessageSignatureAlgorithm;
 use salvo::http::StatusCode;
 use salvo::prelude::*;
 use soland_http::error::AppError;
@@ -191,7 +191,8 @@ async fn verify_inbound_transaction_signature(
         .as_ref()
         .ok_or_else(|| AppError::internal("active applet install is missing its package record"))?;
     let signature_header = applet_required_header(req, "signature")?;
-    let signature_alg = applet_signature_param_value(&signature_params, "alg").unwrap_or_default();
+    let signature_algorithm =
+        applet_signature_param_value(&signature_params, "alg").unwrap_or_default();
     let source_signature_anchor = applet_source_signature_anchor(
         source_service_id,
         &destination_service_id,
@@ -201,7 +202,7 @@ async fn verify_inbound_transaction_signature(
         &verification_method,
         serde_json::to_value(&package.registration_epoch).unwrap_or(serde_json::Value::Null),
         serde_json::to_value(&package.webhook_auth).unwrap_or(serde_json::Value::Null),
-        &signature_alg,
+        &signature_algorithm,
         &signature_params,
         &signature_header,
     );
@@ -258,11 +259,11 @@ pub(super) fn applet_registration_verification_method(
     }
     if !package
         .webhook_auth
-        .accepted_algs
-        .contains(&WebhookSignatureAlg::EdDsa)
+        .accepted_signature_algorithms
+        .contains(&HttpMessageSignatureAlgorithm::Ed25519)
     {
         return Err(applet_signature_error_invalid(
-            "Applet webhook_auth.accepted_algs must include EdDSA for inbound transaction signatures",
+            "Applet webhook_auth.accepted_signature_algorithms must include ed25519 for inbound transaction signatures",
         ));
     }
     Ok(key_ref.to_owned())
@@ -278,7 +279,7 @@ pub(super) fn applet_source_signature_anchor(
     verification_method: &str,
     registration_epoch: serde_json::Value,
     webhook_auth: serde_json::Value,
-    signature_alg: &str,
+    signature_algorithm: &str,
     signature_params: &str,
     signature_header: &str,
 ) -> String {
@@ -292,7 +293,7 @@ pub(super) fn applet_source_signature_anchor(
         "content_digest": content_digest,
         "request_digest": request_digest,
         "verification_method": verification_method,
-        "signature_algorithm": signature_alg,
+        "signature_algorithm": signature_algorithm,
         "registration_epoch": registration_epoch,
         "webhook_auth": webhook_auth,
         "signature_input": signature_params,

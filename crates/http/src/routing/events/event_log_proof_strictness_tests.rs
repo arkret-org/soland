@@ -182,7 +182,7 @@ async fn member_identity_encrypted_payload_is_unsupported_fail_closed() {
         "segment": "member_identity",
         "identity_payload": {
             "encrypted_payload": {
-                "alg": "stub"
+                "encryption_algorithm": "stub"
             }
         }
     });
@@ -1395,11 +1395,10 @@ async fn production_rejects_full_proof_without_valid_jws_signature() {
         "proofs".to_owned(),
         json!([{
             "kind": "detached_jws",
-            "alg": "EdDSA",
             "verification_method": "did:web:alice.example#k1",
             "event_digest": event_digest,
             "created_at": "2026-05-17T00:00:00.000Z",
-            "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
+            "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
         }]),
     );
     object.insert("payload".to_owned(), json!({"body": "hello"}));
@@ -1439,11 +1438,10 @@ async fn production_event_proof_fails_closed_when_did_document_stale() {
         "proofs".to_owned(),
         json!([{
             "kind": "detached_jws",
-            "alg": "EdDSA",
             "verification_method": "did:web:alice.example#k1",
             "event_digest": event_digest,
             "created_at": "2026-05-17T00:00:00.000Z",
-            "jws": "eyJhbGciOiJFZERTQSJ9..AAAAAAAA"
+            "jws": "eyJhbGciOiJFZDI1NTE5In0..AAAAAAAA"
         }]),
     );
     object.insert("payload".to_owned(), json!({"body": "hello"}));
@@ -1490,7 +1488,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
             Ok(())
         }
         fn algorithm(&self) -> &str {
-            "EdDSA"
+            "Ed25519"
         }
     }
     let verifier = ProductionVerifier::wrap(Noop);
@@ -1498,7 +1496,6 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
     // must be rejected with DevProofRejected.
     let dev = build_proof_envelope(
         "dev",
-        "EdDSA",
         arkret_wire::DidUrl::new("did:web:alice.example#k1").unwrap(),
         Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
             .unwrap(),
@@ -1518,7 +1515,6 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
     // (signature still has to verify separately).
     let prod = build_proof_envelope(
         arkret_signatures::detached_jws_kind(),
-        "EdDSA",
         arkret_wire::DidUrl::new("did:web:alice.example#k1").unwrap(),
         Hash::new("sha256:0000000000000000000000000000000000000000000000000000000000000000")
             .unwrap(),
@@ -1554,7 +1550,6 @@ fn data_event_dummy_signature() -> arkret_wire::PayloadSignature {
 
     arkret_wire::PayloadSignature {
         extra: Default::default(),
-        alg: "EdDSA".to_owned(),
         verification_method: arkret_wire::DidUrl::new("did:web:notary.example#k1").unwrap(),
         payload_digest: data_event_hash(0xff),
         created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 8, 0, 0, 0).unwrap(),

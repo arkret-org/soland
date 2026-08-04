@@ -932,11 +932,6 @@ fn sdk_event_proofs(
     Ok(vec![Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         proof_purpose: None,
-        alg: proof
-            .and_then(|proof| proof.get("alg"))
-            .and_then(Value::as_str)
-            .unwrap_or("EdDSA")
-            .to_owned(),
         verification_method,
         event_digest,
         created_at,

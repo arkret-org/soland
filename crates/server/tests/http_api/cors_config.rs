@@ -399,7 +399,7 @@ async fn runtime_service_id_is_used_across_public_metadata() {
     // webrtc-signaling.md §4: the ICE config response is signed by the service
     // notary key. kid = <service_id>#notary-key (see move_seal_wire/notary.rs);
     // signature_input is the fixed domain label `ak.media.ice_config.v1`; sig is
-    // bare base64url (no `eddsa-ed25519:` prefix); the signing input is
+    // bare base64url; the signing input is
     // label || 0x00 || canonical_json(response without `signature`).
     assert_eq!(ice["signature"]["kid"], format!("{service_id}#notary-key"));
     assert_eq!(

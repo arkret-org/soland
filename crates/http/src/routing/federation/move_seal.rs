@@ -367,11 +367,6 @@ fn verify_device_seal_signature(seal: &Seal, device_public_key: &str) -> Result<
             "B-model Seal requires one identifiable current-generation device signature",
         ));
     };
-    if signature.alg != "EdDSA" {
-        return Err(device_generation_fenced(
-            "B-model device Seal signature must use EdDSA",
-        ));
-    }
     let canonical_bytes = seal
         .canonical_bytes_for_id()
         .map_err(|error| seal_admission_error(format!("Seal canonical bytes: {error}")))?;
@@ -1635,14 +1630,13 @@ mod seal_delta_tests {
             previous_digest_algorithm: None,
             notary_signature: NotarySig::Single(arkret_wire::PayloadSignature {
                 extra: Default::default(),
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new(
                     "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
                 )
                 .unwrap(),
                 payload_digest: placeholder_digest,
                 created_at: chrono::Utc::now(),
-                jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
+                jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
             }),
             sealed_at: chrono::Utc::now(),
             hlc: arkret_identifiers::Hlc::new("0189c4d2af00-0000-aabbccdd".to_owned()).unwrap(),
@@ -1652,7 +1646,6 @@ mod seal_delta_tests {
         seal.id = Seal::id_from_canonical_bytes(&canonical_bytes).unwrap();
         seal.notary_signature = NotarySig::Single(arkret_wire::PayloadSignature {
             extra: Default::default(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(
                 "did:webvh:z6mkfixture:alice.example#ak:device:recovery",
             )
@@ -1741,7 +1734,6 @@ mod seal_delta_tests {
         let event_digest = Hash::new(event.event_digest().unwrap()).unwrap();
         let proof = |verification_method: &str| arkret_wire::primitives::Proof {
             kind: "detached_jws".to_owned(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
                 .expect("fixture verification method is a DID URL"),
             event_digest: event_digest.clone(),

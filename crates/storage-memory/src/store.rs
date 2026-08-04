@@ -591,7 +591,7 @@ mod device_pairing_commit_tests {
         let now = chrono::Utc::now();
         let request_id = "device_pairing_request:01964137-0000-7000-8000-0000000000c1".to_owned();
         let public_key = serde_json::json!({
-            "alg": "EdDSA",
+            "algorithm": "Ed25519",
             "key": "z6MkpTHR8VNsBxYAAWHut2Geadd9jSwuBV8xRoAnwWsdvktH",
             "kid": "ak:device:01964137-0000-7000-8000-0000000000b2",
             "kty": "OKP"

@@ -207,7 +207,7 @@ pub(crate) fn sign_trusted_recovery_service_proof(
         "service_id": service_id,
         "audience": audience,
         "verification_method": verification_method,
-        "alg": "EdDSA",
+        "signature_algorithm": "Ed25519",
     });
     if let Some(attestation_ref) = attestation_ref {
         proof_body["attestation_ref"] = serde_json::json!(attestation_ref);
@@ -243,7 +243,7 @@ pub(crate) fn recovery_unlock_proof(
         "challenge": session["challenge"],
         "recovery_secret_ref": recovery_secret_ref,
         "verification_method": recovery_secret_ref,
-        "alg": "Ed25519",
+        "signature_algorithm": "Ed25519",
     });
     let transcript = serde_json::json!({
         "schema": "ak.identity.recovery_proof.v1",
@@ -274,7 +274,7 @@ pub(crate) fn recovery_unlock_proof(
             "challenge": session["challenge"],
             "recovery_secret_ref": recovery_secret_ref,
             "verification_method": recovery_secret_ref,
-            "alg": "Ed25519",
+            "signature_algorithm": "Ed25519",
             "unlock_commitment": format!("sha256:{}", hex::encode(hasher.finalize())),
             "signature": URL_SAFE_NO_PAD.encode(signing.sign(&bytes).to_bytes()),
         }
@@ -301,18 +301,18 @@ pub(crate) async fn seed_cross_signing(
         "principal_id": principal_id,
         "trust_domain": "ak:trust_domain:soland.local",
         "principal_signing_key": {
-            "kid": vm, "alg": "EdDSA",
+            "kid": vm, "algorithm": "Ed25519",
             "public_key": test_ed25519_multibase_public(psk), "key_format": "multibase",
         },
         "self_signing_key": {
-            "kid": format!("{principal_id}#CK_self_signing_v1"), "alg": "EdDSA",
+            "kid": format!("{principal_id}#CK_self_signing_v1"), "algorithm": "Ed25519",
             "public_key": test_ed25519_multibase_public(ssk), "key_format": "multibase",
-            "binding": { "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXItc2ln" },
+            "binding": { "verification_method": vm, "signature_algorithm": "Ed25519", "signature": "cGxhY2Vob2xkZXItc2ln" },
         },
         "user_signing_key": {
-            "kid": format!("{principal_id}#CK_user_signing_v1"), "alg": "EdDSA",
+            "kid": format!("{principal_id}#CK_user_signing_v1"), "algorithm": "Ed25519",
             "public_key": test_ed25519_multibase_public(usk), "key_format": "multibase",
-            "binding": { "verification_method": vm, "alg": "EdDSA", "signature": "cGxhY2Vob2xkZXItc2ln" },
+            "binding": { "verification_method": vm, "signature_algorithm": "Ed25519", "signature": "cGxhY2Vob2xkZXItc2ln" },
         },
         "expected_previous_generation": 0,
         "generation": 1,
@@ -562,7 +562,6 @@ pub(crate) async fn delete_key_backup(
         kind: "detached_jws".to_owned(),
         verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
             .expect("fixture verification method is a DID URL"),
-        alg: "EdDSA".to_owned(),
         payload_digest,
         // Inside the challenge window, which the server checks.
         created_at: challenge.issued_at,

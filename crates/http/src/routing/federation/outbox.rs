@@ -1507,7 +1507,6 @@ mod tests {
                 arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
             event.proofs = vec![arkret_wire::primitives::Proof {
                 kind: "detached_jws".to_owned(),
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new("did:web:alice.example#device-1")
                     .unwrap(),
                 event_digest: event_digest.clone(),
@@ -1547,7 +1546,6 @@ mod tests {
             let lease_digest = lease.lease_digest().unwrap();
             lease.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new("did:web:authority.example#key-1")
                     .unwrap(),
                 payload_digest: lease_digest,
@@ -1573,7 +1571,6 @@ mod tests {
             let receipt_digest = receipt.receipt_digest().unwrap();
             receipt.proofs = vec![arkret_wire::primitives::PayloadProof {
                 kind: "detached_jws".to_owned(),
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new("did:web:alpha.example#notary-key")
                     .unwrap(),
                 payload_digest: receipt_digest,

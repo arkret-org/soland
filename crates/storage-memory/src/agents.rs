@@ -376,7 +376,7 @@ mod tests {
             "verification_method": "did:web:agent.example#key-1",
             "public_key": {
                 "kty": "OKP",
-                "alg": "Ed25519",
+                "algorithm": "Ed25519",
                 "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
             },
             "public_key_digest": format!("sha256:{}", "00".repeat(32)),

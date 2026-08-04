@@ -637,7 +637,6 @@ fn preview_token_for_address(
         arkret_signatures::jws::sign_jws_ed25519(&canonical_bytes, signing_key.as_ref()).unwrap();
     claim["proof"] = serde_json::json!({
         "kind": "detached_jws",
-        "alg": "EdDSA",
         "verification_method": format!("{}#preview-token", state.service_id()),
         "payload_digest": payload_digest,
         "jws": jws,

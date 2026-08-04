@@ -1592,7 +1592,7 @@ async fn continue_issue_terminal_receipt(
                     "federation signature verification method is invalid: {error}"
                 ))
             })?,
-            alg: "EdDSA".to_owned(),
+            signature_algorithm: "Ed25519".to_owned(),
             signature: String::new(),
             signed_fields: arkret_wire::RECOVERY_COMPLETION_ATTESTATION_SIGNED_FIELDS
                 .iter()
@@ -2526,7 +2526,7 @@ pub(super) async fn recovery_authority_ticket_issue(
                     "federation signature verification method is invalid: {error}"
                 ))
             })?,
-            alg: ServiceSignatureAlgorithm::EdDSA,
+            signature_algorithm: ServiceSignatureAlgorithm::Ed25519,
             signature: String::new(),
             signed_fields: RECOVERY_AUTHORITY_TICKET_SIGNED_FIELDS
                 .iter()

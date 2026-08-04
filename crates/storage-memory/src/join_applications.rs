@@ -248,11 +248,10 @@ mod tests {
                 "application_receipt_digest": hash('a'),
                 "proof": {
                     "kind": "detached_jws",
-                    "alg": "EdDSA",
                     "verification_method": "did:web:alice.example#device",
                     "payload_digest": hash('a'),
                     "created_at": "2026-07-24T00:00:00.000Z",
-                    "jws": "eyJhbGciOiJFZERTQSJ9..AQ"
+                    "jws": "eyJhbGciOiJFZDI1NTE5In0..AQ"
                 }
             },
             "private_body": {
@@ -295,11 +294,10 @@ mod tests {
             "review_receipt_digest": digest,
             "proof": {
                 "kind": "detached_jws",
-                "alg": "EdDSA",
                 "verification_method": format!("{reviewer}#device"),
                 "payload_digest": digest,
                 "created_at": format!("2026-07-24T00:00:{second:02}.000Z"),
-                "jws": "eyJhbGciOiJFZERTQSJ9..AQ"
+                "jws": "eyJhbGciOiJFZDI1NTE5In0..AQ"
             }
         }))
         .unwrap()

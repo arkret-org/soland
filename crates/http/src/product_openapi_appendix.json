@@ -16053,7 +16053,7 @@
         "additionalProperties": false,
         "description": "`recovery-policy.schema.json#/$defs/recovery_key_agreement_entry`.",
         "properties": {
-          "alg": {
+          "signature_algorithm": {
             "$ref": "#/components/schemas/arkret_models_crypto.key_backup.RecoveryKeyAgreementAlgorithm"
           },
           "expires_at": {
@@ -16089,7 +16089,7 @@
         },
         "required": [
           "key_agreement_ref",
-          "alg",
+          "signature_algorithm",
           "public_key_multibase",
           "hpke_suites",
           "use",
@@ -16107,7 +16107,7 @@
       "arkret_models_crypto.key_backup.RecoveryKeyEntry": {
         "description": "`recovery-policy.schema.json#/$defs/recovery_key_entry` — a recovery\nsigning key the principal authorizes for `recovery_unlock` proofs. The\n`verification_method` is the stable `recovery_secret_ref` a recovery_unlock\nproof references; the proof signature is verified under this entry's public\nkey resolved via `verification_method`.",
         "properties": {
-          "alg": {
+          "signature_algorithm": {
             "allOf": [
               {
                 "$ref": "#/components/schemas/arkret_models_crypto.key_backup.RecoveryKeySignatureAlgorithm"
@@ -16170,7 +16170,7 @@
           "verification_method",
           "public_key_multibase",
           "key_agreement_ref",
-          "alg",
+          "signature_algorithm",
           "not_before",
           "expires_at"
         ],
@@ -18891,9 +18891,6 @@
       "arkret_wire.move_event.MoveSignature": {
         "description": "Issuer detached-JWS signature over canonical bytes (excluding `sig` and `id`).",
         "properties": {
-          "alg": {
-            "type": "string"
-          },
           "created_at": {
             "format": "date-time",
             "type": "string"
@@ -18910,7 +18907,6 @@
           }
         },
         "required": [
-          "alg",
           "verification_method",
           "payload_digest",
           "created_at",
@@ -19101,9 +19097,6 @@
       "arkret_wire.primitives.PayloadProof": {
         "additionalProperties": false,
         "properties": {
-          "alg": {
-            "type": "string"
-          },
           "audience": {
             "oneOf": [
               {
@@ -19150,7 +19143,6 @@
         },
         "required": [
           "kind",
-          "alg",
           "verification_method",
           "payload_digest",
           "created_at",
@@ -19168,9 +19160,6 @@
       "arkret_wire.primitives.Proof": {
         "additionalProperties": false,
         "properties": {
-          "alg": {
-            "type": "string"
-          },
           "audience": {
             "oneOf": [
               {
@@ -19218,7 +19207,6 @@
         "required": [
           "kind",
           "verification_method",
-          "alg",
           "event_digest",
           "created_at",
           "jws"

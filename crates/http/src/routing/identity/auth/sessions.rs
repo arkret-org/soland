@@ -252,7 +252,8 @@ mod tests {
     fn compact_jwt(payload: serde_json::Value) -> String {
         use base64::Engine as _;
 
-        let header = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+        let header =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519"}"#);
         let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(serde_json::to_vec(&payload).expect("payload must serialize"));
         format!("{header}.{payload}.signature")

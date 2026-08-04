@@ -1160,7 +1160,7 @@ impl NotaryWorker {
     ///
     /// The JWS is constructed by `arkret_signatures::jws::sign_jws_ed25519`,
     /// the symmetric counterpart of the SDK detached-JWS verifier. Both sides of
-    /// the wire therefore agree on the protected header (`{"alg":"EdDSA"}`)
+    /// the wire therefore agree on the protected header (`{"alg":"Ed25519"}`)
     /// and the RFC 7515 §5.2 signing input shape (`BASE64URL(header) ||
     /// '.' || BASE64URL(canonical_bytes)`) byte-for-byte.
     ///
@@ -1190,7 +1190,6 @@ impl NotaryWorker {
 
         Ok(PayloadSignature {
             extra: Default::default(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "{}#notary-key",
                 self.service_id
@@ -1258,16 +1257,15 @@ fn zero_notary_sig_placeholder(service_id: &str) -> Result<PayloadSignature, Not
             NotaryError::Construction(format!("service notary verification method: {e}"))
         })?;
     // 64 zero bytes -> 86-char base64url-no-pad zero string. The detached
-    // JWS shape is `header..signature`, with the SDK-canonical EdDSA
+    // JWS shape is `header..signature`, with the SDK-canonical Ed25519
     // header so the placeholder is at least well-typed for the
     // `PayloadSignature` field. The SDK detached-JWS verifier rejects the
     // all-zero signature as a sentinel — that's intended; this value
     // must not survive past the overwrite at the end of step 7.
-    let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+    let header_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519"}"#);
     let zero_sig_b64 = URL_SAFE_NO_PAD.encode([0u8; 64]);
     Ok(PayloadSignature {
         extra: Default::default(),
-        alg: "EdDSA".to_owned(),
         verification_method,
         payload_digest,
         created_at: chrono::Utc::now(),

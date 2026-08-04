@@ -117,9 +117,12 @@ pub(super) async fn submit_agent_runtime_key_request(
     )?;
     let agent_did = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent_id invalid: {error}")))?;
-    let public_key_digest =
-        arkret_signatures::agent::agent_runtime_public_key_digest(&body.public_key)
-            .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?;
+    let public_key_digest = arkret_signatures::agent::validate_agent_runtime_public_key(
+        &body.public_key,
+        &body.verification_method,
+    )
+    .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))?
+    .runtime_request_digest;
     let runtime_attestation = runtime_attestation_value(body.runtime_attestation.as_ref())?;
     let attestation_digest =
         arkret_signatures::agent::agent_runtime_attestation_digest(runtime_attestation.as_ref())
@@ -367,6 +370,14 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             "pending pairing commit intent is missing its controller signing-key binding",
         )
     })?;
+    let authorized_public_key_digest =
+        arkret_signatures::agent_evidence::agent_signing_public_key_digest(
+            &signing_key_binding.public_key,
+        )
+        .map_err(|reason| {
+            pairing_failed_precondition("pending signing-key binding public key is invalid")
+                .with_reason_detail(format!("{reason:?}"))
+        })?;
     let expected_realm_id = agent_record.principal_control_realm_id.clone();
     let expected_authorization_ref = agent_record.controller_authorization_ref.clone();
     let expected_request_digest = pairing_request_binding_digest(
@@ -374,7 +385,6 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         &controller_id,
         &agent_id,
         &verification_method,
-        &public_key_digest,
         state.service_id(),
     )?;
     let events = state
@@ -402,7 +412,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
             && payload.get("verification_method").and_then(Value::as_str)
                 == Some(verification_method.as_str())
             && payload.get("public_key_digest").and_then(Value::as_str)
-                == Some(public_key_digest.as_str())
+                == Some(authorized_public_key_digest.as_str())
             && payload
                 .get("accountable_principal_id")
                 .and_then(Value::as_str)
@@ -488,7 +498,7 @@ pub(super) async fn reconcile_accepted_agent_authorization(
         paired_request_digest,
         authorized_event_ref: accepted.event_id,
         authorized_verification_method: verification_method,
-        authorized_public_key_digest: public_key_digest,
+        authorized_public_key_digest: authorized_public_key_digest.as_str().to_owned(),
         authorized_signing_key_binding: signing_key_binding,
         authorized_at: accepted.received_at,
     };
@@ -811,7 +821,7 @@ pub(super) async fn agent_key_pair(
         &agent_record,
         agent_id,
         &body.verification_method,
-        &runtime_public_key_digest,
+        body.signing_key_binding.public_key_digest.as_str(),
         body.authorize_event.clone(),
     )
     .await?;
@@ -998,36 +1008,30 @@ async fn validate_agent_signing_key_binding_parts(
             )));
         }
     }
-    let binding_public_key_digest =
-        arkret_signatures::agent_evidence::agent_signing_public_key_digest(
-            verification_method,
-            &binding.public_key,
-        )
-        .map_err(|reason| {
-            AppError::invalid_param(format!(
-                "signing_key_binding public key invalid: {reason:?}"
-            ))
+    let expected_authorization_digest = payload
+        .get("public_key_digest")
+        .and_then(Value::as_str)
+        .ok_or_else(|| {
+            AppError::invalid_param("authorize_event.payload.public_key_digest is required")
+        })
+        .and_then(|value| {
+            arkret_wire::Hash::new(value.to_owned())
+                .map_err(|error| AppError::invalid_param(error.to_string()))
         })?;
-    if binding_public_key_digest != binding.public_key_digest {
-        return Err(AppError::invalid_param(
-            "signing_key_binding public key digest mismatch",
-        ));
-    }
-    let runtime_public_key_digest_from_binding =
-        arkret_signatures::agent_evidence::agent_signing_public_key_runtime_digest(
-            verification_method,
-            &binding.public_key,
-        )
-        .map_err(|reason| {
-            AppError::invalid_param(format!(
-                "signing_key_binding public key invalid: {reason:?}"
-            ))
-        })?;
-    if runtime_public_key_digest_from_binding.as_str() != runtime_public_key_digest {
-        return Err(AppError::invalid_param(
-            "signing_key_binding public key does not match the pairing request",
-        ));
-    }
+    let expected_runtime_request_digest =
+        arkret_wire::Hash::new(runtime_public_key_digest.to_owned())
+            .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    arkret_signatures::agent_evidence::validate_agent_signing_key_binding_digest_domains(
+        binding,
+        verification_method,
+        &expected_runtime_request_digest,
+        &expected_authorization_digest,
+    )
+    .map_err(|reason| {
+        AppError::invalid_param(format!(
+            "signing_key_binding key material does not match its digest domains: {reason:?}"
+        ))
+    })?;
     let issued_at = payload
         .get("issued_at")
         .and_then(Value::as_str)
@@ -1328,7 +1332,7 @@ pub(super) async fn submit_production_key_authorize_event(
     agent_record: &AgentPrincipalRecord,
     agent_id: &str,
     verification_method: &str,
-    runtime_public_key_digest: &str,
+    authorized_public_key_digest: &str,
     submission: arkret_wire::EventInitialSubmission,
 ) -> Result<String, AppError> {
     ensure_key_authorize_event_matches_request(
@@ -1337,7 +1341,7 @@ pub(super) async fn submit_production_key_authorize_event(
         agent_record,
         agent_id,
         verification_method,
-        runtime_public_key_digest,
+        authorized_public_key_digest,
         state.service_id(),
     )?;
     let delegated_session = delegated_agent_session(session, agent_id);
@@ -1364,7 +1368,7 @@ pub(super) fn ensure_key_authorize_event_matches_request(
     agent_record: &AgentPrincipalRecord,
     agent_id: &str,
     verification_method: &str,
-    runtime_public_key_digest: &str,
+    authorized_public_key_digest: &str,
     service_id: &str,
 ) -> Result<(), AppError> {
     if envelope.get("kind").and_then(Value::as_str) != Some("ak.agent.key.authorize") {
@@ -1453,9 +1457,11 @@ pub(super) fn ensure_key_authorize_event_matches_request(
             ));
         }
     }
-    if payload.get("public_key_digest").and_then(Value::as_str) != Some(runtime_public_key_digest) {
+    if payload.get("public_key_digest").and_then(Value::as_str)
+        != Some(authorized_public_key_digest)
+    {
         return Err(AppError::invalid_param(
-            "authorize_event.payload.public_key_digest must bind the runtime public_key",
+            "authorize_event.payload.public_key_digest must bind the raw signing key",
         ));
     }
     let expected_digest = pairing_request_binding_digest(
@@ -1463,7 +1469,6 @@ pub(super) fn ensure_key_authorize_event_matches_request(
         controller,
         agent_id,
         verification_method,
-        runtime_public_key_digest,
         service_id,
     )?;
     let approval_evidence = payload.get("approval_evidence").ok_or_else(|| {
@@ -1613,23 +1618,11 @@ pub(super) fn runtime_ed25519_public_key(
     public_key: &PublicKey,
     verification_method: &str,
 ) -> Result<[u8; 32], AppError> {
-    if public_key.kty.as_str() != "OKP" {
-        return Err(AppError::invalid_param("public_key.kty must be OKP"));
-    }
-    if public_key.alg.as_str() != "EdDSA" {
-        return Err(AppError::invalid_param("public_key.alg must be EdDSA"));
-    }
-    if public_key.kid.as_str() != verification_method {
-        return Err(AppError::invalid_param(
-            "public_key.kid must match verification_method",
-        ));
-    }
-    let bytes = base64::engine::general_purpose::URL_SAFE_NO_PAD
-        .decode(public_key.key.as_bytes())
-        .map_err(|_| AppError::invalid_param("public_key.key is not base64url"))?;
-    bytes
-        .try_into()
-        .map_err(|_| AppError::invalid_param("public_key.key must be a 32-byte Ed25519 key"))
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    arkret_signatures::agent::validate_agent_runtime_public_key(public_key, &verification_method)
+        .map(|validated| validated.raw_public_key)
+        .map_err(|error| AppError::invalid_param(format!("public_key invalid: {error}")))
 }
 
 pub(super) fn verify_runtime_key_pair_proof_of_possession(
@@ -1769,9 +1762,10 @@ pub(super) fn runtime_public_key_digest(
     public_key: &PublicKey,
     verification_method: &str,
 ) -> Result<String, AppError> {
-    runtime_ed25519_public_key(public_key, verification_method)?;
-    arkret_signatures::agent::agent_runtime_public_key_digest(public_key)
-        .map(|digest| digest.as_str().to_owned())
+    let verification_method = arkret_wire::DidUrl::new(verification_method.to_owned())
+        .map_err(|error| AppError::invalid_param(error.to_string()))?;
+    arkret_signatures::agent::validate_agent_runtime_public_key(public_key, &verification_method)
+        .map(|validated| validated.runtime_request_digest.as_str().to_owned())
         .map_err(|error| AppError::invalid_param(format!("public_key is invalid: {error}")))
 }
 
@@ -1810,7 +1804,6 @@ pub(super) fn pairing_request_binding_digest(
     controller: &str,
     agent_id: &str,
     _verification_method: &str,
-    runtime_public_key_digest: &str,
     service_id: &str,
 ) -> Result<String, AppError> {
     let pairing_request_id =
@@ -1824,7 +1817,6 @@ pub(super) fn pairing_request_binding_digest(
         .map_err(|error| AppError::invalid_param(format!("controller DID invalid: {error}")))?;
     let agent_id = Did::new(agent_id.to_owned())
         .map_err(|error| AppError::invalid_param(format!("agent DID invalid: {error}")))?;
-    let _ = runtime_public_key_digest;
     let audience = Did::new(service_id.to_owned())
         .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
     let runtime_key_binding_digest = Hash::new(

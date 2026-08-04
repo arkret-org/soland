@@ -1233,7 +1233,7 @@ impl AgentPairingState {
                         "active Agent runtime binding is missing signing_key_binding".to_owned()
                     })?;
                 let binding_runtime_public_key_digest =
-                    arkret_signatures::agent_evidence::agent_signing_public_key_runtime_digest(
+                    arkret_signatures::agent_evidence::agent_signing_public_key_runtime_request_digest(
                         &signing_key_binding.verification_method,
                         &signing_key_binding.public_key,
                     )
@@ -3527,7 +3527,7 @@ mod tests {
                 "verification_method": "did:web:agent.example#key-1",
                 "public_key": {
                     "kty": "OKP",
-                    "alg": "Ed25519",
+                    "algorithm": "Ed25519",
                     "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 },
                 "public_key_digest": format!("sha256:{}", "00".repeat(32)),

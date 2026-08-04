@@ -29,7 +29,6 @@ impl arkret_wire::PayloadSigner for ControllerSealSigner {
         canonical_bytes: &[u8],
     ) -> Result<arkret_wire::PayloadSignature, arkret_wire::WireError> {
         Ok(arkret_wire::PayloadSignature {
-            alg: "EdDSA".to_owned(),
             verification_method: self.verification_method.clone(),
             extra: Default::default(),
             payload_digest: arkret_identifiers::Hash::new(arkret_canonical::sha256_digest(

@@ -1207,7 +1207,6 @@ async fn range_completeness_for_query(
     let mut payload_proof = Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
         verification_method: verification_method.clone(),
-        alg: "EdDSA".to_owned(),
         event_digest: Hash::new(arkret_canonical::canonical::sha256_digest(
             &canonical_payload,
         ))
@@ -1224,7 +1223,6 @@ async fn range_completeness_for_query(
     let signature = signer
         .sign_payload(&proof_binding)
         .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?;
-    payload_proof.alg = signature.alg;
     payload_proof.jws = signature.jws;
     payload.proofs.push(payload_proof);
 

@@ -431,7 +431,7 @@ pub(crate) async fn verify_authoritative_event_seal_signature(
     canonical_bytes: &[u8],
 ) -> Result<(), AppError> {
     let expected_method = format!("{signer}#notary-key");
-    if signature.alg != "EdDSA" || signature.verification_method != expected_method {
+    if signature.verification_method != expected_method {
         return Err(proof_state_error(
             "authoritative Event Seal signature is not bound to the notary key",
         ));

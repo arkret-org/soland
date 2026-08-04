@@ -347,12 +347,6 @@ fn check_proof_envelope(
     proof: &PayloadProof,
     expected_digest: &arkret_identifiers::Hash,
 ) -> Result<(), AppError> {
-    if proof.alg != "EdDSA" {
-        return Err(AppError::capability_denied(format!(
-            "key backup delete proof alg `{}` is not supported",
-            proof.alg
-        )));
-    }
     if proof.payload_digest != *expected_digest {
         return Err(AppError::capability_denied(
             "key backup delete proof does not cover the canonical delete-intent transcript",

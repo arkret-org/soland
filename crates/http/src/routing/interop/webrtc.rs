@@ -210,7 +210,7 @@ async fn issue_ice_config(
         next_retry_at: None,
         signature: MediaIceConfigSignature {
             kid: format!("{}#notary-key", state.service_id()),
-            alg: MediaIceSignatureAlgorithm::EdDsa,
+            signature_algorithm: MediaIceSignatureAlgorithm::Ed25519,
             signature_input: MediaIceSignatureInput::IceConfigV1,
             payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .map_err(|error| AppError::internal(format!("ICE config digest: {error}")))?,

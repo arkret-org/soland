@@ -256,14 +256,13 @@ pub(super) fn mimi_provider_directory_value(
     let placeholder = arkret_wire::PayloadProof {
         kind: "detached_jws".to_owned(),
         verification_method: verification_method.clone(),
-        alg: "EdDSA".to_owned(),
         payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
             .map_err(|error| AppError::internal(format!("placeholder digest invalid: {error}")))?,
         created_at: chrono::Utc::now(),
         domain: None,
         audience: None,
         proof_purpose: None,
-        jws: "eyJhbGciOiJFZERTQSJ9..AA".to_owned(),
+        jws: "eyJhbGciOiJFZDI1NTE5In0..AA".to_owned(),
     };
     let mut directory = ProviderDirectory {
         schema: "ak.schema.mimi_interop.v1".to_owned(),
@@ -350,7 +349,6 @@ pub(super) fn mimi_provider_directory_value(
     directory.proof = ProviderDirectoryProof(arkret_wire::PayloadProof {
         kind: "detached_jws".to_owned(),
         verification_method: signature.verification_method,
-        alg: signature.alg,
         payload_digest: signature.payload_digest,
         created_at: signature.created_at,
         domain: None,

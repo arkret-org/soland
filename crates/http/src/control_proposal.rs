@@ -123,7 +123,6 @@ pub(crate) fn mint_control_proposal_receipt(
         authority_set_ref: authority_set_ref.clone(),
         signature: PayloadSignature {
             extra: Default::default(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "{}#notary-key",
                 state.service_id()
@@ -401,7 +400,6 @@ pub(crate) fn sign_control_proposal_reject(
         authority_set_ref: receipt.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
             extra: Default::default(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "{}#notary-key",
                 state.service_id()
@@ -460,7 +458,6 @@ pub(crate) fn sign_control_proposal_defer(
         authority_set_ref: receipt.authority_set_ref.clone(),
         proofs: vec![PayloadSignature {
             extra: Default::default(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!(
                 "{}#notary-key",
                 state.service_id()

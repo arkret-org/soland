@@ -451,7 +451,7 @@ fn validate_subject_proof(
     if subject_proof.verification_method.trim().is_empty() {
         return Err("subject_proof_method_required");
     }
-    if subject_proof.alg
+    if subject_proof.signature_algorithm
         != arkret_models_collaboration::governance::membership_invite::INVITE_SUBJECT_PROOF_ALG
     {
         return Err("subject_proof_alg_unsupported");

@@ -915,9 +915,9 @@ async fn verify_peer_claim_participant_authorization(
     };
     if authorization
         .signature
-        .alg
+        .signature_algorithm
         .as_ref()
-        .is_some_and(|algorithm| algorithm.as_str() != "EdDSA")
+        .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
     {
         return reject("signature_algorithm");
     }
@@ -1140,7 +1140,7 @@ fn build_peer_claim_outcome(
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method.clone())
                 .map_err(|error| AppError::internal(format!("receipt kid invalid: {error}")))?,
-            alg: Some(arkret_wire::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
+            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty")),
             sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder receipt signature is base64url"),
         },
@@ -1211,9 +1211,9 @@ pub(in crate::routing) async fn validate_federated_welcome_peer_claim(
     if receipt.signature.kid.as_str() != expected_method
         || receipt
             .signature
-            .alg
+            .signature_algorithm
             .as_ref()
-            .is_some_and(|algorithm| algorithm.as_str() != "EdDSA")
+            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
     {
         return Err("peer_claim_welcome_invalid");
     }
@@ -1331,7 +1331,7 @@ fn build_peer_claim_terminal_receipt(
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method)
                 .expect("service notary method is non-empty"),
-            alg: Some(arkret_wire::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
+            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty")),
             sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder signature is base64url"),
         },
@@ -1450,11 +1450,6 @@ async fn claim_keypackages_for_request_inner(
             AppError::internal(format!("configured service DID invalid: {error}"))
         })?;
         let proof = &body.holder_acceptance_proof;
-        if proof.alg != arkret_models_crypto::http_bodies::KeyPackageClaimProofAlgorithm::EdDsa {
-            return Err(AppError::invalid_param(
-                "KeyPackage self-claim proof algorithm is not supported by this authority",
-            ));
-        }
         let binding = body
             .validate_proof_shape(&authority, Utc::now())
             .map_err(|error| {
@@ -2121,7 +2116,7 @@ fn build_keypackage_consume_receipt(
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method)
                 .expect("service notary method is non-empty"),
-            alg: Some(arkret_wire::NonEmptyString::new("EdDSA").expect("EdDSA is non-empty")),
+            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty")),
             sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder signature is base64url"),
         },
@@ -2696,7 +2691,11 @@ fn entry_signature(
     if signature.kid.is_empty() || signature.sig.is_empty() {
         return Err("device_signature_invalid".to_owned());
     }
-    if signature.alg.as_deref().is_some_and(str::is_empty) {
+    if signature
+        .signature_algorithm
+        .as_deref()
+        .is_some_and(str::is_empty)
+    {
         return Err("device_signature_invalid".to_owned());
     }
     Ok(signature.clone())
@@ -2743,7 +2742,7 @@ async fn validate_agent_keypackage_upload(
     let public_key_value = json!({
         "kty": "OKP",
         "kid": verification_method,
-        "alg": "Ed25519",
+        "algorithm": "Ed25519",
         "key": URL_SAFE_NO_PAD.encode(public_key),
     });
     let actual_public_key_digest =
@@ -2752,9 +2751,9 @@ async fn validate_agent_keypackage_upload(
     if actual_public_key_digest.as_str() != expected_public_key_digest
         || signature.kid.as_str() != verification_method
         || signature
-            .alg
+            .signature_algorithm
             .as_ref()
-            .is_some_and(|algorithm| !matches!(algorithm.as_str(), "EdDSA" | "Ed25519"))
+            .is_some_and(|algorithm| algorithm.as_str() != "Ed25519")
     {
         return Err("claim_generation_mismatch".to_owned());
     }
@@ -3533,7 +3532,7 @@ mod trust_binding_tests {
         let public_key_value = json!({
             "kty": "OKP",
             "kid": verification_method,
-            "alg": "Ed25519",
+            "algorithm": "Ed25519",
             "key": URL_SAFE_NO_PAD.encode(signing_key.verifying_key().to_bytes()),
         });
         let public_key_digest =

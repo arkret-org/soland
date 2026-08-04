@@ -120,7 +120,7 @@ pub(crate) async fn snapshot_manifest_for_realm(
             checked_at: created_at,
             witness_attestations: Vec::new(),
         },
-        signature: arkret_state::DetachedJwsProof::eddsa(
+        signature: arkret_state::DetachedJwsProof::ed25519(
             verification_method.clone(),
             arkret_identifiers::Hash::new(arkret_state::EMPTY_SHA256_DIGEST.to_owned())
                 .map_err(|error| soland_http::error::AppError::internal(error.to_string()))?,
@@ -139,8 +139,12 @@ pub(crate) async fn snapshot_manifest_for_realm(
         state.notary_signing_key().as_ref(),
     )
     .map_err(soland_http::error::AppError::internal)?;
-    manifest.signature =
-        arkret_state::DetachedJwsProof::eddsa(verification_method, payload_digest, created_at, jws);
+    manifest.signature = arkret_state::DetachedJwsProof::ed25519(
+        verification_method,
+        payload_digest,
+        created_at,
+        jws,
+    );
     Ok(manifest)
 }
 

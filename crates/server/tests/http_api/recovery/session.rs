@@ -509,7 +509,7 @@ async fn recovery_session_principal_signing_proof_verifies() {
             "kind": "principal_signing",
             "challenge": challenge,
             "verification_method": vm,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": signature,
         },
     });
@@ -573,7 +573,7 @@ async fn recovery_session_principal_signing_rejects_bad_signature() {
             "kind": "principal_signing",
             "challenge": challenge,
             "verification_method": vm,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": signature,
         },
     });
@@ -622,13 +622,13 @@ async fn recovery_session_recovery_unlock_binds_policy_transcript_and_key() {
                 "verification_method": recovery_ref.clone(),
                 "public_key_multibase": recovery_public,
                 "key_agreement_ref": key_agreement_ref.clone(),
-                "alg": "Ed25519",
+                "signature_algorithm": "Ed25519",
                 "not_before": not_before,
                 "expires_at": expires_at,
             }],
             "recovery_key_agreements": [{
                 "key_agreement_ref": key_agreement_ref,
-                "alg": "X25519",
+                "key_agreement_algorithm": "X25519",
                 "public_key_multibase": "z6LSr8KVwSrjSa7Bj6KagU93mSi8zQM6VfmmUoTb8xXJFEr7",
                 "hpke_suites": ["ak.hpke_x25519_aead_chacha20poly1305.v1"],
                 "use": "backup_hpke",
@@ -774,7 +774,7 @@ async fn recovery_session_trusted_recovery_service_proof_verifies_and_audits() {
             "service_id": service_id.clone(),
             "audience": audience.clone(),
             "verification_method": service_vm.clone(),
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": signature,
         },
     });
@@ -886,7 +886,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
             "service_id": attacker_service_id.clone(),
             "audience": audience.clone(),
             "verification_method": attacker_service_vm.clone(),
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": rejected_signature,
         },
     });
@@ -925,7 +925,7 @@ async fn recovery_session_trusted_recovery_service_rejects_unlisted_service_and_
             "service_id": service_id.clone(),
             "audience": accepted_audience,
             "verification_method": service_vm.clone(),
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": accepted_signature,
         },
     });
@@ -960,7 +960,7 @@ async fn recovery_session_proof_rejects_challenge_mismatch() {
             "kind": "principal_signing",
             "challenge": "not-the-real-challenge",
             "verification_method": vm,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "c2ln"
         },
     });
@@ -1003,13 +1003,13 @@ async fn recovery_session_proof_rejects_kind_not_allowed_by_policy() {
                 {
                     "device_id": "ak:device:01904100-0000-7000-8000-000000000071",
                     "verification_method": format!("{principal_id}#device-a"),
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "signature": "c2ln"
                 },
                 {
                     "device_id": "ak:device:01904100-0000-7000-8000-000000000072",
                     "verification_method": format!("{principal_id}#device-b"),
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "signature": "c2ln"
                 }
             ]
@@ -1065,7 +1065,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             "recovery_session_id": recovery_session_id,
             "recovery_secret_ref": recovery_ref,
             "unlock_commitment": "sha256:0000000000000000000000000000000000000000000000000000000000000000",
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "AA"
         }),
     );
@@ -1125,7 +1125,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
             "recovery_session_id": recovery_session_id,
             "service_id": service_id,
             "verification_method": service_vm,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "AA"
         }),
     );
@@ -1204,13 +1204,13 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
                 {
                     "device_id": device_a,
                     "verification_method": format!("{principal_id}#{device_a}"),
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "signature": "AA"
                 },
                 {
                     "device_id": device_b,
                     "verification_method": format!("{principal_id}#{device_b}"),
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "signature": "AA"
                 }
             ]
@@ -1300,7 +1300,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         serde_json::json!({
             "kind": "principal_signing",
             "verification_method": vm,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "AA"
         }),
     );
@@ -1360,7 +1360,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         serde_json::json!({
             "kind": "principal_signing",
             "verification_method": vm,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "signature": "AA"
         }),
     );

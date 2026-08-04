@@ -893,10 +893,11 @@ pub(super) async fn get_agent(
         chrono::Utc::now(),
     )
     .await?;
+    // The service-authorized caller is the Account Authority verifier, not a
+    // public/runtime projection. It needs the authoritative pairing code to
+    // reconstruct the runtime proof transcript during final approval. The
+    // controller-facing pending approval projection remains secret-free.
     let mut view = agent_view_from_record(state, &record).await?;
-    if service_authorized && let Some(key_state) = view.key_state.as_mut() {
-        key_state.pairing_code = None;
-    }
     // Surface every durable, unrevoked grant so terminal deactivation can
     // author complete revocation coverage. The effective authz index supplies
     // optional display metadata, but pending or expired grants must not

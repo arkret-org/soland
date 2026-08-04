@@ -1250,7 +1250,6 @@ fn sign_outcome(
         issuer_service_id: signer.issuer_service_id().clone(),
         proof: PayloadProof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            alg: "EdDSA".to_owned(),
             verification_method: signer.verification_method().to_owned(),
             payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .expect("constant digest is valid"),
@@ -1571,7 +1570,6 @@ mod tests {
         for signer in signers {
             let mut proof = PayloadProof {
                 kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-                alg: "EdDSA".to_owned(),
                 verification_method: DidUrl::new(signer.verification_method().to_owned())
                     .expect("fixture signer verification method is a DID URL"),
                 payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),

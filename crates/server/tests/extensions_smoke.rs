@@ -15,8 +15,8 @@ use arkret_models_collaboration::governance::grant_constraint::{
 };
 use arkret_models_integration::applet::{
     AppletEndpointAuth, AppletEndpointEntry, AppletEndpointMethod, AppletEndpointPolicy,
-    AppletGhostPolicy, AppletNamespaceEntry, AppletPackage, AppletWireNamespaces, WebhookAuth,
-    WebhookSignatureAlg,
+    AppletGhostPolicy, AppletNamespaceEntry, AppletPackage, AppletWireNamespaces,
+    HttpMessageSignatureAlgorithm, WebhookAuth,
 };
 use arkret_signatures::{Ed25519PayloadSigner, SignEventOptions};
 use arkret_wire::{Event, ScopeRef};
@@ -386,7 +386,6 @@ fn signed_ghost_provision_body(
         None,
         arkret_wire::PayloadProof {
             kind: "detached_jws".to_owned(),
-            alg: "EdDSA".to_owned(),
             verification_method: verification_method.clone(),
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
@@ -1483,7 +1482,7 @@ fn signed_applet_package(applet_id: &str, namespace: &str) -> AppletPackage {
     );
     package.webhook_auth = WebhookAuth::http_message_signature(
         format!("{}#applet-service-key", package.service_id),
-        vec![WebhookSignatureAlg::EdDsa],
+        vec![HttpMessageSignatureAlgorithm::Ed25519],
     );
     let service_document = applet_service_id_document(&package);
     let registration_epoch_evidence =

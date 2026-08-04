@@ -205,7 +205,7 @@ fn corrupt_signature_is_rejected_participant_binding_invalid() {
     install_media_service(&state, ISSUER_KID);
     let mut binding = signed_binding(&state, "2026-06-15T00:05:00.000Z");
     binding["sig"] = json!(
-        "eddsa-ed25519:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+        "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
     );
     let op = call_state_op(binding);
     let err = validate_operation_semantics(&state, std::slice::from_ref(&op)).unwrap_err();

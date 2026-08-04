@@ -103,17 +103,14 @@ pub(crate) fn sign_binding(binding: &Value, signing_key: &ed25519_dalek::Signing
     let canonical_bytes = binding_canonical_bytes(binding);
     let signing_input = binding_signing_input(&canonical_bytes);
     let signature = signing_key.sign(&signing_input);
-    format!(
-        "eddsa-ed25519:{}",
-        URL_SAFE_NO_PAD.encode(signature.to_bytes())
-    )
+    URL_SAFE_NO_PAD.encode(signature.to_bytes())
 }
 
-/// Decode the wire `sig` (`eddsa-ed25519:<base64url>` or bare base64url) into a
-/// raw Ed25519 [`Signature`].
+/// Decode the wire `sig` (unprefixed base64url, as fixed by the schema) into a
+/// raw Ed25519 [`Signature`]. The algorithm belongs to the binding profile,
+/// not to an ad-hoc prefix inside the signature bytes.
 pub(crate) fn decode_binding_signature(sig: &str) -> Option<Signature> {
-    let encoded = sig.strip_prefix("eddsa-ed25519:").unwrap_or(sig);
-    let bytes = URL_SAFE_NO_PAD.decode(encoded.as_bytes()).ok()?;
+    let bytes = URL_SAFE_NO_PAD.decode(sig.as_bytes()).ok()?;
     let array: [u8; 64] = bytes.try_into().ok()?;
     Some(Signature::from_bytes(&array))
 }

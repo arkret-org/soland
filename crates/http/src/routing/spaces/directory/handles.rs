@@ -436,10 +436,6 @@ async fn verify_remote_handle_claim_proof(
             last_error = Some("remote handle claim proof kind must be detached_jws".to_owned());
             continue;
         }
-        if proof.alg != "EdDSA" {
-            last_error = Some("remote handle claim proof alg must be EdDSA".to_owned());
-            continue;
-        }
         if proof.payload_digest.as_str() != expected_digest {
             last_error = Some("remote handle claim proof payload_digest mismatch".to_owned());
             continue;
@@ -694,7 +690,6 @@ pub(super) async fn signed_handle_claim(
         .map_err(|err| AppError::internal(format!("handle claim signing failed: {err}")))?;
     claim.proofs.push(PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
-        alg: signature.alg,
         verification_method: signature.verification_method,
         payload_digest: signature.payload_digest,
         created_at: signature.created_at,

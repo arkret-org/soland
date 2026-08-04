@@ -1572,7 +1572,8 @@ mod tests {
         let agreement = RecoveryKeyAgreementEntry {
             key_agreement_ref: arkret_wire::DidUrl::new(format!("{CONTROLLER}#backup-hpke-1"))
                 .unwrap(),
-            alg: arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
+            key_agreement_algorithm:
+                arkret_models_crypto::key_backup::RecoveryKeyAgreementAlgorithm::X25519,
             public_key_multibase: arkret_wire::NonEmptyString::new(
                 "z6LSriWhVBzW9Vz2PvqbieSz7Aa2hPLzTKJuDwXTMKFeomeW".to_owned(),
             )

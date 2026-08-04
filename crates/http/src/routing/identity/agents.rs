@@ -342,7 +342,6 @@ mod tests {
             controller,
             agent_id,
             verification_method,
-            public_key_digest,
             service_id,
         )
         .expect("pairing binding digest");
@@ -384,16 +383,10 @@ mod tests {
         let signing_key = SigningKey::from_bytes(&[42u8; 32]);
         let encoded_public_key = base64::engine::general_purpose::URL_SAFE_NO_PAD
             .encode(signing_key.verifying_key().as_bytes());
-        let public_key_value = json!({
-            "kty": "OKP",
-            "kid": verification_method,
-            "alg": "EdDSA",
-            "key": encoded_public_key.clone(),
-        });
         let public_key = PublicKey {
             kty: arkret_wire::NonEmptyString::new("OKP").unwrap(),
             kid: arkret_wire::NonEmptyString::new(verification_method).unwrap(),
-            alg: arkret_wire::NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: arkret_wire::NonEmptyString::new("Ed25519").unwrap(),
             key: arkret_wire::Base64UrlString::new(encoded_public_key).unwrap(),
             key_digest: None,
         };
@@ -418,7 +411,7 @@ mod tests {
             arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProof {
                 kind: arkret_models_collaboration::agent_operations::AgentRuntimeKeyPossessionProofKind::AgentRuntimeKeyPossession,
                 verification_method: verification_method.clone(),
-                alg: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::EdDsa,
+                signature_algorithm: arkret_models_collaboration::agent_operations::AgentRuntimeKeyAlgorithm::Ed25519,
                 challenge: pairing_request_id.clone(),
                 audience: Did::new(service_id).unwrap(),
                 created_at,
@@ -460,11 +453,10 @@ mod tests {
             "expires_at": "2026-07-06T00:05:00.000Z",
             "proofs": [{
                 "kind": "detached_jws",
-                "alg": "EdDSA",
                 "verification_method": "did:web:controller.example#key-1",
                 "event_digest": format!("sha256:{}", "0".repeat(64)),
                 "created_at": "2026-07-06T00:00:00.000Z",
-                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+                "jws": "eyJhbGciOiJFZDI1NTE5In0..c2ln"
             }]
         }))
         .unwrap();
@@ -484,8 +476,10 @@ mod tests {
         .unwrap();
         let authorize_event_id = authorize_event.event_id.clone();
         let authorize_event = initial_submission(authorize_event);
-        let public_key_digest =
-            arkret_signatures::agent::agent_runtime_public_key_digest(&public_key_value).unwrap();
+        let signing_public_key_digest = arkret_wire::Hash::new(arkret_canonical::sha256_digest(
+            signing_key.verifying_key().as_bytes(),
+        ))
+        .unwrap();
         let signing_key_binding = serde_json::from_value(json!({
             "schema": "ak.schema.agent_signing_key_binding.v1",
             "agent_id": agent_id,
@@ -493,17 +487,17 @@ mod tests {
             "verification_method": verification_method,
             "public_key": {
                 "kty": "OKP",
-                "alg": "Ed25519",
+                "algorithm": "Ed25519",
                 "key": public_key.key
             },
-            "public_key_digest": public_key_digest,
+            "public_key_digest": signing_public_key_digest,
             "agent_key_authorize_event_id": authorize_event_id,
             "issued_at": "2026-07-06T00:00:00.000Z",
             "controller_id": controller_id,
             "controller_proof": {
                 "kind": "detached_jws",
                 "verification_method": "did:web:controller.example#key-1",
-                "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+                "jws": "eyJhbGciOiJFZDI1NTE5In0..c2ln"
             }
         }))
         .unwrap();
@@ -900,6 +894,7 @@ mod tests {
             key_state.approval_requested_at,
             record.approval_requested_at
         );
+        assert_eq!(key_state.pairing_code.as_deref(), Some("12345678"));
     }
 
     fn status_request_body(
@@ -1343,7 +1338,7 @@ mod tests {
     }
 
     #[test]
-    fn key_authorize_event_rejects_wrong_runtime_public_key_digest() {
+    fn key_authorize_event_rejects_wrong_authorization_public_key_digest() {
         let controller = "did:web:controller.example";
         let agent = "did:web:agent.example";
         let verification_method = "did:web:agent.example#runtime-key-1";
@@ -1359,7 +1354,7 @@ mod tests {
             "12345678",
             "2999-01-01T00:00:00.000Z",
         );
-        let envelope = key_authorize_envelope(
+        let mut envelope = key_authorize_envelope(
             &mut record,
             controller,
             agent,
@@ -1368,6 +1363,8 @@ mod tests {
             service_id,
             scope,
         );
+        envelope["payload"]["public_key_digest"] =
+            json!("sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
 
         let err = ensure_key_authorize_event_matches_request(
             &envelope,
@@ -1375,10 +1372,10 @@ mod tests {
             &record,
             agent,
             verification_method,
-            "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            public_key_digest,
             service_id,
         )
-        .expect_err("authorize_event public key digest must bind request public_key");
+        .expect_err("authorize_event public key digest must bind the raw authorization key");
 
         assert_eq!(err.wire_code(), "invalid_param");
         assert!(err.message.contains("public_key_digest"));

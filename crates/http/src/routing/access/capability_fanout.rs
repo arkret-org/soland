@@ -183,7 +183,6 @@ async fn validate_fanout_proofs(
 
     for proof in &body.proofs {
         if proof.kind != arkret_wire::proof_kind::DETACHED_JWS
-            || proof.alg != "EdDSA"
             || proof.event_digest.as_str() != transcript_digest
         {
             return Err(AppError::unauthenticated(

@@ -107,7 +107,7 @@ fn welcome_payload(welcome_id: &str) -> Value {
             "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "sig": b64(b"welcome-claim-envelope-signature")
             }
         },

@@ -222,13 +222,13 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
         trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland.local".to_owned()).unwrap(),
         principal_signing_key: PublishedKey {
             kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new("z6MkPrincipalDirect").unwrap(),
             key_format: KeyFormat::Multibase,
         },
         self_signing_key: SubordinateSignedKey {
             kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new("z6MkSelfDirect").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
@@ -236,14 +236,14 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
                     "{principal}#principal-signing"
                 ))
                 .unwrap(),
-                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
                 signature: NonEmptyString::new(format!("direct-psk-sig-ssk-gen-{generation}"))
                     .unwrap(),
             },
         },
         user_signing_key: SubordinateSignedKey {
             kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new("z6MkUserDirect").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
@@ -251,7 +251,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
                     "{principal}#principal-signing"
                 ))
                 .unwrap(),
-                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
                 signature: NonEmptyString::new(format!("direct-psk-sig-usk-gen-{generation}"))
                     .unwrap(),
             },
@@ -456,7 +456,7 @@ async fn peer_keypackage_claim_is_participant_authorized_atomic_and_queryable() 
             "requester_device_id": ALICE_SIGNING_DEVICE,
             "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000bb",
             "signed_at": arkret_canonical::format_timestamp_canonical(Utc::now()),
-            "signature": {"kid": verification_method, "alg": "EdDSA", "sig": "AA"}
+            "signature": {"kid": verification_method, "signature_algorithm": "Ed25519", "sig": "AA"}
         }))
         .unwrap();
     let draft = arkret_models_crypto::PeerKeyPackagesClaimAuthorizationDraft {

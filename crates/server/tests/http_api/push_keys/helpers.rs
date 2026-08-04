@@ -56,7 +56,7 @@ pub(crate) fn signed_keys_upload_body(
         "one_time_keys": one_time_keys,
         "fallback_keys": fallback_keys,
         "device_signature": {
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "kid": format!("{actor}#device"),
             "sig": sig,
         }

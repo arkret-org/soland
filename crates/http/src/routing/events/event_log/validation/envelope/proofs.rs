@@ -67,7 +67,6 @@ pub(crate) async fn validate_event_proofs(
         };
         let required_fields: &[&str] = &[
             "kind",
-            "alg",
             "verification_method",
             "event_digest",
             "created_at",
@@ -87,13 +86,6 @@ pub(crate) async fn validate_event_proofs(
                 StatusCode::BAD_REQUEST,
                 "invalid_proof",
                 "event proof kind must be detached_jws",
-            ));
-        }
-        if event_string_field(proof_object, &["alg"]).as_deref() != Some("EdDSA") {
-            return Err(event_validation_error(
-                StatusCode::BAD_REQUEST,
-                "invalid_proof",
-                "event proof alg must be EdDSA",
             ));
         }
         let proof_event_digest =
@@ -249,8 +241,8 @@ pub(crate) async fn validate_event_proofs(
             // from the DID document and retain the high-risk freshness gate.
             // Both branches go through the SDK's **Event proof** verifier, not
             // the generic detached-JWS one: the Event protected-header profile
-            // rejects a `kid` member and requires `header.alg == proof.alg`,
-            // neither of which the generic profile checks. Handing hand-built
+            // rejects a `kid` member and requires the protected-header
+            // algorithm to be Ed25519. Handing hand-built
             // binding bytes to the generic verifier — as this call site used to
             // do — silently dropped both checks.
             if !verify_with_federated_signer_evidence(
@@ -518,7 +510,7 @@ async fn verify_with_active_agent_session(
     let authorized_public_key = serde_json::json!({
         "kty": "OKP",
         "kid": verification_method,
-        "alg": "Ed25519",
+        "algorithm": "Ed25519",
         "key": encoded_key,
     });
     let public_key_digest = arkret_signatures::agent::agent_runtime_public_key_digest(
@@ -711,11 +703,10 @@ mod tests {
             "actor_id": actor,
             "proofs": [{
                 "kind": "detached_jws",
-                "alg": "EdDSA",
                 "verification_method": verification_method,
                 "event_digest": format!("sha256:{}", "1".repeat(64)),
                 "created_at": "2026-07-21T08:00:00.000Z",
-                "jws": "eyJhbGciOiJFZERTQSJ9..signature"
+                "jws": "eyJhbGciOiJFZDI1NTE5In0..signature"
             }]
         })
     }

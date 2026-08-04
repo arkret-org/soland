@@ -627,7 +627,6 @@ fn sign_lease_fields(
     let digest = lease.lease_digest().map_err(lease_internal_error)?;
     let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
         verification_method: arkret_wire::DidUrl::new(format!("{}#notary-key", state.service_id()))
             .map_err(lease_internal_error)?,
         payload_digest: digest,

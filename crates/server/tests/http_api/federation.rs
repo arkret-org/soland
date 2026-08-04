@@ -196,7 +196,7 @@ async fn peer_events_query_and_frontier_use_peer_surface() {
             .starts_with("sha256:")
     );
     assert_eq!(frontier["issuer"], SERVICE_ID);
-    assert_eq!(frontier["signature"]["alg"], "EdDSA");
+    assert_eq!(frontier["signature"]["alg"], "Ed25519");
     assert_eq!(
         frontier["signature"]["signed_payload"]["frontier_root"],
         frontier["frontier_root"]
@@ -799,7 +799,6 @@ fn peer_event_submission(event: &Value) -> arkret_wire::EventFederationSubmissio
             authority_set_ref: authority_set_digest.clone(),
             signature: arkret_wire::PayloadSignature {
                 extra: Default::default(),
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new(format!(
                     "{PEER_SOURCE_DID}#notary-key"
                 ))
@@ -846,7 +845,6 @@ fn publication_proof(
 ) -> arkret_wire::primitives::PayloadProof {
     arkret_wire::primitives::PayloadProof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
         verification_method: arkret_wire::DidUrl::new(verification_method.to_owned()).unwrap(),
         payload_digest,
         created_at,
@@ -1083,7 +1081,7 @@ fn mls_welcome_payload(claim_id: &str, ciphertext: &str) -> Value {
             "created_at": "2026-05-25T00:00:02.000Z",
             "signature": {
                 "kid": "did:web:alice.example#self-signing",
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "sig": b64(format!("{claim_id}-signature").as_bytes())
             }
         },

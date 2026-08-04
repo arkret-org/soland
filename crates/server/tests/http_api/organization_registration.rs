@@ -88,7 +88,6 @@ fn signed_control_proof(
     let created_at = challenge.created_at + Duration::seconds(1);
     let mut proof = PayloadProof {
         kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
         verification_method: arkret_wire::DidUrl::new(signer.verification_method().to_owned())
             .unwrap(),
         payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),

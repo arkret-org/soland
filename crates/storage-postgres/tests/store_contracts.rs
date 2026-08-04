@@ -130,7 +130,6 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
         absolute_due_at: now + chrono::Duration::hours(2),
         authority_set_ref: authority_set_ref.clone(),
         signature: arkret_wire::PayloadSignature {
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(
                 "did:web:controller.example#device-1".to_owned(),
             )
@@ -138,7 +137,7 @@ async fn postgres_event_commit_indexes_basis_free_control_anchor_when_configured
             payload_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "b".repeat(64)))
                 .unwrap(),
             created_at: now,
-            jws: "eyJhbGciOiJFZERTQSJ9..AQ".to_owned(),
+            jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
             extra: Default::default(),
         },
     };

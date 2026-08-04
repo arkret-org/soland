@@ -219,7 +219,7 @@ fn verify_subject_proof_signature(
     if subject_proof.verification_method.trim().is_empty() {
         return Err("subject_proof_method_required");
     }
-    if subject_proof.alg != INVITE_SUBJECT_PROOF_ALG {
+    if subject_proof.signature_algorithm != INVITE_SUBJECT_PROOF_ALG {
         return Err("subject_proof_alg_unsupported");
     }
     subject_proof
@@ -275,7 +275,7 @@ async fn verify_subject_proof_signature_for_state(
     if subject_proof.verification_method.trim().is_empty() {
         return Err("subject_proof_method_required");
     }
-    if subject_proof.alg != INVITE_SUBJECT_PROOF_ALG {
+    if subject_proof.signature_algorithm != INVITE_SUBJECT_PROOF_ALG {
         return Err("subject_proof_alg_unsupported");
     }
     subject_proof

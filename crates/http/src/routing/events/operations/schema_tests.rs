@@ -520,7 +520,7 @@ mod realm_key_share_schema_tests {
             "sender_device_id": "ak:device:01904100-0000-7000-8000-0000000000a1",
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
             "sender_device_signature": {
-                "alg": "Ed25519",
+                "signature_algorithm": "Ed25519",
                 "signature": "c2lnbmF0dXJl",
                 "signer_public_key_multibase": "z6MkiTbzSR9vvoRMkuSWLUnx5QXNxoUwYkpxHxTtN77xuxNm"
             },
@@ -1162,29 +1162,29 @@ mod sdk_artifact_schema_tests {
             "trust_domain": "ak:trust_domain:soland.local",
             "principal_signing_key": {
                 "kid": "did:web:alice.example#ak_principal_signing_v1",
-                "alg": "EdDSA",
+                "algorithm": "Ed25519",
                 "public_key": "z6MkPrincipalAlice",
                 "key_format": "multibase"
             },
             "self_signing_key": {
                 "kid": "did:web:alice.example#ak_self_signing_v1",
-                "alg": "EdDSA",
+                "algorithm": "Ed25519",
                 "public_key": "z6MkSelfAlice",
                 "key_format": "multibase",
                 "binding": {
                     "verification_method": "did:web:alice.example#ak_principal_signing_v1",
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "signature": "c2ln"
                 }
             },
             "user_signing_key": {
                 "kid": "did:web:alice.example#ak_user_signing_v1",
-                "alg": "EdDSA",
+                "algorithm": "Ed25519",
                 "public_key": "z6MkUserAlice",
                 "key_format": "multibase",
                 "binding": {
                     "verification_method": "did:web:alice.example#ak_principal_signing_v1",
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "signature": "c2ln"
                 }
             },
@@ -1235,7 +1235,7 @@ mod sdk_artifact_schema_tests {
             "proof": {
                 "kind": "principal_signing",
                 "verification_method": "did:web:alice.example#key-1",
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "signature": "abc"
             },
             "trust_domain": "ak:trust_domain:soland.local",
@@ -1277,7 +1277,7 @@ mod sdk_artifact_schema_tests {
             "proof": {
                 "kind": "principal_signing",
                 "verification_method": "did:web:alice.example#key-1",
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "signature": "abc"
             },
             "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
@@ -1302,7 +1302,7 @@ mod sdk_artifact_schema_tests {
             "proof": {
                 "kind": "principal_signing",
                 "verification_method": "did:web:alice.example#key-1",
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "signature": "abc"
             },
             "trust_domain": "ak:trust_domain:soland.local",
@@ -1322,7 +1322,7 @@ mod sdk_artifact_schema_tests {
             "proof": {
                 "kind": "principal_signing",
                 "verification_method": "did:web:alice.example#key-1",
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "signature": "abc"
             },
             "trust_domain": "ak:trust_domain:soland.local",
@@ -1402,7 +1402,7 @@ mod derived_relation_and_morph_immutability_tests {
                 "device_signature": "c2ln",
                 "cross_signing_binding": {
                     "verification_method": "did:web:alice.example#ssk",
-                    "alg": "EdDSA",
+                    "signature_algorithm": "Ed25519",
                     "ssk_generation": 1,
                     "signature": "c2ln"
                 },

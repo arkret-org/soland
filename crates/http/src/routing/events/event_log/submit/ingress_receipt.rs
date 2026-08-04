@@ -322,7 +322,6 @@ fn sign_ingress_receipt(
         .map_err(|error| publication_reject(format!("receipt digest failed: {error}")))?;
     let mut proof = PayloadProof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
         verification_method,
         payload_digest: receipt_digest,
         // §2 — verbatim equality, not "close enough": a retry that re-stamped

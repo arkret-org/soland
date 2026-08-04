@@ -463,14 +463,14 @@ fn verify_keys_upload_device_signature(
         .ok_or_else(|| {
             AppError::invalid_param("keys/upload requires authoritative device_public_key")
         })?;
-    let alg = device_signature
-        .alg
+    let signature_algorithm = device_signature
+        .signature_algorithm
         .as_ref()
         .map(arkret_wire::NonEmptyString::as_str)
         .unwrap_or_default();
-    if alg != "EdDSA" {
+    if signature_algorithm != "Ed25519" {
         return Err(AppError::invalid_param(
-            "keys/upload device_signature.alg must be EdDSA",
+            "keys/upload device_signature.signature_algorithm must be Ed25519",
         ));
     }
     let kid = device_signature.kid.as_str();

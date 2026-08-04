@@ -103,9 +103,9 @@ fn overwide_window_is_window_invalid() {
 #[test]
 fn source_signature_anchor_binds_registration_epoch_and_webhook_auth() {
     let webhook_auth = json!({
-        "type": "http_message_signature",
+        "kind": "http_message_signature",
         "key_ref": "did:web:app#applet-service-key",
-        "accepted_algs": ["EdDSA"]
+        "accepted_signature_algorithms": ["ed25519"]
     });
     let base = applet_source_signature_anchor(
         "did:web:app",
@@ -142,9 +142,9 @@ fn source_signature_anchor_binds_registration_epoch_and_webhook_auth() {
         "did:web:app#rotated",
         json!("sha256:2222222222222222222222222222222222222222222222222222222222222222"),
         json!({
-            "type": "http_message_signature",
+            "kind": "http_message_signature",
             "key_ref": "did:web:app#rotated",
-            "accepted_algs": ["EdDSA"]
+            "accepted_signature_algorithms": ["ed25519"]
         }),
         "ed25519",
         &params(1, 60),

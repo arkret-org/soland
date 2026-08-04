@@ -180,10 +180,10 @@ pub async fn validate_cross_signing_reset(
     match content.proof() {
         CrossSigningResetProof::PrincipalSigning {
             verification_method,
-            alg,
+            signature_algorithm,
             signature,
         } => {
-            ensure_reset_alg(alg)?;
+            ensure_reset_algorithm(signature_algorithm)?;
             crate::jws_verify::validate_verification_method_controller(
                 content.principal_id().as_str(),
                 verification_method,
@@ -201,10 +201,10 @@ pub async fn validate_cross_signing_reset(
             recovery_session_id,
             recovery_secret_ref,
             unlock_commitment,
-            alg,
+            signature_algorithm,
             signature,
         } => {
-            ensure_reset_alg(alg)?;
+            ensure_reset_algorithm(signature_algorithm)?;
             require_verified_reset_recovery_session(state, &content, recovery_session_id.as_str())
                 .await?;
             let policy = active_reset_recovery_policy(state, &content, "recovery_unlock").await?;
@@ -259,11 +259,11 @@ pub async fn validate_cross_signing_reset(
             recovery_session_id,
             service_id,
             verification_method,
-            alg,
+            signature_algorithm,
             signature,
             attestation_ref,
         } => {
-            ensure_reset_alg(alg)?;
+            ensure_reset_algorithm(signature_algorithm)?;
             require_verified_reset_recovery_session(state, &content, recovery_session_id.as_str())
                 .await?;
             let policy =
@@ -352,9 +352,9 @@ pub async fn project_cross_signing_reset(state: &AppState, payload: &Value) {
     }
 }
 
-fn ensure_reset_alg(alg: &str) -> Result<(), &'static str> {
-    match alg {
-        "EdDSA" | "Ed25519" => Ok(()),
+fn ensure_reset_algorithm(signature_algorithm: &str) -> Result<(), &'static str> {
+    match signature_algorithm {
+        "Ed25519" => Ok(()),
         _ => Err("cross_signing_reset_proof_authority_invalid"),
     }
 }
@@ -423,7 +423,7 @@ async fn verify_device_quorum_reset(
     let mut seen_devices = BTreeSet::new();
     let mut valid = 0u64;
     for contribution in signatures {
-        ensure_reset_alg(&contribution.alg)?;
+        ensure_reset_algorithm(&contribution.signature_algorithm)?;
         if !seen_devices.insert(contribution.device_id.as_str().to_owned()) {
             return Err("cross_signing_reset_quorum_insufficient");
         }
@@ -776,10 +776,12 @@ fn device_authorize_signature_value(
     match signature_material {
         SignatureMaterial::NonEmptyString(value) => Ok(value.as_str()),
         SignatureMaterial::Variant1(object) => {
-            if let Some(alg) = object.get("alg").and_then(Value::as_str)
-                && !matches!(alg, "EdDSA" | "Ed25519")
+            if let Some(signature_algorithm) = object
+                .get("signature_algorithm")
+                .and_then(Value::as_str)
+                && signature_algorithm != "Ed25519"
             {
-                return Err("device_authorize_device_signature_alg_unsupported");
+                return Err("device_authorize_device_signature_algorithm_unsupported");
             }
             object
                 .get("signature")
@@ -804,8 +806,8 @@ pub(crate) async fn verify_mls_welcome_claim_envelope_signature(
     signer_key_evidence: Option<&arkret_wire::event_envelope::FederatedDeviceSigningKeyEvidence>,
 ) -> Result<(), &'static str> {
     envelope.validate_signature_shape()?;
-    if let Some(alg) = envelope.signature.alg.as_deref()
-        && !matches!(alg, "EdDSA" | "Ed25519")
+    if let Some(signature_algorithm) = envelope.signature.signature_algorithm.as_deref()
+        && signature_algorithm != "Ed25519"
     {
         return Err(arkret_wire::ReasonCode::KEYPACKAGE_WELCOME_ENVELOPE_MISMATCH);
     }

@@ -1962,7 +1962,6 @@ fn sign_event_batch_receipt(
     })?;
     Ok(Proof {
         kind: proof_kind::DETACHED_JWS.to_owned(),
-        alg: "EdDSA".to_owned(),
         proof_purpose: None,
         verification_method,
         event_digest: Hash::new(receipt_digest).map_err(|error| {
@@ -2003,7 +2002,6 @@ mod tests {
         let digest = arkret_identifiers::Hash::new(event.event_digest().unwrap()).unwrap();
         event.proofs = vec![arkret_wire::Proof {
             kind: arkret_wire::proof_kind::DETACHED_JWS.to_owned(),
-            alg: "EdDSA".to_owned(),
             proof_purpose: None,
             verification_method: arkret_wire::DidUrl::new(verification_method.to_owned())
                 .expect("fixture verification method is a DID URL"),
@@ -2073,7 +2071,7 @@ mod tests {
                 .unwrap(),
             ],
             device_key_algorithm: Some(
-                arkret_wire::NonEmptyString::new("EdDSA".to_owned()).unwrap(),
+                arkret_wire::NonEmptyString::new("Ed25519".to_owned()).unwrap(),
             ),
             authorized_by: arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(authority.clone()),
             scopes: None,
@@ -2197,7 +2195,6 @@ mod tests {
         {
             event.proofs.push(arkret_wire::Proof {
                 kind: "detached_jws".to_owned(),
-                alg: "EdDSA".to_owned(),
                 proof_purpose: None,
                 verification_method: arkret_wire::DidUrl::new(format!("{actor}#key-1")).unwrap(),
                 event_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "a".repeat(64)))

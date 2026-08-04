@@ -324,7 +324,6 @@ fn signal_record() -> soland_services::delivery::SignalRelayState {
                 "did:web:bob.example#{BOB_DEVICE}"
             ))
             .unwrap(),
-            alg: "EdDSA".to_owned(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: sent_at,

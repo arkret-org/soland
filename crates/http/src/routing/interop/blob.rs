@@ -80,7 +80,7 @@ pub(super) fn blob_upload_outcome(
         issuer_service_id: issuer_service_id.clone(),
         signature: SignatureValue {
             kid: issuer_service_id,
-            alg: "EdDSA".to_owned(),
+            signature_algorithm: "Ed25519".to_owned(),
             sig: URL_SAFE_NO_PAD.encode(signature.to_bytes()),
         },
     };
@@ -747,7 +747,6 @@ async fn blob_presign(
 
 const BLOB_PRESIGN_SCHEME: &str = "ak.blob.presign.v1";
 const BLOB_PRESIGN_PROOF_KIND: &str = "detached_jws";
-const BLOB_PRESIGN_PROOF_ALG: &str = "EdDSA";
 const BLOB_PRESIGN_KID_FRAGMENT: &str = "notary-key";
 const BLOB_PRESIGN_MAX_TTL_SECONDS: i64 = 300;
 const BLOB_PRESIGN_CLOCK_SKEW_SECONDS: i64 = 30;
@@ -812,7 +811,6 @@ fn issue_presign_envelope(
         payload: payload.clone(),
         proof: BlobPresignDetachedJwsProof {
             kind: BLOB_PRESIGN_PROOF_KIND.to_owned(),
-            alg: BLOB_PRESIGN_PROOF_ALG.to_owned(),
             kid: blob_presign_kid(state),
             jws,
         },
@@ -839,7 +837,6 @@ fn validate_presign_query(
     let envelope: BlobPresignEnvelope = serde_json::from_slice(&bytes).map_err(|_| ())?;
     let expected_kid = blob_presign_kid(state);
     if envelope.proof.kind != BLOB_PRESIGN_PROOF_KIND
-        || envelope.proof.alg != BLOB_PRESIGN_PROOF_ALG
         || envelope.proof.kid != expected_kid
         || envelope.proof.jws.trim().is_empty()
     {
@@ -1196,12 +1193,12 @@ fn validate_encrypted_attachment_metadata(
         return Err("attachment envelope must be a JSON object");
     };
 
-    let has_alg = envelope
-        .get("alg")
+    let has_encryption_algorithm = envelope
+        .get("encryption_algorithm")
         .and_then(|value| value.as_str())
         .is_some_and(|value| !value.trim().is_empty());
-    if !has_alg {
-        return Err("attachment envelope requires alg");
+    if !has_encryption_algorithm {
+        return Err("attachment envelope requires encryption_algorithm");
     }
 
     if !envelope
@@ -1596,7 +1593,7 @@ mod presign_block_tests {
 
     #[test]
     fn presign_blob_e2ee_blocked() {
-        let blob = json!({"encryption": {"alg": "xchacha20poly1305"}, "uploaded_by": "did:web:alice.example"});
+        let blob = json!({"encryption": {"encryption_algorithm": "xchacha20poly1305"}, "uploaded_by": "did:web:alice.example"});
         assert_eq!(
             classify_presign_blob_block(&blob, "did:web:alice.example"),
             Some(PresignBlobBlock::E2ee)
@@ -1713,7 +1710,7 @@ mod tests {
         // No scheme → treated as whole_file; nonce present → valid.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "alg": "mls_exporter_aead_xchacha20poly1305",
+                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
                 "key_ref": "ak:mls:exporter",
                 "nonce": "AAAAAAAAAAAAAAAA",
                 "ciphertext_digest": digest,
@@ -1723,7 +1720,7 @@ mod tests {
         // No scheme, no nonce → rejected.
         assert!(
             validate_encrypted_attachment_metadata(&json!({
-                "alg": "mls_exporter_aead_xchacha20poly1305",
+                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
                 "key_ref": "ak:mls:exporter",
                 "ciphertext_digest": digest,
             }))
@@ -1738,7 +1735,7 @@ mod tests {
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ak.blob.stream_aead.v1",
-                "alg": "mls_exporter_aead_xchacha20poly1305_stream",
+                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
                 "segment_bytes": 65536,
@@ -1751,7 +1748,7 @@ mod tests {
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ak.blob.stream_aead.v1",
-                "alg": "mls_exporter_aead_xchacha20poly1305_stream",
+                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "segment_bytes": 65536,
                 "segment_count": 4,
@@ -1763,7 +1760,7 @@ mod tests {
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ak.blob.stream_aead.v1",
-                "alg": "mls_exporter_aead_xchacha20poly1305_stream",
+                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305_stream",
                 "key_ref": "ak:mls:exporter",
                 "nonce_prefix": "AAAAAAAA",
                 "segment_bytes": "65536",
@@ -1782,7 +1779,7 @@ mod tests {
         assert!(
             validate_encrypted_attachment_metadata(&json!({
                 "scheme": "ak.blob.future_scheme.v9",
-                "alg": "something-new",
+                "encryption_algorithm": "something-new",
                 "key_ref": "ak:mls:exporter",
                 "ciphertext_digest": digest,
             }))

@@ -1099,7 +1099,6 @@ mod consent_proof_tests {
             actor_id,
             signature: PayloadProof {
                 kind: proof_kind::DETACHED_JWS.to_owned(),
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new(verification_method.clone()).unwrap(),
                 payload_digest: Hash::new(format!("sha256:{}", "0".repeat(64))).unwrap(),
                 created_at: now(),

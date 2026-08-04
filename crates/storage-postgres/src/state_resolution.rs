@@ -1765,7 +1765,6 @@ mod proposal_decision_tests {
 
     fn signature(payload_digest: Hash, created_at: DateTime<Utc>) -> PayloadSignature {
         PayloadSignature {
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(
                 "did:webvh:z6mkfixture:notary.example#k1",
             )
@@ -1954,12 +1953,11 @@ mod event_seal_commit_tests {
             previous_state_root: None,
             previous_digest_algorithm: None,
             notary_signature: NotarySig::Single(PayloadSignature {
-                alg: "EdDSA".to_owned(),
                 verification_method: arkret_wire::DidUrl::new("did:key:z6MkFixture#z6MkFixture")
                     .unwrap(),
                 payload_digest: placeholder_hash,
                 created_at: Utc::now(),
-                jws: "eyJhbGciOiJFZERTQSJ9..AQ".to_owned(),
+                jws: "eyJhbGciOiJFZDI1NTE5In0..AQ".to_owned(),
                 extra: Default::default(),
             }),
             sealed_at: Utc::now(),

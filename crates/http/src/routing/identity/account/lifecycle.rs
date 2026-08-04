@@ -878,7 +878,6 @@ fn build_erasure_receipt_value(
         )?;
     let signature = erasure_receipt_proof_signature(state, &proof_payload, &verification_method)?;
     let mut extra = std::collections::BTreeMap::new();
-    extra.insert("alg".to_owned(), Value::String("EdDSA".to_owned()));
     extra.insert(
         "scheme".to_owned(),
         Value::String("ed25519-detached-jws".to_owned()),
@@ -961,7 +960,7 @@ fn erasure_receipt_proof_signature(
     verification_method: &str,
 ) -> Result<String, AppError> {
     let protected = json!({
-        "alg": "EdDSA",
+        "alg": "Ed25519",
         "kid": verification_method,
     });
     let protected = arkret_canonical::canonical_json_bytes(&protected)

@@ -770,7 +770,7 @@ pub(in crate::routing) async fn auth_bridge_describe() -> JsonResult<AuthBridgeD
                     "challenge": "challenge-01js0000000000000000000000",
                     "request_canonical_digest": "sha256:7e4f3a0b6f0d0f3d9f8c3a2b1e0d9c8b7a6f5e4d3c2b1a009988776655443322",
                     "audience": "did:webvh:z2dmjYwAPJzv5CZsnAzt8auVZRn1GfuxhpK2t3Q3K3rj4B1x:soland.local:webvh:service",
-                    "signature": "eyJhbGciOiJFZERTQSIsImtpZCI6ImRpZDp3ZWI6YWxpY2UuZXhhbXBsZSNkZXZpY2Uta2V5In0.example"
+                    "signature": "eyJhbGciOiJFZDI1NTE5Iiwia2lkIjoiZGlkOndlYjphbGljZS5leGFtcGxlI2RldmljZS1rZXkifQ.example"
                 }
             }),
             register_device_request: json!({

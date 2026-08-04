@@ -8,19 +8,19 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use proptest::prelude::*;
 use serde_json::json;
 
-fn eddsa_detached_jws(signature: &[u8]) -> String {
-    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+fn ed25519_detached_jws(signature: &[u8]) -> String {
+    let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519"}"#);
     let signature = URL_SAFE_NO_PAD.encode(signature);
     format!("{header}..{signature}")
 }
 
 proptest! {
     #[test]
-    fn jws_shape_accepts_well_formed_detached_eddsa_signatures(
+    fn jws_shape_accepts_well_formed_detached_ed25519_signatures(
         payload in prop::collection::vec(any::<u8>(), 1..128),
         signature in prop::collection::vec(any::<u8>(), 64),
     ) {
-        let jws = eddsa_detached_jws(&signature);
+        let jws = ed25519_detached_jws(&signature);
         prop_assume!(!jws.rsplit('.').next().unwrap_or_default().bytes().all(|b| b == b'A'));
         prop_assert!(soland_http::jws_verify::verify_jws_shape(
             &payload,
@@ -36,7 +36,7 @@ proptest! {
         signature in prop::collection::vec(1u8..=255, 1..96),
         attached_payload in "[A-Za-z0-9_-]{1,32}",
     ) {
-        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+        let header = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519"}"#);
         let signature = URL_SAFE_NO_PAD.encode(signature);
         let jws = format!("{header}.{attached_payload}.{signature}");
         let err = soland_http::jws_verify::verify_jws_shape(

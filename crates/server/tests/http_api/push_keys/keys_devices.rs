@@ -25,12 +25,12 @@ async fn auth_keys_device_messages_and_blobs_work() {
         serde_json::json!({"signed_curve25519:otk1": {
             "key": "one-time",
             "algorithm": "signed_curve25519",
-            "signature": {"kid": format!("{alice}#device"), "alg": "EdDSA", "sig": "c2ln"}
+            "signature": {"kid": format!("{alice}#device"), "signature_algorithm": "Ed25519", "sig": "c2ln"}
         }}),
         serde_json::json!({"signed_curve25519:fallback": {
             "key": "fallback-key",
             "algorithm": "signed_curve25519",
-            "signature": {"kid": format!("{alice}#device"), "alg": "EdDSA", "sig": "c2ln"}
+            "signature": {"kid": format!("{alice}#device"), "signature_algorithm": "Ed25519", "sig": "c2ln"}
         }}),
     );
 
@@ -286,7 +286,7 @@ async fn auth_keys_device_messages_and_blobs_work() {
             "x-arkret-attachment-envelope",
             serde_json::json!({
                 "scheme": "ak.blob.whole_file_aead.v1",
-                "alg": "mls_exporter_aead_xchacha20poly1305",
+                "encryption_algorithm": "mls_exporter_aead_xchacha20poly1305",
                 "nonce": "nonce0123456789ab",
                 "key_ref": {
                     "algorithm": "MLS",
@@ -1052,13 +1052,13 @@ fn tier2_publish_and_authorize(
             .unwrap(),
         principal_signing_key: PublishedKey {
             kid: DidUrl::new(format!("{principal}#ak_principal_signing_v1")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new(psk_multibase.clone()).unwrap(),
             key_format: KeyFormat::Multibase,
         },
         self_signing_key: SubordinateSignedKey {
             kid: DidUrl::new(format!("{principal}#ak_self_signing_v1")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new(ssk_multibase.clone()).unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
@@ -1066,13 +1066,13 @@ fn tier2_publish_and_authorize(
                     "{principal}#ak_principal_signing_v1"
                 ))
                 .unwrap(),
-                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
                 signature: NonEmptyString::new("pending").unwrap(),
             },
         },
         user_signing_key: SubordinateSignedKey {
             kid: DidUrl::new(format!("{principal}#ak_user_signing_v1")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new("z6MkUserDistinctKey").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
@@ -1080,7 +1080,7 @@ fn tier2_publish_and_authorize(
                     "{principal}#ak_principal_signing_v1"
                 ))
                 .unwrap(),
-                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
                 signature: NonEmptyString::new("dW51c2Vk").unwrap(),
             },
         },
@@ -1126,7 +1126,7 @@ fn tier2_publish_and_authorize(
         "device_signature": "c2ln",
         "cross_signing_binding": {
             "verification_method": format!("{principal}#ak_self_signing_v1"),
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "ssk_generation": 1,
             "signature": binding_signature,
         },
@@ -1227,11 +1227,11 @@ async fn keys_query_exposes_tier2_cross_signing_chain_and_verifies() {
         serde_json::from_value(entry["cross_signing_binding"].clone()).unwrap();
     let trust_binding = DeviceTrustBinding {
         verification_method: binding.verification_method.clone(),
-        alg: binding
-            .alg
+        signature_algorithm: binding
+            .signature_algorithm
             .as_ref()
             .map(ToString::to_string)
-            .unwrap_or_else(|| "EdDSA".to_owned()),
+            .unwrap_or_else(|| "Ed25519".to_owned()),
         ssk_generation: binding.ssk_generation,
         signature: binding.signature.to_string(),
     };
@@ -1321,12 +1321,12 @@ async fn keys_query_hides_revoked_device() {
             serde_json::json!({"signed_curve25519:desktop": {
                 "key": "desktop-device-key",
                 "algorithm": "signed_curve25519",
-                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+                "signature": {"kid": "did:web:alice.example#device", "signature_algorithm": "Ed25519", "sig": "c2ln"}
             }}),
             serde_json::json!({"signed_curve25519:desktop": {
                 "key": "fallback-desktop",
                 "algorithm": "signed_curve25519",
-                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+                "signature": {"kid": "did:web:alice.example#device", "signature_algorithm": "Ed25519", "sig": "c2ln"}
             }}),
         ))
         .send(&app_from_state(state.clone()))
@@ -1344,12 +1344,12 @@ async fn keys_query_hides_revoked_device() {
             serde_json::json!({"signed_curve25519:phone": {
                 "key": "phone-device-key",
                 "algorithm": "signed_curve25519",
-                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+                "signature": {"kid": "did:web:alice.example#device", "signature_algorithm": "Ed25519", "sig": "c2ln"}
             }}),
             serde_json::json!({"signed_curve25519:phone": {
                 "key": "fallback-phone",
                 "algorithm": "signed_curve25519",
-                "signature": {"kid": "did:web:alice.example#device", "alg": "EdDSA", "sig": "c2ln"}
+                "signature": {"kid": "did:web:alice.example#device", "signature_algorithm": "Ed25519", "sig": "c2ln"}
             }}),
         ))
         .send(&app_from_state(state.clone()))
@@ -1472,7 +1472,7 @@ async fn revoked_device_blocks_encrypted_writes() {
             "device_id": "ak:device:01904100-0000-7000-8000-30b11e000005",
             "one_time_keys": {},
             "fallback_keys": {},
-            "device_signature": {"alg": "none"}
+            "device_signature": {"signature_algorithm": "none"}
         }))
         .send(&app_from_state(state.clone()))
         .await;

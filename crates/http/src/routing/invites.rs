@@ -587,7 +587,6 @@ async fn resolve_invite_locator(
                     "service notary verification method is invalid: {error}"
                 ))
             })?,
-            alg: "EdDSA".to_owned(),
             payload_digest,
             created_at: now(),
             domain: None,

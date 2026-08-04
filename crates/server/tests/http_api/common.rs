@@ -1554,7 +1554,7 @@ pub(crate) async fn seed_verified_device_with_public_key(
 // is no plaintext branch, so every Signal integration test needs the same three
 // things seeded: a bearer session, an authoritative device signing key the
 // device directory resolves (the proof is verified by
-// `arkret_signatures::verify_eddsa_signal_proof`, not merely parsed), and an
+// `arkret_signatures::verify_ed25519_signal_proof`, not merely parsed), and an
 // accepted Seal in the target Realm for `seal_ref` to resolve to.
 
 /// The additional data-plane actions this suite's DataEvents exercise.
@@ -1910,7 +1910,6 @@ pub(crate) fn signed_signal_envelope(
         proof: arkret_wire::SignalProof {
             kind: "detached_jws".to_owned(),
             verification_method: verification_method.clone(),
-            alg: "EdDSA".to_owned(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: sent_at,

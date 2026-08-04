@@ -389,7 +389,7 @@ async fn verify_signal_device_proof(
     // rail. The state-dependent admission checks §3 also requires — that the
     // method resolves to this device's active signing key, and that the device
     // may send into this scope — ran above.
-    arkret_signatures::verify_eddsa_signal_proof(envelope, &public_key).map_err(|error| {
+    arkret_signatures::verify_ed25519_signal_proof(envelope, &public_key).map_err(|error| {
         tracing::warn!(
             %error,
             actor = %envelope.sender_actor_id,
@@ -447,7 +447,7 @@ async fn verify_signal_agent_proof(
     let bytes = arkret_canonical::base64url_decode(binding.public_key.key.as_str())
         .map_err(|_| signal_proof_invalid("Signal sender Agent key is malformed"))?;
     let public_key = arkret_signatures::PublicKeyMaterial::Ed25519Raw { bytes };
-    arkret_signatures::verify_eddsa_signal_proof(envelope, &public_key).map_err(|error| {
+    arkret_signatures::verify_ed25519_signal_proof(envelope, &public_key).map_err(|error| {
         tracing::warn!(
             %error,
             actor = %envelope.sender_actor_id,

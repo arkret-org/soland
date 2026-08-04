@@ -69,7 +69,7 @@ fn claim_payload(nonce: &str, token_commitment: &str, service_id: &str) -> Value
         "binding_proof": binding_proof,
         "subject_proof": {
             "verification_method": SUBJECT_METHOD,
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "transcript_digest": transcript_digest,
             "signature": "subject-signature"
         }

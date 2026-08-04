@@ -325,7 +325,6 @@ fn signal_envelope(
                 "{sender_actor}#{sender_device}"
             ))
             .unwrap(),
-            alg: "EdDSA".to_owned(),
             envelope_digest: arkret_identifiers::Hash::new(format!("sha256:{}", "0".repeat(64)))
                 .unwrap(),
             created_at: sent_at,
@@ -1090,7 +1089,6 @@ fn handle_claim(
         "expires_at": arkret_canonical::format_timestamp_canonical(expires_at),
         "proofs": [{
             "kind": "detached_jws",
-            "alg": "EdDSA",
             "verification_method": format!("{issuer}#directory-handle-claim"),
             "payload_digest": "sha256:unsigned-payload",
             "jws": "detached"

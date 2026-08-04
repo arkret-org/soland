@@ -167,7 +167,7 @@ pub(crate) async fn seed_active_controller_device_generation(state: &AppState, c
         algorithms: vec![
             arkret_wire::NonEmptyString::new("ak.hpke_x25519_aead_chacha20poly1305.v1").unwrap(),
         ],
-        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("EdDSA").unwrap()),
+        device_key_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
         authorized_by: arkret_models_collaboration::events_payloads::device_identity::DeviceOrPrincipalRef::Did(actor.clone()),
         scopes: None,
         not_before: created_at,
@@ -656,7 +656,7 @@ async fn production_agent_provision_admits_controller_signed_sdk_events() {
         assert_eq!(event.proofs.len(), 1);
         let canonical_bytes =
             arkret_canonical::canonical_json_bytes(&event.digest_payload().unwrap()).unwrap();
-        arkret_signatures::verify_eddsa_detached_jws_proof(
+        arkret_signatures::verify_ed25519_detached_jws_proof(
             &event.proofs[0],
             &canonical_bytes,
             &event.actor_id,

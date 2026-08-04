@@ -430,7 +430,7 @@ mod tests {
         let canonical: PublicKey = serde_json::from_value(serde_json::json!({
             "kty": "OKP",
             "kid": "ak:device:01964137-0000-7000-8000-0000000000c1",
-            "alg": "EdDSA",
+            "algorithm": "Ed25519",
             "key": raw
         }))
         .unwrap();
@@ -440,7 +440,7 @@ mod tests {
         let noncanonical: PublicKey = serde_json::from_value(serde_json::json!({
             "kty": "OKP",
             "kid": "ak:device:01964137-0000-7000-8000-0000000000c1",
-            "alg": "EdDSA",
+            "algorithm": "Ed25519",
             "key": multibase
         }))
         .unwrap();

@@ -134,7 +134,6 @@ pub(crate) fn sign_frontier_root(
         .map_err(|error| error.to_string())?;
 
     Ok(json!({
-        "alg": "EdDSA",
         "typ": "ak.events.frontier.signature.v1",
         "scheme": "ed25519-detached-jws",
         "verification_method": format!("{}#frontier-key", service_id.as_str()),
@@ -215,7 +214,7 @@ mod tests {
 
         let signature =
             sign_frontier_root(&alice(), Some(&realm()), observed_at, &root, &signing_key).unwrap();
-        assert_eq!(signature["alg"], "EdDSA");
+        assert!(signature.get("alg").is_none());
         assert_eq!(
             signature["verification_method"],
             "did:web:alice.example#frontier-key"

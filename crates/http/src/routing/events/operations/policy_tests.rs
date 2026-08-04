@@ -131,7 +131,6 @@ fn accountability_grant_payload(status: &str, expires_at: &str) -> serde_json::V
         "grant_status": status,
         "proof": {
             "kind": "detached_jws",
-            "alg": "EdDSA",
             "verification_method": "did:web:alice.example#key-1",
             "payload_digest": format!("sha256:{}", "3".repeat(64)),
             "created_at": "2026-01-01T00:00:00.000Z",
@@ -395,7 +394,7 @@ fn signed_service_attested_device_authorize_payload(
         "device_public_key": device_public_key,
         "hpke_key": "z6LSgy7T8CEsMDMzk1e4EBFVX8CDXWWzvkFZWSXhsC97zjcM",
         "algorithms": ["ak.hpke_x25519_aead_chacha20poly1305.v1", "ak.mls.v1"],
-        "device_key_algorithm": "EdDSA",
+        "device_key_algorithm": "Ed25519",
         "authorized_by": "did:key:z6MknBuwKMPAzbhp6EwCnaxsEDk4G2KFeWRu273gYVuTY5jw",
         "not_before": "2026-06-22T14:45:51.000Z",
         "enrollment_authority_binding": {
@@ -919,7 +918,6 @@ async fn register_native_agent_membership_context(
         "expires_at": "2099-01-01T00:00:00.000Z",
         "proof": {
             "kind": "detached_jws",
-            "alg": "EdDSA",
             "verification_method": "did:web:alice.example#key-1",
             "payload_digest": format!("sha256:{}", "3".repeat(64)),
             "created_at": "2026-01-01T00:00:00.000Z",
@@ -2845,7 +2843,7 @@ async fn realm_key_share_rrk_targeted_is_accepted_for_recovery_recipient() {
             "recovery_recipient_id": "rrk-1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d1d2",
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-00000000d1a1",
-            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
                 "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -2966,7 +2964,7 @@ async fn realm_key_share_member_device_accepts_projection_metadata() {
             "recipient_device_id": bob_device,
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d3d2",
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-00000000d3a1",
-            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
                 "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
@@ -3025,7 +3023,7 @@ async fn realm_key_share_non_recovery_recipient_without_policy_is_rejected() {
             "recipient_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d1",
             "sender_device_id": "ak:device:01904100-0000-7000-8000-00000000d2d2",
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-00000000d2a1",
-            "sender_device_signature": {"alg": "EdDSA", "kid": "k", "sig": "s"},
+            "sender_device_signature": {"signature_algorithm": "Ed25519", "kid": "k", "sig": "s"},
             "key_scope": {
                 "effective_scope": {"kind": "realm", "realm_id": realm_id.as_str()},
                 "policy_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",

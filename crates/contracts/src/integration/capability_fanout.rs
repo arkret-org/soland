@@ -22,7 +22,6 @@ use serde_json::Value;
 #[serde(deny_unknown_fields)]
 pub struct CapabilityFanoutProof {
     pub kind: String,
-    pub alg: String,
     pub verification_method: String,
     pub event_digest: Hash,
     #[serde(with = "arkret_canonical::serde_helpers::canonical_timestamp")]

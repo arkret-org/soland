@@ -2236,7 +2236,6 @@ mod tests {
                     "grant_status": grant_status,
                     "proof": {
                         "kind": "detached_jws",
-                        "alg": "EdDSA",
                         "verification_method": "did:web:controller.example#key-1",
                         "payload_digest": format!("sha256:{}", "3".repeat(64)),
                         "created_at": "2026-01-01T00:00:00.000Z",

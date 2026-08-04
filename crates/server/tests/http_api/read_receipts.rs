@@ -219,11 +219,10 @@ fn legacy_plaintext_read_receipt_envelope(actor: &str, device_id: &str, event_id
     let event_digest = arkret_canonical::sha256_digest(&canonical);
     envelope["proof"] = serde_json::json!({
         "kind": "detached_jws",
-        "alg": "EdDSA",
         "verification_method": format!("{actor}#{device_id}"),
         "event_digest": event_digest,
         "created_at": arkret_canonical::format_timestamp_canonical(sent_at),
-        "jws": "eyJhbGciOiJFZERTQSJ9..c2ln"
+        "jws": "eyJhbGciOiJFZDI1NTE5In0..c2ln"
     });
     envelope
 }

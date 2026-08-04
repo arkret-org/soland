@@ -10,7 +10,7 @@
 //! # Two-tier verifier model (unchanged)
 //!
 //! - Dev mode (`config.development_mode == true`): handlers use [`verify_jws_shape`] — RFC 7515
-//!   §3.2 detached shape, alg=EdDSA, no zero-sentinel signature, no actual crypto. Lets test
+//!   §3.2 detached shape, alg=Ed25519, no zero-sentinel signature, no actual crypto. Lets test
 //!   fixtures and local dev iterate without managing real keys.
 //! - Production mode (default): handlers use [`verify_did_controlled_jws`] or its async
 //!   counterpart. The selected document, issuer and verification-method DID root must agree before
@@ -92,7 +92,6 @@ pub fn verify_jws_shape(
         .map_err(|error| format!("verification_method is not a DID URL: {error}"))?;
     let proof = build_proof_envelope(
         "detached_jws",
-        "EdDSA",
         verification_method,
         payload_digest,
         None,
@@ -534,10 +533,10 @@ pub async fn verify_principal_authorized_jws_ed25519_async(
 /// | check | Event profile (here) | generic profile |
 /// | --- | --- | --- |
 /// | `kid` header member | rejected | accepted and ignored |
-/// | `header.alg` vs `proof.alg` | must be equal | not compared |
+/// | `header.alg` | must be `Ed25519` | must be `Ed25519` |
 ///
 /// Reconstructing the binding bytes by hand and feeding them to the generic
-/// verifier — which is what this call site used to do — therefore relaxed two
+/// verifier — which is what this call site used to do — therefore relaxed the
 /// header checks on every DID-rooted Event proof. Every branch below routes
 /// through an SDK Event-profile verifier instead, so the transcript, the digest
 /// comparison and the header hygiene all come from one implementation.
@@ -561,7 +560,7 @@ pub async fn verify_principal_authorized_event_proof_async(
     let (scheme, outcome) = match source {
         PrincipalVerificationSource::DeviceDirectory(material) => (
             crate::metrics::SIGNATURE_SCHEME_DEVICE_DIRECTORY,
-            arkret_signatures::verify_eddsa_detached_jws_proof(
+            arkret_signatures::verify_ed25519_detached_jws_proof(
                 proof,
                 envelope_bytes,
                 actor_id,
@@ -581,7 +580,7 @@ pub async fn verify_principal_authorized_event_proof_async(
         ),
         PrincipalVerificationSource::Development(material) => (
             crate::metrics::SIGNATURE_SCHEME_DEVELOPMENT,
-            arkret_signatures::verify_eddsa_detached_jws_proof(
+            arkret_signatures::verify_ed25519_detached_jws_proof(
                 proof,
                 envelope_bytes,
                 actor_id,
@@ -1191,7 +1190,7 @@ mod did_binding_tests {
     }
 
     fn signed(key: &SigningKey, payload: &[u8]) -> String {
-        arkret_signatures::sign_eddsa_detached_jws(key, payload).expect("detached JWS")
+        arkret_signatures::sign_ed25519_detached_jws(key, payload).expect("detached JWS")
     }
 
     // DID-P1-A03 — two ordinary Events under the same accepted key: both
@@ -1422,7 +1421,6 @@ mod did_binding_tests {
             Hash::new(arkret_canonical::sha256_digest(&envelope_bytes)).expect("event digest");
         let proof = build_proof_envelope(
             "detached_jws",
-            "EdDSA",
             arkret_wire::DidUrl::new(verification_method.to_owned()).expect("DID URL"),
             event_digest,
             None,
@@ -1448,7 +1446,7 @@ mod did_binding_tests {
         let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
         let jws = detached_jws_with_header(
             &key,
-            &serde_json::json!({"alg": "EdDSA", "kid": verification_method}),
+            &serde_json::json!({"alg": "Ed25519", "kid": verification_method}),
             &binding_bytes,
         );
         proof.jws = jws.clone();
@@ -1477,11 +1475,10 @@ mod did_binding_tests {
         .expect_err("an Event proof protected header may not carry `kid`");
     }
 
-    /// The Event profile compares `header.alg` with `proof.alg`. The generic
-    /// profile never sees `proof.alg` at all, so a proof could declare one
-    /// algorithm while its header declared another.
+    /// Both Event and generic Ed25519 profiles reject a protected header that
+    /// selects a different algorithm.
     #[tokio::test]
-    async fn an_event_proof_whose_protected_alg_disagrees_with_proof_alg_is_rejected() {
+    async fn an_event_proof_with_an_unsupported_protected_algorithm_is_rejected() {
         let state = state_without_any_resolver();
         let did = Did::new(PRINCIPAL.to_owned()).unwrap();
         let verification_method = format!("{did}#control-1");
@@ -1490,15 +1487,11 @@ mod did_binding_tests {
         seed_binding(&state, &did, &verification_method, &document);
 
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
-        // `alg` is not part of the signed binding object, so a mismatch is
-        // representable on the wire: only the Event profile catches it.
-        proof.alg = "ES256".to_owned();
         let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
         let jws =
-            detached_jws_with_header(&key, &serde_json::json!({"alg": "EdDSA"}), &binding_bytes);
+            detached_jws_with_header(&key, &serde_json::json!({"alg": "ES256"}), &binding_bytes);
         proof.jws = jws.clone();
 
-        // Control: the generic profile validates the header in isolation.
         verify_principal_authorized_jws_ed25519_async(
             &binding_bytes,
             &jws,
@@ -1507,7 +1500,7 @@ mod did_binding_tests {
             &state,
         )
         .await
-        .expect("the generic profile never compares the protected header to a proof alg");
+        .expect_err("the generic Ed25519 profile must reject ES256");
 
         verify_principal_authorized_event_proof_async(
             &proof,
@@ -1518,11 +1511,11 @@ mod did_binding_tests {
             &state,
         )
         .await
-        .expect_err("Event proof `alg` and the protected header alg must agree");
+        .expect_err("the Event Ed25519 profile must reject ES256");
     }
 
     /// Positive control for the two rejections above: with a clean
-    /// `{"alg":"EdDSA"}` header the same fixture verifies, so the rejections
+    /// `{"alg":"Ed25519"}` header the same fixture verifies, so the rejections
     /// are about header hygiene and nothing else.
     #[tokio::test]
     async fn a_well_formed_event_proof_verifies_against_the_accepted_binding() {
@@ -1536,7 +1529,7 @@ mod did_binding_tests {
         let (envelope_bytes, mut proof) = event_proof_fixture(&verification_method);
         let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
         proof.jws =
-            detached_jws_with_header(&key, &serde_json::json!({"alg": "EdDSA"}), &binding_bytes);
+            detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
 
         verify_principal_authorized_event_proof_async(
             &proof,
@@ -1565,7 +1558,7 @@ mod did_binding_tests {
         let (_, mut proof) = event_proof_fixture(&verification_method);
         let binding_bytes = proof.canonical_binding_bytes(&did).expect("binding bytes");
         proof.jws =
-            detached_jws_with_header(&key, &serde_json::json!({"alg": "EdDSA"}), &binding_bytes);
+            detached_jws_with_header(&key, &serde_json::json!({"alg": "Ed25519"}), &binding_bytes);
 
         verify_principal_authorized_event_proof_async(
             &proof,

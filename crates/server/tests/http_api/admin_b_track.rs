@@ -202,7 +202,7 @@ async fn admin_media_statistics_and_by_actor_are_derived_from_blobs() {
                 media_type: "text/plain".to_owned(),
                 filename: Some("two.txt".to_owned()),
                 realm_id: Some(DEMO_REALM_ID.to_owned()),
-                encryption: Some(serde_json::json!({"alg": "test"})),
+                encryption: Some(serde_json::json!({"encryption_algorithm": "test"})),
                 legal_hold: false,
                 redacted: false,
                 visibility: arkret_models_collaboration::objects::blob::BlobVisibility::RealmBound,

@@ -1130,7 +1130,7 @@ mod tests {
             "sender_device_id": sender_device,
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000001a1",
             "sender_device_signature": {
-                "alg": "Ed25519",
+                "signature_algorithm": "Ed25519",
                 "signature": "signature",
                 "signer_public_key_multibase": "z6MkkWfGNkv1TUe64XN2p4WMVabjTxzk4snewMn4774HxGyB"
             },
@@ -1203,7 +1203,7 @@ mod tests {
             "sender_device_id": sender_device,
             "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
             "sender_device_signature": {
-                "alg": "EdDSA",
+                "signature_algorithm": "Ed25519",
                 "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
                 "sig": "signature"
             },

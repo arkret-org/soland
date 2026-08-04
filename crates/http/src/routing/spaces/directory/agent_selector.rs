@@ -111,7 +111,6 @@ pub(super) fn signed_agent_selector_claim(
         .map_err(|err| AppError::internal(format!("agent selector claim signing failed: {err}")))?;
     let proof = PayloadProof {
         kind: "detached_jws".to_owned(),
-        alg: signature.alg,
         verification_method: signature.verification_method,
         payload_digest: signature.payload_digest,
         created_at: signature.created_at,

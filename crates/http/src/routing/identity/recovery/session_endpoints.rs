@@ -890,16 +890,17 @@ pub(super) async fn verify_principal_signing_proof(
     record: &RecoverySessionServiceState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    // recovery-session.schema.json $defs/principal_signing_proof requires `alg`.
-    let alg = proof
-        .get("alg")
+    // recovery-session.schema.json $defs/principal_signing_proof requires
+    // `signature_algorithm` for this raw signature object.
+    let signature_algorithm = proof
+        .get("signature_algorithm")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| AppError::invalid_param("proof.alg is required"))?;
-    if !matches!(alg, "EdDSA" | "Ed25519") {
+        .ok_or_else(|| AppError::invalid_param("proof.signature_algorithm is required"))?;
+    if signature_algorithm != "Ed25519" {
         return Err(AppError::invalid_param(format!(
-            "proof.alg `{alg}` not in {{EdDSA, Ed25519}}",
+            "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519`",
         )));
     }
     let verification_method = proof
@@ -952,10 +953,10 @@ pub(super) async fn verify_trusted_recovery_service_proof(
     record: &RecoverySessionServiceState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    let alg = required_proof_string(proof, "alg")?;
-    if !matches!(alg, "EdDSA" | "Ed25519") {
+    let signature_algorithm = required_proof_string(proof, "signature_algorithm")?;
+    if signature_algorithm != "Ed25519" {
         return Err(AppError::invalid_param(format!(
-            "proof.alg `{alg}` not in {{EdDSA, Ed25519}}",
+            "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519`",
         )));
     }
     let service_id = required_proof_string(proof, "service_id")?;
@@ -1037,7 +1038,7 @@ pub(super) async fn verify_trusted_recovery_service_proof(
 ///     authoritative at the session `created_at` (not_before/expires_at window,
 ///     not revoked), and `verification_method` MUST equal that entry's
 ///     verification_method;
-/// (b) `signature` (under the entry's `alg`, Ed25519) MUST verify over the
+/// (b) `signature` (under the entry's `signature_algorithm`, Ed25519) MUST verify over the
 ///     generic recovery transcript whose proof_body is this proof object with
 ///     `signature` and `unlock_commitment` removed, using the public key
 ///     decoded from the entry's `public_key_multibase`;
@@ -1051,10 +1052,10 @@ pub(super) async fn verify_recovery_unlock_proof(
     record: &RecoverySessionServiceState,
     proof: &Map<String, Value>,
 ) -> Result<(), AppError> {
-    let alg = required_proof_string(proof, "alg")?;
-    if alg != "Ed25519" {
+    let signature_algorithm = required_proof_string(proof, "signature_algorithm")?;
+    if signature_algorithm != "Ed25519" {
         return Err(AppError::invalid_param(format!(
-            "proof.alg `{alg}` must be `Ed25519` for recovery_unlock",
+            "proof.signature_algorithm `{signature_algorithm}` must be `Ed25519` for recovery_unlock",
         )));
     }
     let recovery_secret_ref = required_proof_string(proof, "recovery_secret_ref")?;
@@ -1076,10 +1077,13 @@ pub(super) async fn verify_recovery_unlock_proof(
             "recovery_unlock verification_method does not match the resolved recovery key entry",
         ));
     }
-    let entry_alg = entry.get("alg").and_then(Value::as_str).unwrap_or_default();
-    if entry_alg != alg {
+    let entry_signature_algorithm = entry
+        .get("signature_algorithm")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+    if entry_signature_algorithm != signature_algorithm {
         return Err(recovery_evidence_unbound_error(
-            "recovery_unlock proof.alg does not match the recovery key entry alg",
+            "recovery_unlock proof.signature_algorithm does not match the recovery key entry signature_algorithm",
         ));
     }
     let recovery_key = decode_recovery_key_public_key(&entry)?;
@@ -1228,7 +1232,7 @@ fn trusted_recovery_service_proof_body(proof: &Map<String, Value>) -> Result<Val
         "service_id": required_proof_string(proof, "service_id")?,
         "audience": required_proof_string(proof, "audience")?,
         "verification_method": required_proof_string(proof, "verification_method")?,
-        "alg": required_proof_string(proof, "alg")?,
+        "signature_algorithm": required_proof_string(proof, "signature_algorithm")?,
     });
     if let Some(attestation_ref) = proof
         .get("attestation_ref")

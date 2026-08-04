@@ -151,9 +151,7 @@ pub(super) fn preview_token_signature_valid(state: &AppState, claim: &Value) -> 
     let Some(proof) = claim.get("proof").and_then(Value::as_object) else {
         return false;
     };
-    if proof.get("kind").and_then(Value::as_str) != Some("detached_jws")
-        || proof.get("alg").and_then(Value::as_str) != Some("EdDSA")
-    {
+    if proof.get("kind").and_then(Value::as_str) != Some("detached_jws") {
         return false;
     }
     let Some(verification_method) = proof.get("verification_method").and_then(Value::as_str) else {
@@ -203,7 +201,7 @@ pub(super) fn verify_detached_jws_with_service_key(
     let Ok(protected) = serde_json::from_slice::<Value>(&protected) else {
         return false;
     };
-    if protected.get("alg").and_then(Value::as_str) != Some("EdDSA") {
+    if protected.get("alg").and_then(Value::as_str) != Some("Ed25519") {
         return false;
     }
     let Ok(signature_bytes) = URL_SAFE_NO_PAD.decode(signature_b64) else {
@@ -260,7 +258,7 @@ mod tests {
         });
         let canonical_bytes = canonical::canonical_json_bytes(&unsigned).unwrap();
         let payload_digest = canonical::sha256_digest(&canonical_bytes);
-        let protected_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"EdDSA"}"#);
+        let protected_b64 = URL_SAFE_NO_PAD.encode(br#"{"alg":"Ed25519"}"#);
         let signing_input = format!(
             "{protected_b64}.{}",
             URL_SAFE_NO_PAD.encode(&canonical_bytes)
@@ -271,7 +269,6 @@ mod tests {
             "proof".to_owned(),
             json!({
                 "kind": "detached_jws",
-                "alg": "EdDSA",
                 "verification_method": verification_method,
                 "payload_digest": payload_digest,
                 "jws": format!(

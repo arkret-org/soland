@@ -580,7 +580,6 @@ fn registration_outcome(
         issuer_service_id: issuer.clone(),
         proof: PayloadProof {
             kind: "detached_jws".to_owned(),
-            alg: "EdDSA".to_owned(),
             verification_method: arkret_wire::DidUrl::new(format!("{issuer}#registry-key-1"))
                 .expect("registry verification method is a DID URL"),
             payload_digest: test_hash("placeholder-payload"),
@@ -588,7 +587,7 @@ fn registration_outcome(
             domain: None,
             audience: None,
             proof_purpose: None,
-            jws: "eyJhbGciOiJFZERTQSJ9..contract-fixture".to_owned(),
+            jws: "eyJhbGciOiJFZDI1NTE5In0..contract-fixture".to_owned(),
         },
     };
     receipt.registration_receipt_id = receipt

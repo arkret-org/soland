@@ -113,7 +113,6 @@ fn signed_keypackage_claim_request(
             "holder_acceptance_proof": {
                 "kind": "detached_jws",
                 "verification_method": verification_method,
-                "alg": "EdDSA",
                 "payload_digest": format!("sha256:{}", "0".repeat(64)),
                 "created_at": arkret_canonical::format_timestamp_canonical(created_at),
                 "audience": authority_service_id,
@@ -281,13 +280,13 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
         trust_domain: TypedTrustDomainId::new("ak:trust_domain:soland-mls-test.local").unwrap(),
         principal_signing_key: PublishedKey {
             kid: DidUrl::new(format!("{principal}#principal-signing")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new("z6MkPrincipalAlice").unwrap(),
             key_format: KeyFormat::Multibase,
         },
         self_signing_key: SubordinateSignedKey {
             kid: DidUrl::new(format!("{principal}#self-signing")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new(self_signing_public_key).unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
@@ -295,13 +294,13 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
                     "{principal}#principal-signing"
                 ))
                 .unwrap(),
-                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
                 signature: NonEmptyString::new(format!("psk-sig-ssk-gen-{generation}")).unwrap(),
             },
         },
         user_signing_key: SubordinateSignedKey {
             kid: DidUrl::new(format!("{principal}#user-signing")).unwrap(),
-            alg: NonEmptyString::new("EdDSA").unwrap(),
+            algorithm: NonEmptyString::new("Ed25519").unwrap(),
             public_key: NonEmptyString::new("z6MkUserAlice").unwrap(),
             key_format: KeyFormat::Multibase,
             binding: SubordinateSignedKeyBinding {
@@ -309,7 +308,7 @@ fn cross_signing_publish(principal: &str, generation: u64) -> CrossSigningPublis
                     "{principal}#principal-signing"
                 ))
                 .unwrap(),
-                alg: NonEmptyString::new("EdDSA").unwrap(),
+                signature_algorithm: NonEmptyString::new("Ed25519").unwrap(),
                 signature: NonEmptyString::new(format!("psk-sig-usk-gen-{generation}")).unwrap(),
             },
         },
@@ -799,7 +798,7 @@ async fn mls_lifecycle_end_to_end() {
         "created_at": "2026-05-25T00:00:02.000Z",
         "signature": {
             "kid": format!("{alice_did}#self-signing"),
-            "alg": "EdDSA",
+            "signature_algorithm": "Ed25519",
             "sig": b64(&[0_u8; 64])
         }
     });
