@@ -12,8 +12,15 @@ use tokio::signal;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
 
+
+pub(crate) mod bootstrap;
+pub(crate) mod object_storage;
+pub(crate) mod otel;
+pub(crate) mod process_environment;
+pub(crate) mod runtime;
+
 fn main() -> anyhow::Result<()> {
-    soland::process_environment::prepare()?;
+    crate::process_environment::prepare()?;
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
@@ -86,7 +93,7 @@ async fn run() -> anyhow::Result<()> {
     // on the in-memory outbox would silently drop pending deliveries on every
     // restart (`sync/federation.md` §4.1).
     soland_http::config::assert_durable_outbox_backend(&config, db.pool.is_some())?;
-    let bootstrap = soland::bootstrap::resolve_and_build_persistence(&config, &db).await?;
+    let bootstrap = crate::bootstrap::resolve_and_build_persistence(&config, &db).await?;
     let bootstrap = if matches!(
         bootstrap.state,
         arkret_identity::service_identity::ServiceIdentityState::WaitingProvider { .. }
@@ -169,7 +176,7 @@ async fn run() -> anyhow::Result<()> {
     }
     let supervisor_persistence = bootstrap.persistence.clone();
     let supervisor_key_store = bootstrap.key_store.clone();
-    let state = soland::runtime::build_app_state(
+    let state = crate::runtime::build_app_state(
         config.clone(),
         db,
         bootstrap.persistence,
@@ -354,7 +361,7 @@ async fn run() -> anyhow::Result<()> {
 /// (typical pattern: bind to `_guard` in `main`).
 struct TracingGuards {
     _file_guard: Option<tracing_appender::non_blocking::WorkerGuard>,
-    _otel_guard: soland::otel::OtelGuard,
+    _otel_guard: crate::otel::OtelGuard,
 }
 
 fn init_tracing(
@@ -429,7 +436,7 @@ fn init_tracing(
         None
     };
 
-    let (otel_guard, otel_layer) = soland::otel::init_layer("soland")?;
+    let (otel_guard, otel_layer) = crate::otel::init_layer("soland")?;
     if let Some(layer) = otel_layer {
         layers.push(layer);
     }
@@ -486,8 +493,8 @@ where
 async fn wait_for_service_identity<A>(
     acceptor: A,
     config: AppConfig,
-    bootstrap: soland::bootstrap::ServiceIdentityBootstrap,
-) -> anyhow::Result<soland::bootstrap::ServiceIdentityBootstrap>
+    bootstrap: crate::bootstrap::ServiceIdentityBootstrap,
+    ) -> anyhow::Result<crate::bootstrap::ServiceIdentityBootstrap>
 where
     A: Acceptor + Send + 'static,
 {
@@ -501,7 +508,7 @@ where
     let resolve = async {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(5)).await;
-            match soland::bootstrap::retry_service_identity(
+            match crate::bootstrap::retry_service_identity(
                 &config,
                 persistence.clone(),
                 key_store.clone(),
@@ -582,7 +589,7 @@ fn spawn_service_identity_supervisor(
         interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
             interval.tick().await;
-            match soland::bootstrap::retry_service_identity(
+            match crate::bootstrap::retry_service_identity(
                 state.config(),
                 persistence.clone(),
                 key_store.clone(),
