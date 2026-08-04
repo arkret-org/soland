@@ -1,4 +1,4 @@
-use arkret_models_collaboration::protocol_journey::ParticipationBits;
+use arkret_models_collaboration::governance::agent_participation::ParticipationBits;
 
 use super::*;
 
@@ -21,10 +21,10 @@ pub(super) fn agent_participation_ceiling_change(
 ) -> Option<(
     &'static str,
     String,
-    arkret_models_collaboration::protocol_journey::ParticipationBits,
+    arkret_models_collaboration::governance::agent_participation::ParticipationBits,
     Vec<String>,
 )> {
-    use arkret_models_collaboration::protocol_journey::ParticipationBits;
+    use arkret_models_collaboration::governance::agent_participation::ParticipationBits;
     let payload = &operation.payload;
     let realm_uuid = ap_uuid_part(operation.realm_id.as_str()).to_owned();
     let find = || -> Option<Value> {
@@ -161,8 +161,8 @@ pub async fn validate_agent_participation_ceiling(
     state: &AppState,
     operations: &[Operation],
 ) -> Result<(), &'static str> {
+    use arkret_models_collaboration::governance::agent_participation::ParticipationBits;
     use arkret_models_collaboration::governance::agent_participation::validate_agent_participation_tightens;
-    use arkret_models_collaboration::protocol_journey::ParticipationBits;
     for operation in operations {
         let Some((scope_kind, _scope_key, child, parent_keys)) =
             agent_participation_ceiling_change(operation)

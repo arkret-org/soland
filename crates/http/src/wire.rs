@@ -494,7 +494,7 @@ pub use arkret_models_collaboration::objects::media::{
     CallMediaParticipantBinding, CallMediaServiceSignature, CallMediaTokenExchangeOutcome,
     CallMediaTokenExchangeRequestBody,
 };
-pub use arkret_models_collaboration::protocol_journey::{
+pub use arkret_models_collaboration::sidecar_operations::{
     SidecarEnsureOutcome as AgentSidecarEnsureOutcome,
     SidecarEnsureRequestBody as AgentSidecarEnsureRequestBody,
 };

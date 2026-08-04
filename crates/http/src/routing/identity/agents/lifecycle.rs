@@ -18,7 +18,7 @@ struct PreparedAgentProvision {
 fn agent_provision_phase_key(
     phase: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
-    idempotency_key: &arkret_wire::ProtocolOpaqueId,
+    idempotency_key: &arkret_wire::IdempotencyKey,
 ) -> String {
     format!(
         "agent-provision:{phase}:{}:{}",
@@ -38,7 +38,7 @@ fn agent_provision_request_hash(body: &AgentProvisionRequestBody) -> Result<Stri
 fn allocation_binding(
     controller_id: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
-    idempotency_key: &arkret_wire::ProtocolOpaqueId,
+    idempotency_key: &arkret_wire::IdempotencyKey,
     nonce: &str,
 ) -> Result<Vec<u8>, AppError> {
     arkret_canonical::canonical::canonical_json_bytes(&json!({
@@ -55,7 +55,7 @@ fn issue_allocation_handle(
     state: &AppState,
     controller_id: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
-    idempotency_key: &arkret_wire::ProtocolOpaqueId,
+    idempotency_key: &arkret_wire::IdempotencyKey,
 ) -> Result<arkret_wire::ProtocolOpaqueId, AppError> {
     use ed25519_dalek::Signer as _;
 
@@ -74,7 +74,7 @@ fn issue_allocation_handle(
 fn verify_allocation_handle(
     controller_id: &str,
     operation_id: &arkret_wire::ProtocolOperationId,
-    idempotency_key: &arkret_wire::ProtocolOpaqueId,
+    idempotency_key: &arkret_wire::IdempotencyKey,
     handle: &arkret_wire::ProtocolOpaqueId,
 ) -> Result<(), AppError> {
     let mut parts = handle.as_str().split('.');

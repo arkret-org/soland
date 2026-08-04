@@ -1,5 +1,7 @@
 use arkret_models_collaboration::governance::agent_participation::effective_participation;
-use arkret_models_collaboration::protocol_journey::{ParticipationBits, ParticipationScope};
+use arkret_models_collaboration::governance::agent_participation::{
+    ParticipationBits, ParticipationScope,
+};
 use serde_json::Value;
 
 use crate::state::AppState;

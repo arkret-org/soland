@@ -316,7 +316,7 @@ async fn contact_list_rows(
         let can_receive_direct_messages = row.state == ContactState::Accepted
             && row.effective_scopes.as_ref().is_some_and(|scopes| {
                 scopes.contains(
-                    &arkret_models_collaboration::protocol_journey::ContactScope::DirectMessage,
+                    &arkret_models_collaboration::contact_operations::ContactScope::DirectMessage,
                 )
             });
         if !can_receive_direct_messages {
@@ -432,14 +432,14 @@ fn contact_scope_wire(scope: &str) -> String {
 
 fn contact_scope_model(
     scope: &str,
-) -> Option<arkret_models_collaboration::protocol_journey::ContactScope> {
+) -> Option<arkret_models_collaboration::contact_operations::ContactScope> {
     serde_json::from_value(Value::String(scope.to_owned())).ok()
 }
 
 fn intersection(
-    left: &[arkret_models_collaboration::protocol_journey::ContactScope],
-    right: &[arkret_models_collaboration::protocol_journey::ContactScope],
-) -> Vec<arkret_models_collaboration::protocol_journey::ContactScope> {
+    left: &[arkret_models_collaboration::contact_operations::ContactScope],
+    right: &[arkret_models_collaboration::contact_operations::ContactScope],
+) -> Vec<arkret_models_collaboration::contact_operations::ContactScope> {
     let right = right.iter().collect::<BTreeSet<_>>();
     left.iter()
         .filter(|scope| right.contains(scope))

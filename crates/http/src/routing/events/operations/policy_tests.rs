@@ -806,20 +806,22 @@ async fn strand_selection_is_capped_by_enclosing_circle_ceiling() {
     )
     .await;
 
-    let scope = arkret_models_collaboration::protocol_journey::ParticipationScope::Strand {
-        realm_id,
-        strand_id,
-    };
+    let scope =
+        arkret_models_collaboration::governance::agent_participation::ParticipationScope::Strand {
+            realm_id,
+            strand_id,
+        };
     let ceiling =
         crate::routing::agent_participation::resolve_effective_ceiling(&state, &scope).await;
     assert!(!ceiling.accept_third_party_mention);
-    let selection = arkret_models_collaboration::protocol_journey::ParticipationBits {
-        reply_message: true,
-        reaction_add: true,
-        reaction_remove: false,
-        accept_third_party_mention: true,
-        act_on_behalf: false,
-    };
+    let selection =
+        arkret_models_collaboration::governance::agent_participation::ParticipationBits {
+            reply_message: true,
+            reaction_add: true,
+            reaction_remove: false,
+            accept_third_party_mention: true,
+            act_on_behalf: false,
+        };
     let effective =
         arkret_models_collaboration::governance::agent_participation::effective_participation(
             ceiling, selection,

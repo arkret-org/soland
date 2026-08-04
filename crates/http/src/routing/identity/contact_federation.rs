@@ -17,6 +17,13 @@
 
 use arkret_canonical as canonical;
 use arkret_identifiers::{Did, Hash};
+use arkret_models_collaboration::contact_operations::{
+    ContactBasis, ContactCurrentProof, ContactScope, ContactScopeUpdatePayload,
+    GlareConcurrencyAttestation, PeerContactControlDeferredOutcome, PeerContactControlKind,
+    PeerContactControlReceipt, PeerContactControlReceiptDomain, PeerContactDisposition,
+    PeerContactEventSubmitOutcome, PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain,
+    PeerContactSubmitOutcome, PeerContactSubmitRequestBody, RequestAcceptanceReceipt,
+};
 use arkret_models_collaboration::events_payloads::contact::{
     ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
     ContactTombstonedPayload,
@@ -24,15 +31,7 @@ use arkret_models_collaboration::events_payloads::contact::{
 use arkret_models_collaboration::governance::peer_contact::{
     ContactIntroductionEvidence, PeerContactAddress,
 };
-use arkret_models_collaboration::protocol_journey::{
-    ContactBasis, ContactCurrentProof, ContactScope, ContactScopeUpdatePayload,
-    GlareConcurrencyAttestation, PeerContactControlDeferredOutcome, PeerContactControlKind,
-    PeerContactControlReceipt, PeerContactControlReceiptDomain, PeerContactDisposition,
-    PeerContactEventSubmitOutcome, PeerContactMirrorReceipt, PeerContactMirrorReceiptDomain,
-    PeerContactSubmitOutcome, PeerContactSubmitRequestBody, ProtocolSignature,
-    RequestAcceptanceReceipt,
-};
-use arkret_wire::{Base64UrlString, DidUrl, Event};
+use arkret_wire::{Base64UrlString, DidUrl, Event, ProtocolSignature};
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chrono::Duration;
@@ -317,19 +316,19 @@ async fn peer_contacts_submit(
     let mirror_receipt = sign_contact_mirror_receipt(state, &delivery, signed_event, disposition)?;
     let result_kind = match &delivery {
         PeerContactSubmitRequestBody::Request { .. } => {
-            arkret_models_collaboration::protocol_journey::ContactResultKind::Request
+            arkret_models_collaboration::contact_operations::ContactResultKind::Request
         }
         PeerContactSubmitRequestBody::Response { .. } => {
-            arkret_models_collaboration::protocol_journey::ContactResultKind::Response
+            arkret_models_collaboration::contact_operations::ContactResultKind::Response
         }
         PeerContactSubmitRequestBody::Reject { .. } => {
-            arkret_models_collaboration::protocol_journey::ContactResultKind::Reject
+            arkret_models_collaboration::contact_operations::ContactResultKind::Reject
         }
         PeerContactSubmitRequestBody::ScopeUpdate { .. } => {
-            arkret_models_collaboration::protocol_journey::ContactResultKind::ScopeUpdate
+            arkret_models_collaboration::contact_operations::ContactResultKind::ScopeUpdate
         }
         PeerContactSubmitRequestBody::Tombstone { .. } => {
-            arkret_models_collaboration::protocol_journey::ContactResultKind::Tombstone
+            arkret_models_collaboration::contact_operations::ContactResultKind::Tombstone
         }
         PeerContactSubmitRequestBody::ProofRefresh { .. }
         | PeerContactSubmitRequestBody::GlareFinalize { .. } => unreachable!(),
@@ -632,8 +631,8 @@ fn validate_glare_finalize_evidence(
 
 fn validate_contact_lineage_carrier(
     event: &Event,
-    lineage: &arkret_models_collaboration::protocol_journey::ContactLineage,
-    current_proof: &arkret_models_collaboration::protocol_journey::ContactCurrentProof,
+    lineage: &arkret_models_collaboration::contact_operations::ContactLineage,
+    current_proof: &arkret_models_collaboration::contact_operations::ContactCurrentProof,
     terminal: bool,
 ) -> Result<(), AppError> {
     if lineage.event_ref != event.event_id

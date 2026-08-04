@@ -2291,8 +2291,7 @@ mod managed_agent_pcr_batch_tests {
             Value::String("principal_control".to_owned()),
         );
         realm.schema_refs = vec!["ak.profile.principal_control_realm.v1".to_owned()];
-        realm.history_visibility =
-            arkret_models_collaboration::protocol_journey::HistoryVisibility::Restricted;
+        realm.history_visibility = arkret_wire::HistoryVisibility::Restricted;
         realm.encryption_profile = arkret_wire::EncryptionProfile::MlsRfc9420;
         realm.content_encryption_floor =
             Some(arkret_models_collaboration::governance::circle::EncryptionFloor::E2eeRequired);

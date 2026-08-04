@@ -1,16 +1,17 @@
-use arkret_models_collaboration::events_payloads::contact::{
-    ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
-    ContactTombstonedPayload,
-};
-use arkret_models_collaboration::protocol_journey::{
+use arkret_models_collaboration::contact_operations::{
     ContactAcceptedOutcome, ContactBasis, ContactCommitRequestBody, ContactCurrentProof,
     ContactFailedOutcome, ContactLineage, ContactOperationRejectReason, ContactPreparedEventDraft,
     ContactPreparedOutcome, ContactResultKind, ContactScope, ContactScopeUpdatePayload,
     ContactScopeUpdateSchema, NormalResponseAcceptanceReceipt, RejectAcceptanceReceipt,
     RequestAcceptanceReceipt, RequestAcceptanceReceiptCore,
 };
+use arkret_models_collaboration::events_payloads::contact::{
+    ContactAcceptedPayload, ContactRejectedPayload, ContactRequestedPayload,
+    ContactTombstonedPayload,
+};
 use arkret_wire::{
-    Base64UrlString, DidUrl, Event, ProtocolOpaqueId, ProtocolOperationId, ProtocolSignature,
+    Base64UrlString, DidUrl, Event, IdempotencyKey, ProtocolOperationId, ProtocolSignature,
+    ReservationHandle,
 };
 use ed25519_dalek::Signature;
 use serde::de::DeserializeOwned;
@@ -78,8 +79,8 @@ impl ContactReservationBranch {
 #[serde(deny_unknown_fields)]
 struct ContactReservation {
     operation_id: ProtocolOperationId,
-    idempotency_key: ProtocolOpaqueId,
-    reservation_handle: ProtocolOpaqueId,
+    idempotency_key: IdempotencyKey,
+    reservation_handle: ReservationHandle,
     holder: ContactPeer,
     branch: ContactReservationBranch,
     event_draft: ContactPreparedEventDraft,
@@ -87,11 +88,11 @@ struct ContactReservation {
     expires_at: chrono::DateTime<chrono::Utc>,
 }
 
-fn contact_reservation_key(handle: &ProtocolOpaqueId) -> String {
+fn contact_reservation_key(handle: &ReservationHandle) -> String {
     format!("contact-reservation:{}", handle.as_str())
 }
 
-fn contact_phase_idempotency_key(phase: &str, key: &ProtocolOpaqueId) -> String {
+fn contact_phase_idempotency_key(phase: &str, key: &IdempotencyKey) -> String {
     format!("contact-{phase}:{}", key.as_str())
 }
 
@@ -452,7 +453,7 @@ fn prepared_outcome(reservation: &ContactReservation) -> ContactOperationOutcome
 async fn store_prepare(
     state: &AppState,
     principal: &str,
-    idempotency_key: &ProtocolOpaqueId,
+    idempotency_key: &IdempotencyKey,
     request_hash: &str,
     reservation: &ContactReservation,
 ) -> Result<(), AppError> {
@@ -542,7 +543,7 @@ async fn prepare(
     state: &AppState,
     session: &SessionRecord,
     operation_id: ProtocolOperationId,
-    idempotency_key: ProtocolOpaqueId,
+    idempotency_key: IdempotencyKey,
     branch: ContactReservationBranch,
     payload: Value,
     event_kind: &'static str,
@@ -602,7 +603,7 @@ async fn prepare(
     let reservation = ContactReservation {
         operation_id,
         idempotency_key: idempotency_key.clone(),
-        reservation_handle: ProtocolOpaqueId::new(crate::ids::generate("reservation"))
+        reservation_handle: ReservationHandle::new(crate::ids::generate("reservation"))
             .map_err(AppError::internal)?,
         holder,
         branch,

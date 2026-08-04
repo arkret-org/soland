@@ -50,7 +50,7 @@ use arkret_models_collaboration::governance::agent_artifacts::{GrantSnapshot, Pu
 use arkret_models_collaboration::governance::agent_participation::{
     AgentParticipationEntry, AgentParticipationOutcome,
 };
-use arkret_models_collaboration::protocol_journey::{
+use arkret_models_collaboration::governance::agent_participation::{
     ParticipationBits, ParticipationReplaceRequestBody, ParticipationScope,
 };
 use arkret_models_identity::validate_agent_slug;

@@ -5,7 +5,7 @@ use arkret_models_collaboration::agent_operations::{
     AgentSidecarState, AgentSidecarView, PendingSidecarAccessReconciliationItem,
     PendingSidecarAccessReconciliationStage, agent_sidecar_desired_access_digest,
 };
-use arkret_models_collaboration::protocol_journey::{
+use arkret_models_collaboration::sidecar_operations::{
     SidecarContextRef, SidecarEnsureOutcome, SidecarEnsureRequestBody, SidecarPreparedEventDraft,
     SidecarPreparedOutcome,
 };
@@ -996,7 +996,7 @@ fn new_unsigned_sidecar_event(
     })
 }
 
-fn sidecar_reservation_key(handle: &arkret_wire::ProtocolOpaqueId) -> String {
+fn sidecar_reservation_key(handle: &arkret_wire::ReservationHandle) -> String {
     format!("sidecar-reservation:{}", handle.as_str())
 }
 
@@ -1005,7 +1005,7 @@ async fn store_sidecar_prepare(
     principal_id: &str,
     idempotency_key: &str,
     request_hash: &str,
-    reservation_handle: &arkret_wire::ProtocolOpaqueId,
+    reservation_handle: &arkret_wire::ReservationHandle,
     expires_at: chrono::DateTime<chrono::Utc>,
     outcome: &SidecarEnsureOutcome,
 ) -> Result<(), AppError> {
@@ -1062,7 +1062,7 @@ async fn store_sidecar_final_outcome(
 async fn prepare_sidecar(
     state: &AppState,
     session: &SessionRecord,
-    body: arkret_models_collaboration::protocol_journey::SidecarEnsurePrepareRequestBody,
+    body: arkret_models_collaboration::sidecar_operations::SidecarEnsurePrepareRequestBody,
 ) -> JsonResult<SidecarEnsureOutcome> {
     if body.controller_id.as_str() != session.actor {
         return Err(sidecar_create_denied(
@@ -1116,15 +1116,16 @@ async fn prepare_sidecar(
     {
         return json_ok(SidecarEnsureOutcome::Accepted {
             operation_id: body.operation_id,
-            accepted_phase: arkret_models_collaboration::protocol_journey::SidecarAcceptedPhase::Attach,
-            ok: arkret_models_collaboration::protocol_journey::SidecarAcceptedOk,
+            accepted_phase:
+                arkret_models_collaboration::sidecar_operations::SidecarAcceptedPhase::Attach,
+            ok: arkret_models_collaboration::sidecar_operations::SidecarAcceptedOk,
             sidecar_id: SidecarId::new(sidecar.sidecar_id.clone())
                 .map_err(|error| AppError::internal(format!("stored Sidecar id: {error}")))?,
             private_strand_id: StrandId::new(context.private_strand_id)
                 .map_err(|error| AppError::internal(format!("stored Strand id: {error}")))?,
             private_relation_id: RelationId::new(context.private_relation_id)
                 .map_err(|error| AppError::internal(format!("stored Relation id: {error}")))?,
-            access_readiness: arkret_models_collaboration::protocol_journey::SidecarAccessReadiness::KeyMaterialPending,
+            access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
             pending_access_reconciliations: Vec::new(),
         });
     }
@@ -1206,7 +1207,7 @@ async fn prepare_sidecar(
         }),
     )?;
     let context_attach_event_draft = sidecar_event_draft(&attach_event)?;
-    let reservation_handle = arkret_wire::ProtocolOpaqueId::new(ids::generate("reservation"))
+    let reservation_handle = arkret_wire::ReservationHandle::new(ids::generate("reservation"))
         .map_err(AppError::internal)?;
     let expires_at = created_at + chrono::Duration::minutes(10);
     let prepared = if let Some(create_event_id) = create_event_id {
@@ -1316,7 +1317,7 @@ async fn validate_sidecar_commit_reservation(
     state: &AppState,
     session: &SessionRecord,
     operation_id: &arkret_wire::ProtocolOperationId,
-    reservation_handle: &arkret_wire::ProtocolOpaqueId,
+    reservation_handle: &arkret_wire::ReservationHandle,
     create_event: Option<&arkret_wire::Event>,
     context_attach_event: &arkret_wire::Event,
 ) -> Result<SidecarPreparedOutcome, AppError> {
@@ -1526,12 +1527,13 @@ async fn ensure_sidecar_impl(
                 sidecar_prepared_coordinates(&prepared);
             let outcome = SidecarEnsureOutcome::Accepted {
                 operation_id: body.operation_id,
-                accepted_phase: arkret_models_collaboration::protocol_journey::SidecarAcceptedPhase::Commit,
-                ok: arkret_models_collaboration::protocol_journey::SidecarAcceptedOk,
+                accepted_phase:
+                    arkret_models_collaboration::sidecar_operations::SidecarAcceptedPhase::Commit,
+                ok: arkret_models_collaboration::sidecar_operations::SidecarAcceptedOk,
                 sidecar_id: sidecar_id.clone(),
                 private_strand_id: private_strand_id.clone(),
                 private_relation_id: private_relation_id.clone(),
-                access_readiness: arkret_models_collaboration::protocol_journey::SidecarAccessReadiness::KeyMaterialPending,
+                access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
                 pending_access_reconciliations: Vec::new(),
             };
             store_sidecar_final_outcome(
@@ -1602,12 +1604,13 @@ async fn ensure_sidecar_impl(
                 sidecar_prepared_coordinates(&prepared);
             let outcome = SidecarEnsureOutcome::Accepted {
                 operation_id: body.operation_id,
-                accepted_phase: arkret_models_collaboration::protocol_journey::SidecarAcceptedPhase::Attach,
-                ok: arkret_models_collaboration::protocol_journey::SidecarAcceptedOk,
+                accepted_phase:
+                    arkret_models_collaboration::sidecar_operations::SidecarAcceptedPhase::Attach,
+                ok: arkret_models_collaboration::sidecar_operations::SidecarAcceptedOk,
                 sidecar_id: sidecar_id.clone(),
                 private_strand_id: private_strand_id.clone(),
                 private_relation_id: private_relation_id.clone(),
-                access_readiness: arkret_models_collaboration::protocol_journey::SidecarAccessReadiness::KeyMaterialPending,
+                access_readiness: AgentSidecarAccessReadiness::KeyMaterialPending,
                 pending_access_reconciliations: Vec::new(),
             };
             store_sidecar_final_outcome(

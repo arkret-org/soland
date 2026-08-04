@@ -22,15 +22,17 @@ use arkret_models_collaboration::agent_operations::AgentLifecycleState;
 // `arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy` also
 // resolves at the crate root, but the invite-addressing strong type lives under `model`;
 // import it via the `model` path to avoid binding the wrong same-named re-export.
+use arkret_models_collaboration::contact_operations::{
+    ContactAcceptRequestBody, ContactOperationOutcome, ContactOperationRequestBody, ContactPeer,
+    ContactRejectRequestBody, ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
+};
 use arkret_models_collaboration::governance::invite_addressing::InviteReceivePolicy;
 use arkret_models_collaboration::http_bodies::{
     ContactAgentProjection, ContactList, ContactListRow, ContactState, DirectConversationSummary,
     DirectConversationSummaryState,
 };
 use arkret_models_collaboration::objects::account_status::AccountStatus;
-use arkret_models_collaboration::protocol_journey::{
-    ContactAcceptRequestBody, ContactOperationOutcome, ContactOperationRequestBody, ContactPeer,
-    ContactRejectRequestBody, ContactScopeUpdateRequestBody, ContactTombstoneRequestBody,
+use arkret_models_collaboration::operation_control::{
     DirectConversationCoordinates, DirectConversationResolveOutcome,
     DirectConversationResolveRequestBody, DirectConversationResolveStateOutcome,
 };
@@ -1464,7 +1466,7 @@ async fn direct_conversation_resolve(
         return json_ok(DirectConversationResolveOutcome::State(
             DirectConversationResolveStateOutcome::Suspended {
                 coordinates: direct_coordinates(pair_key_hash, &binding)?,
-                suspension_reason: arkret_models_collaboration::protocol_journey::DirectConversationSuspensionReason::ContactDirectionRevoked,
+                suspension_reason: arkret_models_collaboration::operation_control::DirectConversationSuspensionReason::ContactDirectionRevoked,
             },
         ));
     }
@@ -1483,7 +1485,7 @@ async fn direct_conversation_resolve(
     json_ok(DirectConversationResolveOutcome::State(
         DirectConversationResolveStateOutcome::TemporarilyUnavailable {
             operation_id,
-            reason: arkret_models_collaboration::protocol_journey::DirectConversationUnavailableReason::DependencyPending,
+            reason: arkret_models_collaboration::operation_control::DirectConversationUnavailableReason::DependencyPending,
         },
     ))
 }
