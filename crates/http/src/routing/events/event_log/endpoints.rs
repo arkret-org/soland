@@ -149,19 +149,6 @@ async fn events_describe(
 #[tracing::instrument(skip_all, fields(op = "submit_event"))]
 async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) {
     let state = depot.get_typed::<AppState>().expect("state injected");
-    let browser_origin_present = req.headers().contains_key("origin");
-    let supplied_sdk_source_sha256 = req
-        .headers()
-        .get(arkret_wire::HEADER_ARKRET_SDK_SOURCE_SHA256)
-        .and_then(|value| value.to_str().ok());
-    if let Some(message) = browser_sdk_build_identity_error(
-        state.config().development_mode,
-        browser_origin_present,
-        supplied_sdk_source_sha256,
-    ) {
-        render_error(res, StatusCode::CONFLICT, "state_mismatch", &message);
-        return;
-    }
     // api-conventions.md §6 — read the generic `Idempotency-Key` header before
     // the body is consumed; an empty / blank value is treated as absent so a
     // misconfigured client does not collapse every write onto one key.
@@ -336,24 +323,6 @@ async fn submit_event(depot: &mut Depot, req: &mut Request, res: &mut Response) 
             }
         }
     }
-}
-
-fn browser_sdk_build_identity_error(
-    development_mode: bool,
-    browser_origin_present: bool,
-    supplied_sdk_source_sha256: Option<&str>,
-) -> Option<String> {
-    if !development_mode || !browser_origin_present {
-        return None;
-    }
-    if supplied_sdk_source_sha256 == Some(arkret_wire::SDK_SOURCE_SHA256) {
-        return None;
-    }
-    Some(format!(
-        "browser Arkret SDK build mismatch: server SDK={}, browser SDK={}; rebuild/reload Inkson and restart Soland from the same SDK checkout",
-        arkret_wire::SDK_SOURCE_SHA256,
-        supplied_sdk_source_sha256.unwrap_or("<missing>"),
-    ))
 }
 
 /// How long a generic `Idempotency-Key` mapping is retained. api-conventions.md
@@ -971,29 +940,4 @@ pub(super) fn build_realm_actor_frontier(
         suite,
     )
     .map_err(|error| AppError::internal(format!("actor frontier is invalid: {error}")))
-}
-
-#[cfg(test)]
-mod build_identity_tests {
-    use super::*;
-
-    #[test]
-    fn development_browser_write_requires_exact_sdk_identity() {
-        assert!(browser_sdk_build_identity_error(true, true, None).is_some());
-        assert!(browser_sdk_build_identity_error(true, true, Some("stale")).is_some());
-        assert!(
-            browser_sdk_build_identity_error(
-                true,
-                true,
-                Some(arkret_wire::SDK_SOURCE_SHA256)
-            )
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn production_and_non_browser_writes_are_not_exact_build_gated() {
-        assert!(browser_sdk_build_identity_error(false, true, None).is_none());
-        assert!(browser_sdk_build_identity_error(true, false, None).is_none());
-    }
 }
