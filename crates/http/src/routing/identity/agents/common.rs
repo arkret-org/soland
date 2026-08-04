@@ -552,11 +552,18 @@ pub(super) fn agent_projection_from_record(
         }
         (_, AgentRuntimeState::PendingRuntimeKey) => (
             AgentReadinessState::NotReady,
-            vec![AgentReadinessBlocker::RuntimeKeyMissing],
+            vec![
+                AgentReadinessBlocker::RuntimeKeyMissing,
+                AgentReadinessBlocker::PairingOpen,
+            ],
         ),
         (_, AgentRuntimeState::Replacing) => (
             AgentReadinessState::NotReady,
             vec![AgentReadinessBlocker::PairingOpen],
+        ),
+        (_, AgentRuntimeState::PairingExpired) => (
+            AgentReadinessState::NotReady,
+            vec![AgentReadinessBlocker::RuntimeKeyMissing],
         ),
         _ => (
             AgentReadinessState::NotReady,

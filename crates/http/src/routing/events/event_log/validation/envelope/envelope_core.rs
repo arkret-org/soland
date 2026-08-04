@@ -275,7 +275,28 @@ async fn validate_event_envelope_with_ingress(
     // store.put succeeds, so any follow-up facet event in the same
     // session naturally passes the regular realm_has_member check.
     let realm_exists = realm_exists_in_index(state, &realm_id);
-    if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists {
+    // A managed-Agent PCR create is initially published through the batch
+    // surface, then may be replayed through the single-submission surface to
+    // recover its stored proposal receipt. Let an already accepted Event id
+    // reach the submitter's canonical-byte duplicate check; only a different
+    // create for the existing Realm is a `realm_already_exists` conflict here.
+    let historical_realm_create = if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists {
+        state
+            .event_queries()
+            .canonical_event(&event_id)
+            .await
+            .map_err(|error| {
+                event_validation_error(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "internal_error",
+                    format!("canonical Event duplicate lookup failed: {error}"),
+                )
+            })?
+            .is_some()
+    } else {
+        false
+    };
+    if kind == arkret_wire::EventKind::REALM_CREATE && realm_exists && !historical_realm_create {
         return Err(event_validation_error(
             StatusCode::CONFLICT,
             "realm_already_exists",
@@ -285,7 +306,7 @@ async fn validate_event_envelope_with_ingress(
     let is_realm_create_bootstrap = kind == "ak.realm.create"
         && realm_create_actor_is_creator(object, &actor_id)
         && (actor_id == session.actor || managed_agent_delegation)
-        && !realm_exists;
+        && (!realm_exists || historical_realm_create);
     let is_invite_acceptance_join =
         member_join_accepts_pending_invite(state, object, &session.actor, &realm_id).await;
     let is_invitee_invite_cancel =

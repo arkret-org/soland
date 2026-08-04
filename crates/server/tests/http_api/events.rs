@@ -1697,10 +1697,18 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         .expect("managed Agent PCR genesis initial submission");
     let create_submission_body = arkret_canonical::canonical_json_bytes(&create_submission)
         .expect("canonical managed Agent PCR genesis submission");
+    // Inkson publishes the managed genesis as a one-Event bootstrap batch,
+    // then replays the accepted Event as a single submission before the first
+    // Seal so the stored proposal receipt can be recovered. The second request
+    // must be an idempotent duplicate, never `realm_already_exists`.
+    let create_batch_submission_body = arkret_canonical::canonical_json_bytes(
+        &serde_json::json!({ "events": [create_submission.clone()] }),
+    )
+    .expect("canonical managed Agent PCR genesis batch submission");
     let mut create_response = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {token}"), true)
         .add_header("content-type", "application/json", true)
-        .body(create_submission_body)
+        .body(create_batch_submission_body)
         .send(&app_from_state(state.clone()))
         .await;
     let event_status = create_response.status_code.expect("create Event status");
@@ -1712,6 +1720,43 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
         event_status,
         StatusCode::OK,
         "managed Agent PCR create Event failed: {event_body}"
+    );
+    let stored_create = state
+        .test_persistence()
+        .events()
+        .get(create.event_id.as_str())
+        .await
+        .unwrap()
+        .expect("accepted managed Agent PCR create must be queryable by Event id");
+    assert_eq!(
+        stored_create.envelope,
+        serde_json::to_value(&create).unwrap()
+    );
+
+    let mut replay_response = TestClient::post("http://server/_arkret/self/events")
+        .add_header("authorization", format!("Bearer {token}"), true)
+        .add_header("content-type", "application/json", true)
+        .body(create_submission_body)
+        .send(&app_from_state(state.clone()))
+        .await;
+    let replay_status = replay_response
+        .status_code
+        .expect("managed Agent PCR replay status");
+    let replay_body: Value = replay_response
+        .take_json()
+        .await
+        .expect("managed Agent PCR replay body");
+    assert_eq!(
+        replay_status,
+        StatusCode::OK,
+        "managed Agent PCR replay failed: {replay_body}"
+    );
+    assert_eq!(replay_body["status"], "duplicate");
+    assert_eq!(replay_body["duplicate"][0], create.event_id.as_str());
+    assert_eq!(
+        replay_body["control_proposal_receipts"][0]["proposal_digest"],
+        create.event_digest().unwrap(),
+        "managed Agent PCR replay must recover the stored proposal receipt"
     );
 
     let records = state

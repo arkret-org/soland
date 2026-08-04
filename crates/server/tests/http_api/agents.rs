@@ -963,7 +963,8 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
     assert_eq!(
         listed_agent.readiness.blockers,
         vec![
-            arkret_models_collaboration::agent_operations::AgentReadinessBlocker::RuntimeKeyMissing
+            arkret_models_collaboration::agent_operations::AgentReadinessBlocker::RuntimeKeyMissing,
+            arkret_models_collaboration::agent_operations::AgentReadinessBlocker::PairingOpen,
         ]
     );
 

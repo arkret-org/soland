@@ -736,7 +736,22 @@ pub(super) async fn submit_event_value_with_context(
         None => None,
     };
     let service = state.event_queries();
-    if let Ok(Some(existing)) = service.canonical_event(&parsed.event_id).await {
+    // Event ids are globally unique. A managed Realm genesis is initially
+    // committed through the bootstrap-batch writer but may subsequently be
+    // replayed through this single-Event path, so resolve the retry by that
+    // stable id before asking whether the Realm already exists. A storage
+    // failure must not be silently reclassified as a brand-new create.
+    let existing = service
+        .canonical_event(&parsed.event_id)
+        .await
+        .map_err(|error| {
+            SubmitOneError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "internal_error",
+                format!("canonical Event duplicate lookup failed: {error}"),
+            )
+        })?;
+    if let Some(existing) = existing {
         if existing.canonical_bytes == parsed.canonical_bytes {
             let frontier = super::super::endpoints::load_realm_actor_frontier(
                 state,
