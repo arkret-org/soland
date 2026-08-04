@@ -1232,9 +1232,15 @@ impl AgentPairingState {
                     self.authorized_signing_key_binding.clone().ok_or_else(|| {
                         "active Agent runtime binding is missing signing_key_binding".to_owned()
                     })?;
-                let binding_runtime_public_key_digest =
-                    arkret_signatures::agent_evidence::agent_signing_public_key_runtime_request_digest(
-                        &signing_key_binding.verification_method,
+                // `authorized_public_key_digest` belongs to the public
+                // authorization domain: it is the digest the controller-signed
+                // `ak.agent.key.authorize` payload binds, i.e. the hash of the
+                // raw 32-byte Ed25519 key. The private pairing-request JWK
+                // digest is a deliberately distinct domain and lives in
+                // `runtime_public_key_digest`; recomputing it here would never
+                // match the stored column.
+                let binding_authorization_public_key_digest =
+                    arkret_signatures::agent_evidence::agent_signing_public_key_digest(
                         &signing_key_binding.public_key,
                     )
                     .map_err(|reason| {
@@ -1245,7 +1251,8 @@ impl AgentPairingState {
                 if signing_key_binding.agent_id.as_str() != self.id
                     || signing_key_binding.agent_key_authorize_event_id != authorized_event_ref
                     || signing_key_binding.verification_method != verification_method
-                    || binding_runtime_public_key_digest != public_key_digest
+                    || signing_key_binding.public_key_digest != public_key_digest
+                    || binding_authorization_public_key_digest != public_key_digest
                 {
                     return Err(
                         "active Agent runtime binding fields do not match signing_key_binding"
@@ -2976,6 +2983,96 @@ mod tests {
         LeaseBasisRef::Seal(
             arkret_identifiers::SealId::new(format!("ak:seal:sha256:{}", "a".repeat(64))).unwrap(),
         )
+    }
+
+    const ACTIVE_BINDING_AGENT_ID: &str = "did:web:agent.example";
+    const ACTIVE_BINDING_VERIFICATION_METHOD: &str = "did:web:agent.example#key-1";
+    const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:01904100-0000-7000-8000-000000000001";
+
+    fn active_signing_key_binding()
+    -> arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding {
+        let mut binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding =
+            serde_json::from_value(serde_json::json!({
+                "schema": "ak.schema.agent_signing_key_binding.v1",
+                "agent_id": ACTIVE_BINDING_AGENT_ID,
+                "agent_key_id": "runtime-1",
+                "verification_method": ACTIVE_BINDING_VERIFICATION_METHOD,
+                "public_key": {
+                    "kty": "OKP",
+                    "algorithm": "Ed25519",
+                    "key": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+                },
+                "public_key_digest": format!("sha256:{}", "00".repeat(32)),
+                "agent_key_authorize_event_id": ACTIVE_BINDING_EVENT_ID,
+                "issued_at": "2026-07-27T00:00:00.000Z",
+                "controller_id": "did:web:alice.example",
+                "controller_proof": {
+                    "kind": "controller_signature",
+                    "verification_method": "did:web:alice.example#key-1",
+                    "jws": "proof"
+                }
+            }))
+            .expect("valid signing-key binding fixture");
+        binding.public_key_digest =
+            arkret_signatures::agent_evidence::agent_signing_public_key_digest(&binding.public_key)
+                .expect("authorization-domain digest");
+        binding
+    }
+
+    fn active_agent_pairing_state(
+        binding: arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding,
+        authorized_public_key_digest: String,
+    ) -> AgentPairingState {
+        let mut record = AgentPairingState::new(
+            ACTIVE_BINDING_AGENT_ID.to_owned(),
+            "did:web:alice.example".to_owned(),
+            "ak:realm:personal".to_owned(),
+            DidUrl::new("did:web:alice.example#key-1".to_owned()).unwrap(),
+            AgentLifecycleState::Active,
+            Utc::now(),
+        );
+        let pairing_request_id = OpaqueLocalId::new("pairing-1").unwrap();
+        record.pairing_request_id = Some(pairing_request_id.clone());
+        record.paired_pairing_request_id = Some(pairing_request_id);
+        record.authorized_event_ref = Some(ACTIVE_BINDING_EVENT_ID.to_owned());
+        record.authorized_verification_method =
+            Some(ACTIVE_BINDING_VERIFICATION_METHOD.to_owned());
+        record.authorized_public_key_digest = Some(authorized_public_key_digest);
+        record.authorized_signing_key_binding = Some(binding);
+        record
+    }
+
+    /// `authorized_public_key_digest` is the public authorization domain (the
+    /// raw Ed25519 key hash the authorize Event binds), not the private
+    /// pairing-request JWK domain. Reading back an activated Agent must
+    /// succeed instead of failing the consistency gate.
+    #[test]
+    fn active_runtime_binding_reads_back_with_authorization_domain_digest() {
+        let binding = active_signing_key_binding();
+        let record =
+            active_agent_pairing_state(binding.clone(), binding.public_key_digest.to_string());
+        let bindings = record
+            .runtime_bindings()
+            .expect("active runtime binding is readable");
+        let active = bindings
+            .active_binding
+            .expect("active binding is reconstructed");
+        assert_eq!(active.public_key_digest, binding.public_key_digest);
+        assert!(bindings.open_handle.is_none());
+    }
+
+    #[test]
+    fn active_runtime_binding_rejects_runtime_request_domain_digest() {
+        let binding = active_signing_key_binding();
+        let runtime_request_digest =
+            arkret_signatures::agent_evidence::agent_signing_public_key_runtime_request_digest(
+                &binding.verification_method,
+                &binding.public_key,
+            )
+            .expect("runtime-request-domain digest");
+        assert_ne!(runtime_request_digest, binding.public_key_digest);
+        let record = active_agent_pairing_state(binding, runtime_request_digest.to_string());
+        assert!(record.runtime_bindings().is_err());
     }
 
     struct StaticAccount;
