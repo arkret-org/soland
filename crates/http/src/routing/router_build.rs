@@ -389,6 +389,7 @@ pub(crate) fn cors_handler_for_origin_spec(raw: &str) -> CorsHandler {
             "idempotency-key",
             "x-arkret-request-id",
             "x-arkret-wait-for",
+            "x-arkret-sdk-source-sha256",
             "x-arkret-content-digest",
             "x-arkret-realm-id",
             "x-arkret-filename",
