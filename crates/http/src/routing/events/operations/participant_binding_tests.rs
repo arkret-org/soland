@@ -1,12 +1,15 @@
 use arkret_event_draft::Operation;
 use arkret_identifiers::CellRef;
 use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
+use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
 use arkret_state::lattice::CellState;
+use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use ed25519_dalek::Signer as _;
 use serde_json::{Value, json};
 use soland_storage_postgres::Db;
 
 use super::*;
-use crate::routing::interop::participant_binding;
 
 const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-c0ffeec0ffec";
 const CALL_ID: &str = "ak:call:01904100-0000-7000-8000-ca11ca11ca11";
@@ -72,19 +75,7 @@ fn install_media_service(state: &AppState, issuer_kid: &str) {
 /// metadata.
 fn signed_binding(state: &AppState, expires_at: &str) -> Value {
     let issued_at = "2026-06-15T00:00:00.000Z";
-    // Signed value = the seven authoritative fields only.
-    let signed = participant_binding::binding_canonical_value(
-        &json!(REALM_ID),
-        &json!(CALL_ID),
-        &json!(FOCUS_ID),
-        &json!(ACTOR_ID),
-        &json!(DEVICE_ID),
-        &json!(PARTICIPANT_IDENTITY),
-        &json!(expires_at),
-    );
-    let signing_key = state.notary_signing_key();
-    let sig = participant_binding::sign_binding(&signed, &signing_key);
-    json!({
+    let mut value = json!({
         "scheme": ParticipantBinding::SCHEMA,
         "issuer_kid": ISSUER_KID,
         "realm_id": REALM_ID,
@@ -95,8 +86,14 @@ fn signed_binding(state: &AppState, expires_at: &str) -> Value {
         "participant_identity": PARTICIPANT_IDENTITY,
         "issued_at": issued_at,
         "expires_at": expires_at,
-        "sig": sig,
-    })
+        "sig": "",
+    });
+    let binding: CallMediaParticipantBinding = serde_json::from_value(value.clone()).unwrap();
+    let signing_input =
+        arkret_signatures::media::participant_binding_signing_input(&binding).unwrap();
+    let signing_key = state.notary_signing_key();
+    value["sig"] = json!(URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes()));
+    value
 }
 
 fn call_state_op(binding: Value) -> Operation {
@@ -234,19 +231,10 @@ fn expired_binding_is_rejected_participant_binding_invalid() {
 /// (it is not covered), while the byte layout of the signing input MUST
 /// match the spec construction verbatim.
 fn signing_input_matches_spec_construction() {
-    // Build the canonical signing input the spec fixes and assert the
-    // module helper produces the identical bytes.
-    let signed = participant_binding::binding_canonical_value(
-        &json!(REALM_ID),
-        &json!(CALL_ID),
-        &json!(FOCUS_ID),
-        &json!(ACTOR_ID),
-        &json!(DEVICE_ID),
-        &json!(PARTICIPANT_IDENTITY),
-        &json!("2026-06-15T00:05:00.000Z"),
-    );
-    let canonical = participant_binding::binding_canonical_bytes(&signed);
-    let actual = participant_binding::binding_signing_input(&canonical);
+    let state = AppState::new(test_config(), Db { pool: None });
+    let binding: CallMediaParticipantBinding =
+        serde_json::from_value(signed_binding(&state, "2026-06-15T00:05:00.000Z")).unwrap();
+    let actual = arkret_signatures::media::participant_binding_signing_input(&binding).unwrap();
 
     let mut expected = Vec::new();
     expected.extend_from_slice(ParticipantBinding::SCHEMA.as_bytes());

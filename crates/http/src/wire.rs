@@ -14,7 +14,7 @@ pub use arkret_models_collaboration::sync_frames::account_sync::{
 };
 pub use arkret_models_crypto::{
     DeviceStatus, KeysClaimOutcome, KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody,
-    KeysUploadOutcome, KeysUploadRequestBody, QueryDeviceRecord,
+    KeysUploadOutcome, KeysUploadRequestBody, KeysUploadUnsignedRequest, QueryDeviceRecord,
 };
 pub use arkret_models_discovery::ops::HardeningStatus;
 use arkret_models_discovery::{

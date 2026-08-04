@@ -1,21 +1,9 @@
-//! Shared `ak.media.participant_binding.v1` canonical-bytes + verification.
+//! Shared `ak.media.participant_binding.v1` verification.
 //!
 //! `media-service-binding.md` §3 / §7 and `call-state.md` §4.1 require the
 //! token issuer to sign, and the `ak.call.state` reducer / receiver to verify,
-//! the **same** authoritative tuple over the **same** canonical bytes. To keep
-//! the issue and verify sides byte-for-byte symmetric this module is the single
-//! definition of:
-//!
-//! - the binding's signed canonical-JSON field set (`binding_canonical_value`, exactly the seven
-//!   authoritative fields), and
-//! - the label-prefixed Ed25519 signing input (`binding_signing_input`).
-//!
-//! The AKP-0010 token issuer ([`super::webrtc`]) builds the signing input here
-//! and signs it with the notary key; the operation-admission path
-//! ([`crate::routing::events::operations`]) rebuilds the identical bytes from
-//! the wire binding and verifies the detached signature with the same notary
-//! verifying key. Any drift between the two would surface as a verification
-//! failure rather than a silent mismatch.
+//! the same authoritative tuple over the same canonical bytes. The SDK owns
+//! that byte construction; Soland only resolves keys and performs admission.
 //!
 //! `media-service-binding.md` §3 fixes the cross-implementation signing input:
 //!
@@ -36,75 +24,14 @@ use std::collections::BTreeSet;
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::CellRef;
-use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
+use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
 use arkret_wire::REALM_MEDIA_SERVICE_CELL_FAMILY;
 use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::{Signature, Verifier as _, VerifyingKey};
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::state::AppState;
-
-/// Fixed ASCII domain-separation label prefixed (NUL-delimited) before the
-/// canonical binding bytes. Equals the `scheme` value verbatim; MUST match the
-/// issuer and verifier byte-for-byte (`media-service-binding.md` §3).
-pub(crate) const BINDING_SIGNING_LABEL: &[u8] = ParticipantBinding::SCHEMA.as_bytes();
-
-/// Build the canonical-JSON value the issuer signs over: exactly the seven
-/// authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
-/// participant_identity, realm_id)` (`media-service-binding.md` §3). Every value
-/// is taken verbatim (no re-parsing of timestamps), so a verifier that reads the
-/// same wire fields reconstructs identical canonical bytes after key sorting.
-/// The unsigned metadata (`scheme` / `issuer_kid` / `issued_at`) MUST NOT appear
-/// here.
-pub(crate) fn binding_canonical_value(
-    realm_id: &Value,
-    call_id: &Value,
-    focus_id: &Value,
-    actor_id: &Value,
-    device_id: &Value,
-    participant_identity: &Value,
-    expires_at: &Value,
-) -> Value {
-    json!({
-        "realm_id": realm_id,
-        "call_id": call_id,
-        "focus_id": focus_id,
-        "actor_id": actor_id,
-        "device_id": device_id,
-        "participant_identity": participant_identity,
-        "expires_at": expires_at,
-    })
-}
-
-/// Canonical bytes of a binding value (`binding_canonical_value` output).
-pub(crate) fn binding_canonical_bytes(binding: &Value) -> Vec<u8> {
-    arkret_canonical::canonical_json_bytes(binding)
-        .unwrap_or_else(|_| binding.to_string().into_bytes())
-}
-
-/// Label-prefixed Ed25519 signing input: `LABEL \0 canonical_bytes`
-/// (`media-service-binding.md` §3).
-pub(crate) fn binding_signing_input(canonical_bytes: &[u8]) -> Vec<u8> {
-    let mut signing_input =
-        Vec::with_capacity(BINDING_SIGNING_LABEL.len() + canonical_bytes.len() + 1);
-    signing_input.extend_from_slice(BINDING_SIGNING_LABEL);
-    signing_input.push(0);
-    signing_input.extend_from_slice(canonical_bytes);
-    signing_input
-}
-
-/// Build the wire `sig` string for a binding given the notary signing key.
-/// Used by the AKP-0010 issuer so the issued `sig` and the verifier share one
-/// construction.
-pub(crate) fn sign_binding(binding: &Value, signing_key: &ed25519_dalek::SigningKey) -> String {
-    use ed25519_dalek::Signer as _;
-
-    let canonical_bytes = binding_canonical_bytes(binding);
-    let signing_input = binding_signing_input(&canonical_bytes);
-    let signature = signing_key.sign(&signing_input);
-    URL_SAFE_NO_PAD.encode(signature.to_bytes())
-}
 
 /// Decode the wire `sig` (unprefixed base64url, as fixed by the schema) into a
 /// raw Ed25519 [`Signature`]. The algorithm belongs to the binding profile,
@@ -118,15 +45,17 @@ pub(crate) fn decode_binding_signature(sig: &str) -> Option<Signature> {
 /// Verify a detached binding signature against `verifying_key`. Returns `true`
 /// iff the signature covers the canonical signing input for `binding`.
 pub(crate) fn verify_binding_signature(
-    binding: &Value,
+    binding: &CallMediaParticipantBinding,
     sig: &str,
     verifying_key: &VerifyingKey,
 ) -> bool {
     let Some(signature) = decode_binding_signature(sig) else {
         return false;
     };
-    let canonical_bytes = binding_canonical_bytes(binding);
-    let signing_input = binding_signing_input(&canonical_bytes);
+    let Ok(signing_input) = arkret_signatures::media::participant_binding_signing_input(binding)
+    else {
+        return false;
+    };
     verifying_key.verify(&signing_input, &signature).is_ok()
 }
 
@@ -337,12 +266,15 @@ pub(crate) fn verify_call_state_participant_bindings(
         // resolved key validates the same bytes.
         let sig = binding_str(binding, "sig")
             .ok_or("participant_binding_invalid: participant_binding.sig is required")?;
-        let canonical = canonical_value_from_wire(binding);
-        if verify_binding_signature(&canonical, sig, &notary_key) {
+        let typed_binding: CallMediaParticipantBinding = serde_json::from_value(binding.clone())
+            .map_err(
+                |_| "participant_binding_invalid: participant_binding is not the SDK wire type",
+            )?;
+        if verify_binding_signature(&typed_binding, sig, &notary_key) {
             return Ok(());
         }
         if let Ok(resolved) = crate::jws_verify::resolve_ed25519_pubkey(state, issuer_kid)
-            && verify_binding_signature(&canonical, sig, &resolved)
+            && verify_binding_signature(&typed_binding, sig, &resolved)
         {
             return Ok(());
         }
@@ -366,136 +298,5 @@ fn field_mismatch_reason(field: &str) -> &'static str {
             "participant_binding_invalid: participant_binding.participant_identity does not match \
              the participant entry"
         }
-    }
-}
-
-/// Rebuild the canonical binding value from the wire object, taking the seven
-/// authoritative signed fields verbatim (`media-service-binding.md` §3). Key
-/// sorting in `canonical_json_bytes` makes this byte-identical to the issuer's
-/// `binding_canonical_value`. The unsigned metadata (`scheme` / `issuer_kid` /
-/// `issued_at`) is deliberately excluded.
-fn canonical_value_from_wire(binding: &Value) -> Value {
-    let pick = |field: &str| binding.get(field).cloned().unwrap_or(Value::Null);
-    binding_canonical_value(
-        &pick("realm_id"),
-        &pick("call_id"),
-        &pick("focus_id"),
-        &pick("actor_id"),
-        &pick("device_id"),
-        &pick("participant_identity"),
-        &pick("expires_at"),
-    )
-}
-
-#[cfg(test)]
-mod cross_impl_tests {
-    //! Cross-implementation byte lock for the `participant_binding` signing
-    //! input. `media-service-binding.md` §3 fixes one normative `signing_input`
-    //! that the issuer signs and the verifier reconstructs. soland issues the
-    //! binding here (`binding_signing_input`) and the SDK
-    //! ([`arkret_signatures::media::participant_binding_signing_input`]) reconstructs it on the
-    //! verify side. Each side has its own self-consistent unit tests, but until
-    //! this lock there was no test asserting the two produce **identical bytes**
-    //! for the same logical seven-tuple — so a drift on either side could go
-    //! unnoticed (unlike the `ak.call.signal` envelope proof, which has a real
-    //! inkson round-trip). This test fails the moment either construction drifts.
-
-    use arkret_identifiers::{CallId, DeviceId, Did, RealmId};
-    use arkret_models_collaboration::events_payloads::call::ParticipantBinding;
-    use arkret_models_collaboration::objects::media::CallMediaParticipantBinding;
-    use arkret_signatures::media::participant_binding_signing_input;
-    use chrono::{DateTime, Utc};
-    use serde_json::json;
-
-    use super::{binding_canonical_bytes, binding_canonical_value, binding_signing_input};
-
-    /// Fixed, realistic seven-tuple shared by both constructions.
-    const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-9b64700c6ee8";
-    const CALL_ID: &str = "ak:call:0196441c-0000-7000-8000-000000000000";
-    const FOCUS_ID: &str = "fra-1";
-    const ACTOR_ID: &str = "did:web:alice.example";
-    const DEVICE_ID: &str = "ak:device:01904100-0000-7000-8000-000000000005";
-    const PARTICIPANT_IDENTITY: &str = "ak:rtc_participant:0198c2f4-0000-7000-8000-000000000000";
-    const EXPIRES_AT: &str = "2026-05-27T12:34:56.000Z";
-
-    /// SDK-side signing input for the fixed tuple (`expires_at` overridable so
-    /// the field-sensitivity assertion can perturb a single field).
-    fn sdk_signing_input(expires_at: &str) -> Vec<u8> {
-        let expires_at: DateTime<Utc> = expires_at.parse().unwrap();
-        let binding = CallMediaParticipantBinding {
-            // Unsigned metadata — MUST NOT enter the signing input.
-            scheme: ParticipantBinding::SCHEMA.to_owned(),
-            sig: String::new(),
-            issuer_kid: arkret_wire::DidUrl::new("did:web:media.example#media-token").unwrap(),
-            issued_at: "2026-05-27T12:30:00.000Z".parse().unwrap(),
-            // The seven authoritative fields.
-            realm_id: RealmId::new(REALM_ID).unwrap(),
-            call_id: CallId::new(CALL_ID).unwrap(),
-            focus_id: FOCUS_ID.to_owned(),
-            actor_id: Did::new(ACTOR_ID).unwrap(),
-            device_id: DeviceId::new(DEVICE_ID).unwrap(),
-            participant_identity: PARTICIPANT_IDENTITY.to_owned(),
-            expires_at,
-        };
-        participant_binding_signing_input(&binding).unwrap()
-    }
-
-    /// soland-side signing input for the same logical tuple, built from the
-    /// `&Value` wire form exactly as the issuer / verifier do.
-    fn soland_signing_input(expires_at: &str) -> Vec<u8> {
-        let canonical = binding_canonical_value(
-            &json!(REALM_ID),
-            &json!(CALL_ID),
-            &json!(FOCUS_ID),
-            &json!(ACTOR_ID),
-            &json!(DEVICE_ID),
-            &json!(PARTICIPANT_IDENTITY),
-            &json!(expires_at),
-        );
-        binding_signing_input(&binding_canonical_bytes(&canonical))
-    }
-
-    #[test]
-    fn soland_and_sdk_signing_input_are_byte_identical() {
-        let soland = soland_signing_input(EXPIRES_AT);
-        let sdk = sdk_signing_input(EXPIRES_AT);
-
-        // The lock: the two implementations agree on every byte.
-        assert_eq!(
-            soland, sdk,
-            "soland and SDK participant_binding signing_input diverged",
-        );
-
-        // Both carry the normative label + 0x00 prefix (`media-service-binding.md` §3).
-        let prefix = b"ak.media.participant_binding.v1\x00";
-        assert!(soland.starts_with(prefix), "soland missing label prefix");
-        assert!(sdk.starts_with(prefix), "SDK missing label prefix");
-    }
-
-    #[test]
-    fn signing_input_is_not_degenerate_when_a_field_changes() {
-        // Perturbing a single authoritative field MUST change the bytes on both
-        // sides (guards against a construction collapsing to a constant), and
-        // the two sides MUST still agree on the perturbed bytes.
-        let other_expires = "2026-05-27T12:34:57.000Z";
-
-        let soland_base = soland_signing_input(EXPIRES_AT);
-        let soland_other = soland_signing_input(other_expires);
-        assert_ne!(
-            soland_base, soland_other,
-            "soland signing_input did not change when expires_at changed",
-        );
-
-        let sdk_base = sdk_signing_input(EXPIRES_AT);
-        let sdk_other = sdk_signing_input(other_expires);
-        assert_ne!(
-            sdk_base, sdk_other,
-            "SDK signing_input did not change when expires_at changed",
-        );
-
-        assert_eq!(
-            soland_other, sdk_other,
-            "soland and SDK diverged on the perturbed expires_at",
-        );
     }
 }

@@ -1140,7 +1140,9 @@ fn build_peer_claim_outcome(
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method.clone())
                 .map_err(|error| AppError::internal(format!("receipt kid invalid: {error}")))?,
-            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty")),
+            signature_algorithm: Some(
+                arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty"),
+            ),
             sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder receipt signature is base64url"),
         },
@@ -1331,7 +1333,9 @@ fn build_peer_claim_terminal_receipt(
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method)
                 .expect("service notary method is non-empty"),
-            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty")),
+            signature_algorithm: Some(
+                arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty"),
+            ),
             sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder signature is base64url"),
         },
@@ -1430,45 +1434,34 @@ pub(crate) async fn claim_keypackages_for_request(
     state: &AppState,
     body: &KeyPackagesClaimRequestBody,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    claim_keypackages_for_request_inner(state, body, false).await
-}
-
-pub(crate) async fn claim_keypackages_for_materialization_recovery(
-    state: &AppState,
-    body: &KeyPackagesClaimRequestBody,
-) -> Result<KeyPackagesClaimOutcome, AppError> {
-    claim_keypackages_for_request_inner(state, body, true).await
+    claim_keypackages_for_request_inner(state, body).await
 }
 
 async fn claim_keypackages_for_request_inner(
     state: &AppState,
     body: &KeyPackagesClaimRequestBody,
-    allow_same_group_recovery: bool,
 ) -> Result<KeyPackagesClaimOutcome, AppError> {
-    if !allow_same_group_recovery {
-        let authority = Did::new(state.service_id().clone()).map_err(|error| {
-            AppError::internal(format!("configured service DID invalid: {error}"))
-        })?;
-        let proof = &body.holder_acceptance_proof;
-        let binding = body
-            .validate_proof_shape(&authority, Utc::now())
-            .map_err(|error| {
-                AppError::invalid_param(format!("KeyPackage self-claim proof invalid: {error}"))
-            })?;
-        crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
-            &binding,
-            &proof.jws,
-            proof.verification_method.as_str(),
-            body.requester.as_str(),
-            state,
-        )
-        .await
+    let authority = Did::new(state.service_id().clone())
+        .map_err(|error| AppError::internal(format!("configured service DID invalid: {error}")))?;
+    let proof = &body.holder_acceptance_proof;
+    let binding = body
+        .validate_proof_shape(&authority, Utc::now())
         .map_err(|error| {
-            AppError::capability_denied(format!(
-                "KeyPackage self-claim proof verification failed: {error}"
-            ))
+            AppError::invalid_param(format!("KeyPackage self-claim proof invalid: {error}"))
         })?;
-    }
+    crate::jws_verify::verify_principal_authorized_jws_ed25519_async(
+        &binding,
+        &proof.jws,
+        proof.verification_method.as_str(),
+        body.requester.as_str(),
+        state,
+    )
+    .await
+    .map_err(|error| {
+        AppError::capability_denied(format!(
+            "KeyPackage self-claim proof verification failed: {error}"
+        ))
+    })?;
     let request_digest = body
         .payload_digest()
         .map_err(|error| AppError::internal(format!("local claim payload digest: {error}")))?
@@ -2116,7 +2109,9 @@ fn build_keypackage_consume_receipt(
         signature: KeyOperationSignature {
             kid: arkret_wire::NonEmptyString::new(verification_method)
                 .expect("service notary method is non-empty"),
-            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty")),
+            signature_algorithm: Some(
+                arkret_wire::NonEmptyString::new("Ed25519").expect("Ed25519 is non-empty"),
+            ),
             sig: arkret_wire::Base64UrlString::new("AA")
                 .expect("placeholder signature is base64url"),
         },

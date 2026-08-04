@@ -13,7 +13,6 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use ed25519_dalek::Signature;
 use salvo::oapi::extract::JsonBody;
 use salvo::prelude::*;
-use serde::Serialize;
 use serde_json::{Value, json};
 use soland_http::error::AppError;
 use soland_http::result::{JsonResult, json_ok};
@@ -26,10 +25,8 @@ use crate::wire::{
     AuthorizedDeviceSigningKey, DeviceSigningKeyDirectoryOutcome,
     DeviceSigningKeyDirectoryQueryRequestBody, DeviceStatus, KeysClaimOutcome,
     KeysClaimRequestBody, KeysQueryOutcome, KeysQueryRequestBody, KeysUploadOutcome,
-    KeysUploadRequestBody, QueryDeviceRecord,
+    KeysUploadRequestBody, KeysUploadUnsignedRequest, QueryDeviceRecord,
 };
-
-const KEYS_UPLOAD_SIGNATURE_PREFIX: &[u8] = b"ak.keys-upload-v1\n";
 
 pub(super) fn router() -> Router {
     Router::new()
@@ -62,6 +59,7 @@ async fn keys_upload(
     }
 
     let body = body.into_inner();
+    let unsigned = body.unsigned();
     let device_id = body.device_id.as_str().to_owned();
     if device_id != session.device_id {
         return Err(AppError::capability_denied(
@@ -93,8 +91,7 @@ async fn keys_upload(
         &session.actor,
         &device_id,
         current_device.as_ref(),
-        &body.one_time_keys,
-        &body.fallback_keys,
+        &unsigned,
         &body.device_signature,
     )?;
 
@@ -396,24 +393,6 @@ fn keys_query_actor_visible_to_requester(state: &AppState, requester: &str, acto
     })
 }
 
-fn keys_upload_signing_input(
-    device_id: &str,
-    one_time_keys: &impl Serialize,
-    fallback_keys: &impl Serialize,
-) -> Result<Vec<u8>, AppError> {
-    let body = json!({
-        "device_id": device_id,
-        "one_time_keys": one_time_keys,
-        "fallback_keys": fallback_keys,
-    });
-    let canonical = arkret_canonical::canonical_json_bytes(&body)
-        .map_err(|error| AppError::invalid_param(format!("keys/upload canonicalize: {error}")))?;
-    let mut input = Vec::with_capacity(KEYS_UPLOAD_SIGNATURE_PREFIX.len() + canonical.len());
-    input.extend_from_slice(KEYS_UPLOAD_SIGNATURE_PREFIX);
-    input.extend_from_slice(&canonical);
-    Ok(input)
-}
-
 fn verification_method_controller(verification_method: &str) -> &str {
     let no_query = verification_method
         .split_once('?')
@@ -442,8 +421,7 @@ fn verify_keys_upload_device_signature(
     actor: &str,
     device_id: &str,
     current_device: Option<&DeviceIdentity>,
-    one_time_keys: &impl Serialize,
-    fallback_keys: &impl Serialize,
+    unsigned: &KeysUploadUnsignedRequest,
     device_signature: &arkret_models_crypto::artifacts_keys::KeyOperationSignature,
 ) -> Result<(), AppError> {
     let record = current_device.ok_or_else(|| {
@@ -479,7 +457,8 @@ fn verify_keys_upload_device_signature(
             "keys/upload device_signature.kid does not point to the authorized device key",
         ));
     }
-    let signing_input = keys_upload_signing_input(device_id, one_time_keys, fallback_keys)?;
+    let signing_input = arkret_models_crypto::keys_upload_signing_input(unsigned)
+        .map_err(|error| AppError::invalid_param(format!("keys/upload canonicalize: {error}")))?;
     let signature_bytes = URL_SAFE_NO_PAD
         .decode(device_signature.sig.as_bytes())
         .map_err(|_| AppError::invalid_param("keys/upload signature is not base64url"))?;

@@ -26,22 +26,6 @@ pub(crate) fn device_message_target(kind: &str, content: Value) -> Value {
     })
 }
 
-pub(crate) fn keys_upload_signing_input(
-    device_id: &str,
-    one_time_keys: &Value,
-    fallback_keys: &Value,
-) -> Vec<u8> {
-    let body = serde_json::json!({
-        "device_id": device_id,
-        "one_time_keys": one_time_keys,
-        "fallback_keys": fallback_keys,
-    });
-    let canonical = arkret_canonical::canonical_json_bytes(&body).unwrap();
-    let mut input = b"ak.keys-upload-v1\n".to_vec();
-    input.extend_from_slice(&canonical);
-    input
-}
-
 pub(crate) fn signed_keys_upload_body(
     actor: &str,
     device_id: &str,
@@ -49,18 +33,23 @@ pub(crate) fn signed_keys_upload_body(
     one_time_keys: Value,
     fallback_keys: Value,
 ) -> Value {
-    let signing_input = keys_upload_signing_input(device_id, &one_time_keys, &fallback_keys);
+    let unsigned: arkret_models_crypto::KeysUploadUnsignedRequest =
+        serde_json::from_value(serde_json::json!({
+            "device_id": device_id,
+            "one_time_keys": one_time_keys,
+            "fallback_keys": fallback_keys,
+        }))
+        .unwrap();
+    let signing_input = arkret_models_crypto::keys_upload_signing_input(&unsigned).unwrap();
     let sig = arkret_canonical::base64url_encode(signing_key.sign(&signing_input).to_bytes());
-    serde_json::json!({
-        "device_id": device_id,
-        "one_time_keys": one_time_keys,
-        "fallback_keys": fallback_keys,
-        "device_signature": {
-            "signature_algorithm": "Ed25519",
-            "kid": format!("{actor}#device"),
-            "sig": sig,
-        }
-    })
+    serde_json::to_value(
+        unsigned.into_signed(arkret_models_crypto::KeyOperationSignature {
+            kid: arkret_wire::NonEmptyString::new(format!("{actor}#device")).unwrap(),
+            signature_algorithm: Some(arkret_wire::NonEmptyString::new("Ed25519").unwrap()),
+            sig: arkret_wire::Base64UrlString::new(sig).unwrap(),
+        }),
+    )
+    .unwrap()
 }
 
 // `seed_verified_device_with_public_key` moved to `crate::common`: the Signal

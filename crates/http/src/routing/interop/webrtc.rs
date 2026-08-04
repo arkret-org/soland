@@ -708,29 +708,24 @@ async fn handle_rtc_token(
             "media focus issuer_kid is not a verification-method DID URL: {error}"
         ))
     })?;
-    // `media-service-binding.md` §3 — the signature covers ONLY the seven
-    // authoritative fields `(actor_id, call_id, device_id, expires_at, focus_id,
-    // participant_identity, realm_id)`. The self-describing `scheme` /
-    // `issuer_kid` / `issued_at` are unsigned wire metadata and MUST NOT enter
-    // the signing input. Timestamps are serialized verbatim to RFC3339 strings
-    // matching the wire binding so the verifier reconstructs identical bytes.
-    let signed_binding = super::participant_binding::binding_canonical_value(
-        &json!(body.realm_id),
-        &json!(body.call_id),
-        &json!(body.focus_id),
-        &json!(body.actor_id),
-        &json!(body.device_id),
-        &json!(participant_identity),
-        &json!(expires_at),
-    );
-    // The binding `sig` is produced through the shared
-    // `participant_binding` helper so the issue side and the
-    // operation-admission verify side share one canonical-bytes +
-    // signing-input definition (`media-service-binding.md` §3 / §7).
-    let signing_input = super::participant_binding::binding_signing_input(
-        &super::participant_binding::binding_canonical_bytes(&signed_binding),
-    );
-    let sig = super::participant_binding::sign_binding(&signed_binding, &signing_key);
+    let mut participant_binding = CallMediaParticipantBinding {
+        scheme: ParticipantBinding::SCHEMA.to_owned(),
+        sig: String::new(),
+        issuer_kid: issuer_kid.clone(),
+        realm_id,
+        call_id,
+        focus_id: body.focus_id.clone(),
+        actor_id,
+        device_id,
+        participant_identity: participant_identity.clone(),
+        issued_at,
+        expires_at,
+    };
+    let signing_input = arkret_signatures::media::participant_binding_signing_input(
+        &participant_binding,
+    )
+    .map_err(|error| AppError::internal(format!("participant binding signing input: {error}")))?;
+    participant_binding.sig = URL_SAFE_NO_PAD.encode(signing_key.sign(&signing_input).to_bytes());
 
     // `media-service-binding.md` §3 — the detached service signature is a typed
     // `{kid, sig}` object over the **same** `signing_input` (same label + same
@@ -741,20 +736,6 @@ async fn handle_rtc_token(
     let service_signature = CallMediaServiceSignature {
         kid: issuer_kid.clone(),
         sig: URL_SAFE_NO_PAD.encode(service_sig.to_bytes()),
-    };
-
-    let participant_binding = CallMediaParticipantBinding {
-        scheme: ParticipantBinding::SCHEMA.to_owned(),
-        sig,
-        issuer_kid,
-        realm_id,
-        call_id,
-        focus_id: body.focus_id.clone(),
-        actor_id,
-        device_id,
-        participant_identity: participant_identity.clone(),
-        issued_at,
-        expires_at,
     };
 
     // Spec `CallMediaTokenExchangeOutcome` requires `connect_url`; a focus
