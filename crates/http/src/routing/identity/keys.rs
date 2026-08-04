@@ -89,7 +89,6 @@ async fn keys_upload(
     }
     verify_keys_upload_device_signature(
         &session.actor,
-        &device_id,
         current_device.as_ref(),
         &unsigned,
         &body.device_signature,
@@ -419,7 +418,6 @@ pub(crate) fn device_signature_kid_points_to_device_key(
 
 fn verify_keys_upload_device_signature(
     actor: &str,
-    device_id: &str,
     current_device: Option<&DeviceIdentity>,
     unsigned: &KeysUploadUnsignedRequest,
     device_signature: &arkret_models_crypto::artifacts_keys::KeyOperationSignature,

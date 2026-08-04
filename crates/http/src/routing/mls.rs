@@ -1522,9 +1522,7 @@ async fn claim_keypackages_for_request_inner(
         Some(&intended_realm_id),
     );
     let now_secs = now().timestamp();
-    // The public claim operation is strictly single-use. Only the internal
-    // materialization-recovery path may reconstruct the claim already bound to
-    // the same immutable draft after its authoring lease expires.
+    // The public claim operation is strictly single-use.
     let mls_group_ref = body
         .mls_group_id
         .clone()
@@ -1532,31 +1530,6 @@ async fn claim_keypackages_for_request_inner(
         .unwrap_or_else(|| body.intended_realm_id.to_string());
     let candidate_keypackages = {
         let keypackages = &durable_keypackages;
-        let matching_claim = allow_same_group_recovery
-            .then(|| {
-                keypackages
-                    .iter()
-                    .filter(|kp| {
-                        ordinary_keypackage_is_same_group_claim(kp, mls_group_ref.as_str())
-                    })
-                    .filter(|kp| {
-                        keypackage_matches_claim(
-                            kp,
-                            &target_principal_id,
-                            &target_device_ids,
-                            &trust_selector,
-                            now_secs,
-                            &required_capabilities,
-                        )
-                    })
-                    .min_by_key(|kp| (kp.created_at, kp.id.as_str()))
-                    .and_then(|kp| {
-                        KeyPackageTrustBinding::from_keypackage(kp)
-                            .ok()
-                            .map(|binding| (true, kp.id.clone(), binding))
-                    })
-            })
-            .flatten();
         let mut ordinary = keypackages
             .iter()
             .filter(|kp| ordinary_keypackage_is_available(kp))
@@ -1577,13 +1550,9 @@ async fn claim_keypackages_for_request_inner(
             })
             .collect::<Vec<_>>();
         ordinary.sort_by(|left, right| (&left.0, &left.1).cmp(&(&right.0, &right.1)));
-        matching_claim
+        ordinary
             .into_iter()
-            .chain(
-                ordinary
-                    .into_iter()
-                    .map(|(_, keypackage_id, binding)| (false, keypackage_id, binding)),
-            )
+            .map(|(_, keypackage_id, binding)| (keypackage_id, binding))
             .collect::<Vec<_>>()
     };
     if candidate_keypackages.is_empty() {
@@ -1615,7 +1584,7 @@ async fn claim_keypackages_for_request_inner(
         .await;
     }
 
-    for (same_group_recovery, keypackage_id, claim_binding) in candidate_keypackages {
+    for (keypackage_id, claim_binding) in candidate_keypackages {
         let Some(mut predicted) = durable_keypackages
             .iter()
             .find(|keypackage| keypackage.id == keypackage_id)
@@ -1623,22 +1592,16 @@ async fn claim_keypackages_for_request_inner(
         else {
             continue;
         };
-        if !same_group_recovery {
-            predicted.claimed_by_mls_group_id = Some(mls_group_ref.clone());
-            predicted.claimed_at = Some(now_secs);
-            predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
-            predicted.consumed_at = None;
-        }
+        predicted.claimed_by_mls_group_id = Some(mls_group_ref.clone());
+        predicted.claimed_at = Some(now_secs);
+        predicted.claim_expires_at_unix_ms = Some(body.expires_at.timestamp_millis());
+        predicted.consumed_at = None;
         let outcome = KeyPackagesClaimOutcome {
             claims: vec![keypackage_claim_record(&predicted, &body.claim_nonce)?],
             failures: Vec::new(),
             // The immutable terminal response must retain the count observed
             // at the successful transition; replay must not recompute it.
-            available_count: Some(if same_group_recovery {
-                available_before
-            } else {
-                available_before.saturating_sub(1)
-            }),
+            available_count: Some(available_before.saturating_sub(1)),
         };
         let ledger = local_claim_ledger_record(
             state,
@@ -1650,21 +1613,6 @@ async fn claim_keypackages_for_request_inner(
             &outcome,
             now_secs,
         )?;
-
-        if same_group_recovery {
-            return match state
-                .mls_key_packages()
-                .store_peer_claim_terminal(&ledger)
-                .await
-                .map_err(|error| {
-                    AppError::internal(format!("local claim ledger append: {error}"))
-                })? {
-                PeerKeyPackageClaimLedgerWriteResult::Inserted => Ok(outcome),
-                PeerKeyPackageClaimLedgerWriteResult::Existing(existing) => {
-                    replay_local_claim(existing, &request_digest)
-                }
-            };
-        }
 
         match state
             .mls_key_packages()
@@ -3268,22 +3216,6 @@ fn ordinary_keypackage_is_available(keypackage: &MlsKeyPackageRow) -> bool {
     })
 }
 
-fn ordinary_keypackage_is_same_group_claim(
-    keypackage: &MlsKeyPackageRow,
-    requested_group: &str,
-) -> bool {
-    keypackage.lifecycle().is_ok_and(|lifecycle| {
-        matches!(
-            lifecycle.reuse_policy,
-            PersistedKeyPackageReusePolicy::SingleUse
-        ) && matches!(
-            lifecycle.claim_state,
-            PersistedKeyPackageClaimState::Claimed { ref mls_group_id, .. }
-                if mls_group_id.as_str() == requested_group
-        )
-    })
-}
-
 fn keypackage_matches_claim(
     kp: &MlsKeyPackageRow,
     actor_id: &str,
@@ -3409,53 +3341,6 @@ mod trust_binding_tests {
             )
             .is_err()
         );
-    }
-
-    #[test]
-    fn ordinary_claim_retry_only_matches_the_original_group() {
-        let mut ordinary = MlsKeyPackageRow {
-            id: "kp-1".to_owned(),
-            keypackage_ref: "ref-1".to_owned(),
-            keypackage_digest: "sha256:digest".to_owned(),
-            actor_id: "did:web:alice.example".to_owned(),
-            device_id: "ak:device:01904100-0000-7000-8000-000000000001".to_owned(),
-            key_package_bytes: Vec::new(),
-            capabilities: Vec::new(),
-            capabilities_digest: "sha256:capabilities".to_owned(),
-            device_signature: Value::Null,
-            last_resort: false,
-            last_resort_realm_id: None,
-            lifetime_not_before: 1,
-            lifetime_not_after: 100,
-            claimed_by_mls_group_id: Some("mls-group-a".to_owned()),
-            ssk_generation: Some(1),
-            device_authorize_event_id: None,
-            agent_key_authorize_event_id: None,
-            claimed_at: Some(2),
-            claim_expires_at_unix_ms: None,
-            consumed_at: None,
-            created_at: 1,
-        };
-        assert!(ordinary_keypackage_is_same_group_claim(
-            &ordinary,
-            "mls-group-a"
-        ));
-        assert!(!ordinary_keypackage_is_same_group_claim(
-            &ordinary,
-            "mls-group-b"
-        ));
-        ordinary.claimed_by_mls_group_id = None;
-        ordinary.claimed_at = None;
-        assert!(!ordinary_keypackage_is_same_group_claim(
-            &ordinary,
-            "mls-group-a"
-        ));
-        ordinary.last_resort = true;
-        assert!(!ordinary_keypackage_is_available(&ordinary));
-        assert!(!ordinary_keypackage_is_same_group_claim(
-            &ordinary,
-            "mls-group-a"
-        ));
     }
 
     #[test]
