@@ -955,6 +955,29 @@ impl ProjectionState {
         )
     }
 
+    /// True when `actor` speaks for the Realm owner aggregate and that
+    /// aggregate operationally covers `action` in the registry snapshot bound
+    /// into the authority-root cell.
+    ///
+    /// This is intentionally narrower than [`Self::actor_governs_realm`]: a
+    /// generic authorization preflight must not turn owner grant authority
+    /// into direct access to non-Event endpoints, nor may it authorize the two
+    /// root-control-only Realm lifecycle actions.
+    pub fn realm_owner_operationally_covers_action(
+        &self,
+        realm_id: &str,
+        actor: &str,
+        action: &str,
+        evaluation_basis: chrono::DateTime<chrono::Utc>,
+    ) -> bool {
+        self.actor_holds_effective_realm_owner(realm_id, actor, evaluation_basis)
+            && arkret_policy::owner_may_author_action(
+                action,
+                self.realm_authority_registry_basis(realm_id).as_ref(),
+            )
+            .unwrap_or(false)
+    }
+
     /// The shared Realm-governance predicate over projected capability state.
     ///
     /// A governance decision (join review, ban, applet install, ...) is allowed
@@ -3290,6 +3313,42 @@ mod realm_owner_authority_tests {
         let rooted = realm(Some(OWNER), Some(STRANGER));
         assert!(rooted.actor_holds_effective_realm_owner(REALM, OWNER, chrono::Utc::now()));
         assert!(!rooted.actor_holds_effective_realm_owner(REALM, STRANGER, chrono::Utc::now()));
+    }
+
+    #[test]
+    fn authority_root_owner_has_only_registered_operational_coverage() {
+        let rooted = realm(Some(OWNER), None);
+        let now = chrono::Utc::now();
+        assert!(rooted.realm_owner_operationally_covers_action(
+            REALM,
+            OWNER,
+            "ak.invite.create",
+            now
+        ));
+        assert!(rooted.realm_owner_operationally_covers_action(
+            REALM,
+            OWNER,
+            "ak.realm.update",
+            now
+        ));
+        assert!(!rooted.realm_owner_operationally_covers_action(
+            REALM,
+            OWNER,
+            "ak.audit.export",
+            now
+        ));
+        assert!(!rooted.realm_owner_operationally_covers_action(
+            REALM,
+            OWNER,
+            "ak.realm.destroy",
+            now
+        ));
+        assert!(!rooted.realm_owner_operationally_covers_action(
+            REALM,
+            STRANGER,
+            "ak.invite.create",
+            now
+        ));
     }
 
     #[test]

@@ -110,6 +110,23 @@ async fn authz_check(
             members: &members,
             resource_facets: &resource_facets,
         });
+    // The capability-engine map is an index over ordinary grant cells. Realm
+    // genesis deliberately does not mint a synthetic self-grant: the current
+    // controller instead holds effective `ak.realm.owner` through the
+    // registered authority-root cell. Fold that independent operational
+    // source into this local preflight, using the root's registry basis so an
+    // old Realm is never reinterpreted under today's aggregate coverage.
+    // Non-Event and root-control-only actions remain fail-closed.
+    let owner_aggregate_allowed = state
+        .projections()
+        .snapshot()
+        .realm_owner_operationally_covers_action(
+            &realm_id,
+            body.actor_id.as_str(),
+            &body.action,
+            now(),
+        );
+    let allowed = result.allowed || owner_aggregate_allowed;
     let matched_grants = result
         .grants
         .iter()
@@ -126,12 +143,12 @@ async fn authz_check(
     // the decision as a five-valued enum where `quarantine`/`require_review` are
     // Policy Server-mediated soft outcomes (not produced by the local engine);
     // a local refusal maps to the conservative terminal `hard_deny`.
-    let decision = if result.allowed {
+    let decision = if allowed {
         AuthzDecision::Allow
     } else {
         AuthzDecision::HardDeny
     };
-    let reason_code = (!result.allowed).then(|| result.reason.clone());
+    let reason_code = (!allowed).then(|| result.reason.clone());
     // Trace/diagnostic data lives in the spec-allowed `policy_results` array
     // rather than a private `decision_trace` field.
     let policy_results = vec![json!({
@@ -139,7 +156,11 @@ async fn authz_check(
         "action": body.action,
         "resource": resource_expr,
         "realm_id": realm_id,
-        "reason_detail": result.reason_detail,
+        "reason_detail": if owner_aggregate_allowed {
+            Some("realm_owner_aggregate")
+        } else {
+            result.reason_detail.as_deref()
+        },
         "constraints": [],
         "missing_proofs": [],
         "cache": {
