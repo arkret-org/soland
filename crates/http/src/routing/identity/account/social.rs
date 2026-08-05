@@ -7,7 +7,7 @@ const DIRECT_CONVERSATION_PAIRWISE_DID_METHOD_PREFIXES: &[&str] = &["did:peer:",
 const DIRECT_BINDING_PENDING_POLL_ATTEMPTS: usize = 100;
 const DIRECT_BINDING_PENDING_POLL_DELAY_MS: u64 = 25;
 
-mod direct;
+pub(crate) mod direct;
 
 pub(crate) use direct::{
     active_direct_binding, direct_authorization_basis_from_contact,

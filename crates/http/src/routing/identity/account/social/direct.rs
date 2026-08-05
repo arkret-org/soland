@@ -314,19 +314,6 @@ pub(crate) async fn validate_direct_binding_operation(
         "direct_conversation_binding_invalid"
     })?;
 
-    if payload.binding_state == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Retired {
-        let supersedes = payload
-            .supersedes_binding_ref
-            .as_ref()
-            .ok_or("direct_conversation_binding_invalid")?;
-        let current = state
-            .contacts()
-            .direct_binding(payload.pair_key.as_str())
-            .ok_or("direct_conversation_binding_invalid")?;
-        return (current.binding_event_ref == supersedes.as_str())
-            .then_some(())
-            .ok_or("direct_conversation_binding_invalid");
-    }
 
     // The canonical precursor Events are the admission authority. Projection
     // application is asynchronous, so consulting the derived Realm view here
@@ -408,41 +395,17 @@ async fn accepted_direct_event(
     serde_json::from_value(accepted.envelope).map_err(|_| "referenced_event_decode")
 }
 
+/// Validate a Direct Conversation binding against the accepted founding facts.
+///
+/// The binding no longer carries member/Strand/MLS refs: uniqueness comes from founder-only
+/// admission, so this checks that the endorsed coordinates really are an accepted DM founding unit,
+/// that the Realm creator is the founder derived from the pair's root Contact basis, and that the
+/// referenced generation-1 activation exists in the same Realm.
 async fn validate_direct_binding_event_refs(
     state: &AppState,
     payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
 ) -> Result<(), &'static str> {
-    if payload.member_event_refs.len() != 2 {
-        return Err("member_ref_count");
-    }
-    let mut realm_create_ref = None;
-    let mut peer_member_ref = None;
-    for event_id in &payload.member_event_refs {
-        let accepted = state
-            .event_queries()
-            .accepted_event(event_id.as_str())
-            .await
-            .map_err(|_| "direct_conversation_binding_invalid")?
-            .ok_or("direct_conversation_binding_invalid")?;
-        match accepted.kind.as_str() {
-            arkret_wire::EventKind::REALM_CREATE if realm_create_ref.is_none() => {
-                realm_create_ref = Some(event_id)
-            }
-            arkret_wire::EventKind::MEMBER_STATE if peer_member_ref.is_none() => {
-                peer_member_ref = Some(event_id)
-            }
-            _ => return Err("member_ref_kind"),
-        }
-    }
-    let realm_create_ref = realm_create_ref.ok_or("direct_conversation_binding_invalid")?;
-    let peer_member_ref = peer_member_ref.ok_or("direct_conversation_binding_invalid")?;
-    let realm_create = accepted_direct_event(
-        state,
-        realm_create_ref,
-        &payload.realm_id,
-        arkret_wire::EventKind::REALM_CREATE,
-    )
-    .await?;
+    let realm_create = accepted_direct_realm_create(state, &payload.realm_id).await?;
     let realm = realm_create
         .payload
         .get("object")
@@ -456,51 +419,74 @@ async fn validate_direct_binding_event_refs(
         &realm,
     )
     .map_err(|_| "direct_conversation_realm_role_invalid")?;
+
     let creator = realm_create
         .payload
         .get("object")
         .and_then(|object| object.get("created_by"))
         .and_then(Value::as_str)
         .ok_or("direct_conversation_binding_invalid")?;
-    if !payload
+    let participants: Vec<&str> = payload
         .participants_unordered
         .iter()
-        .any(|participant| participant.as_str() == creator)
-    {
+        .map(arkret_identifiers::Did::as_str)
+        .collect();
+    if participants.len() != 2 || !participants.contains(&creator) {
         return Err("creator_participant");
     }
-    let peer_member = accepted_direct_event(
+
+    // founder-only creation: the Realm creator MUST be the participant derived from the pair's root
+    // basis. Anything else is not a competing candidate, it is invalid.
+    let peer = participants
+        .iter()
+        .copied()
+        .find(|participant| *participant != creator)
+        .ok_or("direct_conversation_binding_invalid")?;
+    validate_direct_founder(state, payload, creator, peer).await?;
+
+    // main Strand must be an accepted ak.strand.create inside the same Realm.
+    let realm_events = state
+        .event_queries()
+        .projected_events_for_realm(payload.realm_id.as_str())
+        .await
+        .map_err(|_| "direct_conversation_binding_invalid")?;
+    let has_main_strand = realm_events.iter().any(|event| {
+        event.event_kind == arkret_wire::EventKind::STRAND_CREATE
+            && event
+                .payload
+                .get("object")
+                .and_then(|object| object.get("id"))
+                .and_then(Value::as_str)
+                == Some(payload.main_strand_id.as_str())
+    });
+    if !has_main_strand {
+        return Err("main_strand");
+    }
+
+    // the endorsed first exact-pair generation must be an accepted activation in this Realm.
+    let activation = accepted_direct_event(
         state,
-        peer_member_ref,
+        &payload.initial_exact_pair_generation_ref,
         &payload.realm_id,
-        arkret_wire::EventKind::MEMBER_STATE,
+        arkret_wire::EventKind::DIRECT_CONVERSATION_MLS_GENERATION_ACTIVATE,
     )
     .await?;
-    let peer = peer_member
-        .payload
-        .get("actor_id")
-        .and_then(Value::as_str)
-        .ok_or("direct_conversation_binding_invalid")?;
-    if peer == creator
-        || peer_member
+    if activation.payload.get("phase").and_then(Value::as_str) != Some("exact_pair")
+        || activation
             .payload
-            .get("membership")
+            .get("main_strand_id")
             .and_then(Value::as_str)
-            != Some("join")
-        || !payload
-            .participants_unordered
-            .iter()
-            .any(|participant| participant.as_str() == peer)
+            != Some(payload.main_strand_id.as_str())
+        || activation.payload.get("pair_key").and_then(Value::as_str)
+            != Some(payload.pair_key.as_str())
     {
-        return Err("peer_member");
+        return Err("initial_exact_pair_generation");
     }
 
     match payload.authorization_basis.kind {
         arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthorizationKind::AcceptedContact => {
-            // Contact request/accept facts are principal-scoped projection
-            // facts, including facts delivered across federation. Their exact
-            // kinds and refs are validated against the accepted ContactRecord
-            // by the caller; they are not Realm canonical-event rows.
+            // Contact facts are principal-scoped projection facts, including facts delivered across
+            // federation; the caller validates them against the accepted ContactRecord.
             if payload.authorization_basis.event_refs.len() != 2 {
                 return Err("contact_ref_count");
             }
@@ -530,6 +516,8 @@ async fn validate_direct_binding_event_refs(
                 .await
                 .map_err(|_| "direct_conversation_binding_invalid")?
                 .ok_or("direct_conversation_binding_invalid")?;
+            // controller-to-own-Agent fixes the founder to the controller, so the Realm creator is
+            // the controller and the Agent is the peer.
             if record.controller_id != creator || record.state != AgentLifecycleState::Active {
                 return Err("managed_agent_record");
             }
@@ -565,97 +553,84 @@ async fn validate_direct_binding_event_refs(
         }
     }
 
-    let strand = accepted_direct_event(
-        state,
-        &payload.main_strand_create_ref,
-        &payload.realm_id,
-        arkret_wire::EventKind::STRAND_CREATE,
-    )
-    .await?;
-    if strand
-        .payload
-        .get("object")
-        .and_then(|object| object.get("id"))
-        .and_then(Value::as_str)
-        != Some(payload.main_strand_id.as_str())
-    {
-        return Err("main_strand");
-    }
+    Ok(())
+}
 
-    let genesis = accepted_direct_event(
-        state,
-        &payload.mls_genesis_event_ref,
-        &payload.realm_id,
-        arkret_wire::EventKind::MLS_GENESIS,
-    )
-    .await?;
-    let commit = accepted_direct_event(
-        state,
-        &payload.mls_commit_event_ref,
-        &payload.realm_id,
-        arkret_wire::EventKind::MLS_COMMIT,
-    )
-    .await?;
-    let welcome = accepted_direct_event(
-        state,
-        &payload.mls_welcome_event_ref,
-        &payload.realm_id,
-        arkret_wire::EventKind::MLS_WELCOME,
-    )
-    .await?;
-    let group_matches = |event: &arkret_wire::Event| {
-        event
-            .payload
-            .get("mls_group_id")
-            .or_else(|| event.payload.get("group_id"))
-            .and_then(Value::as_str)
-            == Some(payload.mls_group_id.as_str())
-    };
-    if !group_matches(&genesis)
-        || genesis.payload.get("epoch").and_then(Value::as_u64) != Some(0)
-        || !group_matches(&commit)
-        || commit.payload.get("base_epoch").and_then(Value::as_u64) != Some(0)
-        || commit.payload.get("next_epoch").and_then(Value::as_u64) != Some(1)
-        || !group_matches(&welcome)
-        || welcome.payload.get("epoch").and_then(Value::as_u64) != Some(1)
-        || welcome.payload.get("commit_ref").and_then(Value::as_str)
-            != Some(payload.mls_commit_event_ref.as_str())
-    {
-        return Err("mls_event_links");
-    }
-    let recipient = welcome
-        .payload
-        .get("recipient_principal_id")
-        .and_then(Value::as_str)
+/// Locate the accepted `ak.realm.create` for a Direct Conversation Realm.
+async fn accepted_direct_realm_create(
+    state: &AppState,
+    realm_id: &arkret_identifiers::RealmId,
+) -> Result<arkret_wire::Event, &'static str> {
+    let create_ref = state
+        .event_queries()
+        .projected_events_for_realm(realm_id.as_str())
+        .await
+        .map_err(|_| "direct_conversation_binding_invalid")?
+        .into_iter()
+        .find(|event| event.event_kind == arkret_wire::EventKind::REALM_CREATE)
+        .map(|event| event.event_id)
         .ok_or("direct_conversation_binding_invalid")?;
-    if recipient == creator
-        || !payload
-            .participants_unordered
-            .iter()
-            .any(|participant| participant.as_str() == recipient)
-    {
-        return Err("welcome_recipient");
-    }
-    let typed_welcome =
-        serde_json::from_value::<arkret_models_collaboration::events_payloads::MlsWelcomePayload>(
-            serde_json::to_value(&welcome.payload)
-                .map_err(|_| "direct_conversation_binding_invalid")?,
-        )
+    let event_id = arkret_identifiers::EventId::new(create_ref)
         .map_err(|_| "direct_conversation_binding_invalid")?;
-    if let Some(receipt) = typed_welcome.peer_claim_receipt.as_ref() {
-        let request = &receipt.request;
-        if request.claim_purpose
-            != arkret_models_crypto::http_bodies::PeerKeyPackageClaimPurpose::DirectConversation
-            || request.requester.as_str() != creator
-            || request.target_principal_id.as_str() != recipient
-            || request.intended_realm_id != payload.realm_id
-            || request.mls_group_id.as_str() != payload.mls_group_id.as_str()
-            || request.strand_id.as_ref() != Some(&payload.main_strand_id)
-            || request.pair_key.as_ref() != Some(&payload.pair_key)
-            || request.last_resort_allowed == Some(true)
-        {
-            return Err("peer_claim_receipt");
+    accepted_direct_event(
+        state,
+        &event_id,
+        realm_id,
+        arkret_wire::EventKind::REALM_CREATE,
+    )
+    .await
+}
+
+/// Enforce founder-only creation.
+///
+/// The founder is derived from the pair's Contact basis and is the sole principal allowed to author
+/// the founding unit, which is what removes the cross-server creation race. A Realm created by the
+/// other participant is not a competing candidate: it is invalid and MUST NOT be projected.
+async fn validate_direct_founder(
+    state: &AppState,
+    payload: &arkret_models_collaboration::events_payloads::device_identity::DirectConversationBoundPayload,
+    creator: &str,
+    peer: &str,
+) -> Result<(), &'static str> {
+    use arkret_models_collaboration::objects::direct_conversation::{
+        DirectConversationAuthorizationKind, DirectConversationFounderBasis,
+        direct_conversation_founder,
+    };
+
+    let basis = match payload.authorization_basis.kind {
+        // controller-to-own-Agent has no Contact basis: the founder is fixed to the controller so an
+        // Agent runtime key never needs Direct Conversation founding scope.
+        DirectConversationAuthorizationKind::ManagedAgentController => {
+            DirectConversationFounderBasis::ControllerOwnedAgent {
+                controller_id: arkret_identifiers::Did::new(creator.to_owned())
+                    .map_err(|_| "direct_conversation_binding_invalid")?,
+            }
         }
+        DirectConversationAuthorizationKind::AcceptedContact => {
+            let record = accepted_contact_for_pair(state, creator, peer, "direct_message")
+                .await
+                .map_err(|_| "direct_conversation_binding_invalid")?
+                .ok_or("direct_conversation_founder_basis_unavailable")?;
+            direct_founder_basis_from_contact(&record)?
+        }
+    };
+
+    let [left, right]: [arkret_identifiers::Did; 2] = payload
+        .participants_unordered
+        .clone()
+        .try_into()
+        .map_err(|_| "direct_conversation_binding_invalid")?;
+    let founder = direct_conversation_founder([left, right], &basis)
+        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+    if founder.as_str() != creator {
+        tracing::warn!(
+            target: "soland_http::error",
+            stage = "founder",
+            %creator,
+            founder = %founder,
+            "direct conversation Realm was not created by the derived founder"
+        );
+        return Err("direct_conversation_founder_mismatch");
     }
     Ok(())
 }
@@ -696,25 +671,6 @@ pub(crate) async fn project_canonical_direct_binding(
         return;
     };
     let pair_key = payload.pair_key.to_string();
-    if payload.binding_state == arkret_models_collaboration::objects::direct_conversation::DirectConversationAuthoredBindingState::Retired {
-        let retired = payload
-            .supersedes_binding_ref
-            .as_ref()
-            .and_then(|supersedes| {
-                state
-                    .contacts()
-                    .retire_direct_binding_if_current(&pair_key, supersedes.as_str(), now())
-            });
-        if let Some(binding) = retired
-            && let Err(error) = state
-                .contacts()
-                .save_direct_binding(&pair_key, binding)
-                .await
-        {
-            tracing::error!(%error, %pair_key, "failed to persist canonical direct binding retirement");
-        }
-        return;
-    }
 
     let incoming_digest = operation
         .canonical_event_digest
@@ -764,4 +720,118 @@ pub(crate) async fn project_canonical_direct_binding(
         tracing::error!(%error, %pair_key, "failed to persist canonical direct binding projection");
         return;
     }
+}
+
+/// Derive the founder basis from an accepted Contact record.
+///
+/// Normal branch: the founder is the **responder**, i.e. the participant that is not the request
+/// issuer. This is normative, not a coin flip. The basis is lit up by the responder's
+/// `normal_response_acceptance_receipt`, which proves the responder was online at the moment the
+/// basis came into existence; the requester may have gone offline days earlier. Base v1 defines no
+/// fallback, so naming the possibly-absent party would leave the pair unable to ever create the
+/// conversation.
+pub(crate) fn direct_founder_basis_from_contact(
+    record: &ContactRecord,
+) -> Result<
+    arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis,
+    &'static str,
+> {
+    // NOTE: glare bases (both sides requested concurrently) derive the founder from the
+    // canonically-ordered pair of request refs. The stored ContactRecord keeps a single
+    // requester/target orientation and does not persist both request refs, so a glare pair cannot be
+    // derived here yet. We deliberately do NOT guess: guessing would let the two sides disagree
+    // about who may create, which is exactly the race founder derivation exists to remove.
+    let request_issuer = arkret_identifiers::Did::new(record.requester.clone())
+        .map_err(|_| "direct_conversation_founder_basis_unavailable")?;
+    Ok(
+        arkret_models_collaboration::objects::direct_conversation::DirectConversationFounderBasis::Normal {
+            request_issuer,
+        },
+    )
+}
+
+/// Which participant may author the founding unit for this pair, if it can be determined now.
+///
+/// Returns `None` when the basis cannot be verified, so the caller reports
+/// `temporarily_unavailable` rather than inventing an answer.
+pub(crate) async fn direct_founder_for_pair(
+    state: &AppState,
+    actor: &str,
+    peer: &str,
+    contact: Option<&ContactRecord>,
+    managed_agent: bool,
+) -> Result<Option<String>, AppError> {
+    use arkret_models_collaboration::objects::direct_conversation::{
+        DirectConversationFounderBasis, direct_conversation_founder,
+    };
+
+    let basis = if managed_agent {
+        // controller-to-own-Agent has no Contact basis; the founder is fixed to the controller so an
+        // Agent runtime key never needs Direct Conversation founding scope.
+        let controller = if state
+            .agent_pairings()
+            .agent(peer)
+            .await
+            .map_err(|error| AppError::internal(format!("managed Agent lookup failed: {error}")))?
+            .is_some()
+        {
+            actor
+        } else {
+            peer
+        };
+        DirectConversationFounderBasis::ControllerOwnedAgent {
+            controller_id: arkret_identifiers::Did::new(controller.to_owned())
+                .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?,
+        }
+    } else {
+        let Some(record) = contact else {
+            return Ok(None);
+        };
+        match direct_founder_basis_from_contact(record) {
+            Ok(basis) => basis,
+            Err(_) => return Ok(None),
+        }
+    };
+
+    let left = arkret_identifiers::Did::new(actor.to_owned())
+        .map_err(|error| AppError::internal(format!("actor DID invalid: {error}")))?;
+    let right = arkret_identifiers::Did::new(peer.to_owned())
+        .map_err(|error| AppError::internal(format!("peer DID invalid: {error}")))?;
+    Ok(direct_conversation_founder([left, right], &basis)
+        .ok()
+        .map(|founder| founder.to_string()))
+}
+
+/// Current active exact-pair MLS generation activation for a bound conversation.
+pub(crate) async fn direct_active_generation_ref(
+    state: &AppState,
+    binding: &DirectConversationBindingRecord,
+) -> Result<EventId, AppError> {
+    let mut best: Option<(u64, String)> = None;
+    for event in state
+        .event_queries()
+        .projected_events_for_realm(&binding.realm_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        if event.event_kind != arkret_wire::EventKind::DIRECT_CONVERSATION_MLS_GENERATION_ACTIVATE {
+            continue;
+        }
+        let generation = event
+            .payload
+            .get("mls_generation")
+            .and_then(Value::as_u64)
+            .unwrap_or_default();
+        if best.as_ref().is_none_or(|(current, _)| generation > *current) {
+            best = Some((generation, event.event_id));
+        }
+    }
+    let (_, event_id) = best.ok_or_else(|| {
+        direct_resolve_precondition(
+            arkret_wire::ErrorCode::DIRECT_CONVERSATION_UNAVAILABLE,
+            "direct conversation has no active MLS generation",
+        )
+    })?;
+    EventId::new(event_id)
+        .map_err(|error| AppError::internal(format!("stored activation ref invalid: {error}")))
 }

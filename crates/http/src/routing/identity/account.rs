@@ -32,9 +32,10 @@ use arkret_models_collaboration::http_bodies::{
     DirectConversationSummaryState,
 };
 use arkret_models_collaboration::objects::account_status::AccountStatus;
-use arkret_models_collaboration::operation_control::{
+use self::social::direct::{direct_active_generation_ref, direct_founder_for_pair};
+use arkret_models_collaboration::direct_conversation_ops::{
     DirectConversationCoordinates, DirectConversationResolveOutcome,
-    DirectConversationResolveRequestBody, DirectConversationResolveStateOutcome,
+    DirectConversationResolveRequestBody, DirectConversationSendBlocker,
 };
 use arkret_models_identity::account::{
     AccountDeviceSummary, AccountRegistrationAudit, AccountRegistrationAuditOutcome,
@@ -1346,10 +1347,10 @@ fn actor_profile_from_account(
 }
 
 #[salvo::oapi::endpoint(
-    operation_id = "ak.self.direct_conversation.command.resolve",
+    operation_id = "ak.self.direct_conversation.query.resolve",
     tags("identity")
 )]
-#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.command.resolve"))]
+#[tracing::instrument(skip_all, fields(op = "ak.self.direct_conversation.query.resolve"))]
 async fn direct_conversation_resolve(
     aa: AuthArgs,
     depot: &mut Depot,
@@ -1359,59 +1360,12 @@ async fn direct_conversation_resolve(
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
     let body = body.into_inner();
-    let (peer_descriptor, operation_id) = match &body {
-        DirectConversationResolveRequestBody::Lookup(request) => (&request.peer, None),
-        DirectConversationResolveRequestBody::PrepareAuthorization(request) => {
-            (&request.peer, Some(request.operation_id.clone()))
-        }
-        DirectConversationResolveRequestBody::CommitAuthorization(request) => {
-            if request.operation_control_authorization.core.operation_id != request.operation_id
-                || request
-                    .operation_control_authorization
-                    .materialization_genesis
-                    .operation_id
-                    != request.operation_id
-            {
-                return Err(AppError::invalid_param(
-                    "operation-control authorization draft does not bind operation_id",
-                ));
-            }
-            (&request.peer, Some(request.operation_id.clone()))
-        }
-        DirectConversationResolveRequestBody::PrepareMaterializationStep(request) => {
-            if request.operation_control_authorization.core.operation_id != request.operation_id
-                || request
-                    .operation_control_authorization
-                    .materialization_genesis
-                    .operation_id
-                    != request.operation_id
-            {
-                return Err(AppError::invalid_param(
-                    "operation-control authorization does not bind operation_id",
-                ));
-            }
-            (&request.peer, Some(request.operation_id.clone()))
-        }
-        DirectConversationResolveRequestBody::CommitMaterializationStep(request) => {
-            if request.operation_control_authorization.core.operation_id != request.operation_id
-                || request
-                    .operation_control_authorization
-                    .materialization_genesis
-                    .operation_id
-                    != request.operation_id
-            {
-                return Err(AppError::invalid_param(
-                    "operation-control authorization does not bind operation_id",
-                ));
-            }
-            (&request.peer, Some(request.operation_id.clone()))
-        }
-    };
+    let peer_descriptor = &body.peer;
     if peer_descriptor.subject_id().as_str() == session.actor {
         return Err(AppError::invalid_param("invalid direct conversation peer"));
     }
     let peer = peer_descriptor.subject_id().as_str().to_owned();
-    if let ContactPeer::Agent { controller_id, .. } = &peer_descriptor {
+    if let ContactPeer::Agent { controller_id, .. } = peer_descriptor {
         let record =
             state.agent_pairings().agent(&peer).await.map_err(|error| {
                 AppError::internal(format!("managed Agent lookup failed: {error}"))
@@ -1425,14 +1379,14 @@ async fn direct_conversation_resolve(
             ));
         }
     }
-    // The peer MAY be either an active controller-owned local Agent or an
-    // accepted Contact. Direction grants are read only from the canonical
-    // Contact record.
+
+    // The peer MAY be either an active controller-owned local Agent or an accepted Contact.
+    // Direction grants are read only from the canonical Contact record.
     let scope = "direct_message";
-    let (contact, authorization_basis) = if let Some(basis) =
-        managed_agent_direct_authorization_basis(state, &session.actor, &peer).await?
-    {
-        (None, basis)
+    let managed_agent_basis =
+        managed_agent_direct_authorization_basis(state, &session.actor, &peer).await?;
+    let contact = if managed_agent_basis.is_some() {
+        None
     } else {
         let Some(contact) = accepted_contact_for_pair(state, &session.actor, &peer, scope).await?
         else {
@@ -1445,49 +1399,54 @@ async fn direct_conversation_resolve(
                 session.actor
             )));
         };
-        let basis = direct_authorization_basis_from_contact(&contact)?;
-        (Some(contact), basis)
+        Some(contact)
     };
+
     let pair_key = direct_pair_key(state, &session.actor, &peer)?;
     let pair_key_hash = Hash::new(pair_key.clone())
         .map_err(|error| AppError::internal(format!("direct pair key invalid: {error}")))?;
+
+    // Existing coordinates are never hidden by presence, session, KeyPackage inventory or MLS
+    // reconcile state.
     if let Some(binding) = active_direct_binding(state, &pair_key) {
-        return json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::Found {
-                coordinates: direct_coordinates(pair_key_hash, &binding)?,
-                send_blockers: Vec::new(),
-            },
-        ));
+        return json_ok(DirectConversationResolveOutcome::Found {
+            coordinates: direct_coordinates(pair_key_hash, &binding)?,
+            active_mls_generation_ref: direct_active_generation_ref(state, &binding).await?,
+            send_blockers: Vec::new(),
+        });
     }
     if let Some(binding) = state.contacts().direct_binding(&pair_key)
         && binding.state != "active"
         && EventId::new(binding.binding_event_ref.clone()).is_ok()
     {
-        return json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::Suspended {
-                coordinates: direct_coordinates(pair_key_hash, &binding)?,
-                suspension_reason: arkret_models_collaboration::operation_control::DirectConversationSuspensionReason::ContactDirectionRevoked,
-            },
-        ));
-    }
-    if matches!(body, DirectConversationResolveRequestBody::Lookup(_)) {
-        return json_ok(DirectConversationResolveOutcome::State(
-            DirectConversationResolveStateOutcome::CreationRequired,
-        ));
+        return json_ok(DirectConversationResolveOutcome::Suspended {
+            coordinates: direct_coordinates(pair_key_hash, &binding)?,
+            blockers: vec![DirectConversationSendBlocker::ContactScopeStale],
+        });
     }
 
-    let _ = (contact, authorization_basis);
-    // Every create phase is now routed explicitly. The former one-shot path
-    // synthesized and accepted Events before the caller signed exact prepared
-    // bytes, so it is intentionally not a fallback for these phases. Until the
-    // durable reservation/receipt executor has a complete local dependency
-    // frontier, expose the protocol's retryable typed state.
-    json_ok(DirectConversationResolveOutcome::State(
-        DirectConversationResolveStateOutcome::TemporarilyUnavailable {
-            operation_id,
-            reason: arkret_models_collaboration::operation_control::DirectConversationUnavailableReason::DependencyPending,
-        },
-    ))
+    // No accepted binding yet. Creation is founder-only: this endpoint never creates, and waiting
+    // never grants create authority to the non-founder — there is no timeout fallback or takeover.
+    let founder = direct_founder_for_pair(
+        state,
+        &session.actor,
+        &peer,
+        contact.as_ref(),
+        managed_agent_basis.is_some(),
+    )
+    .await?;
+    match founder {
+        Some(founder) if founder == session.actor => {
+            json_ok(DirectConversationResolveOutcome::CreationRequired)
+        }
+        Some(_) => json_ok(DirectConversationResolveOutcome::AwaitingFounder {
+            retry_after_ms: None,
+        }),
+        // The basis is not verifiable right now, so we cannot safely classify the pair.
+        None => json_ok(DirectConversationResolveOutcome::TemporarilyUnavailable {
+            retry_after_ms: None,
+        }),
+    }
 }
 
 fn direct_coordinates(
@@ -1500,8 +1459,11 @@ fn direct_coordinates(
             .map_err(|error| AppError::internal(format!("stored direct Realm id: {error}")))?,
         main_strand_id: StrandId::new(binding.main_strand_id.clone())
             .map_err(|error| AppError::internal(format!("stored direct Strand id: {error}")))?,
-        binding_event_ref: EventId::new(binding.binding_event_ref.clone())
-            .map_err(|error| AppError::internal(format!("stored direct binding ref: {error}")))?,
+        binding_event_ref: Some(
+            EventId::new(binding.binding_event_ref.clone()).map_err(|error| {
+                AppError::internal(format!("stored direct binding ref: {error}"))
+            })?,
+        ),
     })
 }
 

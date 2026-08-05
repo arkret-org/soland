@@ -423,7 +423,7 @@ async fn provision_agent_sdk_commit_attempt(
     ))
     .unwrap();
     let idempotency_key =
-        arkret_wire::ProtocolOpaqueId::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
+        arkret_wire::IdempotencyKey::new(uuid::Uuid::now_v7().simple().to_string()).unwrap();
     let scope = serde_json::from_value::<
         arkret_models_collaboration::events_payloads::agent::AgentKeyScope,
     >(requested_scope.clone())
@@ -837,7 +837,7 @@ async fn agent_provision_commit_requires_its_server_allocation() {
                 "ak:operation:01904100000070008000000000000011",
             )
             .unwrap(),
-            idempotency_key: arkret_wire::ProtocolOpaqueId::new("unallocated-commit-001").unwrap(),
+            idempotency_key: arkret_wire::IdempotencyKey::new("unallocated-commit-001").unwrap(),
             agent_id: arkret_identifiers::Did::new("did:web:unallocated-agent.example").unwrap(),
             principal_control_realm_id: arkret_identifiers::RealmId::new(
                 "ak:realm:01904100-0000-7000-8000-000000000001",
@@ -1009,7 +1009,7 @@ async fn provisioned_agent_is_listed_and_slug_conflict_is_rejected() {
                 uuid::Uuid::now_v7().simple()
             ))
             .unwrap(),
-            idempotency_key: arkret_wire::ProtocolOpaqueId::new(
+            idempotency_key: arkret_wire::IdempotencyKey::new(
                 uuid::Uuid::now_v7().simple().to_string(),
             )
             .unwrap(),

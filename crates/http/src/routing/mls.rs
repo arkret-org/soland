@@ -2161,12 +2161,20 @@ async fn validate_direct_keypackage_consume(
         )
     })?;
     let welcome_ref = body.welcome_ref.as_str();
-    if binding_payload.mls_welcome_event_ref.as_str() != welcome_ref
-        || body.mls_group_id.as_deref() != Some(binding_payload.mls_group_id.as_str())
-    {
+    // The binding no longer pins a founding MLS group: it is written once and never retired, and
+    // participant authority always reads the *current* active generation. So the consume request is
+    // checked against the active-generation cell for this Realm, not against a frozen binding field.
+    let active_group_id = direct_active_generation_group_id(state, realm_id.as_str()).await?;
+    if body.mls_group_id.as_deref() != Some(active_group_id.as_str()) {
         return Err(AppError::new(
             ErrorCode::FailedPrecondition,
-            "KeyPackage consume does not reference the canonical binding Welcome",
+            "KeyPackage consume does not reference the active direct conversation MLS generation",
+        ));
+    }
+    if binding_payload.realm_id.as_str() != realm_id.as_str() {
+        return Err(AppError::new(
+            ErrorCode::FailedPrecondition,
+            "canonical direct binding belongs to another Realm",
         ));
     }
     let welcome_event = state
@@ -2206,7 +2214,7 @@ async fn validate_direct_keypackage_consume(
     let key_package_id = &body.key_package_refs[0];
     if welcome.recipient_principal_id.as_str() != session.actor
         || welcome.recipient_device_id.as_str() != session.device_id
-        || welcome.mls_group_id.as_str() != binding_payload.mls_group_id.as_str()
+        || welcome.mls_group_id.as_str() != active_group_id.as_str()
         || Some(welcome.epoch) != body.epoch
         || !direct_welcome_claim_matches_consume(
             key_package_id,
@@ -3484,4 +3492,46 @@ mod trust_binding_tests {
         .await
         .unwrap();
     }
+}
+
+/// MLS group id of the Realm's current active Direct Conversation generation.
+///
+/// Reading the active-generation cell rather than a binding field is what lets a pair rekey or
+/// repair into a new generation without ever rewriting or retiring the immutable binding.
+async fn direct_active_generation_group_id(
+    state: &AppState,
+    realm_id: &str,
+) -> Result<String, AppError> {
+    let mut best: Option<(u64, String)> = None;
+    for event in state
+        .event_queries()
+        .projected_events_for_realm(realm_id)
+        .await
+        .map_err(|error| AppError::internal(error.to_string()))?
+    {
+        if event.event_kind != arkret_wire::EventKind::DIRECT_CONVERSATION_MLS_GENERATION_ACTIVATE {
+            continue;
+        }
+        let generation = event
+            .payload
+            .get("mls_generation")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or_default();
+        let Some(group_id) = event
+            .payload
+            .get("mls_group_id")
+            .and_then(serde_json::Value::as_str)
+        else {
+            continue;
+        };
+        if best.as_ref().is_none_or(|(current, _)| generation > *current) {
+            best = Some((generation, group_id.to_owned()));
+        }
+    }
+    best.map(|(_, group_id)| group_id).ok_or_else(|| {
+        AppError::new(
+            ErrorCode::FailedPrecondition,
+            "direct conversation has no active MLS generation",
+        )
+    })
 }

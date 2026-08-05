@@ -829,13 +829,9 @@ async fn accept_delivered_direct_binding(
     // durable federation rails. A binding may legitimately arrive first; make
     // that condition retryable instead of permanently dead-lettering a valid
     // signed fact as a schema error.
-    let referenced_events = payload
-        .member_event_refs
-        .iter()
-        .chain(std::iter::once(&payload.main_strand_create_ref))
-        .chain(std::iter::once(&payload.mls_genesis_event_ref))
-        .chain(std::iter::once(&payload.mls_commit_event_ref))
-        .chain(std::iter::once(&payload.mls_welcome_event_ref));
+    // The slim binding endorses coordinates plus the first exact-pair MLS generation; the founding
+    // unit itself is verified from the Realm projection, not from refs carried in the payload.
+    let referenced_events = std::iter::once(&payload.initial_exact_pair_generation_ref);
     for event_ref in referenced_events {
         let available = state
             .event_queries()
