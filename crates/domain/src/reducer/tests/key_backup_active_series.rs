@@ -37,10 +37,10 @@ fn active_series_payload() -> Value {
             ],
             "ssk_generation": 2
         },
-        "event_id": "ak:event:01964137-1000-7000-8000-000000000099",
+        "event_id": "ak:event:01964137-1000-8000-8000-000000000099",
         "sender": ACTOR,
         "hlc": "019641371000-0001-00000001",
-        "accepted_event_id": "ak:event:01964137-1000-7000-8000-000000000099"
+        "accepted_event_id": "ak:event:01964137-1000-8000-8000-000000000099"
     })
 }
 

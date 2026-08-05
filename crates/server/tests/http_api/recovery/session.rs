@@ -276,8 +276,8 @@ async fn recovery_session_derives_enrollment_authority_model() {
     let inception_version = format!("1-{}", "a".repeat(64));
     let inception_digest = format!("sha256:{}", "b".repeat(64));
     let realm_id = soland_test_support::principal_control_realm_for_did(principal_id);
-    let create_event_id = "ak:event:01964137-0000-7000-8000-00000000b001";
-    let authorize_event_id = "ak:event:01964137-0000-7000-8000-00000000b002";
+    let create_event_id = "ak:event:01964137-0000-8000-8000-00000000b001";
+    let authorize_event_id = "ak:event:01964137-0000-8000-8000-00000000b002";
     let now = chrono::Utc::now();
 
     state
@@ -1056,7 +1056,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     .await;
     let recovery_session_id =
         seed_verified_reset_recovery_session(&state, &principal_id, &policy_id).await;
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1116,7 +1116,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
     .await;
     let recovery_session_id =
         seed_verified_reset_recovery_session(&state, &principal_id, &policy_id).await;
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1193,7 +1193,7 @@ async fn cross_signing_reset_accepts_recovery_unlock_quorum_and_trusted_service_
         "Reset Source",
     )
     .await;
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1293,7 +1293,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
             .unwrap();
     }
 
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let mut payload = base_reset_payload(
         &principal_id,
         &event_id,
@@ -1353,7 +1353,7 @@ async fn cross_signing_reset_replay_cache_and_queue_purge_cover_publish_window()
         Some(1)
     );
 
-    let replay_event_id = new_prefixed_uuid7("ak:event:");
+    let replay_event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let mut replay_payload = base_reset_payload(
         &principal_id,
         &replay_event_id,

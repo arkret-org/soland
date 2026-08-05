@@ -72,8 +72,8 @@ fn bottom_entry_from_camel_case_kind_normalises_to_snake_case() {
         "details": "two heads"
     });
     let entry = bottom_entry_from(
-        "ak:space:01904100-0000-7000-8000-2dd3431bd65a",
-        "ak:cell:ak.component.space.title.v1:ak:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ak:space:01904100-0000-8000-8000-2dd3431bd65a",
+        "ak:cell:ak.component.space.title.v1:ak:space:01904100-0000-8000-8000-2dd3431bd65a",
         &bottom,
     );
     assert_eq!(entry.kind, "conflict");
@@ -91,7 +91,7 @@ fn bottom_entry_from_non_conflict_kind_has_no_candidate_heads() {
         "details": "fsm rejected from invited→ban"
     });
     let entry = bottom_entry_from(
-        "ak:space:01904100-0000-7000-8000-2dd3431bd65a",
+        "ak:space:01904100-0000-8000-8000-2dd3431bd65a",
         "ak:cell:ak.component.member.state.v1:did.web.alice",
         &bottom,
     );
@@ -179,7 +179,7 @@ fn notary_reconfig_body_converts_to_sdk_authoritative_cell_value() {
 
 #[test]
 fn notary_cell_for_builds_canonical_cell_ref() {
-    let cell = notary_cell_for("ak:space:01904100-0000-7000-8000-2dd3431bd65a").unwrap();
+    let cell = notary_cell_for("ak:space:01904100-0000-8000-8000-2dd3431bd65a").unwrap();
     assert_eq!(cell.as_str(), arkret_wire::REALM_NOTARY_CELL);
 }
 

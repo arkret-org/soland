@@ -2004,7 +2004,7 @@ mod tests {
         causal_refs: &[u32],
         payload: Value,
     ) -> AcceptedEvent {
-        let event_id = |value: u32| format!("ak:event:01964137-0000-7000-8000-{value:012x}");
+        let event_id = |value: u32| format!("ak:event:01964137-0000-8000-8000-{value:012x}");
         AcceptedEvent {
             event_id: event_id(suffix),
             actor_id: "did:webvh:z6mkalice:alice.example".to_owned(),
@@ -2059,7 +2059,7 @@ mod tests {
             &[],
             &[],
             serde_json::json!({
-                "message_id": "ak:message:01964137-0000-7000-8000-000000000001"
+                "message_id": "ak:message:01964137-0000-8000-8000-000000000001"
             }),
         );
         let by_digest = causal_record(2, 2, &[], &[1], serde_json::json!({}));
@@ -2069,7 +2069,7 @@ mod tests {
             &[],
             &[],
             serde_json::json!({
-                "replies_to": "ak:message:01964137-0000-7000-8000-000000000001"
+                "replies_to": "ak:message:01964137-0000-8000-8000-000000000001"
             }),
         );
         let records = vec![first, by_digest, reply];
@@ -2253,7 +2253,7 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let original = accountability_event(
-            "ak:event:019f0000-0000-7000-8000-000000000001",
+            "ak:event:019f0000-0000-8000-8000-000000000001",
             1,
             "active",
             accepted_at - chrono::Duration::minutes(2),
@@ -2271,7 +2271,7 @@ mod tests {
         ));
 
         let revoked = accountability_event(
-            "ak:event:019f0000-0000-7000-8000-000000000002",
+            "ak:event:019f0000-0000-8000-8000-000000000002",
             2,
             "revoked",
             accepted_at - chrono::Duration::minutes(1),
@@ -2299,21 +2299,21 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let superset = accountability_event_with_scope(
-            "ak:event:019f0000-0000-7000-8000-000000000011",
+            "ak:event:019f0000-0000-8000-8000-000000000011",
             1,
             "active",
             serde_json::json!(["employment", "agent_operator"]),
             accepted_at - chrono::Duration::minutes(5),
         );
         let singleton = accountability_event_with_scope(
-            "ak:event:019f0000-0000-7000-8000-000000000012",
+            "ak:event:019f0000-0000-8000-8000-000000000012",
             2,
             "active",
             serde_json::json!("contracted_service"),
             accepted_at - chrono::Duration::minutes(4),
         );
         let reordered_revoke = accountability_event_with_scope(
-            "ak:event:019f0000-0000-7000-8000-000000000013",
+            "ak:event:019f0000-0000-8000-8000-000000000013",
             3,
             "revoked",
             serde_json::json!(["agent_operator", "employment"]),
@@ -2345,14 +2345,14 @@ mod tests {
             .unwrap()
             .with_timezone(&Utc);
         let superset = accountability_event_with_scope(
-            "ak:event:019f0000-0000-7000-8000-000000000021",
+            "ak:event:019f0000-0000-8000-8000-000000000021",
             1,
             "active",
             serde_json::json!(["employment", "agent_operator"]),
             accepted_at - chrono::Duration::minutes(3),
         );
         let subset_revoke = accountability_event_with_scope(
-            "ak:event:019f0000-0000-7000-8000-000000000022",
+            "ak:event:019f0000-0000-8000-8000-000000000022",
             2,
             "revoked",
             serde_json::json!("employment"),

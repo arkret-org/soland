@@ -593,10 +593,11 @@ async fn rtc_media_token_uses_projected_media_service_epoch() {
         "participant_identity must be a typed ak:rtc_participant id"
     );
     assert!(
-        arkret_identifiers::is_lowercase_uuidv7(
+        arkret_identifiers::is_lowercase_typed_uuid(
             participant_identity
                 .strip_prefix("ak:rtc_participant:")
-                .unwrap()
+                .unwrap(),
+            arkret_identifiers::UUID_VERSION_PRODUCER_ALLOCATED,
         ),
         "participant_identity payload must be a canonical lowercase uuidv7"
     );

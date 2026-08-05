@@ -1,7 +1,7 @@
 use super::*;
 
 const REALM_ID: &str = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-0000000000f1";
+const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-0000000000f1";
 
 /// `purpose` of the exporter-derived content AEAD domain
 /// (`encryption-and-audit.md` §2.10.2).
@@ -34,7 +34,7 @@ fn encrypted_payload_with_scheme(event_kind: &str, scheme: &str, algorithm: &str
         },
         "key_ref": {
             "algorithm": algorithm,
-            "group_state_ref": "ak:event:01904100-0000-7000-8000-0000000000aa"
+            "group_state_ref": "ak:event:01904100-0000-8000-8000-0000000000aa"
         },
         "aad_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
         "payload_digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222"

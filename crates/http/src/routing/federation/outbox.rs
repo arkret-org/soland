@@ -1409,7 +1409,7 @@ mod tests {
             "status":"partial",
             "accepted":[],
             "rejected":[{
-                "id":"ak:event:019f0000-0000-7000-8000-000000000001",
+                "id":"ak:event:019f0000-0000-8000-8000-000000000001",
                 "reason_code":"dependency_missing",
                 "missing_seal_refs":["ak:seal:sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"]
             }]
@@ -1477,7 +1477,7 @@ mod tests {
         let submission = |suffix: &str, lease_suffix: &str, receipt_suffix: &str| {
             let mut event = arkret_wire::Event::new_with_id_at(
                 arkret_identifiers::EventId::new(format!(
-                    "ak:event:019f0000-0000-7000-8000-{suffix}"
+                    "ak:event:019f0000-0000-8000-8000-{suffix}"
                 ))
                 .unwrap(),
                 arkret_wire::EventKind::MESSAGE_CREATE,

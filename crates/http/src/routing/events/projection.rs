@@ -111,14 +111,14 @@ mod tests {
             .unwrap()
             .with_timezone(&chrono::Utc);
         let event = soland_services::events::ProjectedEvent {
-            event_id: "ak:event:01904100-0000-7000-8000-0000000000f1".to_owned(),
+            event_id: "ak:event:01904100-0000-8000-8000-0000000000f1".to_owned(),
             realm_id: REALM_ID.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some(OPERATION_ID.to_owned()),
             sender: Some("did:web:bob.example".to_owned()),
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000f2",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000f2",
                 "patch": {"synthesis": {"$op": "set", "value": "bob update"}}
             }),
             created_at,
@@ -218,7 +218,7 @@ mod tests {
             arkret_wire::EventKind::SPACE_CREATE,
             json!({
                 "object": {
-                    "id": "ak:space:01904100-0000-7000-8000-000000000003",
+                    "id": "ak:space:01904100-0000-8000-8000-000000000003",
                     "kind": "list",
                     "title": "ee",
                     "summary": "List summary"
@@ -228,7 +228,7 @@ mod tests {
         let update = op(
             arkret_wire::EventKind::SPACE_UPDATE,
             json!({
-                "space_id": "ak:space:01904100-0000-7000-8000-000000000003",
+                "space_id": "ak:space:01904100-0000-8000-8000-000000000003",
                 "patch": {
                     "title": { "$op": "set", "value": "renamed list" },
                     "summary": { "$op": "set", "value": "renamed summary" }

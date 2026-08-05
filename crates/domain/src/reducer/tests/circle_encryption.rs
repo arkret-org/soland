@@ -33,7 +33,7 @@ fn apply_policy_bundle(
 
 fn seed_circle_authz_state() -> (ProjectionState, ServerHlc, String, String) {
     let realm = "ak:realm:01904100-0000-7000-8000-c1c1c1c1c1c1".to_owned();
-    let circle = "ak:circle:01904100-0000-7000-8000-aaaaaaaaaaaa".to_owned();
+    let circle = "ak:circle:01904100-0000-8000-8000-aaaaaaaaaaaa".to_owned();
     let mut state = ProjectionState::new();
     let now = chrono::Utc::now();
     let join_member = |state: &mut ProjectionState, did: &str| {

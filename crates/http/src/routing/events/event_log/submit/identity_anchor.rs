@@ -1995,7 +1995,7 @@ mod tests {
     use super::*;
 
     fn event_id(suffix: &str) -> String {
-        format!("ak:event:01904100-0000-7000-8000-{suffix}")
+        format!("ak:event:01904100-0000-8000-8000-{suffix}")
     }
 
     fn attach_bootstrap_fixture_proof(event: &mut arkret_wire::Event, verification_method: &str) {

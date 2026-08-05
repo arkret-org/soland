@@ -74,9 +74,7 @@ pub(crate) async fn persist_canonical_moderation_report_event(
     let service_did = Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
     let created_at = now();
-    let mut event = arkret_wire::Event::new_with_id_at(
-        EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
-            .map_err(|error| AppError::internal(format!("moderation Event id invalid: {error}")))?,
+    let mut event = arkret_wire::Event::new_with_derived_id_at(
         arkret_wire::EventKind::SELF_MODERATION_REPORT,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
@@ -993,8 +991,8 @@ mod report_safety_tests {
     use crate::config::{AppConfig, ObjectStorageConfig};
 
     const REALM: &str = "ak:realm:01904100-0000-7000-8000-d0d0d0d0d0d0";
-    const TARGET: &str = "ak:message:01904100-0000-7000-8000-000000000777";
-    const FRANKING_EVENT: &str = "ak:event:01904100-0000-7000-8000-000000000222";
+    const TARGET: &str = "ak:message:01904100-0000-8000-8000-000000000777";
+    const FRANKING_EVENT: &str = "ak:event:01904100-0000-8000-8000-000000000222";
     const FRANKING_RECEIVED_AT: &str = "2026-04-30T00:00:00.000Z";
     const REPORTER: &str = "did:web:alice.example";
 

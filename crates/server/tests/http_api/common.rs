@@ -632,7 +632,7 @@ pub(crate) async fn seed_test_realm(
     plaintext_visible_services: &[&str],
     invitees: &[&str],
 ) -> Value {
-    let realm_id = new_prefixed_uuid7("ak:realm:");
+    let realm_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::DateTime::<chrono::Utc>::from_timestamp_millis(
@@ -1104,7 +1104,7 @@ pub(crate) fn make_realm_bootstrap_unit_member(event: &mut Value) {
 
 pub(crate) fn signed_event_envelope(event_id: &str, actor_seq: u64, prev_refs: Vec<&str>) -> Value {
     let payload = serde_json::json!({
-        "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+        "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
         "track_name": "discussion",
         "content": {
             "kind": "ak.content.text",
@@ -1131,7 +1131,7 @@ pub(crate) fn signed_message_event_envelope(
     content: Value,
     encrypted: bool,
 ) -> Value {
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let actor_seq = TEST_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let mut payload = serde_json::json!({
         "strand_id": expected_strand_id_for_scope(realm_id),
@@ -1215,7 +1215,7 @@ pub(crate) fn signed_actor_private_event_envelope(
     kind: &str,
     payload: Value,
 ) -> Value {
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     signed_canonical_event(
         &event_id,
         kind,
@@ -1533,7 +1533,7 @@ pub(crate) async fn seed_verified_device_with_public_key(
                 "device_id": device_id,
                 "verification": "verified",
                 "device_public_key": device_public_key,
-                "device_authorize_event_id": "ak:event:01904100-0000-7000-8000-a11ce00000aa",
+                "device_authorize_event_id": "ak:event:01904100-0000-8000-8000-a11ce00000aa",
                 "enrollment_authority_binding": {
                     "kind": "service_attested",
                     "authority_did": "did:web:auth.example",
@@ -1897,7 +1897,7 @@ pub(crate) fn signed_signal_envelope(
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:01904100-0000-7000-8000-cccccccccccc".to_owned(),
+                group_state_ref: "ak:event:01904100-0000-8000-8000-cccccccccccc".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
@@ -2501,10 +2501,7 @@ fn typed_relation_create_payload(payload: Value) -> Value {
     let rank = relation_payload_str(&payload, &["rank"]);
     let mut typed =
         arkret_models_collaboration::governance::membership_invite::RelationCreatePayload::new(
-            relation_id,
-            kind,
-            from_ref,
-            to_ref,
+            kind, from_ref, to_ref,
         );
     if let Some(rank) = rank {
         typed = typed.with_rank(rank);
@@ -2610,7 +2607,7 @@ pub(crate) async fn persist_test_message_with_actor_seq(
     body: &str,
     actor_seq: u64,
 ) -> MessageRecord {
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let record = MessageRecord {
         event_id: event_id.clone(),
         message_id: event_id.replacen("ak:event:", "ak:message:", 1),

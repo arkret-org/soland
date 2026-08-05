@@ -370,7 +370,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
-                "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+                "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
             }))],
             &[]
         ));
@@ -397,7 +397,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
-                "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+                "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
             }))],
             &[]
         ));
@@ -412,7 +412,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "strand",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000099",
-                "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+                "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
             }))],
             &[]
         ));
@@ -422,7 +422,7 @@ mod requested_scope_tests {
             "resources": [{
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
-                "resource_ref": "ak:circle:019f6000-0000-7000-8000-000000000003"
+                "resource_ref": "ak:circle:019f6000-0000-8000-8000-000000000003"
             }]
         }));
         assert!(agent_grant_within_requested_scope(
@@ -431,7 +431,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
-                "circle_id": "ak:circle:019f6000-0000-7000-8000-000000000003"
+                "circle_id": "ak:circle:019f6000-0000-8000-8000-000000000003"
             }))],
             &[]
         ));
@@ -441,7 +441,7 @@ mod requested_scope_tests {
             &[resource(json!({
                 "kind": "circle",
                 "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
-                "circle_id": "ak:circle:019f6000-0000-7000-8000-000000000004"
+                "circle_id": "ak:circle:019f6000-0000-8000-8000-000000000004"
             }))],
             &[]
         ));
@@ -467,7 +467,7 @@ mod requested_scope_tests {
         let resources = [resource(json!({
             "kind": "strand",
             "realm_id": "ak:realm:019f6000-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:019f6000-0000-7000-8000-000000000002"
+            "strand_id": "ak:strand:019f6000-0000-8000-8000-000000000002"
         }))];
 
         assert!(agent_grant_within_requested_scope(

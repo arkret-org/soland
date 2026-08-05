@@ -1539,7 +1539,7 @@ mod seal_delta_tests {
 
     #[test]
     fn seal_delta_rejects_event_id_form() {
-        let entries = vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()];
+        let entries = vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()];
         let err = validate_seal_delta_entries(&entries).unwrap_err();
         assert_eq!(err.0, ErrorCode::SchemaViolation);
     }
@@ -1721,7 +1721,7 @@ mod seal_delta_tests {
             RealmId::new("ak:realm:01904100-0000-7000-8000-a11ce0000001".to_owned()).unwrap();
         let issued_at = chrono::Utc::now();
         let mut event = Event::new_with_id_at(
-            arkret_wire::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap(),
+            arkret_wire::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap(),
             arkret_wire::EventKind::MESSAGE_CREATE,
             arkret_wire::ScopeRef::Realm { realm_id },
             actor_id.clone(),

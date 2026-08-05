@@ -1122,9 +1122,7 @@ async fn applet_message_event(
             "body": text,
         },
     });
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
-            .expect("fixture Event id"),
+    let mut event = arkret_wire::Event::new_with_derived_id_at(
         "ak.message.create",
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new((*realm_id).to_owned())
@@ -1261,7 +1259,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .unwrap_or_else(|| "ak:strand:01904100-0000-8000-8000-f10dc0000001".to_owned())
 }
 
 #[tokio::test]

@@ -1389,7 +1389,7 @@ mod tests {
             focus: None,
             moderation: Some(json!([
                 {
-                    "tag": "ak:event:01904100-0000-7000-8000-e00000000001",
+                    "tag": "ak:event:01904100-0000-8000-8000-e00000000001",
                     "value": {
                         "actor_id": "did:web:bob.example",
                         "action": "ban"
@@ -1397,7 +1397,7 @@ mod tests {
                     "removed": true
                 },
                 {
-                    "tag": "ak:event:01904100-0000-7000-8000-e00000000002",
+                    "tag": "ak:event:01904100-0000-8000-8000-e00000000002",
                     "value": {
                         "actor_id": "did:web:carol.example",
                         "action": "ban"

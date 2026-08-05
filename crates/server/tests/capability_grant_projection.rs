@@ -25,9 +25,9 @@ const REALM: &str = "ak:realm:01904100-0000-7000-8000-cccccccccccc";
 const GRANT_ID: &str = "ak:grant:01904100-0000-7000-8000-dddddddddddd";
 const ISSUER: &str = "did:web:owner.example";
 const SUBJECT: &str = "did:web:bob.example";
-const STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-eeeeeeeeeeee";
-const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-c1c1c1c1c1c1";
-const CIRCLE_B: &str = "ak:circle:01904100-0000-7000-8000-c2c2c2c2c2c2";
+const STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-eeeeeeeeeeee";
+const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-c1c1c1c1c1c1";
+const CIRCLE_B: &str = "ak:circle:01904100-0000-8000-8000-c2c2c2c2c2c2";
 
 fn op(kind: &str, realm_id: &str, mut payload: Value) -> Operation {
     payload
@@ -414,7 +414,7 @@ fn canonical_strand_selector_projects_to_exact_resource() {
         &state,
         GRANT_ID,
         "ak.strand.read",
-        "ak:strand:01904100-0000-7000-8000-ffffffffffff"
+        "ak:strand:01904100-0000-8000-8000-ffffffffffff"
     ));
 }
 
@@ -423,7 +423,7 @@ fn multiple_resource_selectors_are_disjoined_in_engine_projection() {
     let mut state = ProjectionState::new();
     seed_realm_owner(&mut state);
     let hlc = ServerHlc::new("test");
-    let other_strand = "ak:strand:01904100-0000-7000-8000-ffffffffffff";
+    let other_strand = "ak:strand:01904100-0000-8000-8000-ffffffffffff";
     let effect = state.apply(
         &grant_op_with(
             GRANT_ID,

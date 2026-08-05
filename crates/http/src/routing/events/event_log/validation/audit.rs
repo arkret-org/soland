@@ -380,7 +380,7 @@ mod tests {
 
     fn parsed(kind: &str) -> ValidatedEventEnvelope {
         ValidatedEventEnvelope {
-            event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            event_id: "ak:event:01904100-0000-8000-8000-000000000001".to_owned(),
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,

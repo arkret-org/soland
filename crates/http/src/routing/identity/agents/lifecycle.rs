@@ -280,7 +280,9 @@ pub(super) async fn provision_agent(
                     AppError::internal(format!("generated Agent DID invalid: {error}"))
                 })?;
             let principal_control_realm_id =
-                crate::routing::identity::managed_agent_pcr::allocate_principal_control_realm_id()?;
+                crate::routing::identity::managed_agent_pcr::principal_control_realm_id_for(
+                    &agent_id,
+                )?;
             let controller_did = Did::new(controller_id.clone())
                 .map_err(|error| AppError::internal(format!("controller DID invalid: {error}")))?;
             let requested_scope_digest = arkret_signatures::agent::agent_requested_scope_digest(

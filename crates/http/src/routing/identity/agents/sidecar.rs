@@ -1715,7 +1715,7 @@ mod tests {
             realm_id: realm_id.clone(),
             controller_id: Did::new("did:web:example.com:users:alice".to_owned()).unwrap(),
             backing_circle_id: CircleId::new(
-                "ak:circle:01964137-0000-7000-8000-000000000032".to_owned(),
+                "ak:circle:01964137-0000-8000-8000-000000000032".to_owned(),
             )
             .unwrap(),
             encryption_profile: AgentSidecarEncryptionProfile::MlsRfc9420,
@@ -1752,11 +1752,11 @@ mod tests {
     #[test]
     fn private_context_strand_preserves_all_tracks_without_plaintext_metadata() {
         let strand_id =
-            StrandId::new("ak:strand:01964137-0000-7000-8000-000000000031".to_owned()).unwrap();
+            StrandId::new("ak:strand:01964137-0000-8000-8000-000000000031".to_owned()).unwrap();
         let realm_id =
             RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030".to_owned()).unwrap();
         let circle_id =
-            CircleId::new("ak:circle:01964137-0000-7000-8000-000000000032".to_owned()).unwrap();
+            CircleId::new("ak:circle:01964137-0000-8000-8000-000000000032".to_owned()).unwrap();
         let tracks = json!({
             "description": {"profile": "document"},
             "synthesis": {"profile": "document"},
@@ -1816,7 +1816,7 @@ mod tests {
             provisioning_phase: PendingSidecarAccessReconciliationStage::MlsRemove,
             reason: NonEmptyString::new("mls_remove_obligation_pending").unwrap(),
             membership_frontier: Some(vec![
-                EventId::new("ak:event:01964137-0000-7000-8000-000000000001").unwrap(),
+                EventId::new("ak:event:01964137-0000-8000-8000-000000000001").unwrap(),
             ]),
         };
 
@@ -1833,11 +1833,11 @@ mod tests {
             "binding_version": 1,
             "encoding_profile": "cbor-deterministic-rfc8949-v1",
             "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
-            "circle_id": "ak:circle:01964137-0000-7000-8000-000000000032",
+            "circle_id": "ak:circle:01964137-0000-8000-8000-000000000032",
             "effective_scope": {
                 "kind": "circle",
                 "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
-                "circle_id": "ak:circle:01964137-0000-7000-8000-000000000032"
+                "circle_id": "ak:circle:01964137-0000-8000-8000-000000000032"
             },
             "mls_group_id": "YXJrcmV0LW1scy10ZXN0LWdyb3Vw",
             "previous_epoch": 0,
@@ -1849,8 +1849,8 @@ mod tests {
                 "sidecar_id": sidecar_id,
                 "desired_access_digest": format!("sha256:{}", "4".repeat(64)),
                 "control_frontier": [
-                    "ak:event:01964137-0000-7000-8000-000000000041",
-                    "ak:event:01964137-0000-7000-8000-000000000042"
+                    "ak:event:01964137-0000-8000-8000-000000000041",
+                    "ak:event:01964137-0000-8000-8000-000000000042"
                 ]
             }
         });
@@ -1862,7 +1862,7 @@ mod tests {
             welcome_bytes: vec![1],
             key_package_id: "ak:mls_keypackage:01964137-0000-7000-8000-000000000045".to_owned(),
             epoch: 1,
-            commit_ref: Some("ak:event:01964137-0000-7000-8000-000000000046".to_owned()),
+            commit_ref: Some("ak:event:01964137-0000-8000-8000-000000000046".to_owned()),
             governance_binding,
             enqueued_at: 1,
             delivered_at: Some(2),
@@ -1873,18 +1873,18 @@ mod tests {
         assert!(welcome_matches_sidecar_binding(
             &welcome,
             &sidecar_id,
-            "ak:event:01964137-0000-7000-8000-000000000042"
+            "ak:event:01964137-0000-8000-8000-000000000042"
         ));
         assert!(!welcome_matches_sidecar_binding(
             &welcome,
             &sidecar_id,
-            "ak:event:01964137-0000-7000-8000-000000000047"
+            "ak:event:01964137-0000-8000-8000-000000000047"
         ));
 
         let mut projection = soland_domain::reducer::ProjectionState::new();
         projection
             .accepted_mls_commit_refs
-            .insert("ak:event:01964137-0000-7000-8000-000000000046".to_owned());
+            .insert("ak:event:01964137-0000-8000-8000-000000000046".to_owned());
         projection.mls_welcomes.insert(
             soland_domain::reducer::MlsWelcomeQueueKey::new(
                 welcome.recipient_actor_id.clone(),
@@ -1913,7 +1913,7 @@ mod tests {
                 claimed_by: Some(welcome.group_id.clone()),
                 ssk_generation: None,
                 device_authorize_event_id: Some(
-                    "ak:event:01964137-0000-7000-8000-000000000048".to_owned(),
+                    "ak:event:01964137-0000-8000-8000-000000000048".to_owned(),
                 ),
                 agent_key_authorize_event_id: None,
                 claimed_at: Some(1),
@@ -1927,7 +1927,7 @@ mod tests {
             &welcome.recipient_actor_id,
             &welcome.group_id,
             &sidecar_id,
-            "ak:event:01964137-0000-7000-8000-000000000042",
+            "ak:event:01964137-0000-8000-8000-000000000042",
         ));
         projection
             .mls_key_packages
@@ -1939,7 +1939,7 @@ mod tests {
             &welcome.recipient_actor_id,
             &welcome.group_id,
             &sidecar_id,
-            "ak:event:01964137-0000-7000-8000-000000000042",
+            "ak:event:01964137-0000-8000-8000-000000000042",
         ));
     }
 }

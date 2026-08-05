@@ -1419,10 +1419,10 @@ mod tests {
 
     const TEST_REALM: &str = "ak:realm:01904100-0000-7000-8000-00000000aa01";
     const TEST_ACTOR: &str = "did:web:alice.example";
-    const TEST_MESSAGE_EVENT: &str = "ak:event:01904100-0000-7000-8000-00000000aa11";
-    const TEST_REVISE_EVENT: &str = "ak:event:01904100-0000-7000-8000-00000000aa12";
-    const TEST_MESSAGE_ID: &str = "ak:message:01904100-0000-7000-8000-00000000aa21";
-    const TEST_REDACTION_EVENT: &str = "ak:event:01904100-0000-7000-8000-00000000aa31";
+    const TEST_MESSAGE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa11";
+    const TEST_REVISE_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa12";
+    const TEST_MESSAGE_ID: &str = "ak:message:01904100-0000-8000-8000-00000000aa21";
+    const TEST_REDACTION_EVENT: &str = "ak:event:01904100-0000-8000-8000-00000000aa31";
 
     fn test_state() -> AppState {
         let mut config = crate::config::AppConfig::test_default();
@@ -1441,11 +1441,11 @@ mod tests {
         let created_at = DateTime::parse_from_rfc3339("2026-07-29T10:00:00.000Z")
             .unwrap()
             .with_timezone(&Utc);
-        let circle_id = "ak:circle:01904100-0000-7000-8000-00000000aa41";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-00000000aa42";
+        let circle_id = "ak:circle:01904100-0000-8000-8000-00000000aa41";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-00000000aa42";
         let event = arkret_wire::Event::new_with_id_at(
             arkret_identifiers::EventId::new(
-                "ak:event:01904100-0000-7000-8000-00000000aa43".to_owned(),
+                "ak:event:01904100-0000-8000-8000-00000000aa43".to_owned(),
             )
             .unwrap(),
             arkret_wire::EventKind::STRAND_CREATE,

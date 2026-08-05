@@ -116,7 +116,7 @@ mod tests {
                 operation,
                 issuer,
                 "ak.capability.revoke",
-                "ak:event:01970000-0000-7000-8000-000000000002",
+                "ak:event:01970000-0000-8000-8000-000000000002",
                 "ak:grant:01970000-0000-7000-8000-000000000001",
                 realm,
                 &payload,

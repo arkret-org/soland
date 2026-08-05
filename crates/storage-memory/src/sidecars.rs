@@ -119,11 +119,11 @@ mod tests {
         let store = MemorySidecarStore::new();
         let first = record(
             "ak:sidecar:01964137-0000-7000-8000-000000000031",
-            "ak:circle:01964137-0000-7000-8000-000000000032",
+            "ak:circle:01964137-0000-8000-8000-000000000032",
         );
         let second = record(
             "ak:sidecar:01964137-0000-7000-8000-000000000033",
-            "ak:circle:01964137-0000-7000-8000-000000000034",
+            "ak:circle:01964137-0000-8000-8000-000000000034",
         );
         assert_eq!(store.insert_or_get(first.clone()).await.unwrap(), first);
         assert_eq!(store.insert_or_get(second).await.unwrap(), first);
@@ -137,12 +137,12 @@ mod tests {
             sidecar_id: "ak:sidecar:01964137-0000-7000-8000-000000000031".to_owned(),
             normalized_context_ref_digest: "sha256:context".to_owned(),
             normalized_context_ref: serde_json::json!({"strand_id": "one"}),
-            private_strand_id: "ak:strand:01964137-0000-7000-8000-000000000032".to_owned(),
-            private_relation_id: "ak:relation:01964137-0000-7000-8000-000000000033".to_owned(),
+            private_strand_id: "ak:strand:01964137-0000-8000-8000-000000000032".to_owned(),
+            private_relation_id: "ak:relation:01964137-0000-8000-8000-000000000033".to_owned(),
             created_at: chrono::Utc::now(),
         };
         let mut second = first.clone();
-        second.private_strand_id = "ak:strand:01964137-0000-7000-8000-000000000034".to_owned();
+        second.private_strand_id = "ak:strand:01964137-0000-8000-8000-000000000034".to_owned();
         assert_eq!(
             store.insert_or_get_context(first.clone()).await.unwrap(),
             first

@@ -175,16 +175,16 @@ mod tests {
         frontier_a.insert(
             realm(),
             vec![
-                event("ak:event:01904100-0000-7000-8000-000000000002"),
-                event("ak:event:01904100-0000-7000-8000-000000000001"),
+                event("ak:event:01904100-0000-8000-8000-000000000002"),
+                event("ak:event:01904100-0000-8000-8000-000000000001"),
             ],
         );
         let mut frontier_b = BTreeMap::new();
         frontier_b.insert(
             realm(),
             vec![
-                event("ak:event:01904100-0000-7000-8000-000000000001"),
-                event("ak:event:01904100-0000-7000-8000-000000000002"),
+                event("ak:event:01904100-0000-8000-8000-000000000001"),
+                event("ak:event:01904100-0000-8000-8000-000000000002"),
             ],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7), (bob(), 3)]);
@@ -203,7 +203,7 @@ mod tests {
         let mut frontier = BTreeMap::new();
         frontier.insert(
             realm(),
-            vec![event("ak:event:01904100-0000-7000-8000-000000000001")],
+            vec![event("ak:event:01904100-0000-8000-8000-000000000001")],
         );
         let actors = BTreeMap::from_iter(vec![(alice(), 7)]);
         let root = frontier_root(&frontier, &actors).unwrap();

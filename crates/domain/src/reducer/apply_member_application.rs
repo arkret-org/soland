@@ -548,7 +548,7 @@ mod tests {
                 realm_id: REALM.to_owned(),
                 applicant: "did:web:applicant.example".to_owned(),
                 receipt_digest: APPLICATION.to_owned(),
-                knock_ref: "ak:event:0196419b-0000-7000-8000-000000000001".to_owned(),
+                knock_ref: "ak:event:0196419b-0000-8000-8000-000000000001".to_owned(),
                 policy_version_digest:
                     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
                         .to_owned(),

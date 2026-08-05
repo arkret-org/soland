@@ -341,7 +341,7 @@ async fn minimal_metadata_realm_rejects_non_hidden_aad() {
 
     let encrypted_envelope = |visibility: &str| {
         json!({
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls_rfc9420",
@@ -412,7 +412,7 @@ async fn circle_scoped_write_requires_circle_membership() {
     // bot / Ghost Actor) could inject content into a Circle it never joined.
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-c1c1e0000001";
-    let circle_id = "ak:circle:01904100-0000-7000-8000-c1c1e0000002";
+    let circle_id = "ak:circle:01904100-0000-8000-8000-c1c1e0000002";
     let member = "did:web:alice.example";
     // An Applet bot that holds a Realm-wide grant but never joined the Circle.
     let non_member = "did:web:slack-bridge.example:bot";
@@ -450,7 +450,7 @@ async fn circle_scoped_write_requires_circle_membership() {
 
     let strand_create = |sender: &str, scope: Option<&str>| {
         let mut object = json!({
-            "id": "ak:strand:01904100-0000-7000-8000-000000000abc",
+            "id": "ak:strand:01904100-0000-8000-8000-000000000abc",
             "metadata": {"title": "t"}
         });
         if let Some(scope) = scope {
@@ -499,9 +499,9 @@ async fn circle_scoped_reaction_requires_circle_membership() {
     // scope, so reacting to a Circle message requires Circle membership too.
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-c2c2e0000001";
-    let circle_id = "ak:circle:01904100-0000-7000-8000-c2c2e0000002";
-    let strand_id = "ak:strand:01904100-0000-7000-8000-c2c2e0000003";
-    let event_id = "ak:event:01904100-0000-7000-8000-c2c2e0000004";
+    let circle_id = "ak:circle:01904100-0000-8000-8000-c2c2e0000002";
+    let strand_id = "ak:strand:01904100-0000-8000-8000-c2c2e0000003";
+    let event_id = "ak:event:01904100-0000-8000-8000-c2c2e0000004";
     let member = "did:web:alice.example";
     let non_member = "did:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
@@ -609,9 +609,9 @@ async fn circle_scoped_morph_update_requires_circle_membership() {
     // under a Circle scope.
     let state = make_state(true);
     let realm_id = "ak:realm:01904100-0000-7000-8000-c3c3e0000001";
-    let circle_id = "ak:circle:01904100-0000-7000-8000-c3c3e0000002";
-    let scoped_morph_id = "ak:morph:01904100-0000-7000-8000-c3c3e0000003";
-    let realm_morph_id = "ak:morph:01904100-0000-7000-8000-c3c3e0000004";
+    let circle_id = "ak:circle:01904100-0000-8000-8000-c3c3e0000002";
+    let scoped_morph_id = "ak:morph:01904100-0000-8000-8000-c3c3e0000003";
+    let realm_morph_id = "ak:morph:01904100-0000-8000-8000-c3c3e0000004";
     let member = "did:web:alice.example";
     let non_member = "did:web:slack-bridge.example:bot";
     let now = chrono::Utc::now();
@@ -846,7 +846,7 @@ async fn a_non_minimal_realm_still_needs_a_declared_aad_visibility_ceiling() {
         arkret_identifiers::RealmId::new(realm_id.to_owned()).unwrap(),
         arkret_wire::EventKind::MESSAGE_CREATE,
         json!({
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001",
             "track_name": "main",
             "encrypted_content": {
                 "scheme": "mls_rfc9420",
@@ -965,7 +965,7 @@ async fn top_level_effective_scope_is_reducer_managed() {
     let state = make_state(false);
     let session = session();
     let envelope = json!({
-        "event_id": "ak:event:01904100-0000-7000-8000-00000000eff0",
+        "event_id": "ak:event:01904100-0000-8000-8000-00000000eff0",
         "kind": arkret_wire::EventKind::REALM_CREATE,
         "requirements": { "schema": ["ak.schema.event.v1"] },
         "actor_id": session.actor.clone(),
@@ -1037,7 +1037,7 @@ fn event_payload_validator_rejects_registered_payload_shape_errors() {
     let state = make_state(true);
     let envelope = json!({
         "payload": {
-            "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001"
+            "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001"
         }
     });
     let object = envelope.as_object().unwrap();
@@ -1080,7 +1080,7 @@ fn member_state_join_schema_allows_contextual_invite_ref() {
 #[test]
 fn event_payload_validator_enforces_strand_update_patch_schema() {
     let state = make_state(true);
-    let strand_id = "ak:strand:01904100-0000-7000-8000-f10dc0000001";
+    let strand_id = "ak:strand:01904100-0000-8000-8000-f10dc0000001";
     let valid = json!({
         "payload": {
             "target_ref": strand_id,
@@ -1180,44 +1180,44 @@ fn event_payload_validator_enforces_patch_family_schema() {
         (
             "ak.strand.update",
             json!({
-                "target_ref": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ak.morph.update",
             json!({
-                "target_ref": "ak:morph:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:morph:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:morph:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:morph:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "metadata.title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ak.space.update",
             json!({
-                "space_id": "ak:space:01904100-0000-7000-8000-f10dc0000001",
+                "space_id": "ak:space:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "space_id": "ak:space:01904100-0000-7000-8000-f10dc0000001",
+                "space_id": "ak:space:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
         (
             "ak.profile.update",
             json!({
-                "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
             json!({
-                "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
                 "patch": { "title": { "$op": "replace", "value": "Roadmap" } }
             }),
         ),
@@ -1243,7 +1243,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ak.profile.realm_override",
             &json!({
-                "target_ref": "ak:actor_profile:01904100-0000-7000-8000-f10dc0000001",
+                "target_ref": "ak:actor_profile:01904100-0000-8000-8000-f10dc0000001",
                 "target_realm_id": "ak:realm:01904100-0000-7000-8000-f10dc0000002",
                 "patch": { "title": { "$op": "set", "value": "Roadmap" } }
             }),
@@ -1256,7 +1256,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
         .validate_payload(
             "ak.strand.tracks.update",
             &json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
                 "tracks": {
                     "discussion": {
                         "enabled": true,
@@ -1274,7 +1274,7 @@ fn event_payload_validator_enforces_patch_family_schema() {
                 "ak.strand.tracks.update",
                 &json!({
                     "type": "removed_track_update",
-                    "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+                    "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
                 }),
             )
             .is_err(),
@@ -1529,7 +1529,7 @@ fn soland_dev_proof_gate_matches_sdk_production_verifier() {
 
 const DATA_EVENT_REALM: &str = "ak:realm:01904100-0000-7000-8000-000000000001";
 const DATA_EVENT_ACTOR: &str = "did:web:alice.example";
-const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-7000-8000-000000000001";
+const DATA_EVENT_STRAND: &str = "ak:strand:01904100-0000-8000-8000-000000000001";
 /// The MLS group named by every E2EE fixture ciphertext.
 const DATA_EVENT_MLS_GROUP: &str = "group.01js0mls0000000000000000";
 

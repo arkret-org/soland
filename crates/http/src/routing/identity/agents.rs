@@ -346,7 +346,7 @@ mod tests {
         )
         .expect("pairing binding digest");
         json!({
-            "event_id": "ak:event:01999999-0000-7000-8000-000000000001",
+            "event_id": "ak:event:01999999-0000-8000-8000-000000000001",
             "kind": "ak.agent.key.authorize",
             "actor_id": agent_id,
             "executed_by": controller,
@@ -642,7 +642,7 @@ mod tests {
         let mut active = agent_record("did:web:agent.example", "did:web:controller.example");
         active.state = AgentLifecycleState::Active;
         active.authorized_event_ref =
-            Some("ak:event:01964137-0000-7000-8000-000000000001".to_owned());
+            Some("ak:event:01964137-0000-8000-8000-000000000001".to_owned());
         assert!(agent_record_reserves_selector_slug(&active, &now));
 
         let mut paused = active.clone();
@@ -703,8 +703,8 @@ mod tests {
                 "acknowledged_at": "2026-06-18T12:00:00.000Z",
                 "acknowledged_by": "did:web:controller.example",
                 "sidecar_refs": [
-                    "ak:circle:01964137-0000-7000-8000-000000000020",
-                    "ak:strand:01964137-0000-7000-8000-000000000021"
+                    "ak:circle:01964137-0000-8000-8000-000000000020",
+                    "ak:strand:01964137-0000-8000-8000-000000000021"
                 ]
             })),
             "did:web:controller.example",
@@ -722,7 +722,7 @@ mod tests {
             Some(json!({
                 "acknowledged_at": "2026-06-18T12:00:00.000Z",
                 "acknowledged_by": "did:web:other.example",
-                "sidecar_refs": ["ak:circle:01964137-0000-7000-8000-000000000020"]
+                "sidecar_refs": ["ak:circle:01964137-0000-8000-8000-000000000020"]
             })),
             "did:web:controller.example",
         )

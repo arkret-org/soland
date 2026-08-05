@@ -318,7 +318,7 @@ mod cba_capability_cell_tests {
         let realm_id = "ak:realm:019fa9d5-0000-7000-8000-000000000002";
         let registry_digest = arkret_policy::current_capability_action_registry_digest().unwrap();
         let state = CellState::Value(Value::Array(vec![json!({
-            "tag": "ak:event:019fa9d5-0000-7000-8000-000000000003:0",
+            "tag": "ak:event:019fa9d5-0000-8000-8000-000000000003:0",
             "value": {
                 "grant_id": grant_id,
                 "grant": {
@@ -2164,8 +2164,8 @@ mod agent_key_tests {
     #[test]
     fn runtime_replacement_requires_exact_supersedes_and_is_atomic() {
         let mut state = ProjectionState::default();
-        let old_event = "ak:event:01970000-0000-7000-8000-000000000011";
-        let new_event = "ak:event:01970000-0000-7000-8000-000000000012";
+        let old_event = "ak:event:01970000-0000-8000-8000-000000000011";
+        let new_event = "ak:event:01970000-0000-8000-8000-000000000012";
         let old_key = "ak:agent_key:old";
         let new_key = "ak:agent_key:new";
 
@@ -2225,8 +2225,8 @@ mod agent_key_tests {
     #[test]
     fn pairing_replacement_of_same_key_requires_exact_supersedes() {
         let mut state = ProjectionState::default();
-        let old_event = "ak:event:01970000-0000-7000-8000-000000000021";
-        let new_event = "ak:event:01970000-0000-7000-8000-000000000022";
+        let old_event = "ak:event:01970000-0000-8000-8000-000000000021";
+        let new_event = "ak:event:01970000-0000-8000-8000-000000000022";
         let key_id = "ak:agent_key:stable";
 
         assert!(matches!(

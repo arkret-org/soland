@@ -953,7 +953,7 @@ mod tests {
                         source: arkret_models_collaboration::objects::read_receipts::NotificationSource::Event(
                             arkret_models_collaboration::objects::read_receipts::NotificationEventSource {
                                 source_event_id: arkret_wire::EventId::new(
-                                    "ak:event:019fa233-5ab8-75c0-8497-376bafe172a5"
+                                    "ak:event:019fa233-5ab8-85c0-8497-376bafe172a5"
                                         .to_owned(),
                                 )
                                 .expect("event id"),

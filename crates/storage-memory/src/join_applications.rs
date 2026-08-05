@@ -221,7 +221,7 @@ mod tests {
 
     const REALM: &str = "ak:realm:0196419b-0000-7000-8000-000000000000";
     const APPLICANT: &str = "did:web:alice.example";
-    const KNOCK: &str = "ak:event:0196419b-0000-7000-8000-000000000001";
+    const KNOCK: &str = "ak:event:0196419b-0000-8000-8000-000000000001";
 
     fn at(second: u32) -> DateTime<Utc> {
         DateTime::parse_from_rfc3339(&format!("2026-07-24T00:00:{second:02}.000Z"))

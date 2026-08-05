@@ -2987,7 +2987,7 @@ mod tests {
 
     const ACTIVE_BINDING_AGENT_ID: &str = "did:web:agent.example";
     const ACTIVE_BINDING_VERIFICATION_METHOD: &str = "did:web:agent.example#key-1";
-    const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:01904100-0000-7000-8000-000000000001";
+    const ACTIVE_BINDING_EVENT_ID: &str = "ak:event:01904100-0000-8000-8000-000000000001";
 
     fn active_signing_key_binding()
     -> arkret_models_collaboration::agent_signer_evidence::AgentSigningKeyBinding {
@@ -3629,7 +3629,7 @@ mod tests {
                 },
                 "public_key_digest": format!("sha256:{}", "00".repeat(32)),
                 "agent_key_authorize_event_id":
-                    "ak:event:01904100-0000-7000-8000-000000000001",
+                    "ak:event:01904100-0000-8000-8000-000000000001",
                 "issued_at": "2026-07-27T00:00:00.000Z",
                 "controller_id": "did:web:alice.example",
                 "controller_proof": {

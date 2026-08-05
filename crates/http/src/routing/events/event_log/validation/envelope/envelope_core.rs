@@ -48,6 +48,53 @@ pub(in crate::routing) async fn validate_private_invite_envelope(
     validate_event_envelope_with_ingress(state, session, envelope, &[], None, true).await
 }
 
+/// Spec `zh/models/event-and-patch.md` section 2.5.1 bound (a).
+///
+/// `created_at` MUST NOT precede the greatest `created_at` among the accepted
+/// Events named in `prev_refs`. `prev_refs` is the causal frontier, so every
+/// Event in it precedes this one and `max` is the right aggregate; taking the
+/// max also removes the ambiguity when `actor_seq - 1` holds a sibling fork,
+/// because the producer had to name the whole observed frontier.
+///
+/// The comparison is signed-value against signed-value and uses no local
+/// clock, so every receiver reaches the same verdict in any arrival order.
+/// An unknown `prev_ref` is not this check's business — dependency resolution
+/// owns that — so a missing record is skipped rather than failed here.
+async fn validate_created_at_causal_lower_bound(
+    state: &AppState,
+    object: &serde_json::Map<String, Value>,
+    prev_refs: &[String],
+) -> Result<(), EventValidationError> {
+    let Some(created_at) = object
+        .get("created_at")
+        .and_then(Value::as_str)
+        .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+    else {
+        return Ok(());
+    };
+    for prev_ref in prev_refs {
+        let Ok(Some(record)) = state.event_queries().canonical_event(prev_ref).await else {
+            continue;
+        };
+        let Some(predecessor) = record
+            .envelope
+            .get("created_at")
+            .and_then(Value::as_str)
+            .and_then(|value| DateTime::parse_from_rfc3339(value).ok())
+        else {
+            continue;
+        };
+        if created_at < predecessor {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                arkret_wire::ErrorCode::SchemaViolation.as_str(),
+                "created_at_before_causal_predecessor: created_at precedes an Event named in                  prev_refs",
+            ));
+        }
+    }
+    Ok(())
+}
+
 async fn validate_event_envelope_with_ingress(
     state: &AppState,
     session: &SessionRecord,
@@ -553,6 +600,7 @@ async fn validate_event_envelope_with_ingress(
     }
 
     let prev_refs = event_ref_list(object, "prev_refs", MAX_EVENT_PREV_REFS)?;
+    validate_created_at_causal_lower_bound(state, object, &prev_refs).await?;
     let authorized_refs = event_semantic_refs(object, MAX_EVENT_REFS)?;
     let canonical_bytes = event_canonical_bytes(envelope)?;
     let digest_suite = event_digest_suite(state, &kind, &realm_id, object)?;

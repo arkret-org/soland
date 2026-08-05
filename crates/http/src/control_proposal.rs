@@ -18,7 +18,6 @@ struct RealmCreateProposalPolicyPayload {
 
 #[derive(Deserialize)]
 struct RealmCreateProposalPolicy {
-    id: RealmId,
     #[serde(default)]
     receipt_sla_ms: Option<u64>,
     #[serde(default)]
@@ -44,7 +43,11 @@ fn policy_from_realm_create(
         serde_json::Value::Object(event.payload.clone().into_iter().collect()),
     )
     .map_err(|error| format!("Realm create policy payload is invalid: {error}"))?;
-    if payload.object.id != *realm_id {
+    // The create payload carries no object id (spec `zh/models/common-fields.md`
+    // section 6.0): the Realm id is derived from this genesis Event. The binding
+    // is therefore the Event's own resolved `realm_id`, not a payload field an
+    // attacker could point somewhere else.
+    if event.realm_id != *realm_id {
         return Err("Realm create policy does not bind the proposal Realm".to_owned());
     }
     let duration_from_ms = |value: u64, field: &str| {

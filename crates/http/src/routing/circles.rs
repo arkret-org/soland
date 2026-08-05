@@ -1023,7 +1023,7 @@ mod tests {
     fn circle_create_payload_builder_outputs_sdk_valid_payload() {
         let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
         let payload = circle_create_payload_from_request(
-            CircleId::new("ak:circle:01964137-0000-7000-8000-000000000041").unwrap(),
+            CircleId::new("ak:circle:01964137-0000-8000-8000-000000000041").unwrap(),
             CircleCreateRequestBody {
                 realm_id: RealmId::new("ak:realm:01964137-0000-7000-8000-000000000030").unwrap(),
                 title: "S8 restore circle 1783309323913".to_owned(),

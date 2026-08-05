@@ -27,10 +27,10 @@ use soland_domain::reducer::{
 
 const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
 const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
-const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-c11111111111";
-const CIRCLE_B: &str = "ak:circle:01904100-0000-7000-8000-c22222222222";
-const STRAND_X: &str = "ak:strand:01904100-0000-7000-8000-f11111111111";
-const MORPH_X: &str = "ak:morph:01904100-0000-7000-8000-f33333333333";
+const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-c11111111111";
+const CIRCLE_B: &str = "ak:circle:01904100-0000-8000-8000-c22222222222";
+const STRAND_X: &str = "ak:strand:01904100-0000-8000-8000-f11111111111";
+const MORPH_X: &str = "ak:morph:01904100-0000-8000-8000-f33333333333";
 const ALICE: &str = "did:web:alice.example";
 const BOB: &str = "did:web:bob.example";
 const MALLORY: &str = "did:web:mallory.example";
@@ -579,7 +579,7 @@ fn circle_scoped_message_preserves_scope_for_visibility_filtering() {
             arkret_wire::EventKind::MESSAGE_CREATE,
             REALM_A,
             json!({
-                "event_id": "ak:event:01904100-0000-7000-8000-c1c1eeee0001",
+                "event_id": "ak:event:01904100-0000-8000-8000-c1c1eeee0001",
                 "strand_id": STRAND_X,
                 "sender": ALICE,
                 "content": {

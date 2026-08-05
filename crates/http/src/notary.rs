@@ -1673,7 +1673,7 @@ mod tests {
             "previous_device_generation": "1-QmPrevious",
             "new_device_generation": "2-QmCurrent",
             "pre_fence_basis": pre_fence_basis,
-            "replacement_authorize_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
+            "replacement_authorize_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
             "replacement_authorize_digest": replacement
         }))
         .unwrap();

@@ -479,10 +479,10 @@ mod tests {
             Arc::new(Mutex::new(BTreeMap::new())),
             outbox.clone(),
         );
-        let conflict_id = "ak:event:019f9000-0000-7000-8000-000000000002";
+        let conflict_id = "ak:event:019f9000-0000-8000-8000-000000000002";
         store.put(record(conflict_id, b"existing")).await.unwrap();
 
-        let first_id = "ak:event:019f9000-0000-7000-8000-000000000001";
+        let first_id = "ak:event:019f9000-0000-8000-8000-000000000001";
         let error = store
             .put_realm_bootstrap_batch_atomic(
                 vec![

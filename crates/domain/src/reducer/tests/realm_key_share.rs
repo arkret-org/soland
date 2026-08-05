@@ -14,7 +14,7 @@ fn realm_key_share_payload(effective_scope: Value) -> Value {
         "recipient_principal_id": RECIPIENT,
         "recipient_device_id": RECIPIENT_DEVICE,
         "sender_device_id": SENDER_DEVICE,
-        "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
+        "source_authorization_ref": "ak:event:01904100-0000-8000-8000-0000000000a1",
         "sender_device_signature": {
             "signature_algorithm": "Ed25519",
             "kid": "did:web:alice.example#device-history",
@@ -72,7 +72,7 @@ fn realm_key_share_dispatch_accepts_projection_metadata() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("realm-key-share-projected-context");
     let mut payload = realm_key_share_payload(realm_scope(REALM));
-    payload["event_id"] = json!("ak:event:01904100-0000-7000-8000-000000000701");
+    payload["event_id"] = json!("ak:event:01904100-0000-8000-8000-000000000701");
     payload["sender"] = json!("did:web:alice.example");
     payload["hlc"] = json!("2026-07-05T00:00:00.000Z/node/1");
 

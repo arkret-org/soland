@@ -202,7 +202,7 @@ fn signed_event(
 /// this deployment as its `single_did` notary, so the Realm ends up with a
 /// genuine accepted governance Seal the policy-server Control Moves can cite.
 async fn bootstrap_realm(state: &AppState, token: &str, realm_id: &str, slot: u8, seq_base: u64) {
-    let realm_event_id = format!("ak:event:01904100-0000-7000-8000-00000000{slot:02x}e0");
+    let realm_event_id = format!("ak:event:01904100-0000-8000-8000-00000000{slot:02x}e0");
     let realm_create = signed_event(
         &realm_event_id,
         seq_base,

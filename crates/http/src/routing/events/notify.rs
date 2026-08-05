@@ -808,7 +808,7 @@ mod tests {
     ) -> arkret_event_draft::Operation {
         let mut payload = json!({
             "sender": sender,
-            "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
+            "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
             "content": {
                 "body": "hello"
             }
@@ -907,8 +907,8 @@ mod tests {
             arkret_wire::EventKind::RELATION_CREATE,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
-                "relation_id": format!("ak:relation:01904100-0000-7000-8000-{seed}"),
+                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
+                "relation_id": format!("ak:relation:01904100-0000-8000-8000-{seed}"),
                 "relation_kind": "assigned_to",
                 "from_ref": strand_id,
                 "to_ref": assignee,
@@ -931,7 +931,7 @@ mod tests {
             arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
+                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
                 "target_ref": strand_id,
                 "patch": {
                     "metadata.fields.due_at": {
@@ -958,7 +958,7 @@ mod tests {
             arkret_wire::EventKind::RSVP_SET,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
+                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
                 "event_ref": strand_id,
                 "occurrence": null,
                 "entry": {
@@ -989,7 +989,7 @@ mod tests {
     ) -> arkret_event_draft::Operation {
         let mut payload = json!({
             "sender": sender,
-            "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
+            "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
             "content": {
                 "body": "ping",
                 "mentions": [{
@@ -1029,7 +1029,7 @@ mod tests {
             arkret_wire::EventKind::MESSAGE_CREATE,
             json!({
                 "sender": sender,
-                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}"),
+                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}"),
                 "mention_sidecar_digest": ["unregistered-opaque-tag"],
                 "encrypted": true,
                 "encrypted_content": {
@@ -1062,7 +1062,7 @@ mod tests {
     async fn plain_message_notifies_all_watchers_only() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009951";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009952";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009952";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         let carol = "did:web:carol.example";
@@ -1096,7 +1096,7 @@ mod tests {
     async fn plain_message_all_watcher_falls_back_to_realm_access_when_strand_missing() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009954";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009955";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009955";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         let mallory = "did:web:mallory.example";
@@ -1136,7 +1136,7 @@ mod tests {
     async fn assignment_relation_create_notifies_new_assignee() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009992";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009993";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009993";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
@@ -1164,7 +1164,7 @@ mod tests {
     async fn schedule_update_notifies_assignees_and_all_watchers() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009995";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009996";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009996";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         let carol = "did:web:carol.example";
@@ -1198,7 +1198,7 @@ mod tests {
     async fn calendar_schedule_fanout_fails_closed_without_private_policy_projection() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009930";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009931";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009931";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
@@ -1214,7 +1214,7 @@ mod tests {
             arkret_wire::EventKind::STRAND_UPDATE,
             json!({
                 "sender": alice,
-                "event_id": "ak:event:01904100-0000-7000-8000-000000009933",
+                "event_id": "ak:event:01904100-0000-8000-8000-000000009933",
                 "target_ref": strand_id,
                 "patch": {
                     "metadata.fields.calendar": {
@@ -1241,7 +1241,7 @@ mod tests {
     async fn rsvp_change_never_emits_a_schedule_notification() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009946";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009947";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009947";
         let alice = "did:web:alice.example";
         let bob = "did:web:bob.example";
         seed_realm_members(&state, realm_id, &[alice, bob]);
@@ -1293,7 +1293,7 @@ mod tests {
         assert_eq!(after_flip.len(), 1);
         assert!(after_flip.iter().any(|row| {
             row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:01904100-0000-7000-8000-000000009983")
+                == Some("ak:event:01904100-0000-8000-8000-000000009983")
         }));
 
         let unknown_strand = mention_message_with_strand(
@@ -1301,7 +1301,7 @@ mod tests {
             "000000009985",
             third_party,
             agent,
-            Some("ak:strand:01904100-0000-7000-8000-000000009986"),
+            Some("ak:strand:01904100-0000-8000-8000-000000009986"),
         );
         dispatch_message_notifications(&state, &unknown_strand).await;
         assert_eq!(notifications_for(&state, agent).await.len(), 1);
@@ -1312,11 +1312,11 @@ mod tests {
         assert_eq!(notifications.len(), 2);
         assert!(notifications.iter().any(|row| {
             row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:01904100-0000-7000-8000-000000009984")
+                == Some("ak:event:01904100-0000-8000-8000-000000009984")
         }));
         assert!(!notifications.iter().any(|row| {
             row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:01904100-0000-7000-8000-000000009982")
+                == Some("ak:event:01904100-0000-8000-8000-000000009982")
         }));
     }
 
@@ -1324,8 +1324,8 @@ mod tests {
     async fn strand_mention_uses_circle_effective_participation() {
         let state = test_state();
         let realm_id = "ak:realm:01904100-0000-7000-8000-000000009987";
-        let circle_id = "ak:circle:01904100-0000-7000-8000-000000009988";
-        let strand_id = "ak:strand:01904100-0000-7000-8000-000000009989";
+        let circle_id = "ak:circle:01904100-0000-8000-8000-000000009988";
+        let strand_id = "ak:strand:01904100-0000-8000-8000-000000009989";
         let controller = "did:web:alice.example";
         let third_party = "did:web:bob.example";
         let agent = "did:web:agents.example:alice-summary";
@@ -1357,7 +1357,7 @@ mod tests {
         assert_eq!(notifications.len(), 1);
         assert!(!notifications.iter().any(|row| {
             row.get("source_event_id").and_then(Value::as_str)
-                == Some("ak:event:01904100-0000-7000-8000-000000009991")
+                == Some("ak:event:01904100-0000-8000-8000-000000009991")
         }));
     }
 }

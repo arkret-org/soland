@@ -116,7 +116,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:rogue.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-aaaaaaaaaaaa",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
@@ -135,7 +135,7 @@ fn delivery_binding_policy_rejects_disallowed_recipient_service() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-bbbbbbbbbbbb",
             "resolved_at": "2026-05-19T00:00:00.000Z",
         }),
     );
@@ -172,7 +172,7 @@ fn delivery_binding_policy_empty_recipient_allow_list_rejects_all() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-abcdefabcdef",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-abcdefabcdef",
         }),
     );
     match state.apply(&bad, &hlc) {
@@ -204,7 +204,7 @@ fn delivery_binding_policy_omitted_recipient_allow_list_rejects_all() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-abcdefabcd00",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-abcdefabcd00",
         }),
     );
     match state.apply(&bad, &hlc) {
@@ -236,7 +236,7 @@ fn delivery_binding_policy_star_sentinel_is_unrestricted() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.anywhere.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-abcdefabcd11",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-abcdefabcd11",
         }),
     );
     let effect = state.apply(&good, &hlc);
@@ -268,7 +268,7 @@ fn delivery_binding_policy_rejects_disallowed_binding_source() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-cccccccccccc",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-cccccccccccc",
         }),
     );
     match state.apply(&bad, &hlc) {
@@ -370,7 +370,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
             "delivery_binding": {
                 "binding_source": "explicit",
                 "recipient_service_id": "did:web:soland-beta.example",
-                "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-aaaaaaaaaaaa",
+                "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-aaaaaaaaaaaa",
                 "resolved_at": "2026-07-25T00:00:00.000Z"
             }
         }),
@@ -394,7 +394,7 @@ fn direct_conversation_bootstrap_allows_exact_founding_peer_without_policy() {
             "delivery_binding": {
                 "binding_source": "explicit",
                 "recipient_service_id": "did:web:soland-gamma.example",
-                "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb",
+                "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-bbbbbbbbbbbb",
                 "resolved_at": "2026-07-25T00:00:00.000Z"
             }
         }),
@@ -416,7 +416,7 @@ fn direct_conversation_join_without_bootstrap_reason_still_requires_policy() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:soland-beta.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-cccccccccccc",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-cccccccccccc",
             "resolved_at": "2026-07-25T00:00:00.000Z"
         }),
     );
@@ -496,7 +496,7 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-dddddddddddd",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-dddddddddddd",
             "delivery_binding_frontier": "ak:frontier:01000000",
         }),
     );
@@ -513,7 +513,7 @@ fn delivery_binding_handover_stale_when_frontier_behind_policy() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-eeeeeeeeeeee",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-eeeeeeeeeeee",
             "delivery_binding_frontier": "ak:frontier:02000000",
         }),
     );
@@ -549,7 +549,7 @@ fn delivery_binding_handover_stale_when_frontier_absent() {
         json!({
             "binding_source": "explicit",
             "recipient_service_id": "did:web:principal.acme.example",
-            "service_acceptance_ref": "ak:event:01904100-0000-7000-8000-ffffffffffff",
+            "service_acceptance_ref": "ak:event:01904100-0000-8000-8000-ffffffffffff",
         }),
     );
     match state.apply(&no_frontier, &hlc) {

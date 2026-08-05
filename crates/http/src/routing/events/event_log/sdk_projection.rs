@@ -477,7 +477,7 @@ mod projection_operation_tests {
 
     fn parsed(kind: &str) -> ValidatedEventEnvelope {
         ValidatedEventEnvelope {
-            event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            event_id: "ak:event:01904100-0000-8000-8000-000000000001".to_owned(),
             actor_id: "did:web:alice.example".to_owned(),
             device_id: "ak:device:01904100-0000-7000-8000-000000000002".to_owned(),
             actor_seq: 1,
@@ -504,7 +504,7 @@ mod projection_operation_tests {
                 .payload
                 .get("accepted_event_id")
                 .and_then(Value::as_str),
-            Some("ak:event:01904100-0000-7000-8000-000000000001")
+            Some("ak:event:01904100-0000-8000-8000-000000000001")
         );
 
         let device_authorize = projection_operation_from_event(
@@ -524,7 +524,7 @@ mod projection_operation_tests {
                 .payload
                 .get("accepted_event_id")
                 .and_then(Value::as_str),
-            Some("ak:event:01904100-0000-7000-8000-000000000001")
+            Some("ak:event:01904100-0000-8000-8000-000000000001")
         );
     }
 
@@ -1179,7 +1179,7 @@ mod refs_limit_tests {
     #[test]
     fn authorized_by_rejects_event_id_alias() {
         let refs = json!([{
-            "id": "ak:event:019fa9da-0000-7000-8000-000000000001",
+            "id": "ak:event:019fa9da-0000-8000-8000-000000000001",
             "role": "authorized_by"
         }]);
         let err = event_semantic_refs(&refs_object(refs), MAX_EVENT_REFS).unwrap_err();

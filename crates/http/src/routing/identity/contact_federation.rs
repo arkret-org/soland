@@ -1457,7 +1457,7 @@ mod tests {
             requester,
             target,
             &payload,
-            "ak:event:0196419b-0000-7000-8000-000000000001",
+            "ak:event:0196419b-0000-8000-8000-000000000001",
             Some(source_service_id),
         )
         .await
@@ -1480,7 +1480,7 @@ mod tests {
         );
         assert_eq!(
             record.request_event_ref.as_deref(),
-            Some("ak:event:0196419b-0000-7000-8000-000000000001"),
+            Some("ak:event:0196419b-0000-8000-8000-000000000001"),
         );
         assert_ne!(
             record.peer_service_id.as_deref(),

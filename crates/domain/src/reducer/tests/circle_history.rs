@@ -3,7 +3,7 @@ use chrono::{Duration, TimeZone, Utc};
 use super::*;
 
 const REALM: &str = "ak:realm:01904100-0000-7000-8000-c1c1c1c1c1c1";
-const CIRCLE: &str = "ak:circle:01904100-0000-7000-8000-aaaaaaaaaaaa";
+const CIRCLE: &str = "ak:circle:01904100-0000-8000-8000-aaaaaaaaaaaa";
 const ALICE: &str = "did:web:alice";
 const BOB: &str = "did:web:bob";
 
@@ -167,7 +167,7 @@ fn realm_leave_enqueues_realm_default_mls_remove_obligation() {
             epoch: 2,
             leader_actor_id: ALICE.to_owned(),
             creator_device_id: "ak:device:alice-desktop".to_owned(),
-            genesis_event_ref: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            genesis_event_ref: "ak:event:01904100-0000-8000-8000-000000000001".to_owned(),
             committed_at: base.timestamp(),
             governance_binding: serde_json::json!({
                 "realm_id": REALM,
@@ -235,7 +235,7 @@ fn controller_removal_cascades_owned_agent_membership() {
         ALICE,
         &[BOB.to_owned()],
         ALICE,
-        vec!["ak:event:01904100-0000-7000-8000-bbbbbbbbbbbb".to_owned()],
+        vec!["ak:event:01904100-0000-8000-8000-bbbbbbbbbbbb".to_owned()],
         base + Duration::minutes(30),
     );
 

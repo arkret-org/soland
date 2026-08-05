@@ -18,7 +18,7 @@ fn cursor_operation(
         "read_scope": {"kind": "realm"},
         "position": {
             "event_id": format!(
-                "ak:event:01964137-0000-7000-8000-{event_suffix:012x}"
+                "ak:event:01964137-0000-8000-8000-{event_suffix:012x}"
             ),
             "hlc": hlc,
         },

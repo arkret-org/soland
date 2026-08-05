@@ -17,7 +17,7 @@ fn consent_revoke_accepts_non_empty_observed_dots() {
     validate_consent_revoke_payload(&json!({
         "consent_id": "ak:consent:01904100-0000-7000-8000-000000000001",
         "observed_dots": [
-            "ak:event:01904100-0000-7000-8000-000000000002:1"
+            "ak:event:01904100-0000-8000-8000-000000000002:1"
         ],
     }))
     .unwrap();
@@ -28,7 +28,7 @@ fn consent_revoke_rejects_untyped_consent_id() {
     let err = validate_consent_revoke_payload(&json!({
         "consent_id": "cid",
         "observed_dots": [
-            "ak:event:01904100-0000-7000-8000-000000000002:1"
+            "ak:event:01904100-0000-8000-8000-000000000002:1"
         ],
     }))
     .unwrap_err();

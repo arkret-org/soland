@@ -16,7 +16,7 @@ fn op(payload: serde_json::Value) -> Operation {
 #[test]
 fn canonical_strand_tracks_update_accepts_patch_payload() {
     let operation = op(json!({
-        "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
+        "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001",
         "patch": {
             "tracks": {
                 "discussion": {"profile": "discussion"}
@@ -34,7 +34,7 @@ fn canonical_strand_tracks_update_accepts_patch_payload() {
 #[test]
 fn canonical_strand_tracks_update_accepts_tracks_payload() {
     let operation = op(json!({
-        "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001",
+        "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001",
         "tracks": {
             "review": {"profile": "review"}
         }
@@ -58,7 +58,7 @@ fn canonical_strand_tracks_update_requires_strand_id_and_patch_or_tracks() {
     );
 
     let missing_patch_or_tracks = op(json!({
-        "strand_id": "ak:strand:01904100-0000-7000-8000-000000000001"
+        "strand_id": "ak:strand:01904100-0000-8000-8000-000000000001"
     }));
     assert_eq!(
         validate_operation_schema(&missing_patch_or_tracks, schema),
@@ -68,7 +68,7 @@ fn canonical_strand_tracks_update_requires_strand_id_and_patch_or_tracks() {
 
 #[test]
 fn encrypted_realm_strand_content_detector_matches_content_only_boundary() {
-    let strand_id = "ak:strand:01904100-0000-7000-8000-000000000001";
+    let strand_id = "ak:strand:01904100-0000-8000-8000-000000000001";
     let content_update = strand_position_op(
         arkret_wire::EventKind::STRAND_UPDATE,
         json!({
@@ -165,7 +165,7 @@ fn create_locked_encryption_profile_detector_matches_update_shapes() {
     let pointer_patch = strand_position_op(
         arkret_wire::EventKind::CIRCLE_UPDATE,
         json!({
-            "circle_id": "ak:circle:01904100-0000-7000-8000-000000000001",
+            "circle_id": "ak:circle:01904100-0000-8000-8000-000000000001",
             "patch": {
                 "/object/encryption_profile": {
                     "$op": "replace",
@@ -203,9 +203,9 @@ fn canonical_strand_move_requires_board_target_and_rank() {
     let operation = strand_position_op(
         arkret_wire::EventKind::STRAND_MOVE,
         json!({
-            "board_space_id": "ak:space:01904100-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
-            "target_space_id": "ak:space:01904100-0000-7000-8000-000000000003",
+            "board_space_id": "ak:space:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
+            "target_space_id": "ak:space:01904100-0000-8000-8000-000000000003",
             "rank": "a1"
         }),
     );
@@ -214,8 +214,8 @@ fn canonical_strand_move_requires_board_target_and_rank() {
     let missing_target = strand_position_op(
         arkret_wire::EventKind::STRAND_MOVE,
         json!({
-            "board_space_id": "ak:space:01904100-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "board_space_id": "ak:space:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
             "rank": "a1"
         }),
     );
@@ -231,9 +231,9 @@ fn canonical_strand_reorder_requires_board_space_and_rank() {
     let operation = strand_position_op(
         arkret_wire::EventKind::STRAND_REORDER,
         json!({
-            "board_space_id": "ak:space:01904100-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
-            "space_id": "ak:space:01904100-0000-7000-8000-000000000003",
+            "board_space_id": "ak:space:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
+            "space_id": "ak:space:01904100-0000-8000-8000-000000000003",
             "rank": "a1"
         }),
     );
@@ -256,7 +256,7 @@ fn canonical_space_update_requires_space_id_and_patch() {
     let operation = space_container_op(
         arkret_wire::EventKind::SPACE_UPDATE,
         json!({
-            "space_id": "ak:space:01904100-0000-7000-8000-000000000003",
+            "space_id": "ak:space:01904100-0000-8000-8000-000000000003",
             "patch": {"title": "Launch v2"}
         }),
     );
@@ -265,7 +265,7 @@ fn canonical_space_update_requires_space_id_and_patch() {
     let removed_target_ref = space_container_op(
         arkret_wire::EventKind::SPACE_UPDATE,
         json!({
-            "target_ref": "ak:space:01904100-0000-7000-8000-000000000003",
+            "target_ref": "ak:space:01904100-0000-8000-8000-000000000003",
             "patch": {"title": "Launch v2"}
         }),
     );
@@ -290,8 +290,8 @@ fn canonical_space_parent_requires_space_id_and_expected_parent() {
     let operation = space_container_op(
         arkret_wire::EventKind::SPACE_PARENT,
         json!({
-            "space_id": "ak:space:01904100-0000-7000-8000-000000000003",
-            "parent_space_id": "ak:space:01904100-0000-7000-8000-000000000004",
+            "space_id": "ak:space:01904100-0000-8000-8000-000000000003",
+            "parent_space_id": "ak:space:01904100-0000-8000-8000-000000000004",
             "expected_parent_space_id": null
         }),
     );
@@ -300,8 +300,8 @@ fn canonical_space_parent_requires_space_id_and_expected_parent() {
     let missing_expected = space_container_op(
         arkret_wire::EventKind::SPACE_PARENT,
         json!({
-            "space_id": "ak:space:01904100-0000-7000-8000-000000000003",
-            "parent_space_id": "ak:space:01904100-0000-7000-8000-000000000004"
+            "space_id": "ak:space:01904100-0000-8000-8000-000000000003",
+            "parent_space_id": "ak:space:01904100-0000-8000-8000-000000000004"
         }),
     );
     assert_eq!(

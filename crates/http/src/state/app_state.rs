@@ -1837,8 +1837,8 @@ mod membership_hydration_tests {
                         "did:web:bob.example".to_owned(),
                     ],
                     realm_id: "ak:realm:01904100-0000-7000-8000-000000000001".to_owned(),
-                    main_strand_id: "ak:strand:01904100-0000-7000-8000-000000000002".to_owned(),
-                    binding_event_ref: "ak:event:01904100-0000-7000-8000-000000000003".to_owned(),
+                    main_strand_id: "ak:strand:01904100-0000-8000-8000-000000000002".to_owned(),
+                    binding_event_ref: "ak:event:01904100-0000-8000-8000-000000000003".to_owned(),
                     state: "active".to_owned(),
                     authoring_context: None,
                     created_at: now,
@@ -1969,7 +1969,7 @@ mod membership_hydration_tests {
         store
             .events()
             .put(CanonicalEventRecord {
-                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775901".to_owned(),
+                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775901".to_owned(),
                 actor_id: "did:web:alice.example".to_owned(),
                 actor_seq: 2,
                 realm_id: Some(realm_id.to_owned()),
@@ -1978,7 +1978,7 @@ mod membership_hydration_tests {
                 canonical_digest: "sha256:membership".to_owned(),
                 canonical_bytes: Vec::new(),
                 envelope: serde_json::json!({
-                    "event_id": "ak:event:019f0dd3-081c-7f03-b388-e0399e775901",
+                    "event_id": "ak:event:019f0dd3-081c-8f03-b388-e0399e775901",
                     "actor_id": "did:web:alice.example",
                     "actor_seq": 2,
                     "realm_id": realm_id,
@@ -2157,7 +2157,7 @@ mod membership_hydration_tests {
 
     #[test]
     fn child_scope_policy_hydration_uses_the_sdk_wire_type_and_fails_closed() {
-        let circle_id = "ak:circle:0196419b-0000-7000-8000-000000000003";
+        let circle_id = "ak:circle:0196419b-0000-8000-8000-000000000003";
         assert_eq!(
             soland_services::hydration::parse_child_scope_policy(None, None).unwrap(),
             None
@@ -2207,7 +2207,7 @@ mod membership_hydration_tests {
         let appended = store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775902".to_owned(),
+                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775902".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_kind: "event".to_owned(),
@@ -2266,7 +2266,7 @@ mod membership_hydration_tests {
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775904".to_owned(),
+                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775904".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::KEY_BACKUP_ACTIVE_SERIES.to_owned(),
                 operation_kind: "event".to_owned(),
@@ -2324,9 +2324,9 @@ mod membership_hydration_tests {
         let agent_id =
             "did:webvh:z6mkfixture:example.test:webvh:agent:019f0dd3-081c-7f03-b388-e0399e775901";
         let realm_id = "ak:realm:019f0dd3-081c-7f03-b388-e0399e775902";
-        let event_id = "ak:event:019f0dd3-081c-7f03-b388-e0399e775903";
+        let event_id = "ak:event:019f0dd3-081c-8f03-b388-e0399e775903";
         let key_id = format!("{agent_id}#runtime-1");
-        let replacement_event_id = "ak:event:019f0dd3-081c-7f03-b388-e0399e775907";
+        let replacement_event_id = "ak:event:019f0dd3-081c-8f03-b388-e0399e775907";
         let replacement_key_id = format!("{agent_id}#runtime-2");
         let now = chrono::Utc::now();
         let appended = store
@@ -2352,7 +2352,7 @@ mod membership_hydration_tests {
         store
             .projection_events()
             .append(ProjectionEventRecord {
-                event_id: "ak:event:019f0dd3-081c-7f03-b388-e0399e775905".to_owned(),
+                event_id: "ak:event:019f0dd3-081c-8f03-b388-e0399e775905".to_owned(),
                 realm_id: realm_id.to_owned(),
                 event_kind: arkret_wire::EventKind::AGENT_KEY_REVOKE.to_owned(),
                 operation_kind: "event".to_owned(),

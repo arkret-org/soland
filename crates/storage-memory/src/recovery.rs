@@ -482,7 +482,7 @@ mod tests {
             scope_ref: scope_ref.clone(),
             source: AuthoritySetPolicySource {
                 source_kind: AuthoritySetSourceKind::RealmControl,
-                source_ref: "ak:event:019a7360-0000-7000-8000-000000000111".to_owned(),
+                source_ref: "ak:event:019a7360-0000-8000-8000-000000000111".to_owned(),
                 source_digest: hash('e'),
                 generation_ref: "1".to_owned(),
             },
@@ -640,7 +640,7 @@ mod tests {
                     ciphertext_digest: hash('c'),
                 },
             ],
-            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-00000000010d")
+            active_series_event_id: EventId::new("ak:event:019a7360-0000-8000-8000-00000000010d")
                 .unwrap(),
             old_backups: vec![BackupObjectRef {
                 backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-00000000010e").unwrap(),
@@ -669,7 +669,7 @@ mod tests {
                     ciphertext_digest: hash('6'),
                 },
             ],
-            active_series_event_id: EventId::new("ak:event:019a7360-0000-7000-8000-000000000107")
+            active_series_event_id: EventId::new("ak:event:019a7360-0000-8000-8000-000000000107")
                 .unwrap(),
             old_backups: vec![BackupObjectRef {
                 backup_id: BackupId::new("ak:backup:019a7360-0000-7000-8000-000000000108").unwrap(),
@@ -679,7 +679,7 @@ mod tests {
         let transaction_id =
             TransactionId::new("ak:transaction:019a7360-0000-7000-8000-000000000101").unwrap();
         let revoke_event_id =
-            EventId::new("ak:event:019a7360-0000-7000-8000-000000000102").unwrap();
+            EventId::new("ak:event:019a7360-0000-8000-8000-000000000102").unwrap();
         let request = SecurityTransactionCreateRequest::SecurityRotation(
             SecurityRotationTransactionCreateRequest::from_prepared_rotations(
                 transaction_id,
@@ -732,7 +732,7 @@ mod tests {
             step: SecurityTransactionStep::Revoke,
             prepared_material_digest: hash('4'),
             acceptor_id: "did:web:principal.example".to_owned(),
-            output_ref: "ak:event:019a7360-0000-7000-8000-000000000102".to_owned(),
+            output_ref: "ak:event:019a7360-0000-8000-8000-000000000102".to_owned(),
             output_digest: hash('5'),
             accepted_at: Utc::now(),
         });

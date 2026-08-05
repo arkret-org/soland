@@ -41,7 +41,7 @@ fn call_state_projects_independent_state_focus_and_roster_cells() {
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000a";
-    let event_id = "ak:event:01904100-0000-7000-8000-e00000000001";
+    let event_id = "ak:event:01904100-0000-8000-8000-e00000000001";
     let participant = serde_json::json!({
         "actor_id": "did:web:bob.example",
         "device_id": "ak:device:01904100-0000-7000-8000-d00000000001"
@@ -103,7 +103,7 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
     let first = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e0000000000b",
+        "ak:event:01904100-0000-8000-8000-e0000000000b",
         serde_json::json!({
             "call_id": call_id,
             "state_transition": {"from": null, "to": "ringing"},
@@ -125,7 +125,7 @@ fn focus_update_cannot_omit_or_replace_committed_session_focus() {
         let update = call_input(
             arkret_wire::EventKind::CALL_STATE,
             realm,
-            &format!("ak:event:01904100-0000-7000-8000-e0000000010{index}"),
+            &format!("ak:event:01904100-0000-8000-8000-e0000000010{index}"),
             serde_json::json!({"call_id": call_id, "focus": value}),
         );
         assert!(matches!(
@@ -142,7 +142,7 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     let hlc = ServerHlc::new("test");
     let realm = "ak:realm:01904100-0000-7000-8000-cfc039892063";
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000c";
-    let event_id = "ak:event:01904100-0000-7000-8000-e00000000002";
+    let event_id = "ak:event:01904100-0000-8000-8000-e00000000002";
     let dot = arkret_schema::or_set_dot(event_id, CALL_STATE_MODERATION_WRITE_INDEX);
     let removal = serde_json::json!({
         "actor_id": "did:web:bob.example",
@@ -167,7 +167,7 @@ fn moderation_restore_only_removes_observed_matching_ban() {
     let restore = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e00000000012",
+        "ak:event:01904100-0000-8000-8000-e00000000012",
         serde_json::json!({
             "call_id": call_id,
             "moderation_delta": {
@@ -216,7 +216,7 @@ fn recording_start_requires_consent_before_both_cells_are_written() {
     let call_id = "ak:call:01904100-0000-7000-8000-c0000000000d";
     let recording_id = "capture-1";
     let subject = arkret_wire::composite_subject(&[call_id, recording_id]).unwrap();
-    let event_id = "ak:event:01904100-0000-7000-8000-e00000000003";
+    let event_id = "ak:event:01904100-0000-8000-8000-e00000000003";
     let result = serde_json::json!({
         "recording_start_event_id": event_id,
         "retention": {"consent_confirmed": false}
@@ -272,7 +272,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e0000000000f",
+        "ak:event:01904100-0000-8000-8000-e0000000000f",
         serde_json::json!({
             "call_id": call_id,
             "state_transition": {"from": null, "to": "ringing"}
@@ -283,7 +283,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let wrong_predecessor = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e0000000001f",
+        "ak:event:01904100-0000-8000-8000-e0000000001f",
         serde_json::json!({
             "call_id": call_id,
             "state_transition": {"from": "scheduled", "to": "connecting"}
@@ -298,7 +298,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let missed = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e0000000002f",
+        "ak:event:01904100-0000-8000-8000-e0000000002f",
         serde_json::json!({
             "call_id": call_id,
             "state_transition": {"from": "ringing", "to": "missed"}
@@ -308,7 +308,7 @@ fn call_fsm_rejects_wrong_predecessor_and_terminal_exit() {
     let revive = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e0000000003f",
+        "ak:event:01904100-0000-8000-8000-e0000000003f",
         serde_json::json!({
             "call_id": call_id,
             "state_transition": {"from": "missed", "to": "active"}
@@ -330,7 +330,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
     let initial = call_input(
         arkret_wire::EventKind::CALL_STATE,
         realm,
-        "ak:event:01904100-0000-7000-8000-e00000000020",
+        "ak:event:01904100-0000-8000-8000-e00000000020",
         serde_json::json!({
             "call_id": call_id,
             "state_transition": {"from": null, "to": "ringing"}
@@ -356,9 +356,9 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
         );
         input
     };
-    let active = sibling("ak:event:01904100-0000-7000-8000-e00000000021", "active");
+    let active = sibling("ak:event:01904100-0000-8000-8000-e00000000021", "active");
     apply_call(&mut state, &active, &hlc);
-    let missed = sibling("ak:event:01904100-0000-7000-8000-e00000000022", "missed");
+    let missed = sibling("ak:event:01904100-0000-8000-8000-e00000000022", "missed");
     assert!(matches!(
         apply_call(&mut state, &missed, &hlc),
         ProjectionEffect::CallStateProjected { .. }
@@ -371,7 +371,7 @@ fn state_sibling_conflict_does_not_freeze_roster_cell() {
         Some(CellState::Bottom(_))
     ));
 
-    let join_event_id = "ak:event:01904100-0000-7000-8000-e00000000010";
+    let join_event_id = "ak:event:01904100-0000-8000-8000-e00000000010";
     let participant = serde_json::json!({
         "actor_id": "did:web:bob.example",
         "device_id": "ak:device:01904100-0000-7000-8000-d00000000010"
@@ -420,7 +420,7 @@ fn terminal_summary_reads_the_split_state_cell() {
         let input = call_input(
             arkret_wire::EventKind::CALL_STATE,
             realm,
-            &format!("ak:event:01904100-0000-7000-8000-e0000000003{index}"),
+            &format!("ak:event:01904100-0000-8000-8000-e0000000003{index}"),
             serde_json::json!({
                 "call_id": call_id,
                 "state_transition": {"from": from, "to": to}

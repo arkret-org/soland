@@ -3,7 +3,7 @@ use super::*;
 #[test]
 fn redaction_human_reason_prefers_explicit_field() {
     let payload = serde_json::json!({
-        "target_event_id": "ak:event:01904100-0000-7000-8000-000000000abc",
+        "target_event_id": "ak:event:01904100-0000-8000-8000-000000000abc",
         "reason": "machine policy",
         "human_reason": "moderator request"
     });
@@ -22,7 +22,7 @@ fn message_create_and_query() {
         arkret_wire::EventKind::MESSAGE_CREATE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
-            "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+            "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
             "sender": "did:web:alice",
             "thread_id": "ak:strand:1",
             "content": {"kind": "ak.content.text", "body": "hello"}
@@ -35,7 +35,7 @@ fn message_create_and_query() {
     assert_eq!(msgs.len(), 1);
     assert_eq!(
         msgs[0].event_id,
-        "ak:event:01904100-0000-7000-8000-caaa6a15bce1"
+        "ak:event:01904100-0000-8000-8000-caaa6a15bce1"
     );
 }
 
@@ -49,7 +49,7 @@ fn redaction_hides_message() {
             arkret_wire::EventKind::MESSAGE_CREATE,
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+                "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "hello"}
@@ -62,7 +62,7 @@ fn redaction_hides_message() {
             arkret_wire::EventKind::MESSAGE_REDACT,
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "target_event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+                "target_event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "by": "did:web:alice",
                 "reason": "wrong room"
             }),
@@ -78,18 +78,18 @@ fn redaction_hides_message() {
     assert!(
         state
             .redactions
-            .contains("ak:event:01904100-0000-7000-8000-caaa6a15bce1")
+            .contains("ak:event:01904100-0000-8000-8000-caaa6a15bce1")
     );
     // The original MessageState is preserved (only the
     // parallel cell + flat redactions index move).
     assert!(
         state
             .messages
-            .contains_key("ak:event:01904100-0000-7000-8000-caaa6a15bce1")
+            .contains_key("ak:event:01904100-0000-8000-8000-caaa6a15bce1")
     );
     let cell = state
         .redaction_cells
-        .get("ak:event:01904100-0000-7000-8000-caaa6a15bce1")
+        .get("ak:event:01904100-0000-8000-8000-caaa6a15bce1")
         .cloned()
         .unwrap()
         .unwrap();
@@ -119,7 +119,7 @@ fn redact_make_message(state: &mut ProjectionState, hlc: &ServerHlc, event_id: &
 fn mal14_tombstone_visible_to_author() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-aaaaaaaaaaa1";
+    let event_id = "ak:event:01904100-0000-8000-8000-aaaaaaaaaaa1";
     redact_make_message(&mut state, &hlc, event_id);
     state.apply(
         &make_operation(
@@ -147,7 +147,7 @@ fn mal14_tombstone_visible_to_author() {
 fn mal14_tombstone_hidden_from_members() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-aaaaaaaaaaa2";
+    let event_id = "ak:event:01904100-0000-8000-8000-aaaaaaaaaaa2";
     redact_make_message(&mut state, &hlc, event_id);
     state.apply(
         &make_operation(
@@ -169,7 +169,7 @@ fn mal14_tombstone_hidden_from_members() {
 fn mal14_unredaction_clears_cell_and_index() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-aaaaaaaaaaa3";
+    let event_id = "ak:event:01904100-0000-8000-8000-aaaaaaaaaaa3";
     redact_make_message(&mut state, &hlc, event_id);
     // Redact.
     state.apply(
@@ -212,7 +212,7 @@ fn mal14_unredaction_clears_cell_and_index() {
 fn mal14_late_arriving_redaction_still_takes_effect() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-aaaaaaaaaaa4";
+    let event_id = "ak:event:01904100-0000-8000-8000-aaaaaaaaaaa4";
     // Pre-create the projected message and let the projection
     // rendering query it once before the redaction lands.
     redact_make_message(&mut state, &hlc, event_id);
@@ -256,7 +256,7 @@ fn reaction_or_set_convergence() {
             arkret_wire::EventKind::REACTION_ADD,
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+                "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "actor": "did:web:alice",
                 "key": "👍"
             }),
@@ -265,7 +265,7 @@ fn reaction_or_set_convergence() {
     );
     assert_eq!(
         state
-            .reactions_for_event("ak:event:01904100-0000-7000-8000-caaa6a15bce1")
+            .reactions_for_event("ak:event:01904100-0000-8000-8000-caaa6a15bce1")
             .len(),
         1
     );
@@ -275,7 +275,7 @@ fn reaction_or_set_convergence() {
             arkret_wire::EventKind::REACTION_REMOVE,
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+                "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "actor": "did:web:alice",
                 "key": "👍"
             }),
@@ -284,7 +284,7 @@ fn reaction_or_set_convergence() {
     );
     assert_eq!(
         state
-            .reactions_for_event("ak:event:01904100-0000-7000-8000-caaa6a15bce1")
+            .reactions_for_event("ak:event:01904100-0000-8000-8000-caaa6a15bce1")
             .len(),
         0
     );
@@ -344,7 +344,7 @@ fn message_revise_creates_chain() {
             arkret_wire::EventKind::MESSAGE_CREATE,
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+                "event_id": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
                 "sender": "did:web:alice",
                 "thread_id": "ak:strand:1",
                 "content": {"kind": "ak.content.text", "body": "original"}
@@ -357,7 +357,7 @@ fn message_revise_creates_chain() {
         arkret_wire::EventKind::MESSAGE_REVISE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
         serde_json::json!({
-            "target_ref": "ak:event:01904100-0000-7000-8000-caaa6a15bce1",
+            "target_ref": "ak:event:01904100-0000-8000-8000-caaa6a15bce1",
             "content": {"kind": "ak.content.text", "body": "revised"}
         }),
     );
@@ -372,7 +372,7 @@ fn message_revise_creates_chain() {
     let revision = state.messages.get(&revision_id).unwrap();
     assert_eq!(
         revision.revision_of.as_deref(),
-        Some("ak:event:01904100-0000-7000-8000-caaa6a15bce1")
+        Some("ak:event:01904100-0000-8000-8000-caaa6a15bce1")
     );
 }
 
@@ -380,9 +380,9 @@ fn message_revise_creates_chain() {
 fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-caaa6a15bce1";
-    let message_id = "ak:message:01904100-0001-7000-8000-caaa6a15bce1";
-    let revision_event_id = "ak:event:01904100-0002-7000-8000-caaa6a15bce1";
+    let event_id = "ak:event:01904100-0000-8000-8000-caaa6a15bce1";
+    let message_id = "ak:message:01904100-0001-8000-8000-caaa6a15bce1";
+    let revision_event_id = "ak:event:01904100-0002-8000-8000-caaa6a15bce1";
 
     state.apply(
         &make_operation(
@@ -429,9 +429,9 @@ fn message_revise_resolves_schema_message_id_and_preserves_event_id() {
 fn redaction_accepts_schema_message_id_target() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-caaa6a15bce2";
-    let message_id = "ak:message:01904100-0001-7000-8000-caaa6a15bce2";
-    let redaction_event_id = "ak:event:01904100-0002-7000-8000-caaa6a15bce2";
+    let event_id = "ak:event:01904100-0000-8000-8000-caaa6a15bce2";
+    let message_id = "ak:message:01904100-0001-8000-8000-caaa6a15bce2";
+    let redaction_event_id = "ak:event:01904100-0002-8000-8000-caaa6a15bce2";
 
     state.apply(
         &make_operation(
@@ -480,9 +480,9 @@ fn redaction_accepts_schema_message_id_target() {
 fn redaction_by_message_id_hides_latest_revision() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let event_id = "ak:event:01904100-0000-7000-8000-caaa6a15bce3";
-    let message_id = "ak:message:01904100-0001-7000-8000-caaa6a15bce3";
-    let revision_event_id = "ak:event:01904100-0002-7000-8000-caaa6a15bce3";
+    let event_id = "ak:event:01904100-0000-8000-8000-caaa6a15bce3";
+    let message_id = "ak:message:01904100-0001-8000-8000-caaa6a15bce3";
+    let revision_event_id = "ak:event:01904100-0002-8000-8000-caaa6a15bce3";
 
     state.apply(
         &make_operation(
@@ -515,7 +515,7 @@ fn redaction_by_message_id_hides_latest_revision() {
             arkret_wire::EventKind::MESSAGE_REDACT,
             "ak:realm:01904100-0000-7000-8000-cfc039892036",
             serde_json::json!({
-                "event_id": "ak:event:01904100-0003-7000-8000-caaa6a15bce3",
+                "event_id": "ak:event:01904100-0003-8000-8000-caaa6a15bce3",
                 "message_id": message_id,
                 "by": "did:web:alice",
                 "reason": "wrong room"

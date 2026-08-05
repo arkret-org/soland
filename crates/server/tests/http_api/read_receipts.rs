@@ -186,7 +186,7 @@ async fn read_receipt_policy_rejects_forced_public_world_readable_without_second
 }
 
 /// The Strand the demo Realm's fixture messages are authored into.
-const TARGET_STRAND_ID: &str = "ak:strand:0196419b-0000-7000-8000-000000000000";
+const TARGET_STRAND_ID: &str = "ak:strand:0196419b-0000-8000-8000-000000000000";
 
 /// The pre-migration plaintext ephemeral receipt envelope, kept as a negative.
 ///
@@ -387,7 +387,7 @@ async fn private_read_receipt_narrows_by_signed_scope_and_never_exposes_its_targ
 
     // (2) The receipt rides the Signal rail, narrowed to a Circle Alice is in
     // and Carol is not.
-    let circle_id = "ak:circle:01904100-0000-7000-8000-c17c1e000003";
+    let circle_id = "ak:circle:01904100-0000-8000-8000-c17c1e000003";
     seed_test_circle(&state, DEMO_REALM_ID, circle_id, &[ALICE, BOB]);
     let sent_at = chrono::Utc::now();
     let plaintext = read_receipt_plaintext(BOB, &target_event_id, 1);

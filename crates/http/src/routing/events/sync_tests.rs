@@ -13,7 +13,7 @@ fn ordered_log_message(actor_seq: u64, hlc: &str, body: &str) -> arkret_wire::Ev
         actor_seq,
         arkret_identifiers::Hlc::new(hlc).unwrap(),
         json!({
-            "strand_id": "ak:strand:01904100-0000-7000-8000-f10dc0000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-f10dc0000001",
             "body": body,
         }),
     )
@@ -264,11 +264,11 @@ fn timeline_position_disambiguates_same_second_events() {
         .with_timezone(&Utc);
     let realm_create = timestamp_position_with_tie_breaker(
         created_at,
-        "ak:event:019e507b-16b2-719a-84fd-a9319ab43a36",
+        "ak:event:019e507b-16b2-819a-84fd-a9319ab43a36",
     );
     let welcome_message = timestamp_position_with_tie_breaker(
         created_at,
-        "ak:event:019e507b-1857-73b7-9579-a00706bf0af4",
+        "ak:event:019e507b-1857-83b7-9579-a00706bf0af4",
     );
 
     assert_ne!(realm_create, welcome_message);
@@ -309,7 +309,7 @@ fn signal_envelope(
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:01904100-0000-7000-8000-cccccccccccc".to_owned(),
+                group_state_ref: "ak:event:01904100-0000-8000-8000-cccccccccccc".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),
@@ -674,11 +674,11 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
         received_at,
     };
     let pre_join_event = event_at(
-        "ak:event:01904100-0000-7000-8000-0000000000e1",
+        "ak:event:01904100-0000-8000-8000-0000000000e1",
         pre_join_received_at,
     );
     let post_join_event = event_at(
-        "ak:event:01904100-0000-7000-8000-0000000000e2",
+        "ak:event:01904100-0000-8000-8000-0000000000e2",
         post_join_received_at,
     );
 
@@ -694,9 +694,9 @@ async fn projection_visibility_uses_received_at_for_joined_history_cutoff() {
 
 #[tokio::test]
 async fn sidecar_structural_events_are_visible_only_inside_the_backing_circle() {
-    const CIRCLE_ID: &str = "ak:circle:01904100-0000-7000-8000-00000000a011";
-    const PRIVATE_STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-00000000a012";
-    const SOURCE_STRAND_ID: &str = "ak:strand:01904100-0000-7000-8000-00000000a013";
+    const CIRCLE_ID: &str = "ak:circle:01904100-0000-8000-8000-00000000a011";
+    const PRIVATE_STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-00000000a012";
+    const SOURCE_STRAND_ID: &str = "ak:strand:01904100-0000-8000-8000-00000000a013";
     let mut config = test_config();
     config.seed_demo_data = false;
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
@@ -784,7 +784,7 @@ async fn sidecar_structural_events_are_visible_only_inside_the_backing_circle() 
         received_at: created_at,
     };
     let strand_event = structural_event(
-        "ak:event:01904100-0000-7000-8000-00000000a021",
+        "ak:event:01904100-0000-8000-8000-00000000a021",
         arkret_wire::EventKind::STRAND_CREATE,
         json!({
             "object": {
@@ -796,11 +796,11 @@ async fn sidecar_structural_events_are_visible_only_inside_the_backing_circle() 
         }),
     );
     let relation_event = structural_event(
-        "ak:event:01904100-0000-7000-8000-00000000a022",
+        "ak:event:01904100-0000-8000-8000-00000000a022",
         arkret_wire::EventKind::RELATION_CREATE,
         json!({
             "relation": {
-                "id": "ak:relation:01904100-0000-7000-8000-00000000a022",
+                "id": "ak:relation:01904100-0000-8000-8000-00000000a022",
                 "kind": "agent_sidecar_of",
                 "from_ref": PRIVATE_STRAND_ID,
                 "to_ref": SOURCE_STRAND_ID,
@@ -951,11 +951,11 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
         .lock()
         .apply(&member_join, state.hlc());
 
-    let pre_join_event_id = "ak:event:01904100-0000-7000-8000-0000000002e1";
-    let post_join_event_id = "ak:event:01904100-0000-7000-8000-0000000002e2";
+    let pre_join_event_id = "ak:event:01904100-0000-8000-8000-0000000002e1";
+    let post_join_event_id = "ak:event:01904100-0000-8000-8000-0000000002e2";
     let pre_join_payload = json!({
         "event_id": pre_join_event_id,
-        "message_id": "ak:message:01904100-0000-7000-8000-0000000002e1",
+        "message_id": "ak:message:01904100-0000-8000-8000-0000000002e1",
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -964,7 +964,7 @@ async fn sync_timeline_visibility_uses_received_at_for_joined_history_cutoff() {
     });
     let post_join_payload = json!({
         "event_id": post_join_event_id,
-        "message_id": "ak:message:01904100-0000-7000-8000-0000000002e2",
+        "message_id": "ak:message:01904100-0000-8000-8000-0000000002e2",
         "realm_id": ROSTER_REALM,
         "strand_id": strand_id,
         "thread_id": strand_id,
@@ -1042,7 +1042,7 @@ fn insert_member_identity_subject(state: &AppState) {
         arkret_canonical::canonical_json_bytes(&identity_payload).unwrap(),
     );
     state.test_insert_member_identity(MemberIdentityEventRecord {
-        event_id: "ak:event:01904100-0000-7000-8000-0000000000d1".to_owned(),
+        event_id: "ak:event:01904100-0000-8000-8000-0000000000d1".to_owned(),
         subject: MemberIdentitySubjectKey {
             realm_id: ROSTER_REALM.to_owned(),
             actor_id: ROSTER_ACTOR.to_owned(),
@@ -1051,7 +1051,7 @@ fn insert_member_identity_subject(state: &AppState) {
         payload_digest,
         replaces: Vec::new(),
         raw_event: json!({
-            "event_id": "ak:event:01904100-0000-7000-8000-0000000000d1",
+            "event_id": "ak:event:01904100-0000-8000-8000-0000000000d1",
             "event_kind": arkret_wire::EventKind::MEMBER_IDENTITY_UPDATE,
             "realm_id": ROSTER_REALM,
             "created_at": now(),
@@ -1147,8 +1147,8 @@ fn member_identity_projection_stores_typed_event_id_and_matches_event_replaces()
     let state = test_state();
     let realm = ROSTER_REALM;
     let actor = ROSTER_ACTOR;
-    let first_event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
-    let second_event_id = "ak:event:01904100-0000-7000-8000-0000000000e2";
+    let first_event_id = "ak:event:01904100-0000-8000-8000-0000000000e1";
+    let second_event_id = "ak:event:01904100-0000-8000-8000-0000000000e2";
 
     let first_identity = json!({
         "member_identity": {
@@ -1575,14 +1575,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     crate::routing::events::projection::append_projection_event(
         &state,
         soland_services::events::ProjectedEvent {
-            event_id: "ak:event:01904100-0000-7000-8000-0000000000a1".to_owned(),
+            event_id: "ak:event:01904100-0000-8000-8000-0000000000a1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000a1".to_owned()),
             sender: Some(ROSTER_ACTOR.to_owned()),
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
                 "patch": {"synthesis": {"$op": "set", "value": "first"}}
             }),
             created_at: first_created_at,
@@ -1593,11 +1593,11 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .expect("first state event appended");
     put_canonical_event_received_at(
         &state,
-        "ak:event:01904100-0000-7000-8000-0000000000a1",
+        "ak:event:01904100-0000-8000-8000-0000000000a1",
         1,
         arkret_wire::EventKind::STRAND_UPDATE,
         json!({
-            "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
             "patch": {"synthesis": {"$op": "set", "value": "first"}}
         }),
         first_created_at,
@@ -1628,14 +1628,14 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     crate::routing::events::projection::append_projection_event(
         &state,
         soland_services::events::ProjectedEvent {
-            event_id: "ak:event:01904100-0000-7000-8000-0000000000b1".to_owned(),
+            event_id: "ak:event:01904100-0000-8000-8000-0000000000b1".to_owned(),
             realm_id: ROSTER_REALM.to_owned(),
             event_kind: arkret_wire::EventKind::STRAND_UPDATE.to_owned(),
             operation_kind: "state".to_owned(),
             operation_id: Some("ak:operation:01904100-0000-7000-8000-0000000000b1".to_owned()),
             sender: Some(ROSTER_CALLER.to_owned()),
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
                 "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
             }),
             created_at: second_created_at,
@@ -1646,11 +1646,11 @@ async fn sync_snapshot_emits_state_events_without_timeline_messages() {
     .expect("second state event appended");
     put_canonical_event_received_at_for_actor(
         &state,
-        "ak:event:01904100-0000-7000-8000-0000000000b1",
+        "ak:event:01904100-0000-8000-8000-0000000000b1",
         2,
         arkret_wire::EventKind::STRAND_UPDATE,
         json!({
-            "strand_id": "ak:strand:01904100-0000-7000-8000-0000000000a2",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-0000000000a2",
             "patch": {"synthesis": {"$op": "set", "value": "first\n\n---\n\nsecond"}}
         }),
         ROSTER_CALLER,
@@ -1778,8 +1778,8 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
-    let message_event_id = "ak:event:01904100-0000-7000-8000-0000000000d1";
-    let message_id = "ak:message:01904100-0000-7000-8000-0000000000d1";
+    let message_event_id = "ak:event:01904100-0000-8000-8000-0000000000d1";
+    let message_id = "ak:message:01904100-0000-8000-8000-0000000000d1";
     let base = DateTime::parse_from_rfc3339("2026-06-24T10:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -1862,7 +1862,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
         "ak:operation:01904100-0000-7000-8000-0000000000c5",
         arkret_wire::EventKind::PIN_ADD,
         json!({
-            "event_id": "ak:event:01904100-0000-7000-8000-0000000000d5",
+            "event_id": "ak:event:01904100-0000-8000-8000-0000000000d5",
             "pin_scope": {"kind": "strand", "id": strand_id},
             "target_ref": message_id,
             "rank": "r1",
@@ -1878,7 +1878,7 @@ async fn sync_snapshot_includes_shared_pin_events_for_joined_member() {
     .await;
     put_canonical_event_received_at(
         &state,
-        "ak:event:01904100-0000-7000-8000-0000000000d5",
+        "ak:event:01904100-0000-8000-8000-0000000000d5",
         5,
         arkret_wire::EventKind::PIN_ADD,
         json!({
@@ -1915,10 +1915,10 @@ async fn sync_timeline_dedupes_redacted_revision_by_message_id() {
     let state = AppState::new(config, soland_storage_postgres::Db { pool: None });
     let session = roster_session(&state, ROSTER_CALLER);
     let strand_id = strand_id_from_realm_id(ROSTER_REALM);
-    let message_event_id = "ak:event:01904100-0000-7000-8000-0000000001d1";
-    let revision_event_id = "ak:event:01904100-0000-7000-8000-0000000001d2";
-    let redaction_event_id = "ak:event:01904100-0000-7000-8000-0000000001d3";
-    let message_id = "ak:message:01904100-0000-7000-8000-0000000001d1";
+    let message_event_id = "ak:event:01904100-0000-8000-8000-0000000001d1";
+    let revision_event_id = "ak:event:01904100-0000-8000-8000-0000000001d2";
+    let redaction_event_id = "ak:event:01904100-0000-8000-8000-0000000001d3";
+    let message_id = "ak:message:01904100-0000-8000-8000-0000000001d1";
     let base = DateTime::parse_from_rfc3339("2026-06-24T11:00:00.000Z")
         .unwrap()
         .with_timezone(&Utc);
@@ -2185,7 +2185,7 @@ async fn events_query_cursor_rejects_bare_event_id_cursor() {
     let state = test_state();
     let now_ms = chrono::Utc::now().timestamp_millis();
     let error = parse_and_validate_events_query_cursor(
-        "ak:event:01904100-0000-7000-8000-0000000000e1",
+        "ak:event:01904100-0000-8000-8000-0000000000e1",
         &state,
         None,
         "digest-a",
@@ -2220,7 +2220,7 @@ async fn events_query_cursor_uses_stream_purpose_and_binds_filter_digest() {
         "filters": {"kind": "ak.message.create"},
         "order": "default",
     })));
-    let event_id = "ak:event:01904100-0000-7000-8000-0000000000e1";
+    let event_id = "ak:event:01904100-0000-8000-8000-0000000000e1";
     let token = sync_token_for_events_query(&state, Some(&session), &filter_a, event_id).await;
     let now_ms = chrono::Utc::now().timestamp_millis();
     let token_value = decode_sync_cursor_value(&token).expect("events query cursor decodes");

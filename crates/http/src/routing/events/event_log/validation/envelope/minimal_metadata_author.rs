@@ -360,7 +360,7 @@ mod tests {
         AuthorGroupStateView {
             group_id: "Zml4dHVyZS1yZWFsbQ".to_owned(),
             epoch: 7,
-            group_state_ref: "ak:event:01970e58-0000-7000-8000-000000000001".to_owned(),
+            group_state_ref: "ak:event:01970e58-0000-8000-8000-000000000001".to_owned(),
             active_leaves: leaves,
         }
     }
@@ -378,7 +378,7 @@ mod tests {
         let base_claim = MinimalMetadataAuthorClaim {
             group_id: "Zml4dHVyZS1yZWFsbQ",
             epoch: 7,
-            group_state_ref: "ak:event:01970e58-0000-7000-8000-000000000001",
+            group_state_ref: "ak:event:01970e58-0000-8000-8000-000000000001",
             actor_id: &actor,
             proof_public_key: &proof_key,
         };
@@ -399,7 +399,7 @@ mod tests {
         let removed = view(vec![leaf(0, "did:key:z6MkpairwiseBob", 0xB0)]);
         let key_mismatch = view(vec![leaf(3, "did:key:z6MkpairwiseAlice", 0xE7)]);
         let mut rollback_claim = base_claim.clone();
-        rollback_claim.group_state_ref = "ak:event:01970e58-0000-7000-8000-00000000dead";
+        rollback_claim.group_state_ref = "ak:event:01970e58-0000-8000-8000-00000000dead";
 
         for (candidate_view, claim) in [
             (&duplicate, &base_claim),

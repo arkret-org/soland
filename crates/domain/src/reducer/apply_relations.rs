@@ -1068,11 +1068,11 @@ mod cross_realm_relation_tests {
 
     const REALM_A: &str = "ak:realm:01904100-0000-7000-8000-000000000a01";
     const REALM_B: &str = "ak:realm:01904100-0000-7000-8000-000000000a02";
-    const CIRCLE_A: &str = "ak:circle:01904100-0000-7000-8000-000000000c01";
-    const STRAND_A: &str = "ak:strand:01904100-0000-7000-8000-000000000b01";
-    const STRAND_A2: &str = "ak:strand:01904100-0000-7000-8000-000000000b02";
-    const STRAND_A3: &str = "ak:strand:01904100-0000-7000-8000-000000000b04";
-    const STRAND_B: &str = "ak:strand:01904100-0000-7000-8000-000000000b03";
+    const CIRCLE_A: &str = "ak:circle:01904100-0000-8000-8000-000000000c01";
+    const STRAND_A: &str = "ak:strand:01904100-0000-8000-8000-000000000b01";
+    const STRAND_A2: &str = "ak:strand:01904100-0000-8000-8000-000000000b02";
+    const STRAND_A3: &str = "ak:strand:01904100-0000-8000-8000-000000000b04";
+    const STRAND_B: &str = "ak:strand:01904100-0000-8000-8000-000000000b03";
 
     fn strand_in_scope(realm: &str, scope_circle_id: Option<&str>) -> StrandProjection {
         StrandProjection {
@@ -1131,7 +1131,7 @@ mod cross_realm_relation_tests {
                 "relation_kind": relation_kind,
                 "from_ref": from,
                 "to_ref": to,
-                "event_id": format!("ak:event:01904100-0000-7000-8000-{seed}")
+                "event_id": format!("ak:event:01904100-0000-8000-8000-{seed}")
             }),
         );
         operation.canonical_event_digest = Some(digest.to_owned());
@@ -1211,7 +1211,7 @@ mod cross_realm_relation_tests {
                 .check_relation_cross_realm(&relation_op(
                     "contains",
                     STRAND_A,
-                    "ak:strand:01904100-0000-7000-8000-0000000000ff"
+                    "ak:strand:01904100-0000-8000-8000-0000000000ff"
                 ))
                 .is_ok()
         );
@@ -1223,7 +1223,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         let high = relation_op_with_id_digest(
             "000000000d01",
-            "ak:relation:01904100-0000-7000-8000-000000000d01",
+            "ak:relation:01904100-0000-8000-8000-000000000d01",
             "references",
             STRAND_A,
             STRAND_A2,
@@ -1231,7 +1231,7 @@ mod cross_realm_relation_tests {
         );
         let low = relation_op_with_id_digest(
             "000000000d02",
-            "ak:relation:01904100-0000-7000-8000-000000000d02",
+            "ak:relation:01904100-0000-8000-8000-000000000d02",
             "references",
             STRAND_A,
             STRAND_A2,
@@ -1256,7 +1256,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         for index in 1..=RELATION_CONFLICT_FANOUT_LIMIT {
             let seed = format!("{index:012x}");
-            let relation_id = format!("ak:relation:01904100-0000-7000-8000-{seed}");
+            let relation_id = format!("ak:relation:01904100-0000-8000-8000-{seed}");
             let digest = format!("sha256:{index:064x}");
             let effect = proj.apply_relation_create(
                 &relation_op_with_id_digest(
@@ -1277,7 +1277,7 @@ mod cross_realm_relation_tests {
 
         let overflow_index = RELATION_CONFLICT_FANOUT_LIMIT + 1;
         let overflow_seed = format!("{overflow_index:012x}");
-        let overflow_id = format!("ak:relation:01904100-0000-7000-8000-{overflow_seed}");
+        let overflow_id = format!("ak:relation:01904100-0000-8000-8000-{overflow_seed}");
         let overflow_digest = format!("sha256:{overflow_index:064x}");
         let overflow = relation_op_with_id_digest(
             &overflow_seed,
@@ -1314,7 +1314,7 @@ mod cross_realm_relation_tests {
             ProjectionEffect::Rejected { reason } if reason == arkret_wire::ReasonCode::RELATION_KIND_WATCHES_DERIVED
         ));
 
-        let relation_id = "ak:relation:01904100-0000-7000-8000-0000000000aa".to_owned();
+        let relation_id = "ak:relation:01904100-0000-8000-8000-0000000000aa".to_owned();
         proj.relations.insert(
             relation_id.clone(),
             SolandRelationState {
@@ -1354,7 +1354,7 @@ mod cross_realm_relation_tests {
             .unwrap(),
             arkret_identifiers::RealmId::new(REALM_A.to_owned()).unwrap(),
             arkret_wire::EventKind::RELATION_TOMBSTONE,
-            json!({"relation_id": "ak:relation:01904100-0000-7000-8000-0000000000aa"}),
+            json!({"relation_id": "ak:relation:01904100-0000-8000-8000-0000000000aa"}),
         );
         assert!(matches!(
             proj.apply_relation_delete(&delete),
@@ -1368,7 +1368,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         let losing_parent = relation_op_with_id_digest(
             "000000000e01",
-            "ak:relation:01904100-0000-7000-8000-000000000e01",
+            "ak:relation:01904100-0000-8000-8000-000000000e01",
             "belongs_to",
             STRAND_A,
             STRAND_A2,
@@ -1376,7 +1376,7 @@ mod cross_realm_relation_tests {
         );
         let winning_parent = relation_op_with_id_digest(
             "000000000e02",
-            "ak:relation:01904100-0000-7000-8000-000000000e02",
+            "ak:relation:01904100-0000-8000-8000-000000000e02",
             "belongs_to",
             STRAND_A,
             STRAND_A3,
@@ -1401,7 +1401,7 @@ mod cross_realm_relation_tests {
         let now = chrono::Utc::now();
         let alice_old = relation_op_with_id_digest(
             "000000000f01",
-            "ak:relation:01904100-0000-7000-8000-000000000f01",
+            "ak:relation:01904100-0000-8000-8000-000000000f01",
             "assigned_to",
             STRAND_A,
             "did:web:alice.example",
@@ -1409,7 +1409,7 @@ mod cross_realm_relation_tests {
         );
         let bob = relation_op_with_id_digest(
             "000000000f02",
-            "ak:relation:01904100-0000-7000-8000-000000000f02",
+            "ak:relation:01904100-0000-8000-8000-000000000f02",
             "assigned_to",
             STRAND_A,
             "did:web:bob.example",
@@ -1417,7 +1417,7 @@ mod cross_realm_relation_tests {
         );
         let alice_new = relation_op_with_id_digest(
             "000000000f03",
-            "ak:relation:01904100-0000-7000-8000-000000000f03",
+            "ak:relation:01904100-0000-8000-8000-000000000f03",
             "assigned_to",
             STRAND_A,
             "did:web:alice.example",

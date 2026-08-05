@@ -50,7 +50,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "message create",
             kind: arkret_wire::EventKind::MESSAGE_CREATE,
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-6c663fa0205f",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-6c663fa0205f",
                 "track_name": "discussion",
                 "content": {"kind": "ak.content.text", "body": "hello"}
             }),
@@ -59,13 +59,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "message revise",
             kind: arkret_wire::EventKind::MESSAGE_REVISE,
-            payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "content": {"kind": "ak.content.text", "body": "edited"}}),
+            payload: json!({"target_ref": "ak:event:01904100-0000-8000-8000-79a90338768b", "content": {"kind": "ak.content.text", "body": "edited"}}),
             valid: true,
         },
         OperationVector {
             name: "message redact",
             kind: arkret_wire::EventKind::MESSAGE_REDACT,
-            payload: json!({"target_event_id": "ak:event:01904100-0000-7000-8000-79a90338768b"}),
+            payload: json!({"target_event_id": "ak:event:01904100-0000-8000-8000-79a90338768b"}),
             valid: true,
         },
         OperationVector {
@@ -76,14 +76,14 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // additionalProperties=false). The target pointer `redacts` is an
             // event-ENVELOPE field (event-envelope.schema.json), not part of the
             // operation payload, so the payload carries the target via event_id.
-            payload: json!({"event_id": "ak:event:01904100-0000-7000-8000-79a90338768b"}),
+            payload: json!({"event_id": "ak:event:01904100-0000-8000-8000-79a90338768b"}),
             valid: true,
         },
         OperationVector {
             name: "reaction add",
             kind: arkret_wire::EventKind::REACTION_ADD,
             // reaction_payload: required {target_ref, key}, additionalProperties=false.
-            payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "key": "+1"}),
+            payload: json!({"target_ref": "ak:event:01904100-0000-8000-8000-79a90338768b", "key": "+1"}),
             valid: true,
         },
         OperationVector {
@@ -91,7 +91,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             kind: arkret_wire::EventKind::REACTION_REMOVE,
             // reaction_payload: same schema as add (remove tombstones the (actor,target_ref,key)
             // add).
-            payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b", "key": "+1"}),
+            payload: json!({"target_ref": "ak:event:01904100-0000-8000-8000-79a90338768b", "key": "+1"}),
             valid: true,
         },
         OperationVector {
@@ -105,10 +105,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // to_ref} form has no derivable cell value.
             payload: json!({
                 "relation": {
-                    "id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b",
+                    "id": "ak:relation:01904100-0000-8000-8000-71604d58ec0b",
                     "kind": "blocks",
-                    "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
-                    "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"
+                    "from_ref": "ak:strand:01904100-0000-8000-8000-ca33616973bb",
+                    "to_ref": "ak:morph:01904100-0000-8000-8000-7191ddd787e5"
                 }
             }),
             valid: true,
@@ -119,10 +119,10 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // The negative half of the same rule: a payload the registered
             // projection would have to assemble is not derivable.
             payload: json!({
-                "relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b",
+                "relation_id": "ak:relation:01904100-0000-8000-8000-71604d58ec0b",
                 "kind": "blocks",
-                "from_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
-                "to_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"
+                "from_ref": "ak:strand:01904100-0000-8000-8000-ca33616973bb",
+                "to_ref": "ak:morph:01904100-0000-8000-8000-7191ddd787e5"
             }),
             valid: false,
         },
@@ -132,7 +132,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // relation_update_payload: anyOf {relation_id, patch} | {target_ref, patch} |
             // {relation_id, status}. patch is a ak.patch.v1 map (path -> patch_value);
             // a plain value is shorthand for {$op:set,value}.
-            payload: json!({"relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b", "patch": {"weight": 1}}),
+            payload: json!({"relation_id": "ak:relation:01904100-0000-8000-8000-71604d58ec0b", "patch": {"weight": 1}}),
             valid: true,
         },
         OperationVector {
@@ -140,7 +140,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             kind: arkret_wire::EventKind::RELATION_TOMBSTONE,
             // relation tombstones are validated by relation.schema.json and
             // identify the edge with relation_id.
-            payload: json!({"relation_id": "ak:relation:01904100-0000-7000-8000-71604d58ec0b"}),
+            payload: json!({"relation_id": "ak:relation:01904100-0000-8000-8000-71604d58ec0b"}),
             valid: true,
         },
         OperationVector {
@@ -187,7 +187,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
                 "actor_id": "did:web:alice.example",
                 "read_scope": {"kind": "realm"},
                 "position": {
-                    "event_id": "ak:event:01904100-0000-7000-8000-79a90338768b",
+                    "event_id": "ak:event:01904100-0000-8000-8000-79a90338768b",
                     "hlc": "019041000000-0000-00000001"
                 }
             }),
@@ -244,19 +244,19 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "space container archive",
             kind: arkret_wire::EventKind::SPACE_ARCHIVE,
-            payload: json!({"space_id": "ak:space:01904100-0000-7000-8000-1fb50799ad42"}),
+            payload: json!({"space_id": "ak:space:01904100-0000-8000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container restore",
             kind: arkret_wire::EventKind::SPACE_RESTORE,
-            payload: json!({"space_id": "ak:space:01904100-0000-7000-8000-1fb50799ad42"}),
+            payload: json!({"space_id": "ak:space:01904100-0000-8000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
             name: "space container tombstone",
             kind: arkret_wire::EventKind::SPACE_TOMBSTONE,
-            payload: json!({"space_id": "ak:space:01904100-0000-7000-8000-1fb50799ad42"}),
+            payload: json!({"space_id": "ak:space:01904100-0000-8000-8000-1fb50799ad42"}),
             valid: true,
         },
         OperationVector {
@@ -273,7 +273,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // required {id, schema, realm_id, tracks, created_by, created_at}; title lives in
             // metadata.
             payload: json!({"object": {
-                "id": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
+                "id": "ak:strand:01904100-0000-8000-8000-ca33616973bb",
                 "schema": "ak.schema.strand.v1",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "tracks": {"discussion": {}},
@@ -286,19 +286,19 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "strand update",
             kind: arkret_wire::EventKind::STRAND_UPDATE,
-            payload: json!({"target_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb", "patch": {"metadata.title": { "$op": "set", "value": "Launch v2" }}}),
+            payload: json!({"target_ref": "ak:strand:01904100-0000-8000-8000-ca33616973bb", "patch": {"metadata.title": { "$op": "set", "value": "Launch v2" }}}),
             valid: true,
         },
         OperationVector {
             name: "strand archive",
             kind: arkret_wire::EventKind::STRAND_ARCHIVE,
-            payload: json!({"target_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb"}),
+            payload: json!({"target_ref": "ak:strand:01904100-0000-8000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
             name: "strand restore",
             kind: arkret_wire::EventKind::STRAND_RESTORE,
-            payload: json!({"target_ref": "ak:strand:01904100-0000-7000-8000-ca33616973bb"}),
+            payload: json!({"target_ref": "ak:strand:01904100-0000-8000-8000-ca33616973bb"}),
             valid: true,
         },
         OperationVector {
@@ -312,9 +312,9 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "strand move",
             kind: arkret_wire::EventKind::STRAND_MOVE,
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
-                "board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001",
-                "target_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-ca33616973bb",
+                "board_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000001",
+                "target_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000002",
                 "rank": "a1",
             }),
             valid: true,
@@ -323,9 +323,9 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "strand reorder",
             kind: arkret_wire::EventKind::STRAND_REORDER,
             payload: json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-ca33616973bb",
-                "board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001",
-                "space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-ca33616973bb",
+                "board_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000001",
+                "space_id": "ak:space:01904100-0000-8000-8000-c10dc0000002",
                 "rank": "a1",
             }),
             valid: true,
@@ -333,13 +333,13 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "strand move missing board_space_id",
             kind: arkret_wire::EventKind::STRAND_MOVE,
-            payload: json!({"strand_id": "ak:strand:01904100-0000-7000-8000-ca33616973bb"}),
+            payload: json!({"strand_id": "ak:strand:01904100-0000-8000-8000-ca33616973bb"}),
             valid: false,
         },
         OperationVector {
             name: "strand reorder missing strand_id",
             kind: arkret_wire::EventKind::STRAND_REORDER,
-            payload: json!({"board_space_id": "ak:space:01904100-0000-7000-8000-c10dc0000001", "space_id": "ak:space:01904100-0000-7000-8000-c10dc0000002", "rank": "a1"}),
+            payload: json!({"board_space_id": "ak:space:01904100-0000-8000-8000-c10dc0000001", "space_id": "ak:space:01904100-0000-8000-8000-c10dc0000002", "rank": "a1"}),
             valid: false,
         },
         OperationVector {
@@ -349,7 +349,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             // required {id, schema, realm_id, schema_refs, morph_kind, stage, created_by,
             // created_at}.
             payload: json!({"object": {
-                "id": "ak:morph:01904100-0000-7000-8000-7191ddd787e5",
+                "id": "ak:morph:01904100-0000-8000-8000-7191ddd787e5",
                 "schema": "ak.schema.morph.v1",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
                 "schema_refs": ["ak.schema.morph.v1"],
@@ -364,19 +364,19 @@ fn builtin_operation_conformance_vectors_cover_registry() {
         OperationVector {
             name: "morph update",
             kind: arkret_wire::EventKind::MORPH_UPDATE,
-            payload: json!({"target_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
+            payload: json!({"target_ref": "ak:morph:01904100-0000-8000-8000-7191ddd787e5", "patch": {"metadata.title": "Backfill v2"}}),
             valid: true,
         },
         OperationVector {
             name: "morph archive",
             kind: arkret_wire::EventKind::MORPH_ARCHIVE,
-            payload: json!({"target_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+            payload: json!({"target_ref": "ak:morph:01904100-0000-8000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
             name: "morph restore",
             kind: arkret_wire::EventKind::MORPH_RESTORE,
-            payload: json!({"target_ref": "ak:morph:01904100-0000-7000-8000-7191ddd787e5"}),
+            payload: json!({"target_ref": "ak:morph:01904100-0000-8000-8000-7191ddd787e5"}),
             valid: true,
         },
         OperationVector {
@@ -458,7 +458,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             payload: json!({
                 "applet_id": "ak:applet:01904100-0000-7000-8000-aa55aa55aa55",
                 "realm_id": "ak:realm:01904100-0000-7000-8000-000000000001",
-                "failed_transaction_ref": "ak:event:01904100-0000-7000-8000-79a90338768b",
+                "failed_transaction_ref": "ak:event:01904100-0000-8000-8000-79a90338768b",
                 "error_class": "external_network",
                 "error_code": "bridge_unavailable",
                 "retriable": true,
@@ -477,7 +477,7 @@ fn builtin_operation_conformance_vectors_cover_registry() {
             name: "reaction missing key",
             kind: arkret_wire::EventKind::REACTION_ADD,
             // reaction_payload requires {target_ref, key}; this omits the required `key`.
-            payload: json!({"target_ref": "ak:event:01904100-0000-7000-8000-79a90338768b"}),
+            payload: json!({"target_ref": "ak:event:01904100-0000-8000-8000-79a90338768b"}),
             valid: false,
         },
     ];

@@ -99,7 +99,7 @@ async fn put_account_data(
 }
 
 async fn create_plaintext_realm(state: AppState, owner: &str, title: &str) -> String {
-    let realm_id = arkret_identifiers::new_prefixed_uuid7("ak:realm:");
+    let realm_id = arkret_identifiers::new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -175,9 +175,7 @@ fn signed_actor_private_event_envelope(
         |key| format!("{actor}#{key}"),
     ))
     .expect("fixture verification method is a DID URL");
-    let mut event = arkret_wire::Event::new_with_id_at(
-        arkret_wire::EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:"))
-            .expect("fixture Event id"),
+    let mut event = arkret_wire::Event::new_with_derived_id_at(
         kind,
         arkret_wire::ScopeRef::Realm {
             realm_id: arkret_identifiers::RealmId::new(realm_id.to_owned())
@@ -334,7 +332,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .unwrap_or_else(|| "ak:strand:01904100-0000-8000-8000-f10dc0000001".to_owned())
 }
 
 #[tokio::test]
@@ -670,8 +668,8 @@ async fn read_cursor_fans_out_per_realm_without_cross_actor_leakage() {
     .await;
     let realm_a = create_plaintext_realm(state.clone(), &alice_actor, "Parent Realm").await;
     let realm_b = create_plaintext_realm(state.clone(), &alice_actor, "Discussion Realm").await;
-    let event_a = "ak:event:01904100-0000-7000-8000-0000000000aa";
-    let event_b = "ak:event:01904100-0000-7000-8000-0000000000bb";
+    let event_a = "ak:event:01904100-0000-8000-8000-0000000000aa";
+    let event_b = "ak:event:01904100-0000-8000-8000-0000000000bb";
 
     let marker_a = submit_actor_private_event(
         state.clone(),
@@ -796,7 +794,7 @@ async fn push_blind_wakeup_rejects_e2ee_stable_identifiers() {
                 "push_target_id": push_target_id,
                 "wakeup_kind": "message",
                 "timing_profile_hint": "default",
-                "event_id": "ak:event:01904100-0000-7000-8000-0000000000ee",
+                "event_id": "ak:event:01904100-0000-8000-8000-0000000000ee",
                 "realm_id": "ak:realm:0190419b-0000-7000-8000-0000000000ee",
                 "sender_actor_id": "did:web:bob.example",
                 "devices": [{"device_id": "ak:device:01904100-0000-7000-8000-a11ce0000001"}]

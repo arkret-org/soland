@@ -67,6 +67,27 @@ fn unsupported_digest_algorithm_error(suite: &str) -> EventValidationError {
 }
 
 fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, EventValidationError> {
+    // Spec zh/models/realm-and-space.md section 2.5.0: `ak.realm.create` is the
+    // one kind that MUST NOT carry `realm_id`. The Realm's id is derived from
+    // the genesis Event's own `event_id`, so carrying it would put a function
+    // of the digest inside the digest preimage — there is no fixed point to
+    // solve. Receivers derive it instead, which is also what makes `realm_id`
+    // self-certifying against the genesis they were served.
+    let is_realm_genesis = event_string_field(object, &["kind"])
+        .is_some_and(|kind| kind == arkret_wire::EventKind::REALM_CREATE);
+
+    if is_realm_genesis {
+        if object.contains_key("realm_id") {
+            return Err(event_validation_error(
+                StatusCode::BAD_REQUEST,
+                arkret_wire::ErrorCode::SchemaViolation.as_str(),
+                "realm_id_not_event_derived: ak.realm.create MUST omit realm_id; \
+                 it is derived from the genesis event_id",
+            ));
+        }
+        return derive_realm_id_from_event_id(object);
+    }
+
     if let Some(realm_id) = event_string_field(object, &["realm_id"]) {
         if RealmId::new(realm_id.clone()).is_err() {
             return Err(event_validation_error(
@@ -83,6 +104,55 @@ fn event_realm_id(object: &serde_json::Map<String, Value>) -> Result<String, Eve
         "missing_param",
         "realm_id is required",
     ))
+}
+
+/// Derive this genesis Event's Realm id from its own signed content.
+///
+/// Two branches, both pure functions of the signed Event, so the id stays
+/// self-certifying either way (spec `zh/models/realm-and-space.md` section
+/// 2.5.0): a Principal Control Realm is subject-derived from the principal DID
+/// so its address stays computable from the DID alone, and a collaboration
+/// Realm is `retype(event_id)`.
+///
+/// This is also the **first-contact check**: because the id is a function of
+/// the Event, a receiver that is served a fabricated "Realm S" computes a
+/// different id and never reaches the state that would let the forgery in.
+fn derive_realm_id_from_event_id(
+    object: &serde_json::Map<String, Value>,
+) -> Result<String, EventValidationError> {
+    let event_id = event_string_field(object, &["event_id"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "event_id is required to derive the Realm id",
+        )
+    })?;
+    let event_id = arkret_wire::EventId::new(event_id.clone()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "event_id must use the ak:event: typed prefix",
+        )
+    })?;
+    let actor_id = event_string_field(object, &["actor_id"]).ok_or_else(|| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "missing_param",
+            "actor_id is required to derive the Realm id",
+        )
+    })?;
+    let actor_id = arkret_wire::Did::new(actor_id.clone()).map_err(|_| {
+        event_validation_error(
+            StatusCode::BAD_REQUEST,
+            "invalid_param",
+            "actor_id must be a DID",
+        )
+    })?;
+    let payload_object = object.get("payload").and_then(|payload| payload.get("object"));
+    Ok(
+        arkret_wire::derive_genesis_realm_id(&event_id, &actor_id, payload_object)
+            .into_string(),
+    )
 }
 
 mod applet;

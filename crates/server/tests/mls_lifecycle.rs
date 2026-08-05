@@ -667,7 +667,7 @@ async fn mls_lifecycle_end_to_end() {
 
     // ── 3a. Realm + MLS group genesis enter through canonical events ─
     let realm_create = signed_event(
-        "ak:event:01904100-0000-7000-8000-00000000e2e0",
+        "ak:event:01904100-0000-8000-8000-00000000e2e0",
         0,
         alice_did,
         alice_device,
@@ -741,7 +741,7 @@ async fn mls_lifecycle_end_to_end() {
     });
 
     let mut genesis = signed_event(
-        "ak:event:01904100-0000-7000-8000-00000000e2e1",
+        "ak:event:01904100-0000-8000-8000-00000000e2e1",
         1,
         alice_did,
         alice_device,
@@ -811,7 +811,7 @@ async fn mls_lifecycle_end_to_end() {
     claim_envelope["signature"]["sig"] = json!(claim_envelope_signature);
 
     let mut welcome = signed_event(
-        "ak:event:01904100-0000-7000-8000-00000000e2e2",
+        "ak:event:01904100-0000-8000-8000-00000000e2e2",
         2,
         alice_did,
         alice_device,
@@ -836,14 +836,14 @@ async fn mls_lifecycle_end_to_end() {
             "welcome_ref": welcome_ref,
             "ciphertext": b64(b"opaque-mls-welcome"),
             "expires_at": "2100-01-01T00:00:00.000Z",
-            "commit_ref": "ak:event:01904100-0000-7000-8000-00000000e2e3",
+            "commit_ref": "ak:event:01904100-0000-8000-8000-00000000e2e3",
             "governance_binding": governance_binding
         }),
         Some(realm_seal_basis.clone()),
     );
     set_event_prev_refs(
         &mut welcome,
-        &["ak:event:01904100-0000-7000-8000-00000000e2e1"],
+        &["ak:event:01904100-0000-8000-8000-00000000e2e1"],
     );
     let mut welcome_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -881,7 +881,7 @@ async fn mls_lifecycle_end_to_end() {
     });
     let commit_bytes = b"opaque-mls-commit";
     let mut commit = signed_event(
-        "ak:event:01904100-0000-7000-8000-00000000e2e3",
+        "ak:event:01904100-0000-8000-8000-00000000e2e3",
         3,
         alice_did,
         alice_device,
@@ -890,7 +890,7 @@ async fn mls_lifecycle_end_to_end() {
         json!({
             "mls_group_id": group_id,
             "base_epoch": 0,
-            "base_epoch_ref": "ak:event:01904100-0000-7000-8000-00000000e2e1",
+            "base_epoch_ref": "ak:event:01904100-0000-8000-8000-00000000e2e1",
             "proposal_refs": [],
             "next_epoch": 1,
             "commit_bytes_b64": b64(commit_bytes),
@@ -901,7 +901,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     set_event_prev_refs(
         &mut commit,
-        &["ak:event:01904100-0000-7000-8000-00000000e2e2"],
+        &["ak:event:01904100-0000-8000-8000-00000000e2e2"],
     );
     let mut commit_resp = TestClient::post("http://server/_arkret/self/events")
         .add_header("authorization", format!("Bearer {alice_token}"), true)
@@ -979,7 +979,7 @@ async fn mls_lifecycle_end_to_end() {
     );
     assert_eq!(
         device_message["content"]["commit_ref"],
-        json!("ak:event:01904100-0000-7000-8000-00000000e2e3")
+        json!("ak:event:01904100-0000-8000-8000-00000000e2e3")
     );
     assert_eq!(
         device_message["unsigned"]["mls_welcome_id"],

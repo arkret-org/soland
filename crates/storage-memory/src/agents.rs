@@ -381,7 +381,7 @@ mod tests {
             },
             "public_key_digest": format!("sha256:{}", "00".repeat(32)),
             "agent_key_authorize_event_id":
-                "ak:event:01904100-0000-7000-8000-000000000001",
+                "ak:event:01904100-0000-8000-8000-000000000001",
             "issued_at": "2026-07-27T00:00:00.000Z",
             "controller_id": "did:web:controller.example",
             "controller_proof": {
@@ -447,7 +447,7 @@ mod tests {
             runtime_key_binding_digest: "sha256:binding".to_owned(),
             pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
             request_digest: "sha256:request-a".to_owned(),
-            authorize_event_id: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            authorize_event_id: "ak:event:01904100-0000-8000-8000-000000000001".to_owned(),
             signing_key_binding: signing_key_binding(),
         };
 
@@ -468,7 +468,7 @@ mod tests {
 
         let conflicting = AgentPairingCommitIntent {
             request_digest: "sha256:request-b".to_owned(),
-            authorize_event_id: "ak:event:01904100-0000-7000-8000-000000000002".to_owned(),
+            authorize_event_id: "ak:event:01904100-0000-8000-8000-000000000002".to_owned(),
             ..intent.clone()
         };
         assert!(
@@ -488,7 +488,7 @@ mod tests {
         assert_eq!(stored.request_digest, "sha256:request-a");
         assert_eq!(
             stored.authorize_event_id,
-            "ak:event:01904100-0000-7000-8000-000000000001"
+            "ak:event:01904100-0000-8000-8000-000000000001"
         );
         assert_eq!(
             stored.signing_key_binding.as_ref(),
@@ -506,7 +506,7 @@ mod tests {
             runtime_key_binding_digest: "sha256:binding".to_owned(),
             pairing_request_id: OpaqueLocalId::new("pairing-1").unwrap(),
             paired_request_digest: "sha256:request-a".to_owned(),
-            authorized_event_ref: "ak:event:01904100-0000-7000-8000-000000000001".to_owned(),
+            authorized_event_ref: "ak:event:01904100-0000-8000-8000-000000000001".to_owned(),
             authorized_verification_method: "did:web:agent.example#key-1".to_owned(),
             authorized_public_key_digest: format!("sha256:{}", "00".repeat(32)),
             authorized_signing_key_binding: signing_key_binding(),
@@ -547,7 +547,7 @@ mod tests {
         );
         assert_eq!(
             stored.authorized_event_ref.as_deref(),
-            Some("ak:event:01904100-0000-7000-8000-000000000001")
+            Some("ak:event:01904100-0000-8000-8000-000000000001")
         );
     }
 }

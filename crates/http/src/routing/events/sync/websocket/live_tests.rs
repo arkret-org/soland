@@ -308,7 +308,7 @@ fn signal_record() -> soland_services::delivery::SignalRelayState {
             scheme: arkret_wire::SIGNAL_AEAD_SCHEME.to_owned(),
             key_ref: arkret_wire::SignalKeyRef {
                 algorithm: "MLS-EXPORTER-AEAD".to_owned(),
-                group_state_ref: "ak:event:01904100-0000-7000-8000-cccccccccccc".to_owned(),
+                group_state_ref: "ak:event:01904100-0000-8000-8000-cccccccccccc".to_owned(),
             },
             purpose: arkret_wire::SIGNAL_AEAD_PURPOSE.to_owned(),
             aead_profile: "MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519".to_owned(),

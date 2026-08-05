@@ -63,7 +63,7 @@ fn bootstrap_singleton_cells_are_internally_scoped_per_realm() {
         let cell_writes = projected_cell_writes(
             arkret_wire::EventKind::REALM_DELIVERY_BINDING_POLICY,
             realm_id,
-            &format!("ak:event:01904100-0000-7000-8000-b0000000000{index}"),
+            &format!("ak:event:01904100-0000-8000-8000-b0000000000{index}"),
             &payload,
         );
         let operation = make_operation(

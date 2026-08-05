@@ -33,9 +33,17 @@ const CONTROLLER_DELEGATION_PURPOSES: &[&str] = &[
     "principal_control_realm_recovery",
 ];
 
-pub(crate) fn allocate_principal_control_realm_id() -> Result<RealmId, AppError> {
-    RealmId::new(arkret_identifiers::new_prefixed_uuid7("ak:realm:"))
-        .map_err(|error| AppError::internal(format!("allocated Agent PCR id invalid: {error}")))
+/// Derive the managed Agent's Principal Control Realm id from its DID.
+///
+/// Spec `zh/models/realm-and-space.md` section 2.5.0: a PCR id is
+/// subject-derived — `H(PCR_DOMAIN || principal_did)` — not minted. Deriving it
+/// keeps the address computable from the DID alone by anyone, and keeps the
+/// identity anchored to `did_inception` rather than to whatever random value
+/// this process happened to pick. Minting one here also produced a *different*
+/// id on every retry of the same provisioning request.
+pub(crate) fn principal_control_realm_id_for(agent_id: &Did) -> Result<RealmId, AppError> {
+    RealmId::new(arkret_models_identity::principal_control_realm_id(agent_id))
+        .map_err(|error| AppError::internal(format!("derived Agent PCR id invalid: {error}")))
 }
 
 pub(crate) fn controller_authorization_ref(agent_id: &str) -> Result<DidUrl, AppError> {
@@ -1526,7 +1534,7 @@ mod tests {
             json!({"object": pcr_genesis()}),
         )
         .unwrap();
-        let provision_event_id = "ak:event:01980b44-0000-7000-8000-000000000001";
+        let provision_event_id = "ak:event:01980b44-0000-8000-8000-000000000001";
         event.refs = vec![arkret_bootstrap::managed_agent_provision_ref(
             arkret_wire::EventId::new(provision_event_id).unwrap(),
         )];
@@ -1601,7 +1609,7 @@ mod tests {
         for role in ["did_inception", "did_recovery_anchor", "bootstrap_binding"] {
             let envelope = serde_json::json!({
                 "refs": [{
-                    "event_id": "ak:event:01904100-0000-7000-8000-000000000001",
+                    "event_id": "ak:event:01904100-0000-8000-8000-000000000001",
                     "role": role,
                     "critical": true
                 }]

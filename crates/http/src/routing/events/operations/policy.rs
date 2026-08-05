@@ -349,7 +349,7 @@ mod tests {
         let actor = "did:web:example.com:users:alice";
         let operation = circle_create_with_payload(serde_json::json!({
             "object": {
-                "id": "ak:circle:01964137-0000-7000-8000-000000000041",
+                "id": "ak:circle:01964137-0000-8000-8000-000000000041",
                 "schema": "ak.schema.circle.v1",
                 "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
                 "title": "Agent Sidecar Scope",

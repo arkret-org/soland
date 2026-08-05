@@ -155,7 +155,7 @@ async fn invite_create_event_surfaces_via_authz_invites() {
 
     // Submit Alice's canonical directed invite.
     let invite_id = "ak:invite:01904100-0000-7000-8000-aa00000000ed";
-    let event_id = "ak:event:01904100-0000-7000-8000-aa00000000ee";
+    let event_id = "ak:event:01904100-0000-8000-8000-aa00000000ee";
     let payload = serde_json::json!({
         "invite_id": invite_id,
         "invitee": bob_did,

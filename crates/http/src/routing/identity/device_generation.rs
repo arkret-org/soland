@@ -521,12 +521,12 @@ mod tests {
     #[test]
     fn same_height_siblings_and_causal_successors_are_all_quarantined() {
         let principal = "did:webvh:z6mkfixture:alice.example";
-        let reanchor_a = "ak:event:01904100-0000-7000-8000-000000000001";
-        let authorize_a = "ak:event:01904100-0000-7000-8000-000000000002";
-        let reanchor_b = "ak:event:01904100-0000-7000-8000-000000000003";
-        let authorize_b = "ak:event:01904100-0000-7000-8000-000000000004";
-        let successor = "ak:event:01904100-0000-7000-8000-000000000005";
-        let higher = "ak:event:01904100-0000-7000-8000-000000000006";
+        let reanchor_a = "ak:event:01904100-0000-8000-8000-000000000001";
+        let authorize_a = "ak:event:01904100-0000-8000-8000-000000000002";
+        let reanchor_b = "ak:event:01904100-0000-8000-8000-000000000003";
+        let authorize_b = "ak:event:01904100-0000-8000-8000-000000000004";
+        let successor = "ak:event:01904100-0000-8000-8000-000000000005";
+        let higher = "ak:event:01904100-0000-8000-8000-000000000006";
         let records = vec![
             record(
                 reanchor_a,
@@ -572,12 +572,12 @@ mod tests {
                 "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
                 json!({"payload": {
                     "did_version_id": "3-C",
-                    "replacement_authorize_event_id": "ak:event:01904100-0000-7000-8000-000000000007",
+                    "replacement_authorize_event_id": "ak:event:01904100-0000-8000-8000-000000000007",
                     "replacement_authorize_digest": "sha256:1111111111111111111111111111111111111111111111111111111111111111"
                 }}),
             ),
             record(
-                "ak:event:01904100-0000-7000-8000-000000000007",
+                "ak:event:01904100-0000-8000-8000-000000000007",
                 "ak.device.authorize",
                 "sha256:1111111111111111111111111111111111111111111111111111111111111111",
                 json!({"prev_refs": [higher]}),

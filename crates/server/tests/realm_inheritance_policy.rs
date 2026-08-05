@@ -188,7 +188,7 @@ fn capability_derived_projects_cell_and_cache() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let capability_id = "ak:capability:01904100-0000-7000-8000-dddddddddddd";
-    let source_grant_ref = "ak:event:01904100-0000-7000-8000-eeeeeeeeeeee";
+    let source_grant_ref = "ak:event:01904100-0000-8000-8000-eeeeeeeeeeee";
     state.apply(&link_op(REALM_CHILD, REALM_PARENT, "governed_by"), &hlc);
     seed_source_grant(
         &mut state,
@@ -261,7 +261,7 @@ fn capability_derived_rejects_missing_source_grant() {
         json!({
             "capability_id": "ak:capability:01904100-0000-7000-8000-dddddddddddd",
             "source_realm_inheritance_policy_ref": {
-                "id": "ak:event:01904100-0000-7000-8000-ffffffffffff",
+                "id": "ak:event:01904100-0000-8000-8000-ffffffffffff",
                 "role": "inherits_from",
             },
             "causal_frontier": "ak:frontier:02000000",
@@ -281,7 +281,7 @@ fn capability_derived_rejects_missing_source_grant() {
 fn capability_derived_rejects_action_widening() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let source_grant_ref = "ak:event:01904100-0000-7000-8000-eeeeeeeeeeee";
+    let source_grant_ref = "ak:event:01904100-0000-8000-8000-eeeeeeeeeeee";
     state.apply(
         &link_op(REALM_CHILD, REALM_PARENT, "inherits_policy_from"),
         &hlc,
@@ -324,7 +324,7 @@ fn capability_derived_rejects_action_widening() {
 fn capability_derived_rejects_non_capability_bearing_link_kind() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
-    let source_grant_ref = "ak:event:01904100-0000-7000-8000-eeeeeeeeeeee";
+    let source_grant_ref = "ak:event:01904100-0000-8000-8000-eeeeeeeeeeee";
     seed_source_grant(
         &mut state,
         source_grant_ref,

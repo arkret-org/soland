@@ -262,7 +262,7 @@ mod tests {
                 "schema": "ak.schema.agent_sidecar.v1",
                 "realm_id": "ak:realm:01964137-0000-7000-8000-000000000030",
                 "controller_id": "did:web:example.com:users:alice",
-                "backing_circle_id": "ak:circle:01964137-0000-7000-8000-000000000041",
+                "backing_circle_id": "ak:circle:01964137-0000-8000-8000-000000000041",
                 "encryption_profile": "mls_rfc9420",
                 "state": "active",
                 "created_at": "2026-07-20T00:00:00.000Z"
@@ -316,7 +316,7 @@ mod tests {
             &create("ak:sidecar:01964137-0000-7000-8000-000000000042"),
             &ServerHlc::new("sidecar-test"),
         );
-        let private_strand = "ak:strand:01964137-0000-7000-8000-000000000044";
+        let private_strand = "ak:strand:01964137-0000-8000-8000-000000000044";
         state.strands.insert(
             private_strand.to_owned(),
             crate::reducer::projections::StrandProjection {
@@ -335,7 +335,7 @@ mod tests {
                 updated_at: None,
                 schema_refs: Vec::new(),
                 schedule_revision_heads: Vec::new(),
-                scope_circle_id: Some("ak:circle:01964137-0000-7000-8000-000000000041".to_owned()),
+                scope_circle_id: Some("ak:circle:01964137-0000-8000-8000-000000000041".to_owned()),
             },
         );
 
@@ -351,7 +351,7 @@ mod tests {
         );
         assert_eq!(state.strands, before.strands);
 
-        let ordinary_strand = "ak:strand:01964137-0000-7000-8000-000000000045";
+        let ordinary_strand = "ak:strand:01964137-0000-8000-8000-000000000045";
         let outside_scope = exchange_control(ordinary_strand, serde_json::json!({"c": "AAA"}));
         assert!(matches!(
             state.apply(&outside_scope, &ServerHlc::new("sidecar-test")),

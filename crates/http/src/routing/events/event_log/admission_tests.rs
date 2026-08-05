@@ -66,11 +66,11 @@ fn frozen_realm_blocks_ordinary_write_but_allows_lifecycle_escape() {
 fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
     let payload = json!({
         "trust_domain": "ak:trust_domain:other.example",
-        "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
+        "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
     });
     let err = cross_signing_reset_replay_check(
         &payload,
-        "ak:event:01904100-0000-7000-8000-000000000001",
+        "ak:event:01904100-0000-8000-8000-000000000001",
         "ak:trust_domain:soland.local",
     )
     .unwrap_err();
@@ -81,11 +81,11 @@ fn cross_signing_reset_replay_rejects_wrong_trust_domain() {
 fn cross_signing_reset_replay_rejects_wrong_event_id() {
     let payload = json!({
         "trust_domain": "ak:trust_domain:soland.local",
-        "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000002",
+        "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000002",
     });
     let err = cross_signing_reset_replay_check(
         &payload,
-        "ak:event:01904100-0000-7000-8000-000000000001",
+        "ak:event:01904100-0000-8000-8000-000000000001",
         "ak:trust_domain:soland.local",
     )
     .unwrap_err();
@@ -96,11 +96,11 @@ fn cross_signing_reset_replay_rejects_wrong_event_id() {
 fn cross_signing_reset_replay_passes_when_matched() {
     let payload = json!({
         "trust_domain": "ak:trust_domain:soland.local",
-        "reset_event_id": "ak:event:01904100-0000-7000-8000-000000000001",
+        "reset_event_id": "ak:event:01904100-0000-8000-8000-000000000001",
     });
     cross_signing_reset_replay_check(
         &payload,
-        "ak:event:01904100-0000-7000-8000-000000000001",
+        "ak:event:01904100-0000-8000-8000-000000000001",
         "ak:trust_domain:soland.local",
     )
     .unwrap();
@@ -187,9 +187,9 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
             ))
             .unwrap(),
             membership_frontier: vec![
-                arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001")
+                arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001")
                     .unwrap(),
-                arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001")
+                arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001")
                     .unwrap(),
             ],
             delivery_binding_frontier: Vec::new(),
@@ -210,7 +210,7 @@ fn federation_binding_rejects_duplicate_frontier_entries() {
 #[test]
 fn federation_binding_does_not_carry_a_reducer_profile() {
     let event_id =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap();
     let req = EventsSubmitFederationRequestBody {
         service_binding_ref: arkret_models_collaboration::event_sync::FederationServiceBindingRef {
             realm_id: RealmId::new("ak:realm:01904100-0000-7000-8000-000000000001").unwrap(),
@@ -236,24 +236,24 @@ fn federation_binding_does_not_carry_a_reducer_profile() {
 #[test]
 fn federation_delivery_binding_frontier_rejects_empty_or_stale_basis() {
     let event_id =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000001").unwrap();
-    let current = vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()];
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000001").unwrap();
+    let current = vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()];
 
     federation_delivery_binding_frontier_is_current(std::slice::from_ref(&event_id), current)
         .unwrap();
 
     let stale =
-        arkret_identifiers::EventId::new("ak:event:01904100-0000-7000-8000-000000000002").unwrap();
+        arkret_identifiers::EventId::new("ak:event:01904100-0000-8000-8000-000000000002").unwrap();
     let err = federation_delivery_binding_frontier_is_current(
         &[stale],
-        vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()],
+        vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()],
     )
     .unwrap_err();
     assert_eq!(err, "delivery_binding_stale");
 
     let err = federation_delivery_binding_frontier_is_current(
         &[],
-        vec!["ak:event:01904100-0000-7000-8000-000000000001".to_owned()],
+        vec!["ak:event:01904100-0000-8000-8000-000000000001".to_owned()],
     )
     .unwrap_err();
     assert_eq!(err, "schema_violation");

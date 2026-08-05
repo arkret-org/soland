@@ -630,7 +630,7 @@ mod device_pairing_commit_tests {
             new_device_pubkey: public_key.clone(),
             device: device.clone(),
             authorized_by_actor_id: device.actor.clone(),
-            authorized_event_ref: "ak:event:01964137-0000-7000-8000-00000000d001".to_owned(),
+            authorized_event_ref: "ak:event:01964137-0000-8000-8000-00000000d001".to_owned(),
             changed_at: now,
         };
 

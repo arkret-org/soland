@@ -235,8 +235,8 @@ mod tests {
     #[test]
     fn plaintext_sidecar_exchange_binding_key_is_rejected_pre_schema() {
         let payload = json!({
-            "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "message_id": "ak:message:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
             "content": {"kind": "ak.content.text", "body": "hello"},
             "metadata": {
                 "sidecar_exchange_binding": {
@@ -254,8 +254,8 @@ mod tests {
     #[test]
     fn plaintext_exchange_id_field_is_rejected_pre_schema() {
         let payload = json!({
-            "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "message_id": "ak:message:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
             "content": {"kind": "ak.content.text", "body": "hello"},
             "refs": [{"role": "after", "exchange_id": "018f-abc"}]
         });
@@ -273,7 +273,7 @@ mod tests {
             "ak.schema.agent_sidecar_exchange_control.v1",
         ] {
             let payload = json!({
-                "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+                "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
                 "metadata": {"fields": {"schema": schema_id}}
             });
             let error =
@@ -287,8 +287,8 @@ mod tests {
     #[test]
     fn ordinary_message_and_exchange_control_outer_payload_pass_the_sidecar_scan() {
         let message = json!({
-            "message_id": "ak:message:01904100-0000-7000-8000-000000000001",
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "message_id": "ak:message:01904100-0000-8000-8000-000000000001",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
             "content": {"kind": "ak.content.text", "body": "hello"},
             "metadata": {"fields": {"jira_status": "open"}}
         });
@@ -298,7 +298,7 @@ mod tests {
         // The exchange control Event's outer payload is only strand_id plus an
         // opaque encrypted envelope; the structural scan must not reject it.
         let control = json!({
-            "strand_id": "ak:strand:01904100-0000-7000-8000-000000000002",
+            "strand_id": "ak:strand:01904100-0000-8000-8000-000000000002",
             "encrypted_payload": {
                 "ciphertext": "b3BhcXVlLW1scy1jaXBoZXJ0ZXh0",
                 "content_type": "application/vnd.arkret.mls-ciphertext"

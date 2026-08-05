@@ -1646,7 +1646,7 @@ mod tests {
             applet_id: package.applet_id.clone(),
             registration_event_ref: Some(
                 arkret_identifiers::EventId::new(
-                    "ak:event:01974100-0000-7000-8000-000000000010".to_owned(),
+                    "ak:event:01974100-0000-8000-8000-000000000010".to_owned(),
                 )
                 .unwrap(),
             ),
@@ -1733,7 +1733,7 @@ mod tests {
             .map(|(offset, grant_id)| {
                 Event::new_with_id_at(
                     EventId::new(format!(
-                        "ak:event:01974100-0000-7000-8000-{:012x}",
+                        "ak:event:01974100-0000-8000-8000-{:012x}",
                         0x20 + offset
                     ))
                     .unwrap(),

@@ -1128,7 +1128,7 @@ mod tests {
             "recipient_principal_id": recipient,
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,
-            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000001a1",
+            "source_authorization_ref": "ak:event:01904100-0000-8000-8000-0000000001a1",
             "sender_device_signature": {
                 "signature_algorithm": "Ed25519",
                 "signature": "signature",
@@ -1142,7 +1142,7 @@ mod tests {
             },
             "ciphertext": "sealed",
             "created_at": "2026-07-05T00:00:00.000Z",
-            "event_id": "ak:event:01904100-0000-7000-8000-000000000101",
+            "event_id": "ak:event:01904100-0000-8000-8000-000000000101",
             "sender": sender,
             "hlc": "2026-07-05T00:00:00.000Z/node/1"
         });
@@ -1201,7 +1201,7 @@ mod tests {
             "recipient_principal_id": recipient,
             "recipient_device_id": recipient_device,
             "sender_device_id": sender_device,
-            "source_authorization_ref": "ak:event:01904100-0000-7000-8000-0000000000a1",
+            "source_authorization_ref": "ak:event:01904100-0000-8000-8000-0000000000a1",
             "sender_device_signature": {
                 "signature_algorithm": "Ed25519",
                 "kid": "did:web:alice.example#ak:device:01904100-0000-7000-8000-a11ce0000001",
@@ -1257,7 +1257,7 @@ mod tests {
             .unwrap(),
             arkret_wire::EventKind::CIRCLE_MEMBER_STATE,
             json!({
-                "circle_id": "ak:circle:0196419b-1000-7000-8000-000000000203",
+                "circle_id": "ak:circle:0196419b-1000-8000-8000-000000000203",
                 "actor_id": "did:web:agent.example",
                 "membership": "join"
             }),

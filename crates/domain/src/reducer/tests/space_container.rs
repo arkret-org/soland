@@ -12,8 +12,8 @@ fn cascade_realm_destroy_locks_cross_realm_parent_ref() {
     let hlc = ServerHlc::new("test");
     let realm_a = "ak:realm:01904100-0000-7000-8000-aaaaaaaaaaaa";
     let realm_b = "ak:realm:01904100-0000-7000-8000-bbbbbbbbbbbb";
-    let parent_in_a = "ak:space:01904100-0000-7000-8000-000000000001";
-    let child_in_b = "ak:space:01904100-0000-7000-8000-000000000002";
+    let parent_in_a = "ak:space:01904100-0000-8000-8000-000000000001";
+    let child_in_b = "ak:space:01904100-0000-8000-8000-000000000002";
     // Container hosted inside Realm A (the to-be-destroyed Realm).
     state.apply(
         &make_operation(
@@ -95,7 +95,7 @@ fn space_container_lifecycle_round_trip() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let container_space_id = "ak:space:01904100-0000-7000-8000-1fb50799ad42";
+    let container_space_id = "ak:space:01904100-0000-8000-8000-1fb50799ad42";
 
     // create
     let create_effect = state.apply(
@@ -198,7 +198,7 @@ fn space_container_lifecycle_preflight_rejects_illegal_transitions() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let container_space_id = "ak:space:01904100-0000-7000-8000-1fb50799ad43";
+    let container_space_id = "ak:space:01904100-0000-8000-8000-1fb50799ad43";
 
     // Create the Space container (Active).
     state.apply(
@@ -301,7 +301,7 @@ fn space_container_lifecycle_preflight_tolerates_unknown_space_container() {
     let archive_unknown = make_operation(
         arkret_wire::EventKind::SPACE_ARCHIVE,
         "ak:realm:01904100-0000-7000-8000-cfc039892036",
-        serde_json::json!({ "space_id": "ak:space:01904100-0000-7000-8000-cfc039892039" }),
+        serde_json::json!({ "space_id": "ak:space:01904100-0000-8000-8000-cfc039892039" }),
     );
     assert_eq!(
         state.check_space_container_lifecycle_transition(&archive_unknown),
@@ -314,8 +314,8 @@ fn space_update_and_parent_accept_canonical_payload_fields() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let container_space_id = "ak:space:01904100-0000-7000-8000-cfc039892037";
-    let parent_space_id = "ak:space:01904100-0000-7000-8000-cfc039892038";
+    let container_space_id = "ak:space:01904100-0000-8000-8000-cfc039892037";
+    let parent_space_id = "ak:space:01904100-0000-8000-8000-cfc039892038";
 
     state.apply(
         &make_operation(
@@ -418,7 +418,7 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let space_id = "ak:space:01904100-0000-7000-8000-cfc039892099";
+    let space_id = "ak:space:01904100-0000-8000-8000-cfc039892099";
 
     let create = make_operation(
         arkret_wire::EventKind::SPACE_CREATE,
@@ -444,14 +444,14 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
 
     for object in [
         serde_json::json!({
-            "id": "ak:space:01904100-0000-7000-8000-cfc039892100",
+            "id": "ak:space:01904100-0000-8000-8000-cfc039892100",
             "realm_id": realm_id,
             "kind": "board",
             "title": "Old default",
-            "default_scope_circle_id": "ak:circle:01904100-0000-7000-8000-cfc039892101"
+            "default_scope_circle_id": "ak:circle:01904100-0000-8000-8000-cfc039892101"
         }),
         serde_json::json!({
-            "id": "ak:space:01904100-0000-7000-8000-cfc039892102",
+            "id": "ak:space:01904100-0000-8000-8000-cfc039892102",
             "realm_id": realm_id,
             "kind": "list",
             "title": "Old floor",
@@ -461,7 +461,7 @@ fn space_wip_policy_is_projected_and_removed_scope_fields_fail_closed() {
             }
         }),
         serde_json::json!({
-            "id": "ak:space:01904100-0000-7000-8000-cfc039892103",
+            "id": "ak:space:01904100-0000-8000-8000-cfc039892103",
             "realm_id": realm_id,
             "kind": "board",
             "title": "Wrong WIP owner",
@@ -489,10 +489,10 @@ fn space_container_child_order_tracks_rank_updates() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let board_id = "ak:space:01904100-0000-7000-8000-0000000000b0";
-    let first_id = "ak:space:01904100-0000-7000-8000-0000000000a1";
-    let second_id = "ak:space:01904100-0000-7000-8000-0000000000a2";
-    let third_id = "ak:space:01904100-0000-7000-8000-0000000000a3";
+    let board_id = "ak:space:01904100-0000-8000-8000-0000000000b0";
+    let first_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
+    let second_id = "ak:space:01904100-0000-8000-8000-0000000000a2";
+    let third_id = "ak:space:01904100-0000-8000-8000-0000000000a3";
 
     state.apply(
         &make_operation(
@@ -566,9 +566,9 @@ fn list_archive_cascades_card_and_restore_preserves_rank() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let board_id = "ak:space:01904100-0000-7000-8000-0000000000b0";
-    let list_id = "ak:space:01904100-0000-7000-8000-0000000000a1";
-    let strand_id = "ak:strand:01904100-0000-7000-8000-0000000000f1";
+    let board_id = "ak:space:01904100-0000-8000-8000-0000000000b0";
+    let list_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
+    let strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f1";
 
     state.apply(
         &make_operation(
@@ -682,9 +682,9 @@ fn board_archive_cascades_child_lists_and_cards() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let board_id = "ak:space:01904100-0000-7000-8000-0000000000b0";
-    let list_id = "ak:space:01904100-0000-7000-8000-0000000000a1";
-    let strand_id = "ak:strand:01904100-0000-7000-8000-0000000000f1";
+    let board_id = "ak:space:01904100-0000-8000-8000-0000000000b0";
+    let list_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
+    let strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f1";
 
     state.apply(
         &make_operation(
@@ -793,10 +793,10 @@ fn child_scope_policy_requires_specific_circle_for_strand_placement() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let circle_id = "ak:circle:01904100-0000-7000-8000-00000000c001";
-    let list_id = "ak:space:01904100-0000-7000-8000-0000000000a1";
-    let public_strand_id = "ak:strand:01904100-0000-7000-8000-0000000000f1";
-    let scoped_strand_id = "ak:strand:01904100-0000-7000-8000-0000000000f2";
+    let circle_id = "ak:circle:01904100-0000-8000-8000-00000000c001";
+    let list_id = "ak:space:01904100-0000-8000-8000-0000000000a1";
+    let public_strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f1";
+    let scoped_strand_id = "ak:strand:01904100-0000-8000-8000-0000000000f2";
 
     state.apply(
         &make_operation(
@@ -931,10 +931,10 @@ fn child_scope_policy_gates_space_parent_edges() {
     let mut state = ProjectionState::new();
     let hlc = ServerHlc::new("test");
     let realm_id = "ak:realm:01904100-0000-7000-8000-cfc039892036";
-    let circle_id = "ak:circle:01904100-0000-7000-8000-00000000c002";
-    let parent_id = "ak:space:01904100-0000-7000-8000-0000000000b1";
-    let child_id = "ak:space:01904100-0000-7000-8000-0000000000b2";
-    let scoped_child_id = "ak:space:01904100-0000-7000-8000-0000000000b3";
+    let circle_id = "ak:circle:01904100-0000-8000-8000-00000000c002";
+    let parent_id = "ak:space:01904100-0000-8000-8000-0000000000b1";
+    let child_id = "ak:space:01904100-0000-8000-8000-0000000000b2";
+    let scoped_child_id = "ak:space:01904100-0000-8000-8000-0000000000b3";
 
     state.apply(
         &make_operation(

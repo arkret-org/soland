@@ -335,10 +335,7 @@ async fn persist_account_data_event(
     }
     let service_did = Did::new(state.service_id().clone())
         .map_err(|error| AppError::internal(format!("service DID invalid: {error}")))?;
-    let mut event = Event::new_with_id_at(
-        EventId::new(arkret_identifiers::new_prefixed_uuid7("ak:event:")).map_err(|error| {
-            AppError::internal(format!("account_data Event id invalid: {error}"))
-        })?,
+    let mut event = Event::new_with_derived_id_at(
         arkret_wire::EventKind::ACCOUNT_DATA_SET,
         arkret_wire::ScopeRef::Realm {
             realm_id: realm_id.clone(),
@@ -809,7 +806,7 @@ mod tests {
     fn private_account_data_key_patterns_are_validated() {
         assert!(
             validate_registered_account_data_key(
-                "ak.scheduled_send.v1:ak:message:01904100-0000-7000-8000-000000000001"
+                "ak.scheduled_send.v1:ak:message:01904100-0000-8000-8000-000000000001"
             )
             .is_ok()
         );
@@ -820,7 +817,7 @@ mod tests {
             .is_ok()
         );
         let err = validate_registered_account_data_key(
-            "ak.draft.v1:message:ak:message:01904100-0000-7000-8000-000000000001:main",
+            "ak.draft.v1:message:ak:message:01904100-0000-8000-8000-000000000001:main",
         )
         .unwrap_err();
         assert!(err.to_string().contains("registered private key pattern"));

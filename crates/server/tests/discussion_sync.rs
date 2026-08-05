@@ -89,7 +89,7 @@ async fn seed_realm(
     title: &str,
     history_visibility: &str,
 ) -> String {
-    let realm_id = new_prefixed_uuid7("ak:realm:");
+    let realm_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:realm:");
     let typed_realm_id = RealmId::new(realm_id.clone()).unwrap();
     let owner_did = Did::new(owner.to_owned()).unwrap();
     let now = chrono::Utc::now();
@@ -185,7 +185,7 @@ async fn admit_member(
         "membership": "join",
         "delivery_status": "unroutable",
     });
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let event = signed_event(SignedEvent {
         state: &state,
         token: owner_token,
@@ -274,7 +274,7 @@ async fn accept_invite(
     let payload = json!({
         "invite_id": invite_id,
     });
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let event = signed_event(SignedEvent {
         state: &state,
         token,
@@ -310,7 +310,7 @@ async fn send_message(state: AppState, token: &str, realm_id: &str, body: &str) 
             "format": "plain"
         }
     });
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let event = signed_event(SignedEvent {
         state: &state,
         token,
@@ -438,7 +438,7 @@ async fn send_circle_scoped_encrypted_message(
     device_id: &str,
     realm_id: &str,
 ) -> String {
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     // Spec-conforming encrypted message: `encrypted_content` (not the retired
     // `encrypted_payload`), `track_name`, and an aad carrying ONLY realm_id +
     // event_kind. The message does NOT carry scope_circle_id — its circle
@@ -501,7 +501,7 @@ async fn submit_projection_event(
     kind: &str,
     payload: Value,
 ) -> String {
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let event = signed_event(SignedEvent {
         state: &state,
         token,
@@ -537,7 +537,7 @@ async fn submit_projection_event_status(
     kind: &str,
     payload: Value,
 ) -> (u16, String) {
-    let event_id = new_prefixed_uuid7("ak:event:");
+    let event_id = new_prefixed_uuid7("ak:receipt:").replace("ak:receipt:", "ak:event:");
     let event = signed_event(SignedEvent {
         state: &state,
         token,
@@ -709,7 +709,7 @@ fn strand_id_for_realm(realm_id: &str) -> String {
     realm_id
         .strip_prefix("ak:realm:")
         .map(|suffix| format!("ak:strand:{suffix}"))
-        .unwrap_or_else(|| "ak:strand:01904100-0000-7000-8000-f10dc0000001".to_owned())
+        .unwrap_or_else(|| "ak:strand:01904100-0000-8000-8000-f10dc0000001".to_owned())
 }
 
 fn sync_bodies(sync: &Value, realm_id: &str) -> Vec<String> {
