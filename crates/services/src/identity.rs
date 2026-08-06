@@ -12,7 +12,9 @@ use arkret_models_identity::service_identity::{
     ServiceRegistrationKey, ServiceRegistrationOutcome,
 };
 use arkret_models_identity::{CrossSigningPublish, CrossSigningResetPayload};
-use arkret_wire::{DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId, SealBasis};
+use arkret_wire::{
+    DeviceReanchorPreFenceBasis, DidUrl, LeaseBasisRef, NonEmptyString, OpaqueLocalId,
+};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use parking_lot::Mutex;
@@ -1630,7 +1632,7 @@ pub struct RecoverySessionState {
     pub current_device_generation_ref: Option<NonEmptyString>,
     pub device_generation_status: Option<DeviceGenerationStatus>,
     pub registry_head: Option<Hash>,
-    pub accepted_seal_frontier: Option<SealBasis>,
+    pub accepted_seal_frontier: Option<DeviceReanchorPreFenceBasis>,
     pub policy_payload: Value,
     pub publication_authority_context: RecoveryPublicationAuthorityContext,
     pub publication_authority_context_digest: Hash,

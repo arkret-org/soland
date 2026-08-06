@@ -1217,7 +1217,7 @@ async fn validate_unit_relationships(
 async fn validate_reanchor_actor_frontier(
     state: &AppState,
     reanchor: &ValidatedEventEnvelope,
-    basis: Option<&arkret_wire::SealBasis>,
+    basis: Option<&arkret_wire::DeviceReanchorPreFenceBasis>,
 ) -> Result<(), SubmitOneError> {
     let covered_digests = if let Some(basis) = basis {
         state
@@ -1526,7 +1526,7 @@ async fn validate_reanchor_recovery_session(
 async fn validate_pre_fence_basis(
     state: &AppState,
     parsed: &ValidatedEventEnvelope,
-    basis: Option<&arkret_wire::SealBasis>,
+    basis: Option<&arkret_wire::DeviceReanchorPreFenceBasis>,
 ) -> Result<(), SubmitOneError> {
     let realm_id = RealmId::new(parsed.realm_id.clone()).map_err(|error| {
         SubmitOneError::new(StatusCode::BAD_REQUEST, "invalid_param", error.to_string())
@@ -1566,10 +1566,20 @@ async fn validate_pre_fence_basis(
     if declared_sorted != expected_leaves {
         return Err(frontier_error());
     }
-    state
+    // The declared roots are compare-and-swap operands, not decoration: the
+    // producer snapshotted them, and admission rejects the unit if the live
+    // view has moved since (event-auth-state-resolution.md 5.1). Comparing them
+    // is the reason they are on the wire at all, and the reason this frontier
+    // does not reuse the leaves-only Control Move seal_basis.
+    let view = state
         .projections()
         .effective_seal_view(&leaves, &realm_id)
         .map_err(|_| frontier_error())?;
+    if view.control_event_set_root != basis.control_event_set_root
+        || view.state_root != basis.state_root
+    {
+        return Err(frontier_error());
+    }
     Ok(())
 }
 

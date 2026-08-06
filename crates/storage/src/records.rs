@@ -6,7 +6,8 @@ use arkret_models_crypto::{
     DeviceGenerationStatus, RecoveryIdentityModel, RecoveryPublicationAuthorityContext,
 };
 use arkret_wire::{
-    FreshnessState, LeaseBasisRef, NonEmptyString, PlaintextDataClassKind, SealBasis,
+    DeviceReanchorPreFenceBasis, FreshnessState, LeaseBasisRef, NonEmptyString,
+    PlaintextDataClassKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -144,7 +145,7 @@ pub struct RecoverySessionRecord {
     pub current_device_generation_ref: Option<NonEmptyString>,
     pub device_generation_status: Option<DeviceGenerationStatus>,
     pub registry_head: Option<Hash>,
-    pub accepted_seal_frontier: Option<SealBasis>,
+    pub accepted_seal_frontier: Option<DeviceReanchorPreFenceBasis>,
     /// Snapshot of the active policy at session-creation time (so a later policy
     /// rotation cannot retroactively change what this session was bound to).
     pub policy_payload: Value,

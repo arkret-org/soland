@@ -590,14 +590,22 @@ pub(super) async fn recovery_session_create(
         let accepted_seal_frontier = if leaves.is_empty() {
             None
         } else {
-            state
+            // Both roots ship with the frontier. Unlike a Control Move's
+            // seal_basis they are not a redundant copy the receiver could
+            // recompute: they are the compare-and-swap operands the re-anchor
+            // is admitted against (event-auth-state-resolution.md 5.1).
+            let view = state
                 .projections()
                 .effective_seal_view(&leaves, &realm_id)
                 .map_err(|error| {
                     AppError::conflict(format!("accepted Seal frontier is invalid: {error}"))
                         .with_wire_code("device_reanchor_frontier_mismatch")
                 })?;
-            Some(arkret_wire::SealBasis { leaves })
+            Some(arkret_wire::DeviceReanchorPreFenceBasis {
+                leaves,
+                control_event_set_root: view.control_event_set_root,
+                state_root: view.state_root,
+            })
         };
         (
             RecoveryIdentityModel::EnrollmentAuthority,
