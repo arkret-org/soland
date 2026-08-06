@@ -640,7 +640,10 @@ pub(crate) fn grant_contact_managed_consent(
     granted_at: DateTime<Utc>,
 ) -> (String, ConsentCellRecord) {
     let scope = normalize_scope(Some(scope)).unwrap_or_else(|_| scope.to_owned());
-    let event_id = ids::generate_local_ref();
+    // KNOWN DEFECT: this names an Event that was never authored. It stays a
+    // minted `ak:event:` value only because the consuming field is validated as
+    // one; the fix is to author the Event and use its derived id.
+    let event_id = ids::generate_event_id();
     // actor_seq is a per-actor monotonic counter on the originating event;
     // contact-managed grants are minted server-side without a real event log
     // seq, so we pin seq=0. `event_ref_for_dot` strips the trailing numeric

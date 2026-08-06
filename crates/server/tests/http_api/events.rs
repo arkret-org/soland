@@ -1558,15 +1558,16 @@ async fn agent_controller_can_use_managed_pcr_frontier_as_governance_anchor() {
     .with_timezone(&chrono::Utc);
     let mut create = arkret_wire::Event::new(
         arkret_wire::EventKind::REALM_CREATE,
-        arkret_wire::ScopeRef::Realm {
-            realm_id: RealmId::new(realm_id.clone()).unwrap(),
-        },
+        // A genesis carries the closed `realm_genesis` scope and no id: the
+        // Realm id is derived from the Event (this one is a Principal Control
+        // Realm, so the derivation is subject-derived from the Agent DID and
+        // lands back on `realm_id`).
+        arkret_wire::ScopeRef::RealmGenesis,
         Did::new(agent_id.clone()).unwrap(),
         0,
         arkret_identifiers::Hlc::new("01980b44cc00-0000-aabbcce0").unwrap(),
         serde_json::json!({
             "object": {
-                "id": realm_id,
                 "schema": "ak.schema.realm.v1",
                 "title": "Managed Agent Principal Control Realm",
                 "summary": "Controller-managed E2EE continuity for a Native Personal Agent",
