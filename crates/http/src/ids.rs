@@ -38,11 +38,14 @@ pub fn generate(kind: &str) -> String {
 /// constructor and, if it got through, would name an object no receiver can
 /// agree with.
 ///
-/// They are still here because five call sites author a whole object graph and
+/// They are still here because their callers author a whole object graph and
 /// wire the ids between its members before any envelope exists — converting
 /// them means reordering each into build-then-derive, which is real work per
-/// site rather than a rename. Every remaining caller is a known defect; see
-/// `arkret-work/work/active/2026-08-05-event-derived-object-id.md`.
+/// site rather than a rename. Every remaining caller is a known defect; the
+/// current call-site inventory lives in
+/// `arkret-work/work/active/2026-08-06-event-derived-id-handover.md` section 3,
+/// and the contract change that retires them is
+/// `arkret-work/work/active/2026-08-06-event-log-operations-need-a-signed-request.md`.
 ///
 /// Do not add callers.
 pub fn generate_space_id() -> String {

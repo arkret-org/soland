@@ -5,11 +5,20 @@
 //! `ak.circle.*` is spec-canonical; this HTTP surface is the self convenience
 //! wrapper that builds the canonical operations.
 //!
-//! Each handler builds a `ak.circle.*` Operation and routes it through the standard
-//! `accept_local_operations` pipeline so the reducer's invariants
+//! `POST /_arkret/self/circles` takes the caller-signed `ak.circle.create` Event
+//! and submits those exact bytes through ordinary Event admission: the Circle id
+//! is `retype(create.event_id)`, so the service can neither name the Circle nor
+//! sign for the caller (spec `zh/extensions/capabilities.md` sections 118/361,
+//! `zh/security/key-management.md` section 411).
+//!
+//! The remaining handlers still build a `ak.circle.*` Operation and route it
+//! through the `accept_local_operations` pipeline so the reducer's invariants
 //! (`circle_realm_mismatch`, `circle_member_must_be_realm_member`,
 //! `circle_not_active`, the lifecycle transition matrix) fire identically
-//! to events arriving over the wire.
+//! to events arriving over the wire. That pipeline persists no Event, so each of
+//! them is still declaring a durable `event_log` effect it cannot produce; they
+//! are tracked in `EVENT_LOG_OPERATIONS_WITHOUT_A_SIGNED_REQUEST` in
+//! `arkret-spec/tools/lint_artifacts.py` and close the same way create just did.
 //!
 //! Routes (mirror of `/_soland/self/realms` / `/_soland/self/spaces` style):
 //!
@@ -30,14 +39,12 @@
 
 use arkret_event_draft::Operation;
 use arkret_identifiers::{CircleId, Did, EventId, OperationId, RealmId};
-use arkret_models_collaboration::events_payloads::CircleCreatePayload;
 use arkret_models_collaboration::governance::circle::{
-    Circle, CircleColorToken, CircleCreateRequestBody, CircleDirectoryVisibility, CircleDisplay,
-    CircleGlyph, CircleJoinRule, CircleList, CircleMemberRequestBody, CircleMembership,
+    CircleCreateRequestBody, CircleList, CircleMemberRequestBody, CircleMembership,
     CircleMembershipOutcome, CirclePendingMlsRemoval, CircleScopeRotateOutcome,
-    CircleScopeRotateRequestBody, CircleState, CircleSymbol, CircleView, EncryptionFloor,
+    CircleScopeRotateRequestBody, CircleView, EncryptionFloor,
 };
-use arkret_wire::{EncryptionProfile, Event, HistoryVisibility};
+use arkret_wire::Event;
 use salvo::http::StatusCode;
 use salvo::oapi::endpoint;
 use salvo::oapi::extract::{JsonBody, PathParam, QueryParam};
@@ -47,6 +54,7 @@ use serde::de::DeserializeOwned;
 use serde_json::{Value, json};
 use soland_http::error::{AppError, ErrorCode};
 use soland_http::result::{JsonResult, json_ok};
+use soland_services::identity::SessionIdentityState as SessionRecord;
 use soland_services::projection::{
     CircleLifecycle as CircleLifecycleState, CircleReadModel as CircleProjection,
     MlsRemoveObligationView as MlsRemoveObligation, ProjectionSnapshot as ProjectionState,
@@ -54,7 +62,9 @@ use soland_services::projection::{
 
 use super::{AuthArgs, accept_local_operations};
 use crate::ids;
-use crate::routing::events::event_log::submit_event_value;
+use crate::routing::events::event_log::{
+    submit_event_value, submit_initial_event_submission, submit_one_error_to_app_error,
+};
 use crate::state::AppState;
 
 pub(crate) fn router() -> Router {
@@ -79,65 +89,6 @@ where
 {
     serde_json::from_value(json!(value))
         .map_err(|e| AppError::internal(format!("stored circle {field}: {e}")))
-}
-
-fn circle_short_name_from_title(title: &str) -> String {
-    let mut short_name: String = title
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || matches!(ch, ' ' | '_' | '-'))
-        .collect();
-    short_name = short_name.trim().to_owned();
-    if short_name.is_empty() {
-        short_name = "Circle".to_owned();
-    }
-    if let Some(first) = short_name.as_bytes().first().copied() {
-        if first.is_ascii_lowercase() {
-            short_name.replace_range(0..1, &(first as char).to_ascii_uppercase().to_string());
-        } else if !first.is_ascii_uppercase() {
-            short_name.insert_str(0, "C ");
-        }
-    }
-    if short_name.len() > 24 {
-        short_name.truncate(24);
-    }
-    short_name.trim_end().to_owned()
-}
-
-fn utc_now_seconds() -> chrono::DateTime<chrono::Utc> {
-    let now = chrono::Utc::now();
-    chrono::DateTime::from_timestamp(now.timestamp(), 0).unwrap_or(now)
-}
-
-fn circle_create_payload_from_request(
-    circle_id: CircleId,
-    body: CircleCreateRequestBody,
-    created_by: Did,
-    created_at: chrono::DateTime<chrono::Utc>,
-) -> Result<Value, AppError> {
-    let display = CircleDisplay {
-        short_name: circle_short_name_from_title(&body.title),
-        color_token: CircleColorToken::Slate,
-        symbol: CircleSymbol::Glyph {
-            glyph: CircleGlyph::Ring,
-        },
-    };
-    let mut circle = Circle::new(circle_id, body.realm_id, body.title, display, created_by);
-    circle.summary = body.summary;
-    circle.directory_visibility = body
-        .directory_visibility
-        .unwrap_or(CircleDirectoryVisibility::Members);
-    circle.join_rule = body.join_rule.unwrap_or(CircleJoinRule::Invite);
-    circle.history_visibility = body.history_visibility.unwrap_or(HistoryVisibility::Joined);
-    circle.content_encryption_floor = body.content_encryption_floor;
-    circle.metadata_encryption_floor = body.metadata_encryption_floor;
-    circle.agent_participation = body.agent_participation;
-    circle.encryption_profile = body
-        .encryption_profile
-        .unwrap_or(EncryptionProfile::MlsRfc9420);
-    circle.state = CircleState::Active;
-    circle.created_at = created_at;
-    serde_json::to_value(CircleCreatePayload { object: circle })
-        .map_err(|e| AppError::internal(format!("circle create payload: {e}")))
 }
 
 fn circle_view_from_projection(
@@ -474,26 +425,12 @@ async fn post_circle(
 ) -> JsonResult<CircleView> {
     let state = depot.get_typed::<AppState>().expect("state injected");
     let session = aa.authenticated_session(state, req).await?;
-    let body = body.into_inner();
-    let realm_scope = body.realm_id.clone();
-    let circle_id = CircleId::new(ids::generate_circle_id())
-        .map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))?;
-    let created_at = utc_now_seconds();
-    let created_by = parse_sdk_field::<Did>("created_by", &session.actor)?;
-    let payload =
-        circle_create_payload_from_request(circle_id.clone(), body, created_by, created_at)?;
-    let op_id = OperationId::new(ids::generate_operation_id())
-        .map_err(|e| AppError::invalid_param(format!("operation_id: {e}")))?;
-    let mut operation = Operation::create(
-        op_id,
-        realm_scope,
-        arkret_wire::EventKind::CIRCLE_CREATE,
-        payload,
-    );
-    operation.created_at = created_at;
-    accept_local_operations(state, &session.actor, std::slice::from_ref(&operation))
-        .await
-        .map_err(reducer_reject_to_app_error)?;
+    let submission = body.into_inner().create_event;
+    // The Circle id is `retype(create_event.event_id)`, so it is read off the
+    // caller's Event, never minted here. A service that minted it would be
+    // naming an object no receiver can agree with.
+    let circle_id = caller_signed_circle_create_id(&session.actor, &submission.event)?;
+    submit_caller_signed_circle_event(state, &session, submission).await?;
     let projection = state.projections().snapshot();
     let circle = projection
         .circle(circle_id.as_str())
@@ -503,6 +440,75 @@ async fn post_circle(
         circle,
         &session.actor,
     )?)
+}
+
+/// Check what the request wrapper alone can decide about a caller-signed
+/// `ak.circle.create`, and return the Circle id it derives.
+///
+/// The signature, envelope shape, capability and reducer admission are the
+/// ordinary Event admission path's job. This covers only the bindings between
+/// the authenticated session and the Event it submitted, plus the two fields the
+/// reducer owns and an actor therefore MUST NOT supply.
+fn caller_signed_circle_create_id(actor: &str, event: &Event) -> Result<CircleId, AppError> {
+    if event.kind != arkret_wire::EventKind::CIRCLE_CREATE {
+        return Err(AppError::invalid_param(
+            "create_event.event.kind must be ak.circle.create",
+        ));
+    }
+    if event.actor_id.as_str() != actor {
+        return Err(AppError::invalid_param(
+            "create_event.event.actor_id must be the authenticated caller",
+        ));
+    }
+    // `Event::realm_id` is resolved at deserialization and absent on the wire
+    // only for `ak.realm.create`, so the parent Realm is already guaranteed
+    // present here; the request schema states the same requirement.
+    let object = event.payload.get("object");
+    if object.and_then(|object| object.get("id")).is_some() {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "create_event payload.object must not carry an id: it is derived from this Event",
+        )
+        .with_status(StatusCode::UNPROCESSABLE_ENTITY)
+        .with_wire_code(arkret_wire::ReasonCode::OBJECT_ID_NOT_EVENT_DERIVED));
+    }
+    if object
+        .and_then(|object| object.get("mls_group_ref"))
+        .is_some()
+    {
+        return Err(AppError::new(
+            ErrorCode::SchemaViolation,
+            "create_event payload.object.mls_group_ref is reducer-derived and must not be supplied",
+        )
+        .with_status(StatusCode::UNPROCESSABLE_ENTITY));
+    }
+    let derived = arkret_schema::derived_object_id(event).ok_or_else(|| {
+        AppError::invalid_param("create_event derives no Circle id from its event_id")
+    })?;
+    CircleId::new(derived).map_err(|e| AppError::invalid_param(format!("circle_id: {e}")))
+}
+
+/// Submit the caller's exact Event bytes through ordinary Event admission.
+///
+/// No Event is built here and none is co-signed: the bytes the caller signed are
+/// the bytes that reach admission.
+async fn submit_caller_signed_circle_event(
+    state: &AppState,
+    session: &SessionRecord,
+    submission: arkret_wire::EventInitialSubmission,
+) -> Result<(), AppError> {
+    let kind = submission.event.kind.as_str().to_owned();
+    submit_initial_event_submission(state, session, submission)
+        .await
+        .map(|_| ())
+        .map_err(|error| {
+            submit_one_error_to_app_error(
+                &format!("{kind} submit failed"),
+                error.status,
+                error.code,
+                &error.message,
+            )
+        })
 }
 
 #[endpoint(
@@ -1015,58 +1021,80 @@ fn reducer_reject_to_app_error(reason: &'static str) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use chrono::TimeZone;
-
     use super::*;
 
-    #[test]
-    fn circle_create_payload_builder_outputs_sdk_valid_payload() {
-        let created_at = chrono::Utc.with_ymd_and_hms(2026, 7, 6, 0, 0, 0).unwrap();
-        let payload = circle_create_payload_from_request(
-            CircleId::new("ak:circle:01964137-0000-8000-8000-000000000041").unwrap(),
-            CircleCreateRequestBody {
-                realm_id: RealmId::new("ak:realm:01964137-0000-8000-8000-000000000030").unwrap(),
-                title: "S8 restore circle 1783309323913".to_owned(),
-                summary: None,
-                directory_visibility: None,
-                join_rule: None,
-                history_visibility: None,
-                content_encryption_floor: None,
-                metadata_encryption_floor: None,
-                agent_participation: None,
-                encryption_profile: None,
+    const ACTOR: &str = "did:web:alice.example";
+    const REALM: &str = "ak:realm:01964137-0000-8000-8000-000000000030";
+    const CREATE_EVENT: &str = "ak:event:01964137-0000-8000-8000-000000000041";
+
+    fn circle_create_event(object: Value) -> Event {
+        serde_json::from_value(json!({
+            "event_id": CREATE_EVENT,
+            "kind": arkret_wire::EventKind::CIRCLE_CREATE,
+            "realm_id": REALM,
+            "scope_ref": { "kind": "realm", "realm_id": REALM },
+            "actor_id": ACTOR,
+            "actor_seq": 0,
+            "created_at": "2026-07-06T00:00:00.000Z",
+            "prev_refs": [],
+            "refs": [],
+            "payload": { "object": object },
+            "proofs": [],
+        }))
+        .expect("circle create envelope")
+    }
+
+    fn circle_object() -> Value {
+        json!({
+            "schema": arkret_wire::SchemaId::CIRCLE_V1,
+            "realm_id": REALM,
+            "title": "S8 restore circle",
+            "display": {
+                "short_name": "S8 restore circle",
+                "color_token": "slate",
+                "symbol": { "kind": "glyph", "glyph": "ring" },
             },
-            Did::new("did:web:alice.example".to_owned()).unwrap(),
-            created_at,
+            "directory_visibility": "members",
+            "join_rule": "invite",
+            "history_visibility": "joined",
+            "encryption_profile": "mls_rfc9420",
+            "state": "active",
+            "created_by": ACTOR,
+            "created_at": "2026-07-06T00:00:00.000Z",
+        })
+    }
+
+    #[test]
+    fn circle_id_is_retyped_from_the_create_event_not_minted() {
+        let circle_id =
+            caller_signed_circle_create_id(ACTOR, &circle_create_event(circle_object())).unwrap();
+
+        // Same UUID payload as the Event, only the typed prefix differs. This is
+        // what makes the id something every receiver can recompute.
+        assert_eq!(
+            circle_id.as_str(),
+            "ak:circle:01964137-0000-8000-8000-000000000041"
+        );
+    }
+
+    #[test]
+    fn a_create_payload_carrying_an_object_id_is_rejected() {
+        let mut object = circle_object();
+        object["id"] = json!("ak:circle:01964137-0000-8000-8000-0000000000ff");
+
+        let error = caller_signed_circle_create_id(ACTOR, &circle_create_event(object)).expect_err(
+            "an actor-supplied object id must not be accepted as the Circle's identity",
+        );
+        assert_eq!(error.code, ErrorCode::SchemaViolation);
+    }
+
+    #[test]
+    fn a_create_event_signed_by_someone_else_is_rejected() {
+        caller_signed_circle_create_id(
+            "did:web:bob.example",
+            &circle_create_event(circle_object()),
         )
-        .unwrap();
-
-        arkret_schema::event_payload_validator_catalog()
-            .unwrap()
-            .validate_payload(arkret_wire::EventKind::CIRCLE_CREATE, &payload)
-            .unwrap();
-        assert!(payload.get("sender").is_none());
-
-        let object = payload
-            .get("object")
-            .and_then(Value::as_object)
-            .expect("circle object");
-        assert_eq!(
-            object.get("schema").and_then(Value::as_str),
-            Some(arkret_wire::SchemaId::CIRCLE_V1)
-        );
-        assert_eq!(object.get("state").and_then(Value::as_str), Some("active"));
-        assert_eq!(
-            object.get("created_at").and_then(Value::as_str),
-            Some("2026-07-06T00:00:00.000Z")
-        );
-        let short_name = object
-            .get("display")
-            .and_then(|display| display.get("short_name"))
-            .and_then(Value::as_str)
-            .expect("display.short_name");
-        assert!(short_name.len() <= 24);
-        assert!(short_name.starts_with('S'));
+        .expect_err("the submitted Event must be authored by the authenticated caller");
     }
 
     #[test]
